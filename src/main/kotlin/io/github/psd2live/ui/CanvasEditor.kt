@@ -817,13 +817,14 @@ internal class CanvasEditor(
 
     var isPainting by mutableStateOf(false)
     /** True while the pointer is picking a colour rather than drawing one: the eyedropper's own
-     *  gesture, or Alt held down over any paint tool. */
+     *  gesture, or an Alt + left press over any paint tool. */
     var isSampling by mutableStateOf(false)
 
     /**
      * True while Alt is held. The pointer reports its modifiers only when it moves, so the key itself
-     * latches this - it is what the sampling ring follows, and a ring that waited for the mouse to
-     * twitch would be a ring that is not there when the artist looks for it.
+     * latches this - it is what the eyedropper pointer follows, and a pointer that waited for the mouse
+     * to twitch would not be there when the artist looks for it. Pointer events then correct it, since a
+     * release that lands outside the canvas never reaches the key handler.
      */
     var altHeld by mutableStateOf(false)
     var paintStrokeStart by mutableStateOf<Offset?>(null)
@@ -2040,16 +2041,22 @@ internal class CanvasEditor(
     }
 
     /**
-     * Where the sampling ring belongs, or null when the pointer is drawing rather than picking.
-     *
-     * The eyedropper always picks; Alt makes any paint tool pick for as long as it is held, which is how
-     * a colour is taken without leaving the brush; and a pick already under way keeps picking until the
-     * button comes up. The overlay asks this rather than working it out again, so the ring and the pick
-     * cannot disagree about whether the pointer is picking.
+     * Whether the pointer is the eyedropper right now, Photoshop's way: the eyedropper tool always is,
+     * and Alt turns any paint tool into one for as long as it is held - so the pointer shows the pipette
+     * and a left click takes a colour without leaving the brush. A stroke already under way stays a
+     * stroke, and Alt + right-drag is the tip being retuned, which shows the tip instead.
+     */
+    val eyedropperArmed: Boolean
+        get() = hierarchyMode == EditHierarchyMode.PAINT && tool in PAINT_TOOLS && !adjustingBrush &&
+            (tool == CanvasTool.PAINT_EYEDROPPER || isSampling || (altHeld && !dragging))
+
+    /**
+     * Where the sampling ring belongs, or null when no pick is under way. The ring is the pick in
+     * progress, as in Photoshop: it appears with the button and follows the pointer until the button
+     * comes up, while an armed eyedropper is shown by the pointer itself.
      */
     fun pickCursor(): Offset? = cursor?.takeIf {
-        hierarchyMode == EditHierarchyMode.PAINT && tool in PAINT_TOOLS &&
-            (tool == CanvasTool.PAINT_EYEDROPPER || altHeld || isSampling)
+        hierarchyMode == EditHierarchyMode.PAINT && tool in PAINT_TOOLS && isSampling
     }
 
     /** Takes the colour under [pos]: the foreground, or the secondary colour when [secondary]. */
@@ -3538,6 +3545,7 @@ internal class CanvasEditor(
         if (space) return if (dragging) move else hand
         // A swing session locks the canvas to its handles, so the tool's own pointer never applies.
         if (viewModel.swingSession != null) return if (swingHandle != null || swingHover != null) hand else arrow
+        if (eyedropperArmed) return CanvasCursors.eyedropper
         if (dragging) {
             if (isCreatingWarp || isCreatingRotation) return cross
             if (marquee.isNotEmpty()) return cross
@@ -4861,6 +4869,8 @@ internal class CanvasEditor(
             lastPaintPoint = pos
 
             val canvasPos = screenToCanvasPixel(pos, viewport)
+            // Set on every press, so a pick whose release never arrived cannot turn the next stroke into one.
+            isSampling = false
 
             when {
                 // Picking a colour rather than drawing one: the eyedropper's own gesture, and what Alt

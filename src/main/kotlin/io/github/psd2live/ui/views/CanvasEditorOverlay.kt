@@ -593,9 +593,9 @@ internal fun BoxScope.CanvasEditorOverlay(
         // 3d. Paint mode: the tip under the cursor, Photoshop style - the outer ring is the brush, the
         // inner one the part of it that stays solid, and while the tip is being retuned the falloff
         // between them is painted out in the stroke's own colour and opacity.
-        // While the pointer is picking, the sampling ring is the cursor, and the tip ring would only
-        // argue with it about where the pointer is.
-        editor.cursor?.takeIf { editor.paintBrushActive && editor.pickCursor() == null }?.let { cur ->
+        // While the pointer is the eyedropper, the pipette is the cursor, and the tip ring would only
+        // argue with it about what a click will do.
+        editor.cursor?.takeIf { editor.paintBrushActive && !editor.eyedropperArmed }?.let { cur ->
             // The tip is the one description of the mark: the ring is its radius, the inner circle its
             // core, and the falloff between them is the profile the stroke is rasterized with - so what
             // the cursor promises is what the pixels do. The eraser draws no colour of its own, so its

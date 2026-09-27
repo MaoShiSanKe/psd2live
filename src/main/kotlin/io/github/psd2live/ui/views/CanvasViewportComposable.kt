@@ -532,7 +532,7 @@ fun CanvasViewportComposable(
 					return@onKeyEvent true
 				}
 				// Alt is a latch of the same kind: the pointer reports its modifiers only while it moves,
-				// and the sampling ring has to appear the moment Alt is held, not the moment the mouse
+				// and the eyedropper pointer has to appear the moment Alt is held, not the moment the mouse
 				// happens to twitch. Not consumed - Alt belongs to whatever else wants it too.
 				if (mode == CanvasMode.EDIT && previewModel != null &&
 					(event.key == Key.AltLeft || event.key == Key.AltRight)
@@ -734,6 +734,7 @@ fun CanvasViewportComposable(
                     if(p.y<40f || p.y>viewSize.height/density-25f || (p.x<42f && p.y in 40f..460f)) return@onPointerEvent
                 }
                 focusRequester.requestFocus()
+                if (mode == CanvasMode.EDIT) editor.altHeld = event.keyboardModifiers.isAltPressed
                 // Photoshop parity: Alt + right-drag retunes the brush — right/left grows/shrinks the radius,
                 // down/up hardens/softens. The Alt state is latched by the editor, so releasing Alt mid-drag
                 // neither aborts the gesture nor changes what it is doing.
@@ -842,6 +843,9 @@ fun CanvasViewportComposable(
 			}
 			.onPointerEvent(PointerEventType.Move) { event ->
 				val change = event.changes.firstOrNull() ?: return@onPointerEvent
+                // The key latch misses a release that lands elsewhere (Alt+Tab, a swallowed key-up) and
+                // would leave every paint tool picking; the pointer's own modifiers are the truth.
+                if (mode == CanvasMode.EDIT) editor.altHeld = event.keyboardModifiers.isAltPressed
                 if (mode == CanvasMode.EDIT && previewModel != null && !isDragging) {
                     // The brush gesture takes over the pointer: skipping move() here is what keeps the outline
                     // parked at the press point, so the viewport stops feeding hover updates for the duration.
