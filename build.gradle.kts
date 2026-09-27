@@ -276,6 +276,25 @@ fun shouldKeepPackagedNativeEntry(path: String): Boolean {
 }
 
 afterEvaluate {
+	// The run-gui scripts build through Gradle but start the JVM themselves from these files. Under
+	// `gradlew run` the app is a child of the daemon, outside the terminal's process group, so Ctrl+C
+	// only reaches it through Gradle's cancellation (and cmd's "Terminate batch job" prompt on Windows).
+	val run = tasks.getByName<JavaExec>("run")
+	tasks.register("writeRunArgs") {
+		group = "compose desktop"
+		description = "Builds the app and writes the java launcher and argument file used by run-gui scripts."
+		dependsOn(run.taskDependencies)
+		doLast {
+			val dir = layout.buildDirectory.dir("run").get().asFile.apply { mkdirs() }
+			fun quote(arg: String) = "\"" + arg.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+			// Gradle adds its daemon's locale; a direct launch should see the user's own.
+			val jvmArgs = run.allJvmArgs.filterNot { arg -> listOf("-Duser.country", "-Duser.language", "-Duser.variant").any(arg::startsWith) }
+			val args = jvmArgs + listOf("-cp", run.classpath.asPath, run.mainClass.get())
+			dir.resolve("jvm.args").writeText(args.joinToString("\n", postfix = "\n") { quote(it) })
+			dir.resolve("java").writeText(run.javaLauncher.get().executablePath.asFile.absolutePath)
+		}
+	}
+
 	tasks.findByName("compileTestKotlin")?.enabled = true
 	tasks.findByName("test")?.enabled = true
 	tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask>().configureEach {

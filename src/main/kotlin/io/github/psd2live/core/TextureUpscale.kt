@@ -41,7 +41,10 @@ data class TextureUpscaleConfig(
             for (cmd in candidates) {
                 try {
                     val proc = ProcessBuilder(cmd, "--version").redirectErrorStream(true).start()
-                    if (proc.waitFor(2, TimeUnit.SECONDS) && proc.exitValue() == 0) {
+                    val exited = proc.waitFor(2, TimeUnit.SECONDS)
+                    // A stalled probe (such as the Windows Store alias) must not outlive the check.
+                    if (!exited) proc.destroyForcibly()
+                    if (exited && proc.exitValue() == 0) {
                         return cmd
                     }
                 } catch (_: Exception) {}
@@ -161,30 +164,33 @@ internal object TextureUpscale {
                     process.destroyForcibly()
                 }, "psd2live-upscale-shutdown")
                 Runtime.getRuntime().addShutdownHook(shutdown)
-                val logLines = mutableListOf<String>()
+                val logLines = java.util.Collections.synchronizedList(mutableListOf<String>())
                 val layerRegex = Regex("""Upscaling layer (\d+)/(\d+)""")
-                try {
-                    val reader = process.inputStream.bufferedReader(java.nio.charset.StandardCharsets.UTF_8)
-                    var line = reader.readLine()
-                    while (line != null) {
-                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                        logLines.add(line)
-                        val match = layerRegex.find(line)
-                        if (match != null) {
-                            val curr = match.groupValues[1].toInt()
-                            val total = match.groupValues[2].toInt()
-                            val frac = (0.08 + (curr.toDouble() / total) * 0.87).coerceIn(0.08, 0.95)
-                            progress.update(io.github.psd2live.i18n.tr("upscale.processingLayer", curr, total), frac)
+                // A pipe read ignores interrupts, so the output is drained on its own thread and this one
+                // waits in waitFor, which a cancel does interrupt; the finally below then kills the worker.
+                val drain = Thread({
+                    runCatching {
+                        process.inputStream.bufferedReader(java.nio.charset.StandardCharsets.UTF_8).forEachLine { line ->
+                            logLines.add(line)
+                            val match = layerRegex.find(line)
+                            if (match != null) {
+                                val curr = match.groupValues[1].toInt()
+                                val total = match.groupValues[2].toInt()
+                                val frac = (0.08 + (curr.toDouble() / total) * 0.87).coerceIn(0.08, 0.95)
+                                progress.update(io.github.psd2live.i18n.tr("upscale.processingLayer", curr, total), frac)
+                            }
                         }
-                        line = reader.readLine()
                     }
+                }, "psd2live-upscale-output").apply { isDaemon = true; start() }
+                try {
                     check(process.waitFor(30, TimeUnit.MINUTES)) { "Texture upscaling timed out after 30 minutes." }
+                    drain.join(5_000)
                     check(process.exitValue() == 0) { "nunif upscaling failed:\n${logLines.takeLast(50).joinToString("\n")}" }
                     println(logLines.takeLast(20).joinToString("\n"))
                     progress.update(io.github.psd2live.i18n.tr("upscale.apply"), 1.0)
                 } finally {
-                    runCatching { Files.write(log, logLines) }
                     if (process.isAlive) { process.descendants().forEach { it.destroyForcibly() }; process.destroyForcibly(); runCatching { process.waitFor(5, TimeUnit.SECONDS) } }
+                    runCatching { Files.write(log, synchronized(logLines) { logLines.toList() }) }
                     runCatching { Runtime.getRuntime().removeShutdownHook(shutdown) }
                 }
             }

@@ -10,6 +10,7 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.bearer
 import io.ktor.server.application.install
 import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.cio.CIO
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -66,6 +67,8 @@ import java.util.prefs.Preferences
 private const val MCP_SESSION_ID_HEADER = "mcp-session-id"
 // A 4096 x 4096 RGBA PNG can approach 64 MiB; Base64 adds another third, plus JSON overhead.
 internal const val DEFAULT_MCP_MAX_REQUEST_BODY_BYTES = 96L * 1024 * 1024
+private const val SHUTDOWN_GRACE_MILLIS = 100L
+private const val SHUTDOWN_TIMEOUT_MILLIS = 500L
 
 data class AgentMcpConfig(
 	val host: String = "127.0.0.1",
@@ -123,7 +126,16 @@ class AgentMcpService(
 
 	fun start(): AgentMcpConnectionInfo {
 		check(engine == null) { "Agent MCP service is already running" }
-		val started = embeddedServer(CIO, host = config.host, port = config.port) {
+		val started = embeddedServer(CIO, configure = {
+			connector {
+				host = config.host
+				port = config.port
+			}
+			// Ktor stops itself from a JVM shutdown hook too; connected MCP clients hold streams open,
+			// so its 1 s grace and 5 s timeout defaults would stall every exit.
+			shutdownGracePeriod = SHUTDOWN_GRACE_MILLIS
+			shutdownTimeout = SHUTDOWN_TIMEOUT_MILLIS
+		}) {
 			configureAgentMcp(workspace, config.token, config.maxRequestBodyBytes)
 		}
 		try {
@@ -149,7 +161,7 @@ class AgentMcpService(
 	override fun close() {
 		if (!isClosed.compareAndSet(false, true)) return
 		runCatching {
-			engine?.stop(gracePeriodMillis = 100, timeoutMillis = 500)
+			engine?.stop(SHUTDOWN_GRACE_MILLIS, SHUTDOWN_TIMEOUT_MILLIS)
 		}
 		engine = null
 		runCatching {

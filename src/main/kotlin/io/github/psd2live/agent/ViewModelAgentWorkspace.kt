@@ -2086,9 +2086,10 @@ class ViewModelAgentWorkspace(
 				withTimeoutOrNull(500L) {
 					recoveryJob.cancel()
 					recoveryJob.join()
-					persistenceJob.complete()
-					persistenceJob.join()
 				}
+				// Queued history and task writes are the recovery data; let them land rather than drop them.
+				persistenceJob.complete()
+				withTimeoutOrNull(5_000L) { persistenceJob.join() }
 			}
 		}
 		persistenceScope.cancel()

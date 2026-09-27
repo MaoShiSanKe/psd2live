@@ -16,6 +16,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
 
@@ -155,8 +157,8 @@ class CubismSdkPreviewSession(
 		loadedGeneration = -1L
 		latestRender.clear()
 		postStatus(null)
-		executor.execute {
-			if (closed || targetGeneration != generation) return@execute
+		onNativeThread {
+			if (closed || targetGeneration != generation) return@onNativeThread
 			var stage = "load native library"
 			try {
 				val native = api ?: CubismNativeRuntime.load().also {
@@ -201,9 +203,9 @@ class CubismSdkPreviewSession(
 	 */
 	fun startMotion(name: String, priority: Int = 3, viewId: String = "") {
 		if (closed) return
-		executor.execute {
-			if (closed || loadedGeneration != generation) return@execute
-			val native = api ?: return@execute
+		onNativeThread {
+			if (closed || loadedGeneration != generation) return@onNativeThread
+			val native = api ?: return@onNativeThread
 			val handle = canvasHandle(native, viewId).handle
 			val (group, index) = motionSlots[name.lowercase()] ?: (name to 0)
 			native.Live2D_StartMotion(handle, group, index, priority)
@@ -216,7 +218,7 @@ class CubismSdkPreviewSession(
         require(frames in 1..1201 && fps in 15..120)
         val result = java.util.concurrent.CompletableFuture<List<Map<ParameterId, Float>>>()
         if (closed) { result.completeExceptionally(IllegalStateException("Cubism session closed")); return result }
-        executor.execute {
+        val queued = onNativeThread {
             try {
                 check(!closed) { "Cubism session closed" }
                 val native = api ?: CubismNativeRuntime.load().also {
@@ -236,6 +238,7 @@ class CubismSdkPreviewSession(
                 } finally { native.Live2D_DestroyModel(handle) }
             } catch (failure: Throwable) { result.completeExceptionally(failure) }
         }
+        if (!queued) result.completeExceptionally(IllegalStateException("Cubism session closed"))
         return result
     }
 
@@ -255,7 +258,7 @@ class CubismSdkPreviewSession(
     fun removeView(viewId: String) {
         latestRender.remove(viewId)
         latestDelivery.remove(viewId)
-        if (!closed) executor.execute {
+        if (!closed) onNativeThread {
             nativeCanvases.remove(viewId)?.let { api?.Live2D_DestroyModel(it.handle) }
         }
     }
@@ -268,7 +271,7 @@ class CubismSdkPreviewSession(
 
 	private fun scheduleRenderWorker() {
 		if (closed || loadedGeneration != generation || !renderWorkerScheduled.compareAndSet(false, true)) return
-		executor.execute(::drainRenderRequests)
+		if (!onNativeThread(::drainRenderRequests)) renderWorkerScheduled.set(false)
 	}
 
 	private fun drainRenderRequests() {
@@ -477,7 +480,7 @@ class CubismSdkPreviewSession(
 		generation++
 		latestRender.clear()
 		latestDelivery.clear()
-		executor.execute {
+		onNativeThread {
 			val native = api
 			if (native != null) {
 				nativeCanvases.values.forEach { native.Live2D_DestroyModel(it.handle) }
@@ -493,7 +496,18 @@ class CubismSdkPreviewSession(
 			parameterMemory = null
 		}
 		executor.shutdown()
+		// The native runtime owns a GL context; let it shut down before the JVM halts under it.
+		runCatching { executor.awaitTermination(2, TimeUnit.SECONDS) }
 	}
+
+	/** Queues [task] on the native thread; false once [close] has shut the thread down. */
+	private fun onNativeThread(task: () -> Unit): Boolean =
+		try {
+			executor.execute(task)
+			true
+		} catch (_: RejectedExecutionException) {
+			false
+		}
 
 	private object CubismNativeRuntime {
 		private fun isWindows(): Boolean =

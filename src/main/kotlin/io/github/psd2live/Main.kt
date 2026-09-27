@@ -7,6 +7,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import io.github.psd2live.agent.AgentMcpService
+import io.github.psd2live.agent.AgentWorkspaceStore
 import io.github.psd2live.agent.ViewModelAgentWorkspace
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PipelineConfig
@@ -16,8 +17,11 @@ import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.views.PSD2LiveApp
+import java.io.IOException
 import java.nio.file.Path
+import javax.swing.JOptionPane
 import kotlin.io.path.absolutePathString
+import kotlin.system.exitProcess
 
 import androidx.compose.ui.window.rememberWindowState
 
@@ -25,56 +29,7 @@ fun main(arguments: Array<String>) {
 	System.setProperty("sun.java2d.uiScale.enabled", "true")
 	configureLanguage(arguments)
 	if (arguments.isEmpty()) {
-		val viewModel = PSD2LiveViewModel()
-		val agentWorkspace = ViewModelAgentWorkspace(viewModel)
-		viewModel.attachAgentWorkspace(agentWorkspace)
-		var agentMcpService: AgentMcpService? = null
-		val agentMcpStartup = runCatching {
-			AgentMcpService(agentWorkspace)
-				.also { agentMcpService = it }
-				.start()
-		}
-
-		val shutdown = {
-			runCatching { agentMcpService?.close() }
-			runCatching { viewModel.close() }
-		}
-		val shutdownHook = Thread({
-			shutdown()
-		}, "psd2live-shutdown-hook")
-		Runtime.getRuntime().addShutdownHook(shutdownHook)
-
-		try {
-			application {
-				val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
-				val closeApp: () -> Unit = {
-					viewModel.withSavedChanges {
-						shutdown()
-						exitApplication()
-					}
-				}
-				Window(
-					onCloseRequest = closeApp,
-					title = tr("app.title"),
-					icon = painterResource("icons/psd2live.png"),
-					state = windowState,
-					undecorated = true,
-				) {
-					PSD2LiveApp(
-						viewModel = viewModel,
-						window = window,
-						windowState = windowState,
-						onCloseRequest = closeApp,
-						agentConnectionInfo = agentMcpStartup.getOrNull(),
-						agentStartupError = agentMcpStartup.exceptionOrNull()?.message,
-					)
-				}
-			}
-		} finally {
-			shutdown()
-			runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
-			kotlin.system.exitProcess(0)
-		}
+		runGui()
 		return
 	}
 	if (arguments.any { it == "--help" || it == "-h" }) {
@@ -114,6 +69,72 @@ fun main(arguments: Array<String>) {
 	println(tr("cli.complete", result.exportedFiles.size))
 	result.exportedFiles.forEach { println("  ${it.path.absolutePathString()} (${it.bytes} bytes)") }
 	result.warnings.forEach { System.err.println(tr("cli.warning", it)) }
+}
+
+private fun runGui() {
+	val instanceLock = try {
+		AppInstanceLock.acquire(AgentWorkspaceStore.defaultRoot()) ?: run {
+			// Held by a running editor; leave it alone rather than share its store and MCP port.
+			System.err.println(tr("app.alreadyRunning"))
+			runCatching { JOptionPane.showMessageDialog(null, tr("app.alreadyRunning"), tr("app.title"), JOptionPane.WARNING_MESSAGE) }
+			exitProcess(1)
+		}
+	} catch (failure: IOException) {
+		System.err.println("Instance lock unavailable, continuing without it: ${failure.message}")
+		null
+	}
+	val viewModel = PSD2LiveViewModel()
+	val agentWorkspace = ViewModelAgentWorkspace(viewModel)
+	viewModel.attachAgentWorkspace(agentWorkspace)
+	var agentMcpService: AgentMcpService? = null
+	val agentMcpStartup = runCatching {
+		AgentMcpService(agentWorkspace)
+			.also { agentMcpService = it }
+			.start()
+	}
+
+	// Both close() calls are idempotent, so the hook (Ctrl+C, SIGTERM, logoff) and the normal exit can race.
+	val shutdown = {
+		runCatching { agentMcpService?.close() }
+		runCatching { viewModel.close() }
+		Unit
+	}
+	val shutdownHook = Thread(shutdown, "psd2live-shutdown-hook")
+	Runtime.getRuntime().addShutdownHook(shutdownHook)
+
+	var status = 0
+	try {
+		// Exit from main rather than letting Compose call System.exit on the EDT, which would block
+		// the EDT while the shutdown hooks run.
+		application(exitProcessOnExit = false) {
+			val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
+			val closeApp: () -> Unit = { viewModel.withSavedChanges { exitApplication() } }
+			Window(
+				onCloseRequest = closeApp,
+				title = tr("app.title"),
+				icon = painterResource("icons/psd2live.png"),
+				state = windowState,
+				undecorated = true,
+			) {
+				PSD2LiveApp(
+					viewModel = viewModel,
+					window = window,
+					windowState = windowState,
+					onCloseRequest = closeApp,
+					agentConnectionInfo = agentMcpStartup.getOrNull(),
+					agentStartupError = agentMcpStartup.exceptionOrNull()?.message,
+				)
+			}
+		}
+	} catch (failure: Throwable) {
+		failure.printStackTrace()
+		status = 1
+	}
+	shutdown()
+	runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
+	instanceLock?.close()
+	// AWT, Skiko and pooled threads would otherwise keep the JVM alive.
+	exitProcess(status)
 }
 
 private fun configureLanguage(arguments: Array<String>) {
