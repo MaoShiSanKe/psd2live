@@ -451,6 +451,8 @@ data class PSD2LiveState(
 	val parameterValues: Map<ParameterId, Float> = emptyMap(),
 	val previewParameterValues: Map<ParameterId, Float> = emptyMap(),
 	val parameterSearchQuery: String = "",
+	/** Saved parameter snapshots, shown as the snapshot bar; project data, never history. */
+	val parameterSnapshots: List<ParameterSnapshot> = emptyList(),
 	val animationEnabled: Boolean = false,
 	val mouseTrackingEnabled: Boolean = true,
 	val sdkStatus: String? = null,

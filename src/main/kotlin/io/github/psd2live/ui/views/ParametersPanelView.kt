@@ -94,6 +94,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -115,6 +116,7 @@ import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconCollapseAll
@@ -127,6 +129,7 @@ import io.github.psd2live.ui.components.IconParameterLink
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconRotationDeformer
 import io.github.psd2live.ui.components.IconSearch
+import io.github.psd2live.ui.components.IconSelectedOnly
 import io.github.psd2live.ui.components.IconWarpDeformer
 import io.github.psd2live.ui.components.InlineEditorRegions
 import io.github.psd2live.ui.components.LocalInlineEditorRegions
@@ -430,6 +433,13 @@ internal fun ParametersListView(
 	var renameDraft by remember { mutableStateOf("") }
 	var renameOriginal by remember { mutableStateOf("") }
 	var renameSettled by remember { mutableStateOf(false) }
+	var renamingSnapshotId by remember { mutableStateOf<String?>(null) }
+	var searchOpen by remember { mutableStateOf(state.parameterSearchQuery.isNotEmpty()) }
+	val searchFocus = remember { FocusRequester() }
+	fun closeSearch() {
+		viewModel.setParameterSearchQuery("")
+		searchOpen = false
+	}
 	var folderMenuFor by remember { mutableStateOf<String?>(null) }
 	var folderMenuOffset by remember { mutableStateOf(Offset.Zero) }
 	val focusManager = LocalFocusManager.current
@@ -513,8 +523,19 @@ internal fun ParametersListView(
 	}
 
 	val nameWidth = remember { mutableStateOf(ParamRowNameWidth) }
-	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth) {
-	Column(modifier = Modifier.fillMaxSize()) {
+	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth, LocalInlineEditorRegions provides renameEditorRegions) {
+	Column(
+		modifier = Modifier
+			.fillMaxSize()
+			.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) {
+				if (renamingGroupId != null || renamingSnapshotId != null) renameEditorRegions.pressedInside = false
+			}
+			.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Final) {
+				if ((renamingGroupId != null || renamingSnapshotId != null) && !renameEditorRegions.pressedInside) {
+					focusManager.clearFocus(force = true)
+				}
+			},
+	) {
 		Column(
 			modifier = Modifier
 				.fillMaxWidth()
@@ -522,121 +543,136 @@ internal fun ParametersListView(
 				.padding(horizontal = 4.dp, vertical = 3.dp),
 			verticalArrangement = Arrangement.spacedBy(3.dp),
 		) {
+			val editable = puppet != null && state.historySnapshot != null && !state.canvasEditBusy
 			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(4.dp),
-			) {
-				CompactTextField(
-					value = state.parameterSearchQuery,
-					onValueChange = { viewModel.setParameterSearchQuery(it) },
-					placeholder = tr("parameters.search"),
-					leadingIcon = { IconSearch(tint = colors.textMuted) },
-					trailingIcon = {
-						if (state.parameterSearchQuery.isNotEmpty()) {
-							CompactIconButton(
-								onClick = { viewModel.setParameterSearchQuery("") },
-								tooltip = tr("parameters.clearSearch"), size = 16.dp,
-							) { IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
-						}
-					},
-					modifier = Modifier.weight(1f),
-					height = 22.dp,
-				)
-				Text(
-					text = (if (state.activeWorkspace.canvases.size > 1) "${viewModel.canvasTitle(state.activeCanvas)} · " else "") +
-						tr("parameters.count", visibleCount, allParameters.size, state.lockedParameters.size),
-					style = typography.caption.copy(fontSize = 10.sp),
-					color = colors.textMuted,
-					maxLines = 1,
-				)
-			}
-
-			val inPreview = state.previewLive
-			Row(
-				modifier = Modifier.fillMaxWidth(),
+				modifier = Modifier.fillMaxWidth().height(22.dp),
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.spacedBy(3.dp),
 			) {
-				if (inPreview) {
+				if (searchOpen) {
+					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+					CompactTextField(
+						value = state.parameterSearchQuery,
+						onValueChange = { viewModel.setParameterSearchQuery(it) },
+						placeholder = tr("parameters.search"),
+						leadingIcon = { IconSearch(tint = colors.textMuted) },
+						trailingIcon = {
+							CompactIconButton(
+								onClick = { closeSearch() },
+								tooltip = tr("parameters.clearSearch"), size = 16.dp,
+							) { IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
+						},
+						modifier = Modifier
+							.weight(1f)
+							.focusRequester(searchFocus)
+							.onPreviewKeyEvent { event ->
+								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+									closeSearch()
+									true
+								} else false
+							},
+						height = 22.dp,
+					)
+				} else {
 					CompactIconButton(
-						onClick = { viewModel.unlockAllParameters() },
-						enabled = state.lockedParameters.isNotEmpty(),
+						onClick = { searchOpen = true },
 						size = 22.dp,
-						tooltip = tr("parameters.unlockAll"),
+						tooltip = tr("parameters.search"),
 					) {
-						IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+						IconSearch(tint = colors.textMuted)
+					}
+					CompactIconButton(
+						onClick = { relatedOnly = !relatedOnly },
+						enabled = owner != null,
+						size = 22.dp,
+						tooltip = if (owner != null) tr("parameters.relatedOnly") + " · " + tr("parameters.relatedCount", relatedIds.size)
+						else tr("parameters.relatedOnly"),
+					) {
+						IconSelectedOnly(
+							tint = when {
+								owner == null -> colors.textDisabled
+								activeRelatedFilter -> colors.accent
+								else -> colors.textMuted
+							},
+							modifier = Modifier.size(12.dp),
+						)
+					}
+					ParameterToolbarSeparator()
+					CompactIconButton(
+						onClick = {
+							creatingUnderGroupId = null
+							creatingParameter = true
+						},
+						enabled = editable,
+						size = 22.dp,
+						tooltip = tr("parameters.create"),
+					) {
+						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+					}
+					CompactIconButton(
+						onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
+						enabled = puppet != null,
+						size = 22.dp,
+						tooltip = tr("parameters.newFolder"),
+					) {
+						IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+					}
+					CompactIconButton(
+						onClick = {
+							for (id in collectParameterGroupIds(puppet)) {
+								openOverrides[id] = true
+							}
+						},
+						enabled = puppet != null,
+						size = 22.dp,
+						tooltip = tr("canvas.hierarchy.expandAll"),
+					) {
+						IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+					}
+					CompactIconButton(
+						onClick = {
+							for (id in collectParameterGroupIds(puppet)) {
+								openOverrides[id] = false
+							}
+						},
+						enabled = puppet != null,
+						size = 22.dp,
+						tooltip = tr("canvas.hierarchy.collapseAll"),
+					) {
+						IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+					}
+					Spacer(Modifier.weight(1f))
+				}
+				ParameterCountBadge(
+					visible = visibleCount,
+					total = allParameters.size,
+					locked = state.lockedParameters.size,
+					tooltip = (if (state.activeWorkspace.canvases.size > 1) "${viewModel.canvasTitle(state.activeCanvas)} · " else "") +
+						tr("parameters.count", visibleCount, allParameters.size, state.lockedParameters.size),
+				)
+				if (!searchOpen) {
+					if (state.previewLive) {
+						CompactIconButton(
+							onClick = { viewModel.unlockAllParameters() },
+							enabled = state.lockedParameters.isNotEmpty(),
+							size = 22.dp,
+							tooltip = tr("parameters.unlockAll"),
+						) {
+							IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+						}
+					}
+					CompactIconButton(
+						onClick = { viewModel.resetAllParameters() },
+						enabled = allParameters.isNotEmpty(),
+						size = 22.dp,
+						tooltip = tr("parameters.resetAll"),
+					) {
+						IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
 					}
 				}
-				CompactIconButton(
-					onClick = {
-						for (id in collectParameterGroupIds(puppet)) {
-							openOverrides[id] = true
-						}
-					},
-					enabled = puppet != null,
-					size = 22.dp,
-					tooltip = tr("canvas.hierarchy.expandAll"),
-				) {
-					IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-				}
-				CompactIconButton(
-					onClick = {
-						for (id in collectParameterGroupIds(puppet)) {
-							openOverrides[id] = false
-						}
-					},
-					enabled = puppet != null,
-					size = 22.dp,
-					tooltip = tr("canvas.hierarchy.collapseAll"),
-				) {
-					IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-				}
-
-                io.github.psd2live.ui.components.CompactButton(
-                    text = tr("parameters.create"),
-                    onClick = {
-						creatingUnderGroupId = null
-						creatingParameter = true
-					},
-                    enabled = puppet != null && state.historySnapshot != null && !state.canvasEditBusy,
-                    height = 22.dp,
-                )
-				CompactIconButton(
-					onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
-					enabled = puppet != null,
-					size = 22.dp,
-					tooltip = tr("parameters.newFolder"),
-				) {
-					IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-				}
-				CompactIconButton(
-					onClick = { viewModel.resetAllParameters() },
-					enabled = allParameters.isNotEmpty(),
-					size = 22.dp,
-					tooltip = tr("parameters.resetAll"),
-				) {
-					IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-				}
 			}
+			ParameterSnapshotBar(state, viewModel, renamingSnapshotId) { renamingSnapshotId = it }
 		}
-
-        if (owner != null) {
-            Row(
-                Modifier.fillMaxWidth().background(colors.panelElevated).padding(horizontal = 4.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                io.github.psd2live.ui.components.CompactButton(
-                    text = tr("parameters.relatedOnly"),
-                    onClick = { relatedOnly = !relatedOnly },
-                    isPrimary = activeRelatedFilter,
-                    height = 22.dp,
-                )
-                Text(tr("parameters.relatedCount", relatedIds.size), style = typography.caption, color = colors.textMuted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            }
-        }
 		Divider(color = colors.divider)
 
 		if (rows.isEmpty()) {
@@ -649,19 +685,10 @@ internal fun ParametersListView(
 				)
 			}
 		} else {
-			CompositionLocalProvider(LocalInlineEditorRegions provides renameEditorRegions) {
 				Box(
 					modifier = Modifier
 						.fillMaxSize()
 						.onGloballyPositioned { containerCoordinates = it }
-						.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) {
-							if (renamingGroupId != null) renameEditorRegions.pressedInside = false
-						}
-						.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Final) {
-							if (renamingGroupId != null && !renameEditorRegions.pressedInside) {
-								focusManager.clearFocus(force = true)
-							}
-						}
 						.onPointerEvent(PointerEventType.Move) { event ->
 							val pos = event.changes.firstOrNull()?.position ?: return@onPointerEvent
 							dragState.onMove(pos, itemBoundsMap.values)
@@ -914,7 +941,6 @@ internal fun ParametersListView(
 				}
 
 				}
-			}
 		}
 	}
 	}
@@ -1620,8 +1646,41 @@ private fun ParameterLinkSlot(
 	) { content() }
 }
 
+/** Visible/total, plus a lock and count once anything is locked; the full wording sits in the tooltip. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ParameterTooltip(text: String) {
+private fun ParameterCountBadge(visible: Int, total: Int, locked: Int, tooltip: String) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val style = typography.caption.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+	TooltipArea(tooltip = { ParameterTooltip(tooltip) }, delayMillis = 400) {
+		Row(
+			modifier = Modifier.padding(horizontal = 2.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(2.dp),
+		) {
+			Text(if (visible == total) "$total" else "$visible/$total", style = style, color = colors.textMuted, maxLines = 1)
+			if (locked > 0) {
+				IconLock(locked = true, modifier = Modifier.size(9.dp), tint = colors.accent)
+				Text("$locked", style = style, color = colors.accent, maxLines = 1)
+			}
+		}
+	}
+}
+
+@Composable
+private fun ParameterToolbarSeparator() {
+	Box(
+		Modifier
+			.padding(horizontal = 2.dp)
+			.width(1.dp)
+			.height(14.dp)
+			.background(LocalToolColors.current.divider),
+	)
+}
+
+@Composable
+internal fun ParameterTooltip(text: String) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	Surface(

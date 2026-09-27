@@ -464,6 +464,45 @@ fun IconParameterLink(
 	}
 }
 
+/** Vector Plus / Add Icon */
+@Composable
+fun IconAdd(
+	modifier: Modifier = Modifier.size(12.dp),
+	tint: Color = LocalToolColors.current.textPrimary,
+) {
+	Canvas(modifier = modifier) {
+		val stroke = 1.4f
+		drawLine(tint, Offset(size.width / 2f, 0f), Offset(size.width / 2f, size.height), stroke, StrokeCap.Round)
+		drawLine(tint, Offset(0f, size.height / 2f), Offset(size.width, size.height / 2f), stroke, StrokeCap.Round)
+	}
+}
+
+/** Vector Camera Icon: a saved snapshot of the current pose. */
+@Composable
+fun IconSnapshot(
+	modifier: Modifier = Modifier.size(12.dp),
+	tint: Color = LocalToolColors.current.textPrimary,
+) {
+	Canvas(modifier = modifier) {
+		val w = size.width
+		val h = size.height
+		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+		val body = Path().apply {
+			moveTo(w * 0.08f, h * 0.32f)
+			lineTo(w * 0.30f, h * 0.32f)
+			lineTo(w * 0.38f, h * 0.18f)
+			lineTo(w * 0.62f, h * 0.18f)
+			lineTo(w * 0.70f, h * 0.32f)
+			lineTo(w * 0.92f, h * 0.32f)
+			lineTo(w * 0.92f, h * 0.84f)
+			lineTo(w * 0.08f, h * 0.84f)
+			close()
+		}
+		drawPath(body, color = tint, style = stroke)
+		drawCircle(tint, radius = minOf(w, h) * 0.17f, center = Offset(w * 0.5f, h * 0.57f), style = stroke)
+	}
+}
+
 /** Vector Folder Icon */
 @Composable
 fun IconFolder(

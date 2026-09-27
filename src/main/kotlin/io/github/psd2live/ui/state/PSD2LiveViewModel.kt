@@ -4076,6 +4076,56 @@ class PSD2LiveViewModel : AutoCloseable {
 		markWorkspaceChanged()
 	}
 
+	/** Saves every parameter as the parameters panel shows it, the live pose included while previewing. */
+	fun saveParameterSnapshot(name: String = "") {
+		val values = shownParameterValues() ?: return
+		updateState { current ->
+			val number = (current.parameterSnapshots.maxOfOrNull { it.number } ?: 0) + 1
+			current.copy(parameterSnapshots = current.parameterSnapshots +
+				ParameterSnapshot(java.util.UUID.randomUUID().toString(), number, name, values))
+		}
+		markWorkspaceChanged()
+	}
+
+	fun overwriteParameterSnapshot(id: String) {
+		val values = shownParameterValues() ?: return
+		updateState { current ->
+			current.copy(parameterSnapshots = current.parameterSnapshots.map { if (it.id == id) it.copy(values = values) else it })
+		}
+		markWorkspaceChanged()
+	}
+
+	/** Loads a saved pose onto the parameters it still names; locked parameters keep their value. */
+	fun applyParameterSnapshot(id: String) {
+		val current = _state.value
+		val snapshot = current.parameterSnapshots.firstOrNull { it.id == id } ?: return
+		val known = current.previewModel?.rig?.puppet?.parameters?.mapTo(HashSet()) { it.id } ?: return
+		setParameterValues(snapshot.values.filterKeys { it in known && it !in current.lockedParameters })
+	}
+
+	fun renameParameterSnapshot(id: String, name: String) {
+		// Blank goes back to showing the snapshot's number.
+		val trimmed = name.trim()
+		updateState { current ->
+			current.copy(parameterSnapshots = current.parameterSnapshots.map { if (it.id == id) it.copy(name = trimmed) else it })
+		}
+		markWorkspaceChanged()
+	}
+
+	fun deleteParameterSnapshot(id: String) {
+		updateState { current -> current.copy(parameterSnapshots = current.parameterSnapshots.filterNot { it.id == id }) }
+		markWorkspaceChanged()
+	}
+
+	private fun shownParameterValues(): Map<ParameterId, Float>? {
+		val current = _state.value
+		val parameters = current.previewModel?.rig?.puppet?.parameters ?: return null
+		val live = current.previewLive && (current.animationEnabled || current.mouseTrackingEnabled ||
+			(current.generatePhysics && !current.meshOnly))
+		val pose = if (live) livePose.value else emptyMap()
+		return parameters.associate { it.id to (pose[it.id] ?: current.parameterValues[it.id] ?: it.default) }
+	}
+
 	fun unlockAllParameters() {
 		updateState { current ->
 			current.copy(
@@ -4206,6 +4256,7 @@ class PSD2LiveViewModel : AutoCloseable {
 						statusText = summary,
 						lockedParameters = emptySet(),
 						parameterValues = preview.rig.puppet.parameters.associate { it.id to it.default },
+						parameterSnapshots = emptyList(),
 					)
 				}
 				refreshSdkSession(preview)

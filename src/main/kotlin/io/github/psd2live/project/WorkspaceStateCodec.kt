@@ -482,6 +482,12 @@ internal object WorkspaceStateCodec {
         state.isolationSnapshot?.let { values -> putJsonObject("isolationSnapshot") { values.forEach { (id, v) -> put(id, v) } } }
         putJsonObject("parameterValues") { state.parameterValues.forEach { (id, v) -> put(id.raw, v) } }
         putJsonArray("lockedParameters") { state.lockedParameters.forEach { add(it.raw) } }
+        putJsonArray("parameterSnapshots") { state.parameterSnapshots.forEach { snapshot -> add(buildJsonObject {
+            put("id", snapshot.id)
+            put("number", snapshot.number)
+            put("name", snapshot.name)
+            putJsonObject("values") { snapshot.values.forEach { (id, v) -> put(id.raw, v) } }
+        }) } }
         putJsonObject("drawOrderOverrides") { state.drawOrderOverrides.forEach { (k, v) -> put(k, v) } }
         putJsonObject("historyAnnotations") { state.historyAnnotations.forEach { (id, a) ->
             putJsonObject(id) { put("title", a.title); put("note", a.note); put("hidden", a.hidden) }
@@ -607,6 +613,18 @@ internal object WorkspaceStateCodec {
         isolationSnapshot = value["isolationSnapshot"]?.jsonObject?.mapValues { it.value.jsonPrimitive.boolean },
         parameterValues = value["parameterValues"]?.jsonObject?.map { (id, v) -> ParameterId(id) to v.jsonPrimitive.float }?.toMap() ?: base.parameterValues,
         lockedParameters = value["lockedParameters"]?.jsonArray?.map { ParameterId(it.jsonPrimitive.content) }?.toSet() ?: base.lockedParameters,
+        parameterSnapshots = value["parameterSnapshots"]?.jsonArray?.mapIndexedNotNull { index, element ->
+            val obj = element as? JsonObject ?: return@mapIndexedNotNull null
+            val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapIndexedNotNull null
+            ParameterSnapshot(
+                id = id,
+                number = obj["number"]?.jsonPrimitive?.intOrNull ?: (index + 1),
+                name = obj["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                values = obj["values"]?.jsonObject?.mapNotNull { (param, v) ->
+                    v.jsonPrimitive.floatOrNull?.takeIf { it.isFinite() }?.let { ParameterId(param) to it }
+                }?.toMap().orEmpty(),
+            )
+        } ?: base.parameterSnapshots,
         drawOrderOverrides = value["drawOrderOverrides"]?.jsonObject?.mapValues { it.value.jsonPrimitive.float.coerceIn(0f, 1000f) } ?: base.drawOrderOverrides,
         historyAnnotations = value["historyAnnotations"]?.jsonObject?.mapValues { (_, v) ->
             val a = v.jsonObject; HistoryAnnotation(a.getValue("title").jsonPrimitive.content, a.getValue("note").jsonPrimitive.content, a.getValue("hidden").jsonPrimitive.boolean)
