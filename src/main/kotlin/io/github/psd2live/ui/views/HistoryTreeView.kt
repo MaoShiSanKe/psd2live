@@ -8,15 +8,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Divider
+import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -25,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -37,35 +37,44 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.agent.AgentHistoryNodeSnapshot
-import io.github.psd2live.agent.AgentHistorySnapshot
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.PaintSession
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
+import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.IconClose
+import io.github.psd2live.ui.components.IconEye
+import io.github.psd2live.ui.components.IconRedo
+import io.github.psd2live.ui.components.IconSearch
+import io.github.psd2live.ui.components.IconUndo
+import io.github.psd2live.ui.state.HistoryAnnotation
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
+import io.github.psd2live.ui.theme.frostedGlass
 import java.awt.Cursor
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-private const val NODE_WIDTH_DP = 250f
-private const val NODE_HEIGHT_DP = 80f
-private const val HORIZONTAL_GAP_DP = 44f
-private const val VERTICAL_GAP_DP = 60f
-private const val CANVAS_PADDING_DP = 40f
+private const val NODE_WIDTH_DP = 184f
+private const val NODE_HEIGHT_DP = 46f
+private const val HORIZONTAL_GAP_DP = 20f
+private const val VERTICAL_GAP_DP = 30f
+private const val CANVAS_PADDING_DP = 24f
 private const val MIN_SCALE = 0.25f
 private const val MAX_SCALE = 2.5f
+private const val ZOOM_STEP = 1.15f
 
 internal class TreeNodeLayout(
 	val node: AgentHistoryNodeSnapshot,
@@ -74,7 +83,7 @@ internal class TreeNodeLayout(
 	val children: MutableList<TreeNodeLayout> = mutableListOf(),
 )
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryTreeView(
 	state: PSD2LiveState,
@@ -123,21 +132,11 @@ fun HistoryTreeView(
 				.background(colors.windowBackground),
 			contentAlignment = Alignment.Center,
 		) {
-			Column(
-				horizontalAlignment = Alignment.CenterHorizontally,
-				verticalArrangement = Arrangement.spacedBy(8.dp),
-			) {
-				Text(
-					text = tr("history.title"),
-					style = typography.title.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold),
-					color = colors.textPrimary,
-				)
-				Text(
-					text = tr("history.empty"),
-					style = typography.body.copy(fontSize = 12.sp),
-					color = colors.textMuted,
-				)
-			}
+			Text(
+				text = tr("history.empty"),
+				style = typography.caption.copy(fontSize = 11.sp),
+				color = colors.textMuted,
+			)
 		}
 		return
 	}
@@ -156,9 +155,10 @@ fun HistoryTreeView(
 		}
 		chain.toList()
 	}
+	val headLine = remember(operationChain) { operationChain.mapTo(HashSet()) { it.id } }
 
 	// Calculate Tree Layout in world DP units
-	val (rootNodes, allLayoutNodes, boundsWidth, boundsHeight) = remember(historySnapshot) {
+	val (_, allLayoutNodes, boundsWidth, boundsHeight) = remember(historySnapshot) {
 		calculateTreeLayout(historySnapshot.nodes)
 	}
 
@@ -174,7 +174,7 @@ fun HistoryTreeView(
 		val vpW = viewportSize.width.toFloat()
 		val vpH = viewportSize.height.toFloat()
 		if (boundsWidth <= 0f || boundsHeight <= 0f || vpW <= 0f || vpH <= 0f) return
-		val marginPx = 40f * densityFactor
+		val marginPx = 16f * densityFactor
 		val availableW = (vpW - marginPx * 2f).coerceAtLeast(100f)
 		val availableH = (vpH - marginPx * 2f).coerceAtLeast(100f)
 		val totalContentWDp = boundsWidth + CANVAS_PADDING_DP * 2f
@@ -186,8 +186,20 @@ fun HistoryTreeView(
 		scale = targetScale
 		val drawnContentWPx = totalContentWDp * targetScale * densityFactor
 		val targetPanX = ((vpW - drawnContentWPx) * 0.5f).coerceAtLeast(0f)
-		val targetPanY = marginPx
-		panOffset = Offset(targetPanX, targetPanY)
+		panOffset = Offset(targetPanX, marginPx)
+	}
+
+	/** Zooms by [factor] about [anchor], a point in the viewport that stays put. */
+	fun zoomAbout(factor: Float, anchor: Offset = Offset(viewportSize.width / 2f, viewportSize.height / 2f)) {
+		val nextScale = (scale * factor).coerceIn(MIN_SCALE, MAX_SCALE)
+		if (nextScale == scale) return
+		val worldX = (anchor.x - panOffset.x) / (scale * densityFactor) - CANVAS_PADDING_DP
+		val worldY = (anchor.y - panOffset.y) / (scale * densityFactor) - CANVAS_PADDING_DP
+		scale = nextScale
+		panOffset = Offset(
+			anchor.x - (worldX + CANVAS_PADDING_DP) * nextScale * densityFactor,
+			anchor.y - (worldY + CANVAS_PADDING_DP) * nextScale * densityFactor,
+		)
 	}
 
 	Column(
@@ -196,134 +208,46 @@ fun HistoryTreeView(
 			.background(colors.windowBackground)
 			.clipRectToBounds(),
 	) {
-		// Unified Toolbar
+		HistoryToolbar(
+			operationListOpen = isOperationListOpen,
+			onToggleOperationList = { isOperationListOpen = !isOperationListOpen },
+			showHidden = showHidden,
+			onToggleHidden = { showHidden = !showHidden },
+			searchQuery = searchQuery,
+			onSearchChange = { searchQuery = it },
+			onUndo = viewModel::undoHistory,
+			onRedo = viewModel::redoHistory,
+		)
+
 		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.height(32.dp)
-				.background(colors.panelElevated)
-				.border(BorderStroke(1.dp, colors.divider))
-				.padding(horizontal = 8.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.SpaceBetween,
-		) {
-			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-				Text(
-					text = tr("history.title"),
-					style = typography.title.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold),
-					color = colors.textPrimary,
-				)
-				Text(
-					text = "${historySnapshot.nodes.size} nodes · HEAD: ${historySnapshot.headNodeId.take(10)}…",
-					style = typography.monoSmall.copy(fontSize = 10.sp),
-					color = colors.accent,
-				)
-				Box(
-					modifier = Modifier
-						.width(1.dp)
-						.height(14.dp)
-						.background(colors.divider),
-				)
-				CompactButton(
-					text = tr("project.undo"),
-					onClick = viewModel::undoHistory,
-					height = 20.dp,
-				)
-				CompactButton(
-					text = tr("project.redo"),
-					onClick = viewModel::redoHistory,
-					height = 20.dp,
-				)
-				CompactButton(
-					// The list is a left sidebar, so the arrow points the way it would move.
-					text = (if (isOperationListOpen) "◂ " else "▸ ") + tr("history.operations"),
-					onClick = { isOperationListOpen = !isOperationListOpen },
-					isPrimary = isOperationListOpen,
-					height = 20.dp,
-				)
-				CompactCheckbox(
-					checked = showHidden,
-					onCheckedChange = { showHidden = it },
-					label = tr("project.historyShow"),
-				)
-			}
-
-			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-				// Zoom Controls
-				CompactButton(
-					text = "-",
-					onClick = { scale = (scale / 1.15f).coerceIn(MIN_SCALE, MAX_SCALE) },
-					height = 20.dp,
-				)
-				Text(
-					text = "${(scale * 100).toInt()}%",
-					style = typography.monoSmall.copy(fontSize = 10.sp),
-					color = colors.textMuted,
-				)
-				CompactButton(
-					text = "+",
-					onClick = { scale = (scale * 1.15f).coerceIn(MIN_SCALE, MAX_SCALE) },
-					height = 20.dp,
-				)
-				CompactButton(
-					text = tr("history.resetView"),
-					onClick = {
-						scale = 1.0f
-						panOffset = Offset(0f, 0f)
-					},
-					height = 20.dp,
-				)
-				CompactButton(
-					text = tr("history.fitView"),
-					onClick = { fitToView() },
-					height = 20.dp,
-				)
-
-				Spacer(Modifier.width(4.dp))
-
-				// Search
-				CompactTextField(
-					value = searchQuery,
-					onValueChange = { searchQuery = it },
-					placeholder = tr("history.search"),
-					modifier = Modifier.width(130.dp).height(20.dp),
-				)
-			}
-		}
-
-		// Canvas, operation list and inspection panel share one clipped pane.
-		Box(
 			modifier = Modifier
 				.weight(1f)
 				.fillMaxWidth()
 				.clipRectToBounds(),
 		) {
-			Row(modifier = Modifier.fillMaxSize()) {
-				// Photoshop-style operation list: the chain that led to the current state.
-				if (isOperationListOpen) {
-					OperationListSidebar(
-						chain = operationChain,
-						annotations = state.historyAnnotations,
-						enabled = !state.canvasEditBusy,
-						onCheckout = { viewModel.checkoutHistoryNode(it) },
-						onCollapse = { isOperationListOpen = false },
-						paintSession = viewModel.canvasEditor.paintSession,
-						onJumpToPaintStroke = { viewModel.canvasEditor.jumpToPaintStroke(it) },
-					)
-				}
+			// Photoshop-style operation list: the chain that led to the current state.
+			if (isOperationListOpen) {
+				OperationListSidebar(
+					chain = operationChain,
+					annotations = state.historyAnnotations,
+					enabled = !state.canvasEditBusy,
+					onCheckout = { viewModel.checkoutHistoryNode(it) },
+					paintSession = viewModel.canvasEditor.paintSession,
+					onJumpToPaintStroke = { viewModel.canvasEditor.jumpToPaintStroke(it) },
+				)
+			}
 
-				Box(
-					modifier = Modifier
-						.weight(1f)
-						.fillMaxHeight()
-						.clipRectToBounds(),
-				) {
-				// Interactive Tree Canvas
+			Box(
+				modifier = Modifier
+					.weight(1f)
+					.fillMaxHeight()
+					// clipToBounds() would keep this graph on a layer that ignores dock moves.
+					.clipRectToBounds(),
+			) {
+				// Interactive tree canvas
 				Box(
 					modifier = Modifier
 						.fillMaxSize()
-						// clipToBounds() would keep this graph on a layer that ignores dock moves.
-						.clipRectToBounds()
 						.onSizeChanged { viewportSize = it }
 						.pointerHoverIcon(
 							PointerIcon(
@@ -345,97 +269,55 @@ fun HistoryTreeView(
 						.onPointerEvent(PointerEventType.Scroll) { event ->
 							val change = event.changes.firstOrNull() ?: return@onPointerEvent
 							val delta = change.scrollDelta.y
-							if (delta != 0f) {
-								val mouseX = change.position.x
-								val mouseY = change.position.y
-								val oldScale = scale
-								val zoomFactor = if (delta < 0) 1.15f else 1f / 1.15f
-								val nextScale = (scale * zoomFactor).coerceIn(MIN_SCALE, MAX_SCALE)
-								if (nextScale != oldScale) {
-									val worldX = (mouseX - panOffset.x) / (oldScale * densityFactor) - CANVAS_PADDING_DP
-									val worldY = (mouseY - panOffset.y) / (oldScale * densityFactor) - CANVAS_PADDING_DP
-									scale = nextScale
-									panOffset = Offset(
-										mouseX - (worldX + CANVAS_PADDING_DP) * nextScale * densityFactor,
-										mouseY - (worldY + CANVAS_PADDING_DP) * nextScale * densityFactor,
-									)
-								}
-							}
+							if (delta != 0f) zoomAbout(if (delta < 0) ZOOM_STEP else 1f / ZOOM_STEP, change.position)
 						},
 				) {
-					// Canvas Background Grid & Connecting Lines
+					// Background grid and the edges between parent and child nodes
 					Canvas(modifier = Modifier.fillMaxSize()) {
 						val gridSpacing = 24f * scale * densityFactor
 						if (gridSpacing >= 12f) {
+							val gridColor = colors.textPrimary.copy(alpha = 0.035f)
 							val ox = (panOffset.x % gridSpacing + gridSpacing) % gridSpacing
 							val oy = (panOffset.y % gridSpacing + gridSpacing) % gridSpacing
 							var x = ox
 							while (x < size.width) {
-								drawLine(colors.textPrimary.copy(alpha = 0.05f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+								drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
 								x += gridSpacing
 							}
 							var y = oy
 							while (y < size.height) {
-								drawLine(colors.textPrimary.copy(alpha = 0.05f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+								drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
 								y += gridSpacing
 							}
 						}
 
-						// Draw connecting Bezier curves between parent and child nodes
-						for (layoutNode in allLayoutNodes) {
-							val parent = layoutNode
+						val lineScale = scale.coerceIn(0.6f, 1.6f) * densityFactor
+						for (parent in allLayoutNodes) {
 							val px = worldToScreenX(parent.x + NODE_WIDTH_DP / 2f)
 							val py = worldToScreenY(parent.y + NODE_HEIGHT_DP)
-
 							for (child in parent.children) {
 								val cx = worldToScreenX(child.x + NODE_WIDTH_DP / 2f)
 								val cy = worldToScreenY(child.y)
-
 								val path = Path().apply {
 									moveTo(px, py)
-									cubicTo(
-										px, py + (cy - py) * 0.5f,
-										cx, cy - (cy - py) * 0.5f,
-										cx, cy,
-									)
+									cubicTo(px, py + (cy - py) * 0.5f, cx, cy - (cy - py) * 0.5f, cx, cy)
 								}
-
-								val isBranchToHead = child.node.isHead
-								val strokeColor = if (isBranchToHead) colors.highlight else colors.textMuted.copy(alpha = 0.4f)
-								val strokeWidth = (if (isBranchToHead) 2.5f else 1.5f) * scale.coerceIn(0.6f, 1.8f) * densityFactor
-
+								// The whole path to HEAD reads as one line, like the operation list.
+								val onHeadLine = child.node.id in headLine
 								drawPath(
 									path = path,
-									color = strokeColor,
-									style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
-								)
-
-								// Arrow dot at child connector
-								drawCircle(
-									color = strokeColor,
-									radius = 3.5f * scale.coerceIn(0.6f, 1.5f) * densityFactor,
-									center = Offset(cx, cy),
+									color = if (onHeadLine) colors.highlight else colors.textMuted.copy(alpha = 0.35f),
+									style = Stroke(width = (if (onHeadLine) 2f else 1.2f) * lineScale, cap = StrokeCap.Round),
 								)
 							}
 						}
 					}
 
-					// Place Node Cards
+					val cardShape = RoundedCornerShape((4 * scale.coerceIn(0.5f, 1.2f)).dp)
 					for (layoutNode in allLayoutNodes) {
 						val node = layoutNode.node
-						val isHead = node.isHead
-						val isSelected = node.id == selectedNodeId
-						val matchesSearch = if (searchQuery.isBlank()) true else {
-							node.summary.contains(searchQuery, ignoreCase = true) ||
-								node.id.contains(searchQuery, ignoreCase = true) ||
-								node.actor.contains(searchQuery, ignoreCase = true)
-						}
-
 						val cardX = worldToScreenX(layoutNode.x).roundToInt()
 						val cardY = worldToScreenY(layoutNode.y).roundToInt()
-						val cardWidthDp = (NODE_WIDTH_DP * scale).dp
-						val cardHeightDp = (NODE_HEIGHT_DP * scale).dp
-
 						// Culling outside viewport
 						if (cardX + (NODE_WIDTH_DP * scale * densityFactor) < -100 ||
 							cardX > viewportSize.width + 100 ||
@@ -444,291 +326,584 @@ fun HistoryTreeView(
 						) {
 							continue
 						}
-
-						val isCompact = scale < 0.65f
-						val cornerRadius = (6 * scale.coerceIn(0.5f, 1.2f)).dp
-
-						Box(
+						val matchesSearch = searchQuery.isBlank() ||
+							node.summary.contains(searchQuery, ignoreCase = true) ||
+							node.id.contains(searchQuery, ignoreCase = true) ||
+							node.actor.contains(searchQuery, ignoreCase = true) ||
+							state.historyAnnotations[node.id]?.title?.contains(searchQuery, ignoreCase = true) == true
+						HistoryNodeCard(
+							node = node,
+							annotation = state.historyAnnotations[node.id],
+							selected = node.id == selectedNodeId,
+							dimmed = !matchesSearch,
+							scale = scale,
+							shape = cardShape,
+							onClick = {
+								viewModel.selectHistoryNode(node.id)
+								isInspectionPanelOpen = true
+							},
+							onDoubleClick = {
+								if (!node.isHead && !state.canvasEditBusy) viewModel.checkoutHistoryNode(node.id)
+							},
 							modifier = Modifier
 								.offset { IntOffset(cardX, cardY) }
-								.size(width = cardWidthDp, height = cardHeightDp)
-								.clipShape(RoundedCornerShape(cornerRadius))
-								.background(
-									if (isSelected) colors.panelElevated
-									else colors.panelBackground.copy(alpha = if (matchesSearch) 0.95f else 0.35f)
-								)
-								.border(
-									BorderStroke(
-										width = if (isSelected || isHead) (2 * scale.coerceIn(0.6f, 1.2f)).dp else (1 * scale.coerceIn(0.6f, 1.2f)).dp,
-										color = when {
-											isHead -> colors.highlight
-											isSelected -> colors.accent
-											!matchesSearch -> colors.divider.copy(alpha = 0.2f)
-											else -> colors.border
-										},
-									),
-									RoundedCornerShape(cornerRadius),
-								)
-								.clickable {
-									viewModel.selectHistoryNode(node.id)
-									isInspectionPanelOpen = true
-								}
-								.padding((6 * scale.coerceIn(0.6f, 1.0f)).dp),
-						) {
-							if (isCompact) {
-								// Compact View when zoomed out
-								Column(
-									modifier = Modifier.fillMaxSize(),
-									verticalArrangement = Arrangement.SpaceBetween,
-								) {
-									Row(
-										modifier = Modifier.fillMaxWidth(),
-										verticalAlignment = Alignment.CenterVertically,
-										horizontalArrangement = Arrangement.SpaceBetween,
-									) {
-										Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-											ActorBadge(actor = node.actor, scale = scale.coerceIn(0.5f, 0.8f))
-											Text(
-												text = "#${node.id.takeLast(6)}",
-												style = typography.monoSmall.copy(fontSize = (8 * scale.coerceIn(0.6f, 1.0f)).sp),
-												color = colors.textMuted,
-											)
-										}
-										if (isHead) {
-											Box(
-												modifier = Modifier
-													.size((6 * scale.coerceIn(0.6f, 1.2f)).dp)
-													.clip(CircleShape)
-													.background(colors.highlight)
-											)
-										}
-									}
-									Text(
-										text = state.historyAnnotations[node.id]?.title?.takeIf { it.isNotBlank() } ?: node.summary,
-										style = typography.body.copy(
-											fontSize = (9 * scale.coerceIn(0.6f, 1.0f)).sp,
-											fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-										),
-										color = if (!matchesSearch) colors.textMuted else colors.textPrimary,
-										maxLines = 1,
-										overflow = TextOverflow.Ellipsis,
-									)
-								}
-							} else {
-								// Detailed View when normal or zoomed in
-								Column(
-									modifier = Modifier.fillMaxSize(),
-									verticalArrangement = Arrangement.SpaceBetween,
-								) {
-									// Card Header: Actor Chip + Short ID + HEAD badge
-									Row(
-										modifier = Modifier.fillMaxWidth(),
-										verticalAlignment = Alignment.CenterVertically,
-										horizontalArrangement = Arrangement.SpaceBetween,
-									) {
-										Row(
-											verticalAlignment = Alignment.CenterVertically,
-											horizontalArrangement = Arrangement.spacedBy((4 * scale.coerceIn(0.7f, 1.0f)).dp),
-										) {
-											ActorBadge(actor = node.actor, scale = scale.coerceIn(0.7f, 1.0f))
-											Text(
-												text = "#${node.id.takeLast(7)}",
-												style = typography.monoSmall.copy(fontSize = (9 * scale.coerceIn(0.7f, 1.1f)).sp),
-												color = colors.textMuted,
-											)
-										}
-
-										if (isHead) {
-											Box(
-												modifier = Modifier
-													.clip(RoundedCornerShape((4 * scale).dp))
-													.background(colors.highlightContainer)
-													.border(BorderStroke((1 * scale).dp, colors.highlight), RoundedCornerShape((4 * scale).dp))
-													.padding(horizontal = (4 * scale).dp, vertical = (1 * scale).dp),
-											) {
-												Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy((3 * scale).dp)) {
-													Box(modifier = Modifier.size((5 * scale).dp).clip(CircleShape).background(colors.highlight))
-													Text(
-														text = tr("history.head"),
-														style = typography.monoSmall.copy(fontSize = (8.5 * scale.coerceIn(0.7f, 1.1f)).sp, fontWeight = FontWeight.Bold),
-														color = colors.highlight,
-													)
-												}
-											}
-										}
-									}
-
-									// Summary
-									Text(
-										text = state.historyAnnotations[node.id]?.title?.takeIf { it.isNotBlank() } ?: node.summary,
-										style = typography.body.copy(
-											fontSize = (10.5 * scale.coerceIn(0.75f, 1.2f)).sp,
-											fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-											lineHeight = (13.5 * scale.coerceIn(0.75f, 1.2f)).sp,
-										),
-										color = if (!matchesSearch) colors.textMuted else colors.textPrimary,
-										maxLines = 2,
-										overflow = TextOverflow.Ellipsis,
-									)
-
-									// Timestamp
-									Text(
-										text = node.createdAt.take(19).replace('T', ' '),
-										style = typography.caption.copy(fontSize = (8.5 * scale.coerceIn(0.75f, 1.1f)).sp),
-										color = colors.textMuted,
-									)
-								}
-							}
-						}
+								.size(width = (NODE_WIDTH_DP * scale).dp, height = (NODE_HEIGHT_DP * scale).dp),
+						)
 					}
 				}
 
-				// Side / Floating Inspection Panel for Selected Node
+				// Bottom-left: node count and zoom, where the edit canvas keeps its stats pill.
+				ZoomPill(
+					nodeCount = historySnapshot.nodes.size,
+					scale = scale,
+					onZoomOut = { zoomAbout(1f / ZOOM_STEP) },
+					onZoomIn = { zoomAbout(ZOOM_STEP) },
+					onReset = {
+						scale = 1f
+						panOffset = Offset.Zero
+					},
+					onFit = { fitToView() },
+					modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+				)
+
 				if (selectedNode != null && isInspectionPanelOpen) {
-					Box(
-						modifier = Modifier
-							.align(Alignment.BottomEnd)
-							.padding(12.dp)
-							.width(320.dp)
-							.heightIn(max = 480.dp)
-							.clip(RoundedCornerShape(8.dp))
-							.background(colors.panelElevated)
-							.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(8.dp))
-							.padding(12.dp),
-					) {
-						Column(
-							modifier = Modifier
-								.fillMaxWidth()
-								.verticalScroll(rememberScrollState()),
-							verticalArrangement = Arrangement.spacedBy(8.dp),
-						) {
-							Row(
-								modifier = Modifier.fillMaxWidth(),
-								verticalAlignment = Alignment.CenterVertically,
-								horizontalArrangement = Arrangement.SpaceBetween,
-							) {
-								Text(
-									text = selectedNode.summary,
-									style = typography.title.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold),
-									color = colors.textPrimary,
-									maxLines = 2,
-									overflow = TextOverflow.Ellipsis,
-									modifier = Modifier.weight(1f),
-								)
-								Spacer(Modifier.width(6.dp))
-								if (selectedNode.isHead) {
-									Text(
-										text = "● HEAD",
-										style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-										color = colors.highlight,
-									)
-									Spacer(Modifier.width(6.dp))
-								}
-								CompactButton(
-									text = "✕",
-									onClick = { isInspectionPanelOpen = false },
-									height = 20.dp,
-								)
-							}
-
-							val annotation = state.historyAnnotations[selectedNode.id] ?: io.github.psd2live.ui.state.HistoryAnnotation()
-							var title by remember(selectedNode.id, annotation) { mutableStateOf(annotation.title) }
-							var note by remember(selectedNode.id, annotation) { mutableStateOf(annotation.note) }
-							var hidden by remember(selectedNode.id, annotation) { mutableStateOf(annotation.hidden) }
-
-							Column(
-								modifier = Modifier
-									.fillMaxWidth()
-									.background(colors.inputBackground, RoundedCornerShape(4.dp))
-									.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp))
-									.padding(8.dp),
-								verticalArrangement = Arrangement.spacedBy(6.dp),
-							) {
-								Text(
-									text = tr("project.historyTitle"),
-									style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-									color = colors.textMuted,
-								)
-								CompactTextField(
-									value = title,
-									onValueChange = { title = it },
-									placeholder = tr("project.historyTitle"),
-									modifier = Modifier.fillMaxWidth(),
-									height = 22.dp,
-								)
-								Text(
-									text = tr("project.historyNote"),
-									style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-									color = colors.textMuted,
-								)
-								CompactTextField(
-									value = note,
-									onValueChange = { note = it },
-									placeholder = tr("project.historyNote"),
-									modifier = Modifier.fillMaxWidth(),
-									height = 22.dp,
-								)
-								Row(
-									modifier = Modifier.fillMaxWidth(),
-									verticalAlignment = Alignment.CenterVertically,
-									horizontalArrangement = Arrangement.SpaceBetween,
-								) {
-									CompactCheckbox(
-										checked = hidden,
-										onCheckedChange = { hidden = it },
-										label = tr("project.historyHide"),
-									)
-									CompactButton(
-										text = tr("project.historyApply"),
-										onClick = { viewModel.editHistoryAnnotation(selectedNode.id, title, note, hidden) },
-										height = 20.dp,
-										isPrimary = true,
-									)
-								}
-							}
-							Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-								DetailRow(label = tr("history.nodeId"), value = selectedNode.id)
-								DetailRow(label = tr("history.parentId"), value = selectedNode.parentId ?: "root")
-								DetailRow(label = tr("history.revisionId"), value = selectedNode.revisionId.take(16))
-								DetailRow(label = "Actor", value = selectedNode.actor)
-								DetailRow(label = tr("history.time"), value = selectedNode.createdAt.take(19).replace('T', ' '))
-							}
-
-							Row(
-								modifier = Modifier.fillMaxWidth(),
-								horizontalArrangement = Arrangement.SpaceBetween,
-								verticalAlignment = Alignment.CenterVertically,
-							) {
-								CompactButton(
-									text = tr("history.copyId"),
-									onClick = {
-										val sel = StringSelection(selectedNode.id)
-										Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, sel)
-									},
-									height = 24.dp,
-								)
-
-								if (!selectedNode.isHead) {
-									CompactButton(
-										text = tr("history.checkout"),
-										onClick = { viewModel.checkoutHistoryNode(selectedNode.id) },
-										isPrimary = true,
-										height = 24.dp,
-									)
-								} else {
-									Text(
-										text = tr("history.current"),
-										style = typography.caption.copy(fontSize = 10.5.sp),
-										color = colors.highlight,
-									)
-								}
-							}
-						}
-					}
-				}
+					NodeInspector(
+						node = selectedNode,
+						annotation = state.historyAnnotations[selectedNode.id] ?: HistoryAnnotation(),
+						canCheckout = !state.canvasEditBusy,
+						onClose = { isInspectionPanelOpen = false },
+						onApply = { title, note, hidden -> viewModel.editHistoryAnnotation(selectedNode.id, title, note, hidden) },
+						onCheckout = { viewModel.checkoutHistoryNode(selectedNode.id) },
+						modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+					)
 				}
 			}
 		}
+	}
+}
+
+/** Toolbar in the log and parameters panels' style: 22dp icon buttons whose labels show when there is room. */
+@Composable
+private fun HistoryToolbar(
+	operationListOpen: Boolean,
+	onToggleOperationList: () -> Unit,
+	showHidden: Boolean,
+	onToggleHidden: () -> Unit,
+	searchQuery: String,
+	onSearchChange: (String) -> Unit,
+	onUndo: () -> Unit,
+	onRedo: () -> Unit,
+) {
+	val colors = LocalToolColors.current
+	BoxWithConstraints(
+		Modifier
+			.fillMaxWidth()
+			.height(28.dp)
+			.background(colors.panelElevated)
+			.border(BorderStroke(1.dp, colors.divider))
+			.padding(horizontal = 4.dp),
+	) {
+		val searchWidth = if (maxWidth < 260.dp) 88.dp else 132.dp
+		// Labels appear in this order as the panel widens, each only once everything before it fits.
+		val labels = listOf(tr("history.operations"), tr("project.historyShow"))
+		val labelsShown = shownToolLabels(labels, 4, maxWidth - searchWidth - 6.dp)
+		Row(
+			modifier = Modifier.fillMaxSize(),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(3.dp),
+		) {
+			PanelToolButton(
+				label = labels[0],
+				showLabel = labelsShown > 0,
+				onClick = onToggleOperationList,
+				enabled = true,
+				active = operationListOpen,
+				tooltip = tr("history.operations"),
+			) {
+				IconOperationList(tint = if (operationListOpen) colors.accent else colors.textPrimary)
+			}
+			PanelToolbarSeparator()
+			CompactIconButton(onClick = onUndo, size = 22.dp, tooltip = tr("project.undo")) {
+				IconUndo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+			}
+			CompactIconButton(onClick = onRedo, size = 22.dp, tooltip = tr("project.redo")) {
+				IconRedo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+			}
+			PanelToolbarSeparator()
+			PanelToolButton(
+				label = labels[1],
+				showLabel = labelsShown > 1,
+				onClick = onToggleHidden,
+				enabled = true,
+				active = showHidden,
+				tooltip = tr("project.historyShow"),
+			) {
+				IconEye(
+					visible = showHidden,
+					modifier = Modifier.size(12.dp),
+					tint = if (showHidden) colors.accent else colors.textPrimary,
+				)
+			}
+			Spacer(Modifier.weight(1f))
+			CompactTextField(
+				value = searchQuery,
+				onValueChange = onSearchChange,
+				placeholder = tr("history.search"),
+				leadingIcon = { IconSearch(tint = colors.textMuted) },
+				trailingIcon = if (searchQuery.isEmpty()) null else {
+					{
+						CompactIconButton(onClick = { onSearchChange("") }, size = 16.dp, tooltip = tr("parameters.clearSearch")) {
+							IconClose(modifier = Modifier.size(8.dp), tint = colors.textMuted)
+						}
+					}
+				},
+				modifier = Modifier.width(searchWidth),
+				height = 22.dp,
+			)
+		}
+	}
+}
+
+/**
+ * One history node on the tree. HEAD carries a highlight stripe down its left edge, the selected
+ * card takes the selection color, and cards outside a search fade back.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HistoryNodeCard(
+	node: AgentHistoryNodeSnapshot,
+	annotation: HistoryAnnotation?,
+	selected: Boolean,
+	dimmed: Boolean,
+	scale: Float,
+	shape: Shape,
+	onClick: () -> Unit,
+	onDoubleClick: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	val isHead = node.isHead
+	// A hidden branch still drawn because "show hidden" is on reads as set aside.
+	val fade = when {
+		dimmed -> 0.35f
+		annotation?.hidden == true -> 0.6f
+		else -> 1f
+	}
+	val textScale = scale.coerceIn(0.6f, 1.4f)
+	val stripe = (3 * scale.coerceIn(0.6f, 1.2f)).dp
+	TooltipArea(
+		tooltip = { NodeTooltip(node, annotation, hint = if (isHead) null else tr("history.hint.doubleClick")) },
+		modifier = modifier,
+		delayMillis = 600,
+	) {
+		Box(
+			modifier = Modifier
+				.fillMaxSize()
+				.clipShape(shape)
+				.background(
+					when {
+						selected -> colors.selection
+						hovered -> colors.controlHover
+						else -> colors.panelBackground
+					}.copy(alpha = fade)
+				)
+				.border(
+					BorderStroke(
+						if (selected || isHead) 1.5.dp else 1.dp,
+						when {
+							isHead -> colors.highlight
+							selected -> colors.accent
+							hovered -> colors.borderHover
+							else -> colors.border
+						}.copy(alpha = fade),
+					),
+					shape,
+				)
+				.drawBehind {
+					if (isHead) drawRect(colors.highlight, size = Size(stripe.toPx(), size.height))
+				}
+				.hoverable(interaction)
+				.combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onDoubleClick = onDoubleClick)
+				.padding(start = stripe + (5 * scale).dp, end = (6 * scale).dp),
+			contentAlignment = Alignment.CenterStart,
+		) {
+			val title = annotation?.title?.takeIf { it.isNotBlank() } ?: node.summary
+			val titleColor = (if (selected) colors.selectionText else colors.textPrimary).copy(alpha = fade)
+			val metaColor = colors.textMuted.copy(alpha = fade)
+			if (scale < 0.55f) {
+				// Zoomed far out only the title is legible.
+				Text(
+					text = title,
+					style = typography.body.copy(fontSize = (11 * textScale).sp, fontWeight = FontWeight.Medium),
+					color = titleColor,
+					maxLines = 1,
+					overflow = TextOverflow.Ellipsis,
+				)
+				return@Box
+			}
+			Column(verticalArrangement = Arrangement.spacedBy((2 * scale).dp)) {
+				Row(verticalAlignment = Alignment.CenterVertically) {
+					Text(
+						text = title,
+						style = typography.body.copy(
+							fontSize = (11 * scale).sp,
+							lineHeight = (13 * scale).sp,
+							fontWeight = if (selected || isHead) FontWeight.SemiBold else FontWeight.Normal,
+						),
+						color = titleColor,
+						maxLines = 1,
+						overflow = TextOverflow.Ellipsis,
+						modifier = Modifier.weight(1f),
+					)
+					if (isHead) {
+						Spacer(Modifier.width((4 * scale).dp))
+						Text(
+							text = tr("history.head"),
+							style = typography.monoSmall.copy(fontSize = (8.5 * scale).sp, fontWeight = FontWeight.Bold),
+							color = colors.highlight,
+						)
+					}
+				}
+				Row(verticalAlignment = Alignment.CenterVertically) {
+					ActorBadge(actor = node.actor, scale = scale, alpha = fade)
+					Spacer(Modifier.width((5 * scale).dp))
+					Text(
+						text = shortTime(node.createdAt),
+						style = typography.caption.copy(fontSize = (9.5 * scale).sp, lineHeight = (11 * scale).sp),
+						color = metaColor,
+						maxLines = 1,
+						modifier = Modifier.weight(1f),
+					)
+					if (!annotation?.note.isNullOrBlank()) {
+						IconNote(tint = metaColor, modifier = Modifier.size((9 * scale).dp))
+						Spacer(Modifier.width((4 * scale).dp))
+					}
+					Text(
+						text = "#${node.id.takeLast(6)}",
+						style = typography.monoSmall.copy(fontSize = (9 * scale).sp, lineHeight = (11 * scale).sp),
+						color = metaColor,
+						maxLines = 1,
+					)
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Everything a card or list row cuts short: the full title, the original summary behind a renamed
+ * node, its note, who made it and when, and what clicking does.
+ */
+@Composable
+private fun NodeTooltip(node: AgentHistoryNodeSnapshot, annotation: HistoryAnnotation?, hint: String?) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val customTitle = annotation?.title?.takeIf { it.isNotBlank() }
+	val note = annotation?.note?.takeIf { it.isNotBlank() }
+	Surface(
+		color = colors.panelElevated,
+		shape = RoundedCornerShape(3.dp),
+		border = BorderStroke(1.dp, colors.border),
+		elevation = 4.dp,
+	) {
+		Column(
+			modifier = Modifier.widthIn(max = 280.dp).padding(horizontal = 8.dp, vertical = 6.dp),
+			verticalArrangement = Arrangement.spacedBy(3.dp),
+		) {
+			Row(verticalAlignment = Alignment.CenterVertically) {
+				Text(
+					text = customTitle ?: node.summary,
+					style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+					color = colors.textPrimary,
+					modifier = Modifier.weight(1f, fill = false),
+				)
+				if (node.isHead) {
+					Spacer(Modifier.width(6.dp))
+					Text(
+						text = tr("history.head"),
+						style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+						color = colors.highlight,
+					)
+				}
+			}
+			if (customTitle != null) {
+				Text(text = node.summary, style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
+			}
+			if (note != null) {
+				Row(verticalAlignment = Alignment.Top) {
+					IconNote(tint = colors.textMuted, modifier = Modifier.padding(top = 2.dp).size(9.dp))
+					Spacer(Modifier.width(4.dp))
+					Text(text = note, style = typography.caption.copy(fontSize = 10.sp), color = colors.textPrimary)
+				}
+			}
+			Row(verticalAlignment = Alignment.CenterVertically) {
+				ActorBadge(actor = node.actor)
+				Spacer(Modifier.width(6.dp))
+				Text(
+					text = node.createdAt.take(19).replace('T', ' '),
+					style = typography.caption.copy(fontSize = 10.sp),
+					color = colors.textMuted,
+				)
+				Spacer(Modifier.width(6.dp))
+				Text(
+					text = "#${node.id.takeLast(10)}",
+					style = typography.monoSmall.copy(fontSize = 9.5.sp),
+					color = colors.textMuted,
+				)
+			}
+			if (hint != null) {
+				Text(text = hint, style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textDisabled)
+			}
+		}
+	}
+}
+
+/** Node count and zoom controls on a frosted pill, as the edit canvas shows its stats. */
+@Composable
+private fun ZoomPill(
+	nodeCount: Int,
+	scale: Float,
+	onZoomOut: () -> Unit,
+	onZoomIn: () -> Unit,
+	onReset: () -> Unit,
+	onFit: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	Row(
+		modifier = modifier
+			.frostedGlass(shape = RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.78f)
+			.padding(horizontal = 3.dp, vertical = 2.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Text(
+			text = tr("history.nodeCount", nodeCount),
+			style = typography.caption.copy(fontSize = 11.sp),
+			color = colors.textMuted,
+			modifier = Modifier.padding(horizontal = 5.dp),
+		)
+		PillSeparator()
+		PillButton(tooltip = tr("history.zoomOut"), onClick = onZoomOut) { tint ->
+			IconZoomStep(plus = false, tint = tint)
+		}
+		PillButton(tooltip = tr("history.resetView"), onClick = onReset, width = 40.dp) { tint ->
+			Text(
+				text = "${(scale * 100).roundToInt()}%",
+				style = typography.caption.copy(fontSize = 11.sp),
+				color = tint,
+				textAlign = TextAlign.Center,
+				maxLines = 1,
+			)
+		}
+		PillButton(tooltip = tr("history.zoomIn"), onClick = onZoomIn) { tint ->
+			IconZoomStep(plus = true, tint = tint)
+		}
+		PillSeparator()
+		PillButton(tooltip = tr("history.fitView"), onClick = onFit) { tint -> IconFitView(tint = tint) }
+	}
+}
+
+@Composable
+private fun PillSeparator() {
+	Box(
+		Modifier
+			.padding(horizontal = 2.dp)
+			.width(1.dp)
+			.height(12.dp)
+			.background(LocalToolColors.current.divider),
+	)
+}
+
+/** Borderless pill button; the tint brightens on hover like the log header icons. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PillButton(
+	tooltip: String,
+	onClick: () -> Unit,
+	width: androidx.compose.ui.unit.Dp = 20.dp,
+	content: @Composable (Color) -> Unit,
+) {
+	val colors = LocalToolColors.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	TooltipArea(tooltip = { ParameterTooltip(tooltip) }, delayMillis = 400) {
+		Box(
+			modifier = Modifier
+				.width(width)
+				.height(20.dp)
+				.background(if (hovered) colors.controlHover else Color.Transparent, RoundedCornerShape(3.dp))
+				.hoverable(interaction)
+				.clickable(interactionSource = interaction, indication = null, onClick = onClick)
+				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))),
+			contentAlignment = Alignment.Center,
+		) {
+			content(if (hovered) colors.textPrimary else colors.textMuted)
+		}
+	}
+}
+
+/**
+ * The selected node's details, annotation and checkout, on a floating card over the tree's
+ * bottom-right corner. Rows follow the inspector's label-then-field form.
+ */
+@Composable
+private fun NodeInspector(
+	node: AgentHistoryNodeSnapshot,
+	annotation: HistoryAnnotation,
+	canCheckout: Boolean,
+	onClose: () -> Unit,
+	onApply: (title: String, note: String, hidden: Boolean) -> Unit,
+	onCheckout: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	var title by remember(node.id, annotation) { mutableStateOf(annotation.title) }
+	var note by remember(node.id, annotation) { mutableStateOf(annotation.note) }
+	var hidden by remember(node.id, annotation) { mutableStateOf(annotation.hidden) }
+	val dirty = title != annotation.title || note != annotation.note || hidden != annotation.hidden
+	val shape = RoundedCornerShape(4.dp)
+
+	Column(
+		modifier = modifier
+			.width(248.dp)
+			.heightIn(max = 400.dp)
+			.background(colors.panelElevated, shape)
+			.border(BorderStroke(1.dp, colors.border), shape),
+	) {
+		// Header: who made the node, what it did, and whether it is HEAD.
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.height(26.dp)
+				.padding(start = 8.dp, end = 3.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			ActorBadge(actor = node.actor)
+			Spacer(Modifier.width(6.dp))
+			Text(
+				text = node.summary,
+				style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+				color = colors.textPrimary,
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+				modifier = Modifier.weight(1f),
+			)
+			if (node.isHead) {
+				Spacer(Modifier.width(4.dp))
+				Text(
+					text = tr("history.head"),
+					style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+					color = colors.highlight,
+				)
+			}
+			Spacer(Modifier.width(2.dp))
+			CompactIconButton(onClick = onClose, size = 20.dp, tooltip = tr("workspace.close")) {
+				IconClose(modifier = Modifier.size(8.dp), tint = colors.textMuted)
+			}
+		}
+		Divider(color = colors.divider)
+
+		Column(
+			modifier = Modifier
+				.fillMaxWidth()
+				.verticalScroll(rememberScrollState())
+				.padding(8.dp),
+			verticalArrangement = Arrangement.spacedBy(4.dp),
+		) {
+			DetailRow(label = tr("history.time"), value = node.createdAt.take(19).replace('T', ' '))
+			DetailRow(label = tr("history.nodeId"), value = node.id) {
+				val copy = StringSelection(node.id)
+				Toolkit.getDefaultToolkit().systemClipboard.setContents(copy, copy)
+			}
+			DetailRow(label = tr("history.parentId"), value = node.parentId ?: "root")
+			DetailRow(label = tr("history.revisionId"), value = node.revisionId.take(16))
+
+			Divider(color = colors.divider, modifier = Modifier.padding(vertical = 2.dp))
+
+			FormRow(tr("project.historyTitle")) {
+				CompactTextField(
+					value = title,
+					onValueChange = { title = it },
+					placeholder = node.summary,
+					modifier = Modifier.fillMaxWidth(),
+					height = 22.dp,
+				)
+			}
+			FormRow(tr("project.historyNote")) {
+				CompactTextField(
+					value = note,
+					onValueChange = { note = it },
+					modifier = Modifier.fillMaxWidth(),
+					height = 22.dp,
+				)
+			}
+			CompactCheckbox(
+				checked = hidden,
+				onCheckedChange = { hidden = it },
+				label = tr("project.historyHide"),
+				modifier = Modifier.padding(start = FORM_LABEL_WIDTH),
+			)
+		}
+
+		Divider(color = colors.divider)
+		Row(
+			modifier = Modifier.fillMaxWidth().padding(8.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(6.dp),
+		) {
+			CompactButton(
+				text = tr("project.historyApply"),
+				onClick = { onApply(title, note, hidden) },
+				enabled = dirty,
+				height = 24.dp,
+				modifier = Modifier.weight(1f),
+			)
+			if (node.isHead) {
+				Text(
+					text = tr("history.current"),
+					style = typography.caption.copy(fontSize = 11.sp),
+					color = colors.highlight,
+					textAlign = TextAlign.Center,
+					maxLines = 1,
+					modifier = Modifier.weight(1f),
+				)
+			} else {
+				CompactButton(
+					text = tr("history.checkout"),
+					onClick = onCheckout,
+					enabled = canCheckout,
+					isPrimary = true,
+					height = 24.dp,
+					modifier = Modifier.weight(1f),
+				)
+			}
+		}
+	}
+}
+
+private val FORM_LABEL_WIDTH = 64.dp
+
+/** The inspector's form row: an end-aligned label, then the control. */
+@Composable
+private fun FormRow(label: String, content: @Composable () -> Unit) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+		Text(
+			text = label,
+			style = typography.caption.copy(fontSize = 11.sp),
+			color = colors.textPrimary,
+			textAlign = TextAlign.End,
+			maxLines = 1,
+			overflow = TextOverflow.Ellipsis,
+			modifier = Modifier.width(FORM_LABEL_WIDTH).padding(end = 8.dp),
+		)
+		Box(Modifier.weight(1f)) { content() }
 	}
 }
 
@@ -743,10 +918,9 @@ fun HistoryTreeView(
 @Composable
 private fun OperationListSidebar(
 	chain: List<AgentHistoryNodeSnapshot>,
-	annotations: Map<String, io.github.psd2live.ui.state.HistoryAnnotation>,
+	annotations: Map<String, HistoryAnnotation>,
 	enabled: Boolean,
 	onCheckout: (String) -> Unit,
-	onCollapse: () -> Unit,
 	paintSession: PaintSession? = null,
 	onJumpToPaintStroke: ((Int) -> Unit)? = null,
 ) {
@@ -760,249 +934,303 @@ private fun OperationListSidebar(
 		if (chain.isNotEmpty()) listState.animateScrollToItem(chain.lastIndex)
 	}
 
-	Column(
-		modifier = Modifier
-			.fillMaxHeight()
-			.width(240.dp)
-			.background(colors.panelElevated)
-			.border(BorderStroke(1.dp, colors.divider)),
-	) {
-		Row(
+	Row(Modifier.fillMaxHeight()) {
+		Column(
 			modifier = Modifier
-				.fillMaxWidth()
-				.height(26.dp)
-				.background(colors.panelBackground)
-				.padding(start = 8.dp, end = 4.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.SpaceBetween,
+				.fillMaxHeight()
+				.width(208.dp)
+				.background(colors.panelBackground),
 		) {
-			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-				Text(
-					text = tr("history.operations"),
-					style = typography.title.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-					color = colors.textPrimary,
-				)
-				Text(
-					text = "${chain.size}",
-					style = typography.monoSmall.copy(fontSize = 10.sp),
-					color = colors.textMuted,
-				)
-			}
-			CompactButton(text = "‹", onClick = onCollapse, height = 18.dp)
-		}
+			SidebarHeader(title = tr("history.operations"), count = chain.size)
 
-		if (paintSession != null) {
-			Column(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(colors.panelBackground.copy(alpha = 0.5f))
-					.border(BorderStroke(1.dp, colors.accent.copy(alpha = 0.4f)))
-			) {
-				Row(
-					modifier = Modifier
-						.fillMaxWidth()
-						.background(colors.accent.copy(alpha = 0.12f))
-						.padding(horizontal = 8.dp, vertical = 5.dp),
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.SpaceBetween,
-				) {
-					Text(
-						text = tr("editor.paint.session", paintSession.layerName),
-						style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold),
-						color = colors.accent,
-						maxLines = 1,
-						overflow = TextOverflow.Ellipsis,
-						modifier = Modifier.weight(1f),
-					)
-					Text(
-						text = tr("editor.paint.strokeCount", paintSession.strokeCount),
-						style = typography.monoSmall.copy(fontSize = 9.5.sp),
-						color = colors.textMuted,
-					)
-				}
+			if (paintSession != null) {
+				SidebarHeader(
+					title = tr("editor.paint.session", paintSession.layerName),
+					trailing = tr("editor.paint.strokeCount", paintSession.strokeCount),
+					accent = true,
+				)
 				LazyColumn(
 					modifier = Modifier
 						.fillMaxWidth()
 						.heightIn(max = 160.dp),
 				) {
 					itemsIndexed(paintSession.strokeRecords) { idx, record ->
-						val isCurrent = idx == paintSession.currentStrokeIndex
-						val isFuture = idx > paintSession.currentStrokeIndex
-						Row(
-							modifier = Modifier
-								.fillMaxWidth()
-								.height(22.dp)
-								.background(
-									when {
-										isCurrent -> colors.accent.copy(alpha = 0.25f)
-										else -> Color.Transparent
-									}
-								)
-								.clickable(enabled = enabled) {
-									onJumpToPaintStroke?.invoke(idx)
-								}
-								.padding(horizontal = 8.dp),
-							verticalAlignment = Alignment.CenterVertically,
-							horizontalArrangement = Arrangement.spacedBy(6.dp),
-						) {
-							Text(
-								text = if (idx == 0) "•" else "#$idx",
-								style = typography.monoSmall.copy(fontSize = 9.5.sp),
-								color = if (isCurrent) colors.accent else if (isFuture) colors.textMuted.copy(alpha = 0.5f) else colors.textMuted,
-								modifier = Modifier.width(22.dp),
-							)
-							Text(
-								text = record.name,
-								style = typography.body.copy(fontSize = 10.5.sp),
-								color = if (isCurrent) colors.textPrimary else if (isFuture) colors.textMuted.copy(alpha = 0.5f) else colors.textPrimary,
-								maxLines = 1,
-								overflow = TextOverflow.Ellipsis,
-								modifier = Modifier.weight(1f),
-							)
-							if (isCurrent) {
-								Box(
-									modifier = Modifier
-										.size(6.dp)
-										.background(colors.accent, CircleShape)
-								)
-							}
-						}
+						ListRow(
+							tooltip = { ParameterTooltip(record.name) },
+							index = if (idx == 0) "•" else "$idx",
+							title = record.name,
+							current = idx == paintSession.currentStrokeIndex,
+							future = idx > paintSession.currentStrokeIndex,
+							enabled = enabled,
+							onClick = { onJumpToPaintStroke?.invoke(idx) },
+						)
 					}
 				}
+				Divider(color = colors.divider)
 			}
-			Divider(color = colors.divider, thickness = 1.dp)
-		}
 
-		LazyColumn(
-			state = listState,
-			modifier = Modifier
-				.weight(1f)
-				.fillMaxWidth(),
-		) {
-			itemsIndexed(chain, key = { _, node -> node.id }) { index, node ->
-				OperationListRow(
-					index = index,
-					node = node,
-					title = annotations[node.id]?.title?.takeIf { it.isNotBlank() },
-					enabled = enabled,
-					onClick = { onCheckout(node.id) },
-				)
+			LazyColumn(
+				state = listState,
+				modifier = Modifier
+					.weight(1f)
+					.fillMaxWidth(),
+			) {
+				itemsIndexed(chain, key = { _, node -> node.id }) { index, node ->
+					ListRow(
+						tooltip = {
+							NodeTooltip(node, annotations[node.id], hint = if (node.isHead) null else tr("history.hint.click"))
+						},
+						index = "${index + 1}",
+						// The annotations are what the tree cards show, so a renamed node reads the same here.
+						title = annotations[node.id]?.title?.takeIf { it.isNotBlank() } ?: node.summary,
+						current = node.isHead,
+						enabled = enabled,
+						onClick = { onCheckout(node.id) },
+						trailing = { ActorBadge(actor = node.actor, scale = 0.85f) },
+					)
+				}
 			}
 		}
+		Box(Modifier.fillMaxHeight().width(1.dp).background(colors.divider))
 	}
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun OperationListRow(
-	index: Int,
-	node: AgentHistoryNodeSnapshot,
-	title: String?,
-	enabled: Boolean,
-	onClick: () -> Unit,
-) {
+private fun SidebarHeader(title: String, count: Int? = null, trailing: String? = count?.toString(), accent: Boolean = false) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val interactionSource = remember { MutableInteractionSource() }
-	val isHovered by interactionSource.collectIsHoveredAsState()
-	val isCurrent = node.isHead
-	val canRewind = enabled && !isCurrent
-
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
 			.height(24.dp)
-			.background(
-				when {
-					isCurrent -> colors.selection.copy(alpha = 0.35f)
-					isHovered && canRewind -> colors.controlHover
-					else -> Color.Transparent
-				}
-			)
-			.drawBehind {
-				if (isCurrent) drawRect(color = colors.accent, topLeft = Offset.Zero, size = Size(2.dp.toPx(), size.height))
-			}
-			.pointerHoverIcon(
-				PointerIcon(
-					if (canRewind) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-					else Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
-				)
-			)
-			.clickable(enabled = canRewind, interactionSource = interactionSource, indication = null) { onClick() }
-			.padding(start = 8.dp, end = 6.dp),
+			.background(if (accent) colors.accent.copy(alpha = 0.12f) else colors.panelElevated.copy(alpha = 0.55f))
+			.padding(horizontal = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		Text(
-			text = "${index + 1}",
-			style = typography.monoSmall.copy(fontSize = 9.5.sp),
-			color = if (isCurrent) colors.accent else colors.textDisabled,
-			modifier = Modifier.width(18.dp),
-		)
-		Text(
-			// The annotations are what the tree cards show, so a renamed node reads the same here.
-			text = title ?: node.summary,
-			style = typography.body.copy(
-				fontSize = 10.5.sp,
-				fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
-			),
-			color = if (isCurrent) colors.textPrimary else colors.textMuted,
+			text = title,
+			style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+			color = if (accent) colors.accent else colors.textPrimary,
 			maxLines = 1,
 			overflow = TextOverflow.Ellipsis,
 			modifier = Modifier.weight(1f),
 		)
-		Spacer(Modifier.width(4.dp))
-		ActorBadge(actor = node.actor, scale = 0.85f)
+		if (trailing != null) {
+			Text(text = trailing, style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
+		}
 	}
 }
 
+/** A row of the operation or stroke list, drawn like the skeleton tree's rows. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ActorBadge(actor: String, scale: Float = 1f) {
+private fun ListRow(
+	tooltip: @Composable () -> Unit,
+	index: String,
+	title: String,
+	current: Boolean,
+	enabled: Boolean,
+	onClick: () -> Unit,
+	future: Boolean = false,
+	trailing: (@Composable () -> Unit)? = null,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	val canRewind = enabled && !current
+
+	TooltipArea(tooltip = tooltip, delayMillis = 600) {
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.height(22.dp)
+				.background(
+					when {
+						current -> colors.selection
+						hovered && canRewind -> colors.controlHover.copy(alpha = 0.3f)
+						else -> Color.Transparent
+					}
+				)
+				.hoverable(interaction)
+				.pointerHoverIcon(
+					PointerIcon(Cursor.getPredefinedCursor(if (canRewind) Cursor.HAND_CURSOR else Cursor.DEFAULT_CURSOR))
+				)
+				.clickable(enabled = canRewind, interactionSource = interaction, indication = null, onClick = onClick)
+				.padding(start = 6.dp, end = 6.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			Text(
+				text = index,
+				style = typography.monoSmall.copy(fontSize = 9.5.sp),
+				color = if (current) colors.selectionText else colors.textDisabled,
+				textAlign = TextAlign.End,
+				modifier = Modifier.width(20.dp).padding(end = 6.dp),
+			)
+			Text(
+				text = title,
+				style = typography.body.copy(
+					fontSize = 11.sp,
+					fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+				),
+				color = when {
+					current -> colors.selectionText
+					future -> colors.textDisabled
+					else -> colors.textPrimary
+				},
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+				modifier = Modifier.weight(1f),
+			)
+			if (trailing != null) {
+				Spacer(Modifier.width(4.dp))
+				trailing()
+			}
+		}
+	}
+}
+
+/** Actor chip in the theme's tag colors, shared with the log's source chips. */
+@Composable
+private fun ActorBadge(actor: String, scale: Float = 1f, alpha: Float = 1f) {
 	val colors = LocalToolColors.current
 	val (bg, fg, label) = when (actor.lowercase()) {
 		"agent" -> Triple(colors.tagAgent, colors.tagAgentText, "Agent")
 		"user" -> Triple(colors.tagUser, colors.tagUserText, "User")
 		else -> Triple(colors.tagSystem, colors.tagSystemText, "System")
 	}
-
 	Box(
 		modifier = Modifier
-			.clip(RoundedCornerShape((3 * scale).dp))
-			.background(bg)
-			.padding(horizontal = (4 * scale).dp, vertical = (1 * scale).dp),
+			.background(bg.copy(alpha = bg.alpha * alpha), RoundedCornerShape((2 * scale).dp))
+			.padding(horizontal = (4 * scale).dp),
 	) {
 		Text(
 			text = label,
 			style = LocalToolTypography.current.monoSmall.copy(
 				fontSize = (8.5 * scale).sp,
+				lineHeight = (12 * scale).sp,
 				fontWeight = FontWeight.Bold,
 			),
-			color = fg,
+			color = fg.copy(alpha = alpha),
+			maxLines = 1,
 		)
 	}
 }
 
+/** A label and a monospaced value; with [onCopy] the value copies on click. */
 @Composable
-private fun DetailRow(label: String, value: String) {
+private fun DetailRow(label: String, value: String, onCopy: (() -> Unit)? = null) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-
-	Row(
-		modifier = Modifier.fillMaxWidth(),
-		horizontalArrangement = Arrangement.SpaceBetween,
-		verticalAlignment = Alignment.CenterVertically,
-	) {
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 		Text(
 			text = label,
-			style = typography.caption.copy(fontSize = 10.sp),
+			style = typography.caption.copy(fontSize = 11.sp),
 			color = colors.textMuted,
+			textAlign = TextAlign.End,
+			maxLines = 1,
+			overflow = TextOverflow.Ellipsis,
+			modifier = Modifier.width(FORM_LABEL_WIDTH).padding(end = 8.dp),
 		)
 		Text(
 			text = value,
 			style = typography.monoSmall.copy(fontSize = 10.sp),
-			color = colors.textPrimary,
+			color = if (onCopy != null && hovered) colors.accent else colors.textPrimary,
 			maxLines = 1,
 			overflow = TextOverflow.Ellipsis,
+			modifier = Modifier.weight(1f).then(
+				if (onCopy == null) Modifier else Modifier
+					.hoverable(interaction)
+					.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+					.clickable(interactionSource = interaction, indication = null, onClick = onCopy)
+			),
 		)
+		if (onCopy != null) {
+			CompactIconButton(onClick = onCopy, size = 18.dp, tooltip = tr("history.copyId")) {
+				IconCopy(tint = colors.textMuted)
+			}
+		}
+	}
+}
+
+/** "2026-09-27T12:34:56Z" as "09-27 12:34", the part that tells nearby nodes apart. */
+private fun shortTime(createdAt: String): String =
+	createdAt.take(16).replace('T', ' ').let { if (it.length > 5 && it[4] == '-') it.drop(5) else it }
+
+/** Three list lines with bullets: the operation list. */
+@Composable
+private fun IconOperationList(tint: Color) {
+	Canvas(Modifier.size(12.dp)) {
+		val w = size.width
+		val h = size.height
+		listOf(0.22f, 0.5f, 0.78f).forEach { y ->
+			drawCircle(tint, radius = w * 0.07f, center = Offset(w * 0.14f, h * y))
+			drawLine(tint, Offset(w * 0.34f, h * y), Offset(w * 0.9f, h * y), strokeWidth = 1.3f, cap = StrokeCap.Round)
+		}
+	}
+}
+
+@Composable
+private fun IconZoomStep(plus: Boolean, tint: Color) {
+	Canvas(Modifier.size(9.dp)) {
+		val c = size.width / 2f
+		drawLine(tint, Offset(0f, c), Offset(size.width, c), strokeWidth = 1.3f, cap = StrokeCap.Round)
+		if (plus) drawLine(tint, Offset(c, 0f), Offset(c, size.height), strokeWidth = 1.3f, cap = StrokeCap.Round)
+	}
+}
+
+/** Four corner brackets: fit the whole tree in view. */
+@Composable
+private fun IconFitView(tint: Color) {
+	Canvas(Modifier.size(11.dp)) {
+		val w = size.width
+		val h = size.height
+		val arm = w * 0.3f
+		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+		listOf(
+			Triple(Offset(0f, 0f), 1f, 1f),
+			Triple(Offset(w, 0f), -1f, 1f),
+			Triple(Offset(0f, h), 1f, -1f),
+			Triple(Offset(w, h), -1f, -1f),
+		).forEach { (corner, dx, dy) ->
+			drawPath(Path().apply {
+				moveTo(corner.x + dx * arm, corner.y)
+				lineTo(corner.x, corner.y)
+				lineTo(corner.x, corner.y + dy * arm)
+			}, tint, style = stroke)
+		}
+	}
+}
+
+/** A page with a folded corner and two lines: the node carries a note. */
+@Composable
+private fun IconNote(tint: Color, modifier: Modifier = Modifier.size(9.dp)) {
+	Canvas(modifier) {
+		val w = size.width
+		val h = size.height
+		val stroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+		drawPath(Path().apply {
+			moveTo(w * 0.15f, h * 0.05f)
+			lineTo(w * 0.6f, h * 0.05f)
+			lineTo(w * 0.85f, h * 0.3f)
+			lineTo(w * 0.85f, h * 0.95f)
+			lineTo(w * 0.15f, h * 0.95f)
+			close()
+		}, tint, style = stroke)
+		drawLine(tint, Offset(w * 0.32f, h * 0.5f), Offset(w * 0.68f, h * 0.5f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+		drawLine(tint, Offset(w * 0.32f, h * 0.72f), Offset(w * 0.68f, h * 0.72f), strokeWidth = stroke.width, cap = StrokeCap.Round)
+	}
+}
+
+/** Two overlapping sheets, as the log's copy button draws them. */
+@Composable
+private fun IconCopy(tint: Color) {
+	Canvas(Modifier.size(10.dp)) {
+		val stroke = Stroke(width = 1.1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+		drawRect(tint, topLeft = Offset(size.width * 0.28f, size.height * 0.10f), size = Size(size.width * 0.62f, size.height * 0.62f), style = stroke)
+		drawRect(tint, topLeft = Offset(size.width * 0.10f, size.height * 0.30f), size = Size(size.width * 0.62f, size.height * 0.62f), style = stroke)
 	}
 }
 
