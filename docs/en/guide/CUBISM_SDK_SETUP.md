@@ -1,6 +1,6 @@
 # Optional Cubism Native preview
 
-[Docs](../../README.md) · [User guide](USER_GUIDE.md) · [CI / release](CUBISM_CI_RELEASE.md)
+[Documentation](../../README.md) · [中文](../../zh/guide/CUBISM_SDK_SETUP.md) · [日本語](../../ja/guide/CUBISM_SDK_SETUP.md) · [User guide](USER_GUIDE.md) · [CI and releases](CUBISM_CI_RELEASE.md)
 
 The built-in renderer and basic exports do not require the official SDK. This page configures the repository native preview bridge for observing official runtime rendering and physics. It does not promise identical behavior for every editor feature or pixel.
 

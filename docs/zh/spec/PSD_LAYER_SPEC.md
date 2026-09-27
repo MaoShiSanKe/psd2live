@@ -1,6 +1,6 @@
 # PSD 素材与命名
 
-[Docs](../../README.md) · [User guide](../guide/USER_GUIDE.md)
+[文档目录](../../README.md) · [English](../../en/spec/PSD_LAYER_SPEC.md) · [日本語](../../ja/spec/PSD_LAYER_SPEC.md) · [操作速查](../guide/USER_GUIDE.md)
 
 本页面向素材准备；自动识别只是预设入口，导入后仍可在图层面板改类型、部件与侧别。
 

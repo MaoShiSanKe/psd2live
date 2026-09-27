@@ -1,8 +1,8 @@
-# 实现导览与设计取舍
+# 实现概览
 
-[Docs](../../README.md) · [Third-party notices](../../../THIRD_PARTY_NOTICES.md)
+[文档目录](../../README.md) · [English](../../en/spec/IMPLEMENTATION_COMPARISON.md) · [日本語](../../ja/spec/IMPLEMENTATION_COMPARISON.md) · [第三方组件声明](../../../THIRD_PARTY_NOTICES.md)
 
-本页保留原 IMPLEMENTATION_COMPARISON 路径，但不再用未经基准测试的“常规实现更差”作比较。第三方来源只在许可说明中维护。
+本页按流水线阶段概述当前实现与主要取舍，并列出跨模块必须遵守的不变量。第三方来源见[第三方组件声明](../../../THIRD_PARTY_NOTICES.md)。
 
 | 阶段 | 当前实现与取舍 |
 | --- | --- |

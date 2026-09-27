@@ -1,8 +1,8 @@
-# 実装概要と設計上の選択
+# 実装の概要
 
-[Docs](../../README.md) · [Third-party notices](../../../THIRD_PARTY_NOTICES.md)
+[ドキュメント一覧](../../README.md) · [中文](../../zh/spec/IMPLEMENTATION_COMPARISON.md) · [English](../../en/spec/IMPLEMENTATION_COMPARISON.md) · [第三者表記](../../../THIRD_PARTY_NOTICES.md)
 
-旧 IMPLEMENTATION_COMPARISON の URL を維持しています。計測根拠のない他方式との優劣比較は行わず、出典は第三者表記にまとめます。
+パイプラインの段階ごとに現在の実装と主な設計上の選択をまとめ、すべてのモジュールが守るべき不変条件を示します。サードパーティの出典は[第三者表記](../../../THIRD_PARTY_NOTICES.md)を参照してください。
 
 | 段階 | 実装と選択 |
 | --- | --- |

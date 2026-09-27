@@ -1,6 +1,6 @@
 # PSD artwork and naming
 
-[Docs](../../README.md) · [User guide](../guide/USER_GUIDE.md)
+[Documentation](../../README.md) · [中文](../../zh/spec/PSD_LAYER_SPEC.md) · [日本語](../../ja/spec/PSD_LAYER_SPEC.md) · [User guide](../guide/USER_GUIDE.md)
 
 This page covers source preparation. Automatic classification selects presets; you can correct layer type, part and side after import.
 

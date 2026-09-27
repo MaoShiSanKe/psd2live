@@ -1,6 +1,6 @@
 # 任意の Cubism Native プレビュー
 
-[Docs](../../README.md) · [User guide](USER_GUIDE.md)
+[ドキュメント一覧](../../README.md) · [中文](../../zh/guide/CUBISM_SDK_SETUP.md) · [English](../../en/guide/CUBISM_SDK_SETUP.md) · [操作早見表](USER_GUIDE.md)
 
 内蔵レンダラーと基本的な出力に公式 SDK は不要です。この手順はブリッジを構築し、公式ランタイムの描画・物理を確認するためのものです。エディタの全機能や全画素の一致を保証しません。
 

@@ -1,8 +1,8 @@
-# Implementation overview and tradeoffs
+# Implementation overview
 
-[Docs](../../README.md) · [Third-party notices](../../../THIRD_PARTY_NOTICES.md)
+[Documentation](../../README.md) · [中文](../../zh/spec/IMPLEMENTATION_COMPARISON.md) · [日本語](../../ja/spec/IMPLEMENTATION_COMPARISON.md) · [Third-party notices](../../../THIRD_PARTY_NOTICES.md)
 
-This retains the IMPLEMENTATION_COMPARISON URL but avoids unsupported comparisons with generic alternatives. Third-party attribution belongs in the license notices.
+This page summarizes the current implementation and its main tradeoffs by pipeline stage, and lists the invariants every module must keep. Third-party sources are listed in the [third-party notices](../../../THIRD_PARTY_NOTICES.md).
 
 | Stage | Implementation and tradeoff |
 | --- | --- |

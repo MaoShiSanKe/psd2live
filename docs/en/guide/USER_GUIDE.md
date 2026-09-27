@@ -2,11 +2,29 @@
 
 [Documentation](../../README.md) · [中文](../../zh/guide/USER_GUIDE.md) · [日本語](../../ja/guide/USER_GUIDE.md)
 
-Open **Help → Tutorials** first. Interactive lessons highlight the controls and show your configured shortcuts. This page is a short companion, in the same lesson order.
+Open **Help → Tutorials…** (`F1`) first. Interactive lessons highlight the controls and show your configured shortcuts. This page is a short companion, in the same lesson order.
 
 ## Basic workflow
 
 Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit → save (`Ctrl+S`) → export (`Ctrl+G`). Open an existing `.psd2live` project with `Ctrl+O`.
+
+## Workspaces
+
+The UI is organized into workspace tabs, each with its own canvases and panel layout. Click **+** at the end of the tab bar to add one from six presets or a blank layout; the right side previews the layout and its purpose. The screenshot shows the Chinese UI.
+
+![New workspace menu](../../imgs/workspace-presets.webp)
+
+| Preset | Use |
+| --- | --- |
+| Edit | One edit canvas for deformers, keyforms and bones, with all property panels |
+| Mesh | Hierarchy, edit canvas and Mesh panel for mesh topology |
+| Rigging | Edit canvas beside a live preview, with the Parameters panel docked |
+| Animation | Motion list, preview canvas and animation editor |
+| Preview | Large preview with only the motion list |
+| Physics | Preview canvas with Parameters and Physics panels, to tune while moving the model |
+| Blank | Empty dock; add canvases and panels from the **Windows** menu |
+
+**Reset layout** restores the current workspace's preset layout.
 
 ## Tutorial paths
 
@@ -41,21 +59,31 @@ The catalog has 18 topics. The beginner path contains the 17 lessons below; the 
 
 ## Default shortcuts
 
+These are the default (Photoshop-style) bindings. **Settings** can switch to Blender- or Cubism-style presets or rebind individual actions; **Help → Keyboard Shortcuts…** shows the current bindings.
+
 | Action | Keys |
 | --- | --- |
 | Open project / import PSD | `Ctrl+O` / `Ctrl+Shift+O` |
 | Save / save as | `Ctrl+S` / `Ctrl+Shift+S` |
-| Undo / redo | `Ctrl+Z` / `Ctrl+Y` or `Ctrl+Shift+Z` |
-| Export model / re-export PSD | `Ctrl+G` / `Ctrl+Shift+E` |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` |
+| Export model / export PSD | `Ctrl+G` / `Ctrl+Shift+E` |
+| Reanalyze PSD | `Ctrl+R` |
+| Texture upscale | `Ctrl+U` |
+| Tutorials | `F1` |
 | Zoom / pan | Wheel / middle drag or Space + left drag |
-| Fit canvas | `F` / `Home` / `0` |
+| Frame selection / reset camera | `F` / `Home` or `0` |
+| Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
 
-Settings can change these bindings. `F1` lists current shortcuts; the current tool explains confirmation and cancellation gestures.
+## Troubleshooting
 
-## Troubleshooting and references
+| Symptom | Check first |
+| --- | --- |
+| A part moves wrongly or not at all | [Layer naming](../spec/PSD_LAYER_SPEC.md) and the type and side in the Layers table; masks and parents |
+| Static poses look right but motion breaks | Play it in the animation or physics panel; one static pose does not show dynamic behavior |
+| A panel is missing | Panel toggles in the Windows menu, or Reset layout at the top right |
+| The model is not visible | Fit the canvas (`F` / `Home`), then check layer visibility |
+| Export fails or reports downgrades | The Log panel, the `.psd2live.json` report and the export target version |
 
-Check [layer preparation](../spec/PSD_LAYER_SPEC.md), side assignments, masks and parents before changing rig settings. Observe motion in the animation and physics panels; static poses do not establish dynamic behavior. For missing panels, check layout visibility or reset the layout. For missing artwork, fit the canvas and check visibility. Inspect logs and export reports for errors or conversion losses.
-
-See [SDK setup](CUBISM_SDK_SETUP.md), [development and CLI](DEVELOPMENT.md), [project format](../spec/PROJECT_FORMAT.md), and the Chinese references for [canvas editing](../../zh/guide/CANVAS_EDITOR.md), [paths](../../zh/guide/DEFORM_PATHS.md), [upscaling](../../zh/guide/TEXTURE_UPSCALE.md) and [MCP](../../zh/agent/MCP_AUTHORING.md).
+Further reading: [SDK setup](CUBISM_SDK_SETUP.md), [development and CLI](DEVELOPMENT.md), [project format](../spec/PROJECT_FORMAT.md), and the Chinese references for [canvas editing](../../zh/guide/CANVAS_EDITOR.md), [paths](../../zh/guide/DEFORM_PATHS.md), [upscaling](../../zh/guide/TEXTURE_UPSCALE.md) and [MCP](../../zh/agent/MCP_AUTHORING.md).
 
 Maintained against the [tutorial catalog](../../../src/main/kotlin/io/github/psd2live/ui/tutorial/InteractiveTutorial.kt) and [shortcut registry](../../../src/main/kotlin/io/github/psd2live/ui/state/ShortcutRegistry.kt).

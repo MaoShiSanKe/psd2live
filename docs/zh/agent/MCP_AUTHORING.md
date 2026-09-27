@@ -2,13 +2,13 @@
 
 [文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../STATUS.md)
 
-本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **21 个工具**。旧文档中的 `project_get_state`、`rig_transform`、`asset_import_png` 等是内部适配名称，不能直接当作当前公开工具调用。
+本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **21 个工具**。`project_get_state`、`rig_transform`、`asset_import_png` 等名称属于内部适配层，不是公开工具，不能直接调用。
 
 ## 接入
 
 1. 启动桌面应用，载入或创建工作区。
 2. 打开 **工具 → MCP → MCP 连接与安装…**，复制宿主对应的配置。
-3. 优先使用 Streamable HTTP 和界面提供的 Bearer Token。不要将端点换成旧 `/sse` 地址。
+3. 优先使用 Streamable HTTP 和界面提供的 Bearer Token。不要改用已废弃的 `/sse` 端点。
 4. 仅支持 Stdio 的宿主使用 Python 3 运行根目录 `mcp_proxy.py`；代理支持 `PSD2LIVE_MCP_ENDPOINT` 和 `PSD2LIVE_MCP_TOKEN`。
 5. 列出工具后调用 `inspect`，读取实际对象 ID、参数和当前 `state`。
 

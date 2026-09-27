@@ -1,8 +1,8 @@
-# 绘画系统：实现与扩展边界
+# 绘画系统
 
-[画布速查](../guide/CANVAS_EDITOR.md) · [运行时架构](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) · [文档目录](../../README.md)
+[文档目录](../../README.md) · [画布编辑](../guide/CANVAS_EDITOR.md) · [运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
-本文件保留原路径以兼容链接，内容改为当前实现参考。绘画已经有可用的独立会话，不再把基础工具列为待实施 PRD。
+本页说明绘画模式的用户流程、组件分工、坐标与提交方式，以及扩展时需要验证的场景。
 
 ## 用户流程
 

@@ -1,6 +1,6 @@
 # 工程格式 v1
 
-[English](../../en/spec/PROJECT_FORMAT.md) · [文档目录](../../README.md) · [操作速查](../guide/USER_GUIDE.md)
+[文档目录](../../README.md) · [English](../../en/spec/PROJECT_FORMAT.md) · [运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
 `.psd2live` 是未加密 ZIP，JSON 使用 UTF-8，栅格资源为 PNG。保存后的工程包含继续编辑所需的源素材与历史，不依赖原 PSD 路径。导出报告 `.psd2live.json` 不是此格式。
 

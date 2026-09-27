@@ -1,6 +1,6 @@
 # 物理
 
-[项目首页](../../../README.md) · [摇摆生成](SWING.md) · [MCP 使用与接口](../agent/MCP_AUTHORING.md)
+[文档目录](../../README.md) · [摇摆生成](SWING.md) · [MCP 使用与接口](../agent/MCP_AUTHORING.md)
 
 物理让参数跟随头部、身体等输入产生惯性摆动。PSD2Live 使用 Cubism 的摆锤模型：一串从根部垂下的摆锤（Cubism Editor「摆锤设置」里编号 1、2、3… 的各行），输入推动根部或倾斜重力，摆锤按惯性摆动，指定摆锤的角度写入输出参数。导出时写入 `physics3.json` 和 `.cmo3`。
 

@@ -1,6 +1,6 @@
 # Cubism CI and release workflows
 
-[Docs](../../README.md) · [Cubism SDK local setup](CUBISM_SDK_SETUP.md)
+[Documentation](../../README.md) · [中文](../../zh/guide/CUBISM_CI_RELEASE.md) · [Cubism native preview](CUBISM_SDK_SETUP.md)
 
 This page describes the two GitHub Actions workflows: public tests (no SDK) and optional Cubism preview packaging. It does not replace the Live2D license or grant redistribution rights for proprietary components.
 
@@ -38,23 +38,21 @@ Alternative: keep the zip in other private storage and adapt the fetch step; the
 
 Jobs `build-windows`, `build-linux`, and `release` use the GitHub Environment named **`release-cubism`**. Create it under Settings → Environments and add required reviewers / deployment branch rules so arbitrary collaborators cannot mint SDK-inclusive packages alone.
 
-## How to run workflow_dispatch for 1.4.1 (example)
+## Publishing a release
 
-Prerequisites: SDK zip uploaded to the private repo; variables/secrets above and the `release-cubism` environment configured.
+Prerequisites: the SDK zip is uploaded to the private repository, and the variables, secrets and `release-cubism` environment above are configured. `<version>` below stands for the target version, such as `1.4.1`.
 
-1. Actions → **Release Cubism** → **Run workflow**.
-2. Set `version` to `1.4.1` (no leading `v`).
-3. Leave `create_github_release` enabled unless you only want artifacts.
-4. Approve the environment gate, then wait for Windows and Linux jobs.
-5. When publishing is enabled, tag `v1.4.1` is created or updated as a **formal** (non-prerelease) GitHub Release with:
-   - `PSD2Live-1.4.1-windows-x86_64-portable.zip`
-   - `PSD2Live-1.4.1.exe`
-   - `PSD2Live-1.4.1.msi`
-   - `PSD2Live-1.4.1-linux-amd64.deb`
+1. **Bump the version first.** The workflow does not modify the repository. Set `version` and `packageVersion` in `build.gradle.kts`, update version strings shown in the UI, then commit and push.
+2. Open Actions → **Release Cubism** → **Run workflow** and set `version` to `<version>` (no leading `v`).
+3. Keep `create_github_release` enabled unless you only want build artifacts.
+4. Approve the environment gate and wait for the Windows and Linux jobs.
+5. With publishing enabled, the workflow creates or updates tag `v<version>` as a **formal** (non-prerelease) GitHub Release with:
+   - `PSD2Live-<version>-windows-x86_64-portable.zip`
+   - `PSD2Live-<version>.exe`
+   - `PSD2Live-<version>.msi`
+   - `PSD2Live-<version>-linux-amd64.deb`
 
-You can instead push tag `v1.4.1` to trigger the same workflow. Prefer one entry path to avoid a full double matrix.
-
-The workflow does **not** bump `packageVersion` in `build.gradle.kts`; the version is used for artifact names and the Release title only. Bump `version` / `packageVersion` and product-facing strings in the repo before shipping.
+Pushing tag `v<version>` triggers the same workflow. Use one entry point to avoid running the full matrix twice.
 
 ## Artifacts and platform limits
 

@@ -1,6 +1,6 @@
 # デフォーマとパラメータ
 
-[Docs](../../README.md) · [PSD](PSD_LAYER_SPEC.md)
+[ドキュメント一覧](../../README.md) · [中文](../../zh/spec/DEFORMER_AND_PARAMETER_SPEC.md) · [English](../../en/spec/DEFORMER_AND_PARAMETER_SPEC.md) · [PSD の準備と命名](PSD_LAYER_SPEC.md)
 
 自動生成の標準構成と編集上の約束を説明します。実際の構成は素材・設定・編集によって変わるため、階層ツリー、パラメータパネル、MCP inspect の結果を確認してください。
 

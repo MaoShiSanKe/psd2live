@@ -1,6 +1,8 @@
-# UI / MCP 双向路径清单（Issue #13）
+# UI / MCP 能力对照
 
-依据 [Issue #13](https://github.com/tsunehimatoi/psd2live/issues/13) 和当前代码。这里的“可达”表示用户或 MCP 客户端能经公开入口完成该操作；交互形式不必相同。MCP 的公开工具以 [接口契约](MCP_AUTHORING.md) 为准，内部旧工具名不算公开入口。
+[文档目录](../../README.md) · [MCP 使用与接口](MCP_AUTHORING.md) · [Agent 设计与验收](AGENT_DESIGN.md)
+
+本页列出每项编辑能力在界面与 MCP 中的入口，以及两者共用的数据与验收重点，起源于 [Issue #13](https://github.com/tsunehimatoi/psd2live/issues/13)。「可达」指用户或 MCP 客户端能经公开入口完成该操作，交互形式不必相同。MCP 公开工具以 [MCP 使用与接口](MCP_AUTHORING.md) 为准，内部适配名称不算公开入口。
 
 ## 快捷对照
 
@@ -52,4 +54,4 @@
 - 写模型的 MCP 请求带当前历史 `state`；若 UI 同时改动导致过期，客户端应重读 `inspect`。预览参数不写模型历史。
 - 源图绘画和拆分会改变网格拓扑。拆分在已有运动绑定、Glue 时拒绝；MCP 绘画在目标已有关键形、Warp 或 Glue 时拒绝。UI 绘画另有交互式网格迁移流程。
 - `LayerClassificationIntegrationTest` 覆盖 Issue #13 分类字段、绘画像素和历史回退、单层网格、预览锁定、模型与 PSD 导出、PSD 再导入、套索对应的拆分算法及 user 历史归属。
-- `AuthoringParityTest` 检查 20 个公开 MCP 工具的注册与分类字段合并。全量验证命令：`./gradlew test --offline`。
+- `AuthoringParityTest` 检查 21 个公开 MCP 工具的注册与分类字段合并。全量验证命令：`./gradlew test --offline`。

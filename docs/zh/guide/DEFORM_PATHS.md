@@ -1,6 +1,6 @@
 # 变形路径（实验性）
 
-[画布编辑](CANVAS_EDITOR.md) · [文档目录](../../README.md)
+[文档目录](../../README.md) · [画布编辑](CANVAS_EDITOR.md)
 
 路径是挂在 ArtMesh 上的编辑辅助对象，不是 Warp / Rotation 之外的第三种变形器。当前支持一个 ArtMesh 上的多条路径，不支持一条路径控制多个 ArtMesh。
 

@@ -1,6 +1,6 @@
 # PSD 素材と命名
 
-[Docs](../../README.md) · [User guide](../guide/USER_GUIDE.md)
+[ドキュメント一覧](../../README.md) · [中文](../../zh/spec/PSD_LAYER_SPEC.md) · [English](../../en/spec/PSD_LAYER_SPEC.md) · [操作早見表](../guide/USER_GUIDE.md)
 
 自動分類はプリセットを選ぶための入口です。読み込み後にレイヤーパネルで種別・パーツ・左右を修正できます。
 

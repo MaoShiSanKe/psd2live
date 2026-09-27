@@ -1,6 +1,6 @@
 # 纹理高清化
 
-[操作速查](USER_GUIDE.md) · [开发与 CLI](DEVELOPMENT.md) · [文档目录](../../README.md)
+[文档目录](../../README.md) · [操作速查](USER_GUIDE.md) · [开发与命令行](DEVELOPMENT.md)
 
 对应程序内零基础路线的第 17 课。高清化在贴图打包前逐层放大纹理，默认关闭；不改变原始 PSD、画布尺寸或绑定。预览与导出使用处理后的纹理。
 

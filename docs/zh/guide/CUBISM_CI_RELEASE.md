@@ -1,6 +1,6 @@
 # Cubism CI 与发行工作流
 
-[Docs](../../README.md) · [Cubism SDK 本地配置](CUBISM_SDK_SETUP.md)
+[文档目录](../../README.md) · [English](../../en/guide/CUBISM_CI_RELEASE.md) · [Cubism Native 预览](CUBISM_SDK_SETUP.md)
 
 本页说明仓库中两个 GitHub Actions 工作流：公开测试（不含 SDK）与可选的 Cubism 预览打包。不替代 Live2D 许可，也不授权再分发专有组件。
 
@@ -38,23 +38,21 @@ macOS 打包暂缓，本工作流不构建。
 
 作业 `build-windows`、`build-linux`、`release` 使用 GitHub Environment 名称 **`release-cubism`**。请在仓库 Settings → Environments 中创建该环境，并加上必需审阅者 / 部署分支限制，避免任意协作者直接打出含 SDK 的包。
 
-## 如何手动发 1.4.1（示例）
+## 发布一个版本
 
-前提：私有 SDK 仓库已上传 zip；本仓库已配置上表变量/密钥与 `release-cubism` 环境。
+前提：私有 SDK 仓库已上传 zip，本仓库已配置上表的变量、密钥与 `release-cubism` 环境。下文以 `<version>` 表示目标版本号，例如 `1.4.1`。
 
-1. Actions → **Release Cubism** → **Run workflow**。
-2. `version` 填 `1.4.1`（不要带 `v`）。
-3. `create_github_release` 按需勾选（默认 true）。
-4. 通过环境保护审批后等待 Windows / Linux 构建完成。
-5. 若勾选发布，会创建或更新标签 `v1.4.1` 的 **正式**（非 prerelease）GitHub Release，附件包括：
-   - `PSD2Live-1.4.1-windows-x86_64-portable.zip`
-   - `PSD2Live-1.4.1.exe`
-   - `PSD2Live-1.4.1.msi`
-   - `PSD2Live-1.4.1-linux-amd64.deb`
+1. **先提升版本号**：工作流不会修改仓库内容。在 `build.gradle.kts` 中把 `version` 与 `packageVersion` 改为目标版本，同步界面中的版本字符串，提交并推送。
+2. 打开 Actions → **Release Cubism** → **Run workflow**，`version` 填 `<version>`（不带 `v`）。
+3. 按需勾选 `create_github_release`（默认开启；关闭时只生成构建产物）。
+4. 通过环境保护审批，等待 Windows 与 Linux 构建完成。
+5. 开启发布时，工作流会创建或更新标签 `v<version>` 的**正式**（非预发布）GitHub Release，附件为：
+   - `PSD2Live-<version>-windows-x86_64-portable.zip`
+   - `PSD2Live-<version>.exe`
+   - `PSD2Live-<version>.msi`
+   - `PSD2Live-<version>-linux-amd64.deb`
 
-也可只推送标签 `v1.4.1` 触发同一工作流。请选一种入口，避免重复跑完整矩阵。
-
-工作流**不会**修改 `build.gradle.kts` 里的 `packageVersion`；版本号仅用于产物命名与 Release 标题。发布前请先在仓库中把 `version` / `packageVersion` 与产品字符串 bump 到目标版本。
+也可以直接推送标签 `v<version>` 触发同一工作流。两种入口选其一，避免重复运行完整的构建矩阵。
 
 ## 产物与平台限制
 

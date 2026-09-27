@@ -1,6 +1,6 @@
 # Project format v1
 
-[中文](../../zh/spec/PROJECT_FORMAT.md) · [Documentation](../../README.md) · [User guide](../guide/USER_GUIDE.md)
+[Documentation](../../README.md) · [中文](../../zh/spec/PROJECT_FORMAT.md) · [User guide](../guide/USER_GUIDE.md)
 
 `.psd2live` is an unencrypted ZIP containing UTF-8 JSON and PNG raster resources. A saved project carries its source artwork and history without relying on the original PSD path. Export reports named `.psd2live.json` are not projects.
 
