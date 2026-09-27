@@ -1,5 +1,10 @@
 package io.github.psd2live.ui.views
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.drawWithContent
@@ -21,8 +26,10 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -514,13 +521,6 @@ internal fun ParametersListView(
 		if (puppet == null) emptyList() else buildParameterPanelRows(puppet, query, openOverrides, if (activeRelatedFilter) relatedIds else null)
 	}
 	val listState = rememberLazyListState()
-	val visibleCount = rows.sumOf { row ->
-		when (row) {
-			is ParameterPanelRow.Folder -> 0
-			is ParameterPanelRow.Single -> 1
-			is ParameterPanelRow.Linked -> 2
-		}
-	}
 
 	val nameWidth = remember { mutableStateOf(ParamRowNameWidth) }
 	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth, LocalInlineEditorRegions provides renameEditorRegions) {
@@ -544,8 +544,24 @@ internal fun ParametersListView(
 			verticalArrangement = Arrangement.spacedBy(3.dp),
 		) {
 			val editable = puppet != null && state.historySnapshot != null && !state.canvasEditBusy
+			BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
+			// Labels appear in this order as the panel widens, each only once everything before it fits.
+			val labels = listOf(tr("parameters.relatedOnly"), tr("parameters.newParameterShort"), tr("parameters.newFolderShort"))
+			val labelStyle = typography.caption.copy(fontSize = 10.5.sp)
+			val labelMeasurer = rememberTextMeasurer()
+			val density = LocalDensity.current
+			val labelWidths = labels.map { with(density) { labelMeasurer.measure(it, labelStyle).size.width.toDp() } + ParamToolLabelGap }
+			val iconCount = if (state.previewLive) 8 else 7
+			val iconsWidth = 22.dp * iconCount + 3.dp * (iconCount + 1) + 5.dp + 8.dp
+			var labelsShown = 0
+			var used = iconsWidth
+			for (width in labelWidths) {
+				if (used + width > maxWidth) break
+				used += width
+				labelsShown++
+			}
 			Row(
-				modifier = Modifier.fillMaxWidth().height(22.dp),
+				modifier = Modifier.fillMaxSize(),
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.spacedBy(3.dp),
 			) {
@@ -581,10 +597,12 @@ internal fun ParametersListView(
 					) {
 						IconSearch(tint = colors.textMuted)
 					}
-					CompactIconButton(
+					ParameterToolButton(
+						label = labels[0],
+						showLabel = labelsShown > 0,
 						onClick = { relatedOnly = !relatedOnly },
 						enabled = owner != null,
-						size = 22.dp,
+						active = activeRelatedFilter,
 						tooltip = if (owner != null) tr("parameters.relatedOnly") + " · " + tr("parameters.relatedCount", relatedIds.size)
 						else tr("parameters.relatedOnly"),
 					) {
@@ -598,25 +616,28 @@ internal fun ParametersListView(
 						)
 					}
 					ParameterToolbarSeparator()
-					CompactIconButton(
+					ParameterToolButton(
+						label = labels[1],
+						showLabel = labelsShown > 1,
 						onClick = {
 							creatingUnderGroupId = null
 							creatingParameter = true
 						},
 						enabled = editable,
-						size = 22.dp,
 						tooltip = tr("parameters.create"),
 					) {
 						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 					}
-					CompactIconButton(
+					ParameterToolButton(
+						label = labels[2],
+						showLabel = labelsShown > 2,
 						onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
 						enabled = puppet != null,
-						size = 22.dp,
 						tooltip = tr("parameters.newFolder"),
 					) {
 						IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
 					}
+					Spacer(Modifier.weight(1f))
 					CompactIconButton(
 						onClick = {
 							for (id in collectParameterGroupIds(puppet)) {
@@ -641,22 +662,13 @@ internal fun ParametersListView(
 					) {
 						IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
 					}
-					Spacer(Modifier.weight(1f))
-				}
-				ParameterCountBadge(
-					visible = visibleCount,
-					total = allParameters.size,
-					locked = state.lockedParameters.size,
-					tooltip = (if (state.activeWorkspace.canvases.size > 1) "${viewModel.canvasTitle(state.activeCanvas)} · " else "") +
-						tr("parameters.count", visibleCount, allParameters.size, state.lockedParameters.size),
-				)
-				if (!searchOpen) {
 					if (state.previewLive) {
 						CompactIconButton(
 							onClick = { viewModel.unlockAllParameters() },
 							enabled = state.lockedParameters.isNotEmpty(),
 							size = 22.dp,
-							tooltip = tr("parameters.unlockAll"),
+							tooltip = tr("parameters.unlockAll") +
+								if (state.lockedParameters.isNotEmpty()) " (${state.lockedParameters.size})" else "",
 						) {
 							IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
 						}
@@ -670,6 +682,7 @@ internal fun ParametersListView(
 						IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
 					}
 				}
+			}
 			}
 			ParameterSnapshotBar(state, viewModel, renamingSnapshotId) { renamingSnapshotId = it }
 		}
@@ -1646,23 +1659,67 @@ private fun ParameterLinkSlot(
 	) { content() }
 }
 
-/** Visible/total, plus a lock and count once anything is locked; the full wording sits in the tooltip. */
+private val ParamToolLabelGap = 8.dp
+
+/** Icon button that slides its text label in beside the icon when the toolbar has room. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ParameterCountBadge(visible: Int, total: Int, locked: Int, tooltip: String) {
+private fun ParameterToolButton(
+	label: String,
+	showLabel: Boolean,
+	onClick: () -> Unit,
+	enabled: Boolean,
+	tooltip: String,
+	active: Boolean = false,
+	icon: @Composable () -> Unit,
+) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val style = typography.caption.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	val pressed by interaction.collectIsPressedAsState()
 	TooltipArea(tooltip = { ParameterTooltip(tooltip) }, delayMillis = 400) {
 		Row(
-			modifier = Modifier.padding(horizontal = 2.dp),
+			modifier = Modifier
+				.height(22.dp)
+				.widthIn(min = 22.dp)
+				.background(
+					when {
+						!enabled -> Color.Transparent
+						pressed -> colors.controlActive
+						hovered -> colors.controlHover
+						else -> colors.controlBackground
+					},
+					RoundedCornerShape(2.dp),
+				)
+				.border(
+					BorderStroke(1.dp, if (active) colors.accent else if (hovered && enabled) colors.borderHover else colors.border),
+					RoundedCornerShape(2.dp),
+				)
+				.hoverable(interaction)
+				.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+				.pointerHoverIcon(if (enabled) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
+				.padding(horizontal = 5.dp),
 			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(2.dp),
 		) {
-			Text(if (visible == total) "$total" else "$visible/$total", style = style, color = colors.textMuted, maxLines = 1)
-			if (locked > 0) {
-				IconLock(locked = true, modifier = Modifier.size(9.dp), tint = colors.accent)
-				Text("$locked", style = style, color = colors.accent, maxLines = 1)
+			Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) { icon() }
+			AnimatedVisibility(
+				visible = showLabel,
+				enter = expandHorizontally(tween(160)) + fadeIn(tween(160)),
+				exit = shrinkHorizontally(tween(160)) + fadeOut(tween(120)),
+			) {
+				Text(
+					text = label,
+					style = typography.caption.copy(fontSize = 10.5.sp),
+					color = when {
+						!enabled -> colors.textDisabled
+						active -> colors.accent
+						else -> colors.textPrimary
+					},
+					maxLines = 1,
+					softWrap = false,
+					modifier = Modifier.padding(start = 4.dp),
+				)
 			}
 		}
 	}
