@@ -46,6 +46,7 @@ import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconSkeleton
 import io.github.psd2live.ui.state.RecentFile
 import io.github.psd2live.ui.state.RecentFileKind
+import io.github.psd2live.ui.state.WorkspacePreset
 import io.github.psd2live.ui.state.recentFilesFrom
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -182,6 +183,7 @@ private fun UpdatesSection(
 			modifier = Modifier.padding(bottom = 1.dp),
 		)
 		listOf(
+			TutorialId.WORKSPACE to "workspace",
 			TutorialId.SKELETON to "skeleton",
 			TutorialId.ANIMATION to "animation",
 			TutorialId.PHYSICS to "physics",
@@ -229,6 +231,7 @@ private fun FeatureUpdateRow(
 	) {
 		val iconTint = if (enabled) colors.accent else colors.textDisabled
 		when (tutorial) {
+			TutorialId.WORKSPACE -> WorkspacePresetIcon(WorkspacePreset.EDIT, iconTint, Modifier.size(15.dp))
 			TutorialId.SKELETON -> IconSkeleton(modifier = Modifier.size(15.dp), tint = iconTint)
 			TutorialId.ANIMATION -> IconPlay(modifier = Modifier.size(14.dp), tint = iconTint)
 			TutorialId.PHYSICS -> IconPhysics(active = true, modifier = Modifier.size(15.dp), tint = iconTint)

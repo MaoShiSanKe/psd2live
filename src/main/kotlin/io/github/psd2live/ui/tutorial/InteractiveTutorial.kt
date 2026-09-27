@@ -286,9 +286,13 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 	TutorialId.WORKSPACE to TutorialDefinition(
 		TutorialId.WORKSPACE,
 		listOf(
-			step("tabs", TutorialTargetId.EDIT_TAB, ensureEditTab = true),
-			step("hierarchyToggle", TutorialTargetId.LAYOUT_HIERARCHY_TOGGLE, showAction = true),
-			step("docks", TutorialTargetId.LAYERS_DOCK, selectDock = "layers"),
+			step("presets", TutorialTargetId.WORKSPACE_STRIP, showAction = true),
+			step("switch", TutorialTargetId.WORKSPACE_STRIP, showAction = true),
+			step("dockTabs", TutorialTargetId.DOCK_AREA, ensureEditTab = true, showAction = true),
+			step("split", TutorialTargetId.DOCK_AREA, ensureEditTab = true),
+			step("float", TutorialTargetId.DOCK_AREA, ensureEditTab = true),
+			step("memory", TutorialTargetId.WORKSPACE_STRIP),
+			step("sidebars", TutorialTargetId.LAYOUT_SIDEBAR_TOGGLES, showAction = true),
 			step("viewMenu", TutorialTargetId.VIEW_OPTIONS_MENU, ensureEditTab = true, showAction = true),
 			step("camera", TutorialTargetId.MODE_BAR, ensureEditTab = true),
 			step("done", isDone = true, preferSideBubble = false),

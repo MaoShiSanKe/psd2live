@@ -304,7 +304,10 @@ internal fun DockWorkspaceView(
     // Column height with the dock (which would collapse the workspace to solid black).
     Box(modifier) {
         Column(Modifier.fillMaxSize().background(colors.windowBackground)) {
-            Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+				Modifier.fillMaxWidth().height(28.dp).tutorialTarget(TutorialTargetId.WORKSPACE_STRIP),
+				verticalAlignment = Alignment.CenterVertically,
+			) {
                 WorkspaceStrip(
                     state,
                     viewModel,
@@ -319,7 +322,7 @@ internal fun DockWorkspaceView(
                 Spacer(Modifier.width(4.dp))
             }
             key(workspace.id) {
-                Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { coordinates ->
+                Box(Modifier.weight(1f).fillMaxWidth().tutorialTarget(TutorialTargetId.DOCK_AREA).onGloballyPositioned { coordinates ->
                     session.workspaceBounds = { screenBounds(coordinates, mainWindow) }
                 }) {
                     visibleRoot?.let {

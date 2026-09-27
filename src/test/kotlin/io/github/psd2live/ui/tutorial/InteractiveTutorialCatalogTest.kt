@@ -72,6 +72,16 @@ class InteractiveTutorialCatalogTest {
 	}
 
 	@Test
+	fun workspaceLessonCoversPresetsDockingSplitsAndFloating() {
+		assertEquals(
+			listOf("presets", "switch", "dockTabs", "split", "float", "memory", "sidebars", "viewMenu", "camera", "done"),
+			tutorialDefinition(TutorialId.WORKSPACE).steps.map { it.key },
+		)
+		assertEquals(TutorialTargetId.WORKSPACE_STRIP, tutorialDefinition(TutorialId.WORKSPACE).steps.first().targetId)
+		assertEquals(TutorialTargetId.DOCK_AREA, tutorialDefinition(TutorialId.WORKSPACE).steps.first { it.key == "dockTabs" }.targetId)
+	}
+
+	@Test
 	fun variantsCoversToggleAndSwitchFlow() {
 		assertEquals(
 			listOf("types", "toggleWhy", "toggleSetup", "switchWhy", "switchSetup", "done"),

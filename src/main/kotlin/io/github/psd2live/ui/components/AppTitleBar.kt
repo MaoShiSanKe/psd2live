@@ -842,24 +842,26 @@ fun AppTitleBar(
 			modifier = Modifier.fillMaxHeight(),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
-			SidebarSide.entries.forEach { side ->
-				val toggle = sidebarToggles.firstOrNull { it.side == side }
-				// A button leaving the bar keeps its last look while it slides out.
-				val last = remember(side) { arrayOfNulls<SidebarToggle>(1) }
-				if (toggle != null) last[0] = toggle
-				AnimatedVisibility(
-					visible = toggle != null,
-					enter = fadeIn(tween(160)) + expandHorizontally(tween(200), expandFrom = Alignment.Start),
-					exit = fadeOut(tween(120)) + shrinkHorizontally(tween(200), shrinkTowards = Alignment.Start),
-				) {
-					val shown = toggle ?: last[0] ?: return@AnimatedVisibility
-					TitleBarLayoutToggle(
-						tooltip = sidebarTooltip(shown),
-						active = shown.active,
-						side = shown.side,
-						onClick = { onToggleSidebar(shown.side) },
-						modifier = if (shown.hostsHierarchy) Modifier.tutorialTarget(TutorialTargetId.LAYOUT_HIERARCHY_TOGGLE) else Modifier,
-					)
+			Row(Modifier.tutorialTarget(TutorialTargetId.LAYOUT_SIDEBAR_TOGGLES)) {
+				SidebarSide.entries.forEach { side ->
+					val toggle = sidebarToggles.firstOrNull { it.side == side }
+					// A button leaving the bar keeps its last look while it slides out.
+					val last = remember(side) { arrayOfNulls<SidebarToggle>(1) }
+					if (toggle != null) last[0] = toggle
+					AnimatedVisibility(
+						visible = toggle != null,
+						enter = fadeIn(tween(160)) + expandHorizontally(tween(200), expandFrom = Alignment.Start),
+						exit = fadeOut(tween(120)) + shrinkHorizontally(tween(200), shrinkTowards = Alignment.Start),
+					) {
+						val shown = toggle ?: last[0] ?: return@AnimatedVisibility
+						TitleBarLayoutToggle(
+							tooltip = sidebarTooltip(shown),
+							active = shown.active,
+							side = shown.side,
+							onClick = { onToggleSidebar(shown.side) },
+							modifier = if (shown.hostsHierarchy) Modifier.tutorialTarget(TutorialTargetId.LAYOUT_HIERARCHY_TOGGLE) else Modifier,
+						)
+					}
 				}
 			}
 			TitleBarThemeToggle(
