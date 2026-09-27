@@ -67,14 +67,14 @@ class MultiCanvasIsolationTest {
     @Test fun sidebarToggleRestoresThePanelsItHid() {
         PSD2LiveViewModel().use { vm ->
             vm.addWorkspace(WorkspacePreset.MESH)
-            val shownRight = vm.state.value.activeWorkspace.let { ws -> listOf("mesh", "tools", "inspector").filter { it !in ws.hiddenModules } }
-            assertEquals(listOf("mesh", "tools", "inspector"), shownRight)
+            val shown = vm.state.value.activeWorkspace.let { ws -> io.github.psd2live.ui.state.DEFAULT_DOCK_MODULES.filter { it !in ws.hiddenModules } }
+            assertEquals(setOf(io.github.psd2live.ui.state.PRIMARY_CANVAS_ID, "hierarchy", "mesh"), shown.toSet())
             vm.setModuleVisible("parameters", true)
 
             vm.toggleSidebar(SidebarSide.RIGHT)
             val hidden = vm.state.value.activeWorkspace.hiddenModules
-            assertTrue(listOf("mesh", "tools", "inspector", "parameters").all { it in hidden })
-            assertFalse("layers" in hidden, "layers sits in the mesh preset's left sidebar")
+            assertTrue(listOf("mesh", "parameters").all { it in hidden })
+            assertFalse("hierarchy" in hidden, "hierarchy sits in the mesh preset's left sidebar")
 
             val settings = io.github.psd2live.project.WorkspaceStateCodec.settings(vm.state.value)
             val decoded = io.github.psd2live.project.WorkspaceStateCodec.decode(settings, vm.state.value)
@@ -82,8 +82,8 @@ class MultiCanvasIsolationTest {
 
             vm.toggleSidebar(SidebarSide.RIGHT)
             val restored = vm.state.value.activeWorkspace.hiddenModules
-            assertTrue(listOf("mesh", "tools", "inspector", "parameters").none { it in restored })
-            assertTrue(listOf("settings", "animation", "physics").all { it in restored })
+            assertTrue(listOf("mesh", "parameters").none { it in restored })
+            assertTrue(listOf("tools", "inspector", "settings", "animation", "physics").all { it in restored })
 
             // Physics docks nothing left of its canvas, so there is nothing to toggle there.
             vm.addWorkspace(WorkspacePreset.PHYSICS)

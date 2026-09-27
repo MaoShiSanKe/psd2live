@@ -200,18 +200,19 @@ internal fun presetDockLayout(workspace: EditorWorkspace): DockNode {
     val names = slots.mapIndexed { index, id -> id ?: "#slot$index" }
     val layout = when (preset) {
         WorkspacePreset.EDIT, WorkspacePreset.BLANK -> defaultDockLayout(names[0])
-        WorkspacePreset.MESH -> row(.22f, leaf("layers", "hierarchy", "skeleton"),
+        WorkspacePreset.MESH -> row(.22f, leaf("hierarchy", "layers", "skeleton"),
             row(.72f, column(.78f, leaf(names[0]), leaf("log", "animationEditor")),
                 column(.55f, leaf("mesh", "tools"), leaf("inspector", "parameters", "settings", "animation", "physics"))))
         WorkspacePreset.RIG -> row(.20f, leaf("hierarchy", "skeleton"),
             row(.75f, column(.76f, row(.5f, leaf(names[0]), leaf(names[1])), leaf("log", "animationEditor")),
                 column(.45f, leaf("parameters"), leaf("inspector", "tools", "mesh", "layers", "settings", "animation", "physics"))))
-        WorkspacePreset.ANIMATION -> row(.20f, leaf("parameters", "hierarchy", "skeleton"),
-            row(.76f, column(.55f, leaf(names[0]), leaf("animationEditor", "log")),
-                column(.50f, leaf("animation"), leaf("physics", "settings", "layers", "tools", "mesh", "inspector"))))
+        WorkspacePreset.ANIMATION -> row(.78f,
+            column(.62f, row(.26f, leaf("animation", "physics", "hierarchy", "skeleton"), leaf(names[0])),
+                leaf("animationEditor", "log")),
+            leaf("parameters", "settings", "layers", "tools", "mesh", "inspector"))
         WorkspacePreset.PREVIEW -> row(.16f, leaf("hierarchy", "skeleton"),
             row(.78f, column(.80f, leaf(names[0]), leaf("log", "animationEditor")),
-                column(.50f, leaf("parameters"), leaf("animation", "physics", "settings", "layers", "tools", "mesh", "inspector"))))
+                column(.50f, leaf("animation", "physics", "settings", "layers", "tools", "mesh", "inspector"), leaf("parameters"))))
         WorkspacePreset.PHYSICS -> row(.5f, column(.82f, leaf(names[0]), leaf("log", "animationEditor")),
             row(.5f, leaf("parameters", "hierarchy", "skeleton"),
                 leaf("physics", "animation", "settings", "layers", "tools", "mesh", "inspector")))

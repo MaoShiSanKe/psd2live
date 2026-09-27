@@ -173,10 +173,10 @@ enum class WorkspacePreset(
 	/** Deformers, keyforms and skeleton on one edit canvas, with every property panel at hand. */
 	EDIT(listOf(CanvasMode.EDIT), emptySet()),
 
-	/** Layer art and mesh topology: the layer table beside the canvas, mesh and tool options on the right. */
+	/** Mesh topology: the hierarchy beside the edit canvas, the mesh panel on the right. */
 	MESH(
 		listOf(CanvasMode.EDIT),
-		setOf("skeleton", "animationEditor", "settings", "parameters", "animation", "physics"),
+		setOf("layers", "skeleton", "log", "animationEditor", "tools", "inspector", "settings", "parameters", "animation", "physics"),
 	),
 
 	/** Binding parameters: the edit canvas and a live preview side by side, parameters always visible. */
@@ -185,16 +185,16 @@ enum class WorkspacePreset(
 		setOf("animationEditor", "settings", "layers", "mesh", "animation", "physics"),
 	),
 
-	/** Authoring motions: the preview canvas over a tall timeline, motions and physics on the right. */
+	/** Authoring motions: motions left of the preview canvas, the animation editor below both, parameters on the right. */
 	ANIMATION(
 		listOf(CanvasMode.PREVIEW),
-		setOf("hierarchy", "skeleton", "log", "settings", "layers", "tools", "mesh", "inspector"),
+		setOf("hierarchy", "skeleton", "log", "settings", "layers", "tools", "mesh", "inspector", "physics"),
 	),
 
-	/** Checking the finished model: a large preview with parameters, motions and physics only. */
+	/** Checking the finished model: a large preview with the motion list only. */
 	PREVIEW(
 		listOf(CanvasMode.PREVIEW),
-		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector"),
+		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "parameters", "physics"),
 	),
 
 	/** Tuning physics: the preview and parameters beside a wide physics panel, to shake the model while editing. */
