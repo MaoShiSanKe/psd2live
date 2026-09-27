@@ -83,6 +83,9 @@ import java.nio.file.Path
 import java.util.prefs.Preferences
 import kotlin.math.PI
 import kotlin.math.roundToInt
+import io.github.psd2live.ui.theme.CustomTheme
+import io.github.psd2live.ui.theme.ThemeCatalog
+import io.github.psd2live.ui.theme.ThemeCodec
 import kotlin.math.sin
 
 class PSD2LiveViewModel : AutoCloseable {
@@ -2605,13 +2608,76 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(fontScale = clamped) }
 	}
 
-	fun setDarkTheme(dark: Boolean) {
-		AppSettings.darkTheme = dark
-		updateState { it.copy(darkTheme = dark) }
+	fun setTheme(id: String) {
+		val colors = ThemeCatalog.resolve(id, _state.value.customThemes)
+		AppSettings.themeId = id
+		AppSettings.rememberLastThemeId(colors.isDark, id)
+		updateState { it.copy(themeId = id, toolColors = colors) }
 	}
 
+	/** Flips between the dark and the light theme used last, so a custom theme survives the round trip. */
 	fun toggleDarkTheme() {
-		setDarkTheme(!_state.value.darkTheme)
+		val state = _state.value
+		val target = AppSettings.lastThemeId(!state.darkTheme)
+		val exists = ThemeCatalog.isBuiltIn(target) || state.customThemes.any { it.id == target }
+		val resolved = if (exists && ThemeCatalog.resolve(target, state.customThemes).isDark != state.darkTheme) target
+			else if (state.darkTheme) ThemeCatalog.LIGHT_ID else ThemeCatalog.DARK_ID
+		setTheme(resolved)
+	}
+
+	/** Copies theme [fromId] into a new custom theme and selects it. */
+	fun duplicateTheme(fromId: String) {
+		val state = _state.value
+		val source = state.customThemes.firstOrNull { it.id == fromId }
+		val baseName = source?.name ?: tr(ThemeCatalog.builtIn(fromId).nameKey)
+		val theme = CustomTheme(
+			id = ThemeCatalog.newCustomId(),
+			name = tr("theme.custom.copyName", baseName),
+			baseId = source?.baseId ?: ThemeCatalog.builtIn(fromId).id,
+			overrides = source?.overrides ?: emptyMap(),
+		)
+		saveCustomThemes(state.customThemes + theme)
+		setTheme(theme.id)
+	}
+
+	/** Applied at once but written out after a pause, since a colour drag sends an edit per frame. */
+	fun updateCustomTheme(theme: CustomTheme) {
+		val themes = _state.value.customThemes.map { if (it.id == theme.id) theme else it }
+		saveCustomThemes(themes, debounce = true)
+		if (_state.value.themeId == theme.id) {
+			val colors = theme.resolve()
+			updateState { it.copy(toolColors = colors) }
+		}
+	}
+
+	fun deleteCustomTheme(id: String) {
+		val removed = _state.value.customThemes.firstOrNull { it.id == id } ?: return
+		saveCustomThemes(_state.value.customThemes - removed)
+		if (_state.value.themeId == id) setTheme(removed.baseId)
+	}
+
+	/** Adds a theme pasted as [ThemeCodec] text and selects it; false when [text] is not a theme. */
+	fun importTheme(text: String): Boolean {
+		val decoded = ThemeCodec.decode(text, ThemeCatalog.newCustomId()) ?: return false
+		val theme = if (decoded.name.isBlank()) decoded.copy(name = tr("theme.custom.imported")) else decoded
+		saveCustomThemes(_state.value.customThemes + theme)
+		setTheme(theme.id)
+		return true
+	}
+
+	private var customThemeSaveJob: Job? = null
+
+	private fun saveCustomThemes(themes: List<CustomTheme>, debounce: Boolean = false) {
+		updateState { it.copy(customThemes = themes) }
+		customThemeSaveJob?.cancel()
+		if (debounce) {
+			customThemeSaveJob = scope.launch {
+				delay(400)
+				AppSettings.saveCustomThemes(themes)
+			}
+		} else {
+			AppSettings.saveCustomThemes(themes)
+		}
 	}
 
 	fun zoomIn() {

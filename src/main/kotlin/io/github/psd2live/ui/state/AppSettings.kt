@@ -1,5 +1,8 @@
 package io.github.psd2live.ui.state
 
+import io.github.psd2live.ui.theme.CustomTheme
+import io.github.psd2live.ui.theme.ThemeCatalog
+import io.github.psd2live.ui.theme.ThemeCodec
 import java.awt.GraphicsEnvironment
 import java.nio.file.Files
 import java.nio.file.Path
@@ -66,15 +69,69 @@ object AppSettings {
 			}
 		}
 
-	/** Dark chrome is the shipped look; light is an explicit preference. */
-	var darkTheme: Boolean
-		get() = runCatching { preferences.getBoolean(KEY_DARK_THEME, true) }.getOrDefault(true)
+	// ---------------------------------------------------------------------------------------
+	// Colour theme
+	//
+	// Each custom theme lives under its own key: a Preferences value is capped at 8 KiB, which a
+	// list of fully overridden themes would outgrow.
+	// ---------------------------------------------------------------------------------------
+
+	private const val KEY_THEME_ID = "theme_id"
+	private const val KEY_THEME_LAST_DARK = "theme_last_dark"
+	private const val KEY_THEME_LAST_LIGHT = "theme_last_light"
+	private const val KEY_THEME_CUSTOM_ORDER = "theme_custom_order"
+	private const val THEME_CUSTOM_PREFIX = "theme_custom_"
+
+	/**
+	 * The selected theme. Before themes existed only [KEY_DARK_THEME] was stored, so a missing id
+	 * falls back to whichever of the two built-ins that flag named.
+	 */
+	var themeId: String
+		get() = runCatching {
+			preferences.get(KEY_THEME_ID, null)
+				?: if (preferences.getBoolean(KEY_DARK_THEME, true)) ThemeCatalog.DARK_ID else ThemeCatalog.LIGHT_ID
+		}.getOrDefault(ThemeCatalog.DARK_ID)
 		set(value) {
 			runCatching {
-				preferences.putBoolean(KEY_DARK_THEME, value)
+				preferences.put(KEY_THEME_ID, value)
+				preferences.remove(KEY_DARK_THEME)
 				preferences.flush()
 			}
 		}
+
+	/** The theme the title-bar toggle switches to for [dark]: the one last used on that side. */
+	fun lastThemeId(dark: Boolean): String {
+		val fallback = if (dark) ThemeCatalog.DARK_ID else ThemeCatalog.LIGHT_ID
+		return runCatching {
+			preferences.get(if (dark) KEY_THEME_LAST_DARK else KEY_THEME_LAST_LIGHT, fallback)
+		}.getOrDefault(fallback)
+	}
+
+	fun rememberLastThemeId(dark: Boolean, id: String) {
+		runCatching {
+			preferences.put(if (dark) KEY_THEME_LAST_DARK else KEY_THEME_LAST_LIGHT, id)
+			preferences.flush()
+		}
+	}
+
+	fun customThemes(): List<CustomTheme> = runCatching {
+		val order = preferences.get(KEY_THEME_CUSTOM_ORDER, "").split(',').filter { it.isNotBlank() }
+		order.mapNotNull { id ->
+			preferences.get(THEME_CUSTOM_PREFIX + id, null)?.let { ThemeCodec.decode(it, id) }
+		}
+	}.getOrDefault(emptyList())
+
+	fun saveCustomThemes(themes: List<CustomTheme>) {
+		runCatching {
+			val keep = themes.map { THEME_CUSTOM_PREFIX + it.id }.toSet()
+			preferences.keys()
+				.filter { it.startsWith(THEME_CUSTOM_PREFIX) && it != KEY_THEME_CUSTOM_ORDER && it !in keep }
+				.forEach { preferences.remove(it) }
+			for (theme in themes) preferences.put(THEME_CUSTOM_PREFIX + theme.id, ThemeCodec.encode(theme))
+			preferences.put(KEY_THEME_CUSTOM_ORDER, themes.joinToString(",") { it.id })
+			preferences.flush()
+		}
+	}
 
 	private const val KEY_CLICK_TO_SELECT_LAYER = "click_to_select_layer"
 	private const val KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT = "auto_detect_mesh_splits_on_import"
@@ -221,6 +278,10 @@ object AppSettings {
 			preferences.remove(KEY_FONT_SCALE)
 			preferences.remove(KEY_CUSTOM_SCALE_SET)
 			preferences.remove(KEY_DARK_THEME)
+			// Custom themes are the user's work, not a preference, so a reset only deselects them.
+			preferences.remove(KEY_THEME_ID)
+			preferences.remove(KEY_THEME_LAST_DARK)
+			preferences.remove(KEY_THEME_LAST_LIGHT)
 			preferences.remove(KEY_CLICK_TO_SELECT_LAYER)
 			// Enumerated by prefix so there is no action-name list to keep up to date.
 			preferences.keys().filter { it.startsWith(KEYMAP_PREFIX) }.forEach { preferences.remove(it) }

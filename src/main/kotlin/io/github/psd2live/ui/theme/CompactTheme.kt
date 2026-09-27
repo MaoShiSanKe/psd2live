@@ -42,6 +42,27 @@ data class ToolColors(
 	val error: Color = Color(0xFFE05252),
 	val checkerLight: Color = Color(0xFF3A3D42),
 	val checkerDark: Color = Color(0xFF303236),
+	/** The dim laid over the workspace behind a modal dialog. */
+	val scrim: Color = Color(0x99000000),
+	/** A second highlight beside [accent] for live or current things: a connected agent, the history head. */
+	val highlight: Color = Color(0xFF4EC9B0),
+	/** The badge fill under [highlight] text. */
+	val highlightContainer: Color = Color(0xFF1B4D3E),
+	/** The badge fill under [error] text. */
+	val errorContainer: Color = Color(0xFF4D1B1B),
+	val codeBackground: Color = Color(0xFF141416),
+	val codeKeyword: Color = Color(0xFFDCDCAA),
+	val codeString: Color = Color(0xFFCE9178),
+	val codeIdentifier: Color = Color(0xFF9CDCFE),
+	/** Source badges in the log and history: who made an entry. */
+	val tagSystem: Color = Color(0xFF2E3440),
+	val tagSystemText: Color = Color(0xFF88C0D0),
+	val tagMcp: Color = Color(0xFF1E3A3A),
+	val tagMcpText: Color = Color(0xFF4EC9B0),
+	val tagAgent: Color = Color(0xFF3B2E58),
+	val tagAgentText: Color = Color(0xFFDCDCAA),
+	val tagUser: Color = Color(0xFF1E3A5F),
+	val tagUserText: Color = Color(0xFF9CDCFE),
 ) {
 	companion object {
 		val Dark = ToolColors()
@@ -71,6 +92,22 @@ data class ToolColors(
 			error = Color(0xFFC42B2B),
 			checkerLight = Color(0xFFECEEF1),
 			checkerDark = Color(0xFFDEE1E6),
+			scrim = Color(0x80000000),
+			highlight = Color(0xFF1F7A66),
+			highlightContainer = Color(0xFFE3F4EF),
+			errorContainer = Color(0xFFFBE7E7),
+			codeBackground = Color(0xFFEEF0F3),
+			codeKeyword = Color(0xFF795E26),
+			codeString = Color(0xFFA31515),
+			codeIdentifier = Color(0xFF0451A5),
+			tagSystem = Color(0xFFE8EEF4),
+			tagSystemText = Color(0xFF3A6B8C),
+			tagMcp = Color(0xFFE3F4EF),
+			tagMcpText = Color(0xFF1F7A66),
+			tagAgent = Color(0xFFF1ECF8),
+			tagAgentText = Color(0xFF6B4FA0),
+			tagUser = Color(0xFFE6F0FA),
+			tagUserText = Color(0xFF1A5FA8),
 		)
 
 		fun forTheme(dark: Boolean): ToolColors = if (dark) Dark else Light
@@ -161,8 +198,7 @@ val LocalToolTypography = staticCompositionLocalOf { ToolTypography() }
 
 @Composable
 fun CompactToolTheme(
-	darkTheme: Boolean = true,
-	colors: ToolColors = ToolColors.forTheme(darkTheme),
+	colors: ToolColors = ToolColors.Dark,
 	typography: ToolTypography = toolTypography(colors),
 	uiScale: Float = 1.0f,
 	fontScale: Float = 1.0f,

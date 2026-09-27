@@ -71,7 +71,7 @@ fun TextureUpscaleDialog(
 	Box(
 		modifier = Modifier
 			.fillMaxSize()
-			.background(Color(0x99000000))
+			.background(colors.scrim)
 			.clickable(enabled = !isUpscaling && !isDownloading) { onDismiss() },
 		contentAlignment = Alignment.Center,
 	) {
@@ -104,14 +104,14 @@ fun TextureUpscaleDialog(
 						Box(
 							modifier = Modifier
 								.clip(RoundedCornerShape(4.dp))
-								.background(Color(0xFF1B4D3E))
-								.border(BorderStroke(1.dp, Color(0xFF4EC9B0)), RoundedCornerShape(4.dp))
+								.background(colors.highlightContainer)
+								.border(BorderStroke(1.dp, colors.highlight), RoundedCornerShape(4.dp))
 								.padding(horizontal = 6.dp, vertical = 2.dp),
 						) {
 							Text(
 								text = "PROCESSING",
 								style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-								color = Color(0xFF4EC9B0),
+								color = colors.highlight,
 							)
 						}
 					}
@@ -179,8 +179,8 @@ fun TextureUpscaleDialog(
 						modifier = Modifier
 							.fillMaxWidth()
 							.clip(RoundedCornerShape(4.dp))
-							.background(Color(0xFF1B4D3E).copy(alpha = 0.5f))
-							.border(BorderStroke(1.dp, Color(0xFF4EC9B0).copy(alpha = 0.6f)), RoundedCornerShape(4.dp))
+							.background(colors.highlightContainer.copy(alpha = 0.5f))
+							.border(BorderStroke(1.dp, colors.highlight.copy(alpha = 0.6f)), RoundedCornerShape(4.dp))
 							.padding(horizontal = 10.dp, vertical = 6.dp),
 						verticalAlignment = Alignment.CenterVertically,
 						horizontalArrangement = Arrangement.SpaceBetween,
@@ -189,11 +189,11 @@ fun TextureUpscaleDialog(
 							verticalAlignment = Alignment.CenterVertically,
 							horizontalArrangement = Arrangement.spacedBy(6.dp),
 						) {
-							Text("✓", color = Color(0xFF4EC9B0), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+							Text("✓", color = colors.highlight, fontWeight = FontWeight.Bold, fontSize = 12.sp)
 							Text(
 								text = tr("upscale.modelReady"),
 								style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Medium),
-								color = Color(0xFF4EC9B0),
+								color = colors.highlight,
 							)
 						}
 						Text(
@@ -208,7 +208,7 @@ fun TextureUpscaleDialog(
 							.fillMaxWidth()
 							.clip(RoundedCornerShape(6.dp))
 							.background(colors.inputBackground)
-							.border(BorderStroke(1.dp, if (downloadState is DownloadState.Failed) Color(0xFFE06C75) else colors.border), RoundedCornerShape(6.dp))
+							.border(BorderStroke(1.dp, if (downloadState is DownloadState.Failed) colors.error else colors.border), RoundedCornerShape(6.dp))
 							.padding(10.dp),
 						verticalArrangement = Arrangement.spacedBy(8.dp),
 					) {
@@ -276,7 +276,7 @@ fun TextureUpscaleDialog(
 								Text(
 									text = "${tr("upscale.downloadFailed")}: ${state.error}",
 									style = typography.caption.copy(fontSize = 10.sp),
-									color = Color(0xFFE06C75),
+									color = colors.error,
 								)
 								Row(
 									modifier = Modifier.fillMaxWidth(),

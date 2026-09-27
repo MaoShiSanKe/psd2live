@@ -530,7 +530,7 @@ fun DrawOrderInputDialog(
 	Box(
 		modifier = Modifier
 			.fillMaxSize()
-			.background(Color(0x88000000))
+			.background(colors.scrim)
 			.clickable(onClick = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {

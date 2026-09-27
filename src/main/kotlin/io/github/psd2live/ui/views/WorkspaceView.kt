@@ -1337,7 +1337,7 @@ private fun DeformerTreeItem(
 		childDrawables
 	}
 
-	val guideColor = Color(0xFFE4E7EC).copy(alpha = 0.42f)
+	val guideColor = colors.textPrimary.copy(alpha = 0.42f)
 	val activeGuideColor = if (isSelected) colors.selectionText.copy(alpha = 0.9f) else guideColor
 
 	val isCurrentDragged = treeDragState.isDragging && treeDragState.draggedId == headId
@@ -1903,7 +1903,7 @@ private fun DrawableTreeItem(
 		return
 	}
 
-	val guideColor = Color(0xFFE4E7EC).copy(alpha = 0.42f)
+	val guideColor = colors.textPrimary.copy(alpha = 0.42f)
 	val activeGuideColor = if (isLayerSelected) colors.selectionText.copy(alpha = 0.9f) else guideColor
 
 	val isCurrentDragged = treeDragState.isDragging && treeDragState.draggedId == itemId

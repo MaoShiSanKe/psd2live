@@ -154,7 +154,7 @@ fun AgentConnectionDialog(
 	Box(
 		modifier = Modifier
 			.fillMaxSize()
-			.background(Color(0x99000000))
+			.background(colors.scrim)
 			.clickable(onClick = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {
@@ -184,16 +184,16 @@ fun AgentConnectionDialog(
 						Box(
 							modifier = Modifier
 								.clip(RoundedCornerShape(4.dp))
-								.background(Color(0xFF1B4D3E))
-								.border(BorderStroke(1.dp, Color(0xFF4EC9B0)), RoundedCornerShape(4.dp))
+								.background(colors.highlightContainer)
+								.border(BorderStroke(1.dp, colors.highlight), RoundedCornerShape(4.dp))
 								.padding(horizontal = 6.dp, vertical = 2.dp),
 						) {
 							Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-								Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF4EC9B0)))
+								Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(colors.highlight))
 								Text(
 									text = "ONLINE :23871",
 									style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-									color = Color(0xFF4EC9B0),
+									color = colors.highlight,
 								)
 							}
 						}
@@ -201,7 +201,7 @@ fun AgentConnectionDialog(
 						Box(
 							modifier = Modifier
 								.clip(RoundedCornerShape(4.dp))
-								.background(Color(0xFF4D1B1B))
+								.background(colors.errorContainer)
 								.border(BorderStroke(1.dp, colors.error), RoundedCornerShape(4.dp))
 								.padding(horizontal = 6.dp, vertical = 2.dp),
 						) {
@@ -370,14 +370,14 @@ fun AgentConnectionDialog(
 							Box(
 								modifier = Modifier
 									.fillMaxWidth()
-									.background(Color(0xFF141416), RoundedCornerShape(3.dp))
+									.background(colors.codeBackground, RoundedCornerShape(3.dp))
 									.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(3.dp))
 									.padding(8.dp),
 							) {
 								Text(
 									text = connection.configToml,
 									style = typography.mono.copy(fontSize = 10.sp, lineHeight = 14.sp),
-									color = Color(0xFFDCDCAA),
+									color = colors.codeKeyword,
 								)
 							}
 						}
@@ -400,14 +400,14 @@ fun AgentConnectionDialog(
 							Box(
 								modifier = Modifier
 									.fillMaxWidth()
-									.background(Color(0xFF141416), RoundedCornerShape(3.dp))
+									.background(colors.codeBackground, RoundedCornerShape(3.dp))
 									.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(3.dp))
 									.padding(8.dp),
 							) {
 								Text(
 									text = geminiJson,
 									style = typography.mono.copy(fontSize = 10.sp, lineHeight = 14.sp),
-									color = Color(0xFF9CDCFE),
+									color = colors.codeIdentifier,
 								)
 							}
 						}
@@ -430,14 +430,14 @@ fun AgentConnectionDialog(
 							Box(
 								modifier = Modifier
 									.fillMaxWidth()
-									.background(Color(0xFF141416), RoundedCornerShape(3.dp))
+									.background(colors.codeBackground, RoundedCornerShape(3.dp))
 									.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(3.dp))
 									.padding(8.dp),
 							) {
 								Text(
 									text = stdioJson,
 									style = typography.mono.copy(fontSize = 10.sp, lineHeight = 14.sp),
-									color = Color(0xFF9CDCFE),
+									color = colors.codeIdentifier,
 								)
 							}
 						}
@@ -472,7 +472,7 @@ fun AgentConnectionDialog(
 							modifier = Modifier
 								.weight(1f)
 								.fillMaxWidth()
-								.background(Color(0xFF141416), RoundedCornerShape(4.dp))
+								.background(colors.codeBackground, RoundedCornerShape(4.dp))
 								.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
 								.padding(10.dp)
 								.verticalScroll(rememberScrollState()),
@@ -480,7 +480,7 @@ fun AgentConnectionDialog(
 							Text(
 								text = installationPrompt,
 								style = typography.mono.copy(fontSize = 10.5.sp, lineHeight = 15.sp),
-								color = Color(0xFFCE9178),
+								color = colors.codeString,
 							)
 						}
 					}
@@ -499,7 +499,7 @@ fun AgentConnectionDialog(
 					Text(
 						text = "✓ $copyNotification",
 						style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-						color = Color(0xFF4EC9B0),
+						color = colors.highlight,
 					)
 				} else {
 					Spacer(Modifier.width(1.dp))

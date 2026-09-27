@@ -49,6 +49,7 @@ import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.state.*
 import io.github.psd2live.ui.theme.LocalToolColors
+import io.github.psd2live.ui.theme.ToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import java.awt.Cursor
 import java.awt.Toolkit
@@ -599,32 +600,13 @@ private fun IconLogCopy(tint: Color) {
 	}
 }
 
-/**
- * Source-chip colors for a log row. Dark keeps the existing Nord-ish fills; light uses a soft wash
- * with a saturated label so the chip stays readable on a white panel.
- */
-private fun logSourceBadge(source: LogSource, dark: Boolean): Triple<Color, Color, String> = when (source) {
-	LogSource.SYSTEM -> if (dark) {
-		Triple(Color(0xFF2E3440), Color(0xFF88C0D0), "SYSTEM")
-	} else {
-		Triple(Color(0xFFE8EEF4), Color(0xFF3A6B8C), "SYSTEM")
-	}
-	LogSource.MCP_SERVER -> if (dark) {
-		Triple(Color(0xFF1E3A3A), Color(0xFF4EC9B0), "MCP")
-	} else {
-		Triple(Color(0xFFE3F4EF), Color(0xFF1F7A66), "MCP")
-	}
-	LogSource.AGENT -> if (dark) {
-		Triple(Color(0xFF3B2E58), Color(0xFFDCDCAA), "AGENT")
-	} else {
-		Triple(Color(0xFFF1ECF8), Color(0xFF6B4FA0), "AGENT")
-	}
+/** Source-chip colors for a log row, from the theme's tag tokens the history tree shares. */
+private fun logSourceBadge(source: LogSource, colors: ToolColors): Triple<Color, Color, String> = when (source) {
+	LogSource.SYSTEM -> Triple(colors.tagSystem, colors.tagSystemText, "SYSTEM")
+	LogSource.MCP_SERVER -> Triple(colors.tagMcp, colors.tagMcpText, "MCP")
+	LogSource.AGENT -> Triple(colors.tagAgent, colors.tagAgentText, "AGENT")
 	// Same blue family the history tree gives a "User" node.
-	LogSource.EDITOR -> if (dark) {
-		Triple(Color(0xFF1E3A5F), Color(0xFF9CDCFE), "EDITOR")
-	} else {
-		Triple(Color(0xFFE6F0FA), Color(0xFF1A5FA8), "EDITOR")
-	}
+	LogSource.EDITOR -> Triple(colors.tagUser, colors.tagUserText, "EDITOR")
 }
 
 @Composable
@@ -639,7 +621,7 @@ private fun LogEntryRow(
 		TIME_FORMATTER.format(entry.timestamp)
 	}
 
-	val (sourceBg, sourceFg, sourceLabel) = logSourceBadge(entry.source, colors.isDark)
+	val (sourceBg, sourceFg, sourceLabel) = logSourceBadge(entry.source, colors)
 
 	val textColor = when (entry.level) {
 		LogLevel.ERROR -> colors.error

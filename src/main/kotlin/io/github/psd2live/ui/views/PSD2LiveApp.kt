@@ -230,7 +230,7 @@ fun FrameWindowScope.PSD2LiveApp(
 	}
 
 	CompactToolTheme(
-		darkTheme = state.darkTheme,
+		colors = state.toolColors,
 		uiScale = state.uiScale,
 		fontScale = state.fontScale,
 	) {
@@ -664,7 +664,8 @@ fun FrameWindowScope.PSD2LiveApp(
 			SettingsDialog(
 				uiScale = state.uiScale,
 				fontScale = state.fontScale,
-				darkTheme = state.darkTheme,
+				themeId = state.themeId,
+				customThemes = state.customThemes,
 				clickToSelectLayer = state.clickToSelectLayer,
 				autoDetectMeshSplitsOnImport = state.autoDetectMeshSplitsOnImport,
 				keymap = state.keymap,
@@ -673,7 +674,11 @@ fun FrameWindowScope.PSD2LiveApp(
 				currentLanguage = currentLanguage,
 				onUiScaleChange = viewModel::setUiScale,
 				onFontScaleChange = viewModel::setFontScale,
-				onDarkThemeChange = viewModel::setDarkTheme,
+				onThemeSelect = viewModel::setTheme,
+				onThemeDuplicate = viewModel::duplicateTheme,
+				onCustomThemeChange = viewModel::updateCustomTheme,
+				onCustomThemeDelete = viewModel::deleteCustomTheme,
+				onThemeImport = viewModel::importTheme,
 				onClickToSelectLayerChange = viewModel::setClickToSelectLayer,
 				onAutoDetectMeshSplitsOnImportChange = viewModel::setAutoDetectMeshSplitsOnImport,
 				onLanguageChange = viewModel::setLanguage,
@@ -686,7 +691,7 @@ fun FrameWindowScope.PSD2LiveApp(
 					viewModel.resetZoom()
 					viewModel.resetInteractionPrefs()
 					viewModel.resetKeymap()
-					viewModel.setDarkTheme(AppSettings.darkTheme)
+					viewModel.setTheme(AppSettings.themeId)
 				},
 				onDismiss = { viewModel.closeSettingsDialog() },
 			)
@@ -888,7 +893,7 @@ private fun ModalDialog(
 	Box(
 		modifier = Modifier
 			.fillMaxSize()
-			.background(Color(0x88000000))
+			.background(colors.scrim)
 			.clickable(onClick = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {

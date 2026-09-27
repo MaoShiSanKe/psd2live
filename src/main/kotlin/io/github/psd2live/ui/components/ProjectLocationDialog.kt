@@ -52,7 +52,7 @@ fun ProjectLocationDialog(state: PSD2LiveState, viewModel: PSD2LiveViewModel, wi
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x88000000))
+            .background(colors.scrim)
             .clickable(enabled = !state.projectSaving, onClick = viewModel::cancelProjectLocation),
         contentAlignment = Alignment.Center,
     ) {

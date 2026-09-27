@@ -69,7 +69,7 @@ fun ExportPsdDialog(
 	Box(
 		modifier = Modifier
 			.fillMaxSize()
-			.background(Color(0x99000000))
+			.background(colors.scrim)
 			.clickable(enabled = !isExporting) { viewModel.closeExportPsdDialog() },
 		contentAlignment = Alignment.Center,
 	) {
@@ -101,14 +101,14 @@ fun ExportPsdDialog(
 						Box(
 							modifier = Modifier
 								.clip(RoundedCornerShape(4.dp))
-								.background(Color(0xFF1B4D3E))
-								.border(BorderStroke(1.dp, Color(0xFF4EC9B0)), RoundedCornerShape(4.dp))
+								.background(colors.highlightContainer)
+								.border(BorderStroke(1.dp, colors.highlight), RoundedCornerShape(4.dp))
 								.padding(horizontal = 6.dp, vertical = 2.dp),
 						) {
 							Text(
 								text = "EXPORTING",
 								style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-								color = Color(0xFF4EC9B0),
+								color = colors.highlight,
 							)
 						}
 					}

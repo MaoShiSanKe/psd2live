@@ -371,12 +371,12 @@ fun HistoryTreeView(
 							val oy = (panOffset.y % gridSpacing + gridSpacing) % gridSpacing
 							var x = ox
 							while (x < size.width) {
-								drawLine(Color(0x0CFFFFFF), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+								drawLine(colors.textPrimary.copy(alpha = 0.05f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
 								x += gridSpacing
 							}
 							var y = oy
 							while (y < size.height) {
-								drawLine(Color(0x0CFFFFFF), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+								drawLine(colors.textPrimary.copy(alpha = 0.05f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
 								y += gridSpacing
 							}
 						}
@@ -401,7 +401,7 @@ fun HistoryTreeView(
 								}
 
 								val isBranchToHead = child.node.isHead
-								val strokeColor = if (isBranchToHead) Color(0xFF4EC9B0) else Color(0x66778899)
+								val strokeColor = if (isBranchToHead) colors.highlight else colors.textMuted.copy(alpha = 0.4f)
 								val strokeWidth = (if (isBranchToHead) 2.5f else 1.5f) * scale.coerceIn(0.6f, 1.8f) * densityFactor
 
 								drawPath(
@@ -461,7 +461,7 @@ fun HistoryTreeView(
 									BorderStroke(
 										width = if (isSelected || isHead) (2 * scale.coerceIn(0.6f, 1.2f)).dp else (1 * scale.coerceIn(0.6f, 1.2f)).dp,
 										color = when {
-											isHead -> Color(0xFF4EC9B0)
+											isHead -> colors.highlight
 											isSelected -> colors.accent
 											!matchesSearch -> colors.divider.copy(alpha = 0.2f)
 											else -> colors.border
@@ -499,7 +499,7 @@ fun HistoryTreeView(
 												modifier = Modifier
 													.size((6 * scale.coerceIn(0.6f, 1.2f)).dp)
 													.clip(CircleShape)
-													.background(Color(0xFF4EC9B0))
+													.background(colors.highlight)
 											)
 										}
 									}
@@ -542,16 +542,16 @@ fun HistoryTreeView(
 											Box(
 												modifier = Modifier
 													.clip(RoundedCornerShape((4 * scale).dp))
-													.background(Color(0xFF1B4D3E))
-													.border(BorderStroke((1 * scale).dp, Color(0xFF4EC9B0)), RoundedCornerShape((4 * scale).dp))
+													.background(colors.highlightContainer)
+													.border(BorderStroke((1 * scale).dp, colors.highlight), RoundedCornerShape((4 * scale).dp))
 													.padding(horizontal = (4 * scale).dp, vertical = (1 * scale).dp),
 											) {
 												Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy((3 * scale).dp)) {
-													Box(modifier = Modifier.size((5 * scale).dp).clip(CircleShape).background(Color(0xFF4EC9B0)))
+													Box(modifier = Modifier.size((5 * scale).dp).clip(CircleShape).background(colors.highlight))
 													Text(
 														text = tr("history.head"),
 														style = typography.monoSmall.copy(fontSize = (8.5 * scale.coerceIn(0.7f, 1.1f)).sp, fontWeight = FontWeight.Bold),
-														color = Color(0xFF4EC9B0),
+														color = colors.highlight,
 													)
 												}
 											}
@@ -620,7 +620,7 @@ fun HistoryTreeView(
 									Text(
 										text = "● HEAD",
 										style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-										color = Color(0xFF4EC9B0),
+										color = colors.highlight,
 									)
 									Spacer(Modifier.width(6.dp))
 								}
@@ -719,7 +719,7 @@ fun HistoryTreeView(
 									Text(
 										text = tr("history.current"),
 										style = typography.caption.copy(fontSize = 10.5.sp),
-										color = Color(0xFF4EC9B0),
+										color = colors.highlight,
 									)
 								}
 							}
@@ -957,23 +957,11 @@ private fun OperationListRow(
 
 @Composable
 private fun ActorBadge(actor: String, scale: Float = 1f) {
-	val dark = LocalToolColors.current.isDark
+	val colors = LocalToolColors.current
 	val (bg, fg, label) = when (actor.lowercase()) {
-		"agent" -> if (dark) {
-			Triple(Color(0xFF3B2E58), Color(0xFFDCDCAA), "Agent")
-		} else {
-			Triple(Color(0xFFF1ECF8), Color(0xFF6B4FA0), "Agent")
-		}
-		"user" -> if (dark) {
-			Triple(Color(0xFF1E3A5F), Color(0xFF9CDCFE), "User")
-		} else {
-			Triple(Color(0xFFE6F0FA), Color(0xFF1A5FA8), "User")
-		}
-		else -> if (dark) {
-			Triple(Color(0xFF2E3440), Color(0xFFD8DEE9), "System")
-		} else {
-			Triple(Color(0xFFE8EEF4), Color(0xFF3A6B8C), "System")
-		}
+		"agent" -> Triple(colors.tagAgent, colors.tagAgentText, "Agent")
+		"user" -> Triple(colors.tagUser, colors.tagUserText, "User")
+		else -> Triple(colors.tagSystem, colors.tagSystemText, "System")
 	}
 
 	Box(

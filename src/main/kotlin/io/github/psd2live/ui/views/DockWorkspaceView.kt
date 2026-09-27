@@ -371,7 +371,7 @@ internal fun DockWorkspaceView(
                 }
                 // Match the main window's custom density and theme.
                 CompactToolTheme(
-                    darkTheme = state.darkTheme,
+                    colors = state.toolColors,
                     uiScale = AppSettings.uiScale,
                     fontScale = AppSettings.fontScale,
                 ) {

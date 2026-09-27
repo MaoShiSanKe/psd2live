@@ -98,7 +98,7 @@ internal fun BatchMeshSplitDialog(
     val allValid = selectedItems.all { it.isValid }
 
     Box(
-        Modifier.fillMaxSize().background(Color(0x88000000)).clickable(onClick = onDismiss),
+        Modifier.fillMaxSize().background(colors.scrim).clickable(onClick = onDismiss),
         contentAlignment = Alignment.Center,
     ) {
         Column(

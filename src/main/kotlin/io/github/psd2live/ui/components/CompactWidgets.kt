@@ -268,6 +268,8 @@ fun IconLock(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
 ) {
+	// The keyhole is punched in the panel colour the icon sits on.
+	val keyhole = LocalToolColors.current.panelBackground
 	Canvas(modifier = modifier) {
 		val w = size.width
 		val h = size.height
@@ -319,7 +321,7 @@ fun IconLock(
 
 		if (locked) {
 			drawCircle(
-				color = Color(0xFF1E1F22),
+				color = keyhole,
 				radius = 1.3f,
 				center = Offset(w * 0.5f, bodyTop + bodyH * 0.45f),
 				style = Fill,
@@ -611,6 +613,7 @@ fun IconDeformPath(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
 ) {
+	val highlight = LocalToolColors.current.highlight
 	Canvas(modifier = modifier) {
 		val w = size.width
 		val h = size.height
@@ -622,7 +625,7 @@ fun IconDeformPath(
 		drawPath(curvePath, color = tint, style = stroke)
 		drawCircle(color = tint, radius = w * 0.12f, center = Offset(w * 0.15f, h * 0.78f), style = Fill)
 		drawCircle(color = tint, radius = w * 0.12f, center = Offset(w * 0.85f, h * 0.22f), style = Fill)
-		drawCircle(color = Color(0xFF4EC9B0), radius = w * 0.09f, center = Offset(w * 0.5f, h * 0.5f), style = Fill)
+		drawCircle(color = highlight, radius = w * 0.09f, center = Offset(w * 0.5f, h * 0.5f), style = Fill)
 	}
 }
 

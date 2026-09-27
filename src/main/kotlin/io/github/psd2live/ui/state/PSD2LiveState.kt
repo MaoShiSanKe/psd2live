@@ -16,6 +16,9 @@ import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.EditHierarchyMode
 import org.umamo.runtime.model.ParameterId
+import io.github.psd2live.ui.theme.CustomTheme
+import io.github.psd2live.ui.theme.ThemeCatalog
+import io.github.psd2live.ui.theme.ToolColors
 
 import io.github.psd2live.agent.AgentHistorySnapshot
 
@@ -480,8 +483,11 @@ data class PSD2LiveState(
 	val currentLanguage: AppLanguage = I18n.currentLanguage,
 	val uiScale: Float = AppSettings.uiScale,
 	val fontScale: Float = AppSettings.fontScale,
-	/** Chrome palette. Like [uiScale], this is an application preference, not part of the project. */
-	val darkTheme: Boolean = AppSettings.darkTheme,
+	/** Chrome palette. Like [uiScale], these are application preferences, not part of the project. */
+	val themeId: String = AppSettings.themeId,
+	val customThemes: List<CustomTheme> = AppSettings.customThemes(),
+	/** The palette [themeId] resolves to, kept here so the tree reads one resolved value. */
+	val toolColors: ToolColors = ThemeCatalog.resolve(themeId, customThemes),
 	val showSettingsDialog: Boolean = false,
 	/** App-level texture upscale prompt; must not be mounted inside a Column (scrim is fillMaxSize). */
 	val showTextureUpscaleDialog: Boolean = false,
@@ -502,6 +508,8 @@ data class PSD2LiveState(
 	val errorMessage: String? = null,
 	val successExportMessage: String? = null,
 ) {
+	val darkTheme: Boolean get() = toolColors.isDark
+
 	val activeWorkspace: EditorWorkspace
 		get() = workspaces.firstOrNull { it.id == activeWorkspaceId }
 			?: workspaces.firstOrNull()

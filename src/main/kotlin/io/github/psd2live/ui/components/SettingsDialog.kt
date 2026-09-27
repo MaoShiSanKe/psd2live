@@ -54,8 +54,10 @@ import io.github.psd2live.ui.state.Keymap
 import io.github.psd2live.ui.state.KeymapPreset
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.state.ShortcutCategory
+import io.github.psd2live.ui.theme.CustomTheme
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
+import io.github.psd2live.ui.theme.ThemeCatalog
 import java.awt.Cursor
 import kotlin.math.roundToInt
 
@@ -68,6 +70,7 @@ import kotlin.math.roundToInt
  */
 private enum class SettingsSection(val labelKey: String) {
 	SCALE("dialog.settings.category.scale"),
+	THEME("dialog.settings.category.theme"),
 	LANGUAGE("dialog.settings.category.language"),
 	CANVAS("settings.canvas.title"),
 	SHORTCUTS("dialog.settings.category.shortcuts"),
@@ -93,7 +96,8 @@ private enum class SettingsSection(val labelKey: String) {
 fun SettingsDialog(
 	uiScale: Float,
 	fontScale: Float,
-	darkTheme: Boolean = true,
+	themeId: String = ThemeCatalog.DARK_ID,
+	customThemes: List<CustomTheme> = emptyList(),
 	clickToSelectLayer: Boolean = true,
 	autoDetectMeshSplitsOnImport: Boolean = AppSettings.autoDetectMeshSplitsOnImport,
 	keymap: Keymap = Keymap.DEFAULT,
@@ -102,7 +106,11 @@ fun SettingsDialog(
 	currentLanguage: AppLanguage = I18n.currentLanguage,
 	onUiScaleChange: (Float) -> Unit,
 	onFontScaleChange: (Float) -> Unit,
-	onDarkThemeChange: (Boolean) -> Unit = {},
+	onThemeSelect: (String) -> Unit = {},
+	onThemeDuplicate: (String) -> Unit = {},
+	onCustomThemeChange: (CustomTheme) -> Unit = {},
+	onCustomThemeDelete: (String) -> Unit = {},
+	onThemeImport: (String) -> Boolean = { false },
 	onClickToSelectLayerChange: (Boolean) -> Unit = {},
 	onAutoDetectMeshSplitsOnImportChange: (Boolean) -> Unit = { AppSettings.autoDetectMeshSplitsOnImport = it },
 	onLanguageChange: (AppLanguage) -> Unit = {},
@@ -131,7 +139,7 @@ fun SettingsDialog(
 	BoxWithConstraints(
 		modifier = Modifier
 			.fillMaxSize()
-			.background(Color(0x99000000))
+			.background(colors.scrim)
 			.clickable(onClick = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {
@@ -216,11 +224,18 @@ fun SettingsDialog(
 						SettingsSection.SCALE -> SettingsScaleSection(
 							uiScale = uiScale,
 							fontScale = fontScale,
-							darkTheme = darkTheme,
 							recommendedScale = displayMetrics.recommendedScale,
 							onUiScaleChange = onUiScaleChange,
 							onFontScaleChange = onFontScaleChange,
-							onDarkThemeChange = onDarkThemeChange,
+						)
+						SettingsSection.THEME -> SettingsThemeSection(
+							themeId = themeId,
+							customThemes = customThemes,
+							onSelect = onThemeSelect,
+							onDuplicate = onThemeDuplicate,
+							onChange = onCustomThemeChange,
+							onDelete = onCustomThemeDelete,
+							onImport = onThemeImport,
 						)
 						SettingsSection.LANGUAGE -> SettingsLanguageSection(
 							currentLanguage = currentLanguage,
@@ -365,7 +380,7 @@ private fun SettingsSidebarRow(
 
 /** One-line caption under a category's sidebar label, explaining what the section does. */
 @Composable
-private fun SettingsSectionDescription(text: String) {
+internal fun SettingsSectionDescription(text: String) {
 	Text(
 		text = text,
 		style = LocalToolTypography.current.caption.copy(fontSize = 11.sp, lineHeight = 15.sp),
@@ -377,11 +392,9 @@ private fun SettingsSectionDescription(text: String) {
 private fun SettingsScaleSection(
 	uiScale: Float,
 	fontScale: Float,
-	darkTheme: Boolean,
 	recommendedScale: Float,
 	onUiScaleChange: (Float) -> Unit,
 	onFontScaleChange: (Float) -> Unit,
-	onDarkThemeChange: (Boolean) -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -395,30 +408,6 @@ private fun SettingsScaleSection(
 	)
 
 	SettingsSectionDescription(tr("dialog.settings.scale.desc"))
-
-	Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-		Text(
-			text = tr("dialog.settings.theme"),
-			style = typography.header.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
-			color = colors.textPrimary,
-		)
-		Row(
-			modifier = Modifier.fillMaxWidth(),
-			horizontalArrangement = Arrangement.spacedBy(16.dp),
-			verticalAlignment = Alignment.CenterVertically,
-		) {
-			CompactRadioButton(
-				selected = darkTheme,
-				onClick = { onDarkThemeChange(true) },
-				label = tr("dialog.settings.theme.dark"),
-			)
-			CompactRadioButton(
-				selected = !darkTheme,
-				onClick = { onDarkThemeChange(false) },
-				label = tr("dialog.settings.theme.light"),
-			)
-		}
-	}
 
 	// Section 1: UI Scaling (界面缩放)
 	Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
