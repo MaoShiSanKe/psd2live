@@ -92,6 +92,8 @@ import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.CompactToggleChip
+import io.github.psd2live.ui.components.IconAdd
+import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
@@ -214,9 +216,9 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 			height = 22.dp,
 		)
 		CompactIconButton(onClick = { viewModel.createMotionClip() }, tooltip = tr("animation.new"), size = 22.dp) {
-			Text("+", color = colors.textPrimary, fontSize = 14.sp)
+			IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 		}
-		ToolbarSeparator()
+		PanelToolbarSeparator()
 		val enabled = clip != null
 		CompactIconButton(
 			onClick = { viewModel.stopMotionEditorPlayback() },
@@ -284,7 +286,7 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 			onToggle = { editor.snapToFrames = !editor.snapToFrames },
 			height = 22.dp,
 		)
-		ToolbarSeparator()
+		PanelToolbarSeparator()
 		AddTrackButton(viewModel, clip, state)
 		CompactButton(
 			text = tr("animation.editor.keyPose"),
@@ -292,7 +294,7 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 			enabled = clip.curves.isNotEmpty(),
 			height = 22.dp,
 		)
-		ToolbarSeparator()
+		PanelToolbarSeparator()
 		CompactToggleChip(
 			text = tr("animation.editor.dopesheet"),
 			selected = editor.view == MotionEditorView.DOPESHEET,
@@ -311,12 +313,6 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 }
 
 @Composable
-private fun ToolbarSeparator() {
-	val colors = LocalToolColors.current
-	Box(Modifier.padding(horizontal = 2.dp).width(1.dp).height(16.dp).background(colors.divider))
-}
-
-@Composable
 private fun ToolbarLabel(text: String) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -332,9 +328,10 @@ private fun AddTrackButton(viewModel: PSD2LiveViewModel, clip: MotionClip, state
 	val parameters = state.previewModel?.rig?.puppet?.parameters.orEmpty()
 	Box {
 		CompactButton(
-			text = "+ ${tr("animation.editor.addTrack")}",
+			text = tr("animation.editor.addTrack"),
 			onClick = { open = true; query = "" },
 			enabled = parameters.isNotEmpty(),
+			leadingIcon = { IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary) },
 			height = 22.dp,
 		)
 		TreeContextMenu(expanded = open, onDismissRequest = { open = false }, minWidth = 220.dp, maxWidth = 300.dp) {
@@ -504,7 +501,7 @@ private fun TrackRow(
 			onClick = { viewModel.removeMotionCurve(curve.parameterId) },
 			tooltip = tr("animation.editor.removeTrack"),
 			size = 18.dp,
-		) { Text("×", color = if (hovered) colors.textPrimary else colors.textMuted, fontSize = 12.sp) }
+		) { IconClose(modifier = Modifier.size(9.dp), tint = if (hovered) colors.textPrimary else colors.textMuted) }
 	}
 }
 

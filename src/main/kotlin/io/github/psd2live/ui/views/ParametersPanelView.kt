@@ -550,7 +550,7 @@ internal fun ParametersListView(
 			val labelStyle = typography.caption.copy(fontSize = 10.5.sp)
 			val labelMeasurer = rememberTextMeasurer()
 			val density = LocalDensity.current
-			val labelWidths = labels.map { with(density) { labelMeasurer.measure(it, labelStyle).size.width.toDp() } + ParamToolLabelGap }
+			val labelWidths = labels.map { with(density) { labelMeasurer.measure(it, labelStyle).size.width.toDp() } + PanelToolLabelGap }
 			val iconCount = if (state.previewLive) 8 else 7
 			val iconsWidth = 22.dp * iconCount + 3.dp * (iconCount + 1) + 5.dp + 8.dp
 			var labelsShown = 0
@@ -597,7 +597,7 @@ internal fun ParametersListView(
 					) {
 						IconSearch(tint = colors.textMuted)
 					}
-					ParameterToolButton(
+					PanelToolButton(
 						label = labels[0],
 						showLabel = labelsShown > 0,
 						onClick = { relatedOnly = !relatedOnly },
@@ -615,8 +615,8 @@ internal fun ParametersListView(
 							modifier = Modifier.size(12.dp),
 						)
 					}
-					ParameterToolbarSeparator()
-					ParameterToolButton(
+					PanelToolbarSeparator()
+					PanelToolButton(
 						label = labels[1],
 						showLabel = labelsShown > 1,
 						onClick = {
@@ -628,7 +628,7 @@ internal fun ParametersListView(
 					) {
 						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 					}
-					ParameterToolButton(
+					PanelToolButton(
 						label = labels[2],
 						showLabel = labelsShown > 2,
 						onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
@@ -1659,12 +1659,12 @@ private fun ParameterLinkSlot(
 	) { content() }
 }
 
-private val ParamToolLabelGap = 8.dp
+internal val PanelToolLabelGap = 8.dp
 
 /** Icon button that slides its text label in beside the icon when the toolbar has room. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ParameterToolButton(
+internal fun PanelToolButton(
 	label: String,
 	showLabel: Boolean,
 	onClick: () -> Unit,
@@ -1726,7 +1726,7 @@ private fun ParameterToolButton(
 }
 
 @Composable
-private fun ParameterToolbarSeparator() {
+internal fun PanelToolbarSeparator() {
 	Box(
 		Modifier
 			.padding(horizontal = 2.dp)
