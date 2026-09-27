@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -15,11 +16,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.psd2live.ui.BrushShape
 import io.github.psd2live.ui.CanvasTool
+import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
 import io.github.psd2live.ui.components.drawBoneIcon
@@ -106,6 +109,12 @@ internal fun ToolIcon(
     Canvas(Modifier.size(18.dp)) { drawToolIcon(tool, color, brushShape, paintShape) }
 }
 
+/** The hierarchy mode bar's icons, one per mode, on the same grid as the tools. */
+@Composable
+internal fun ModeIcon(mode: EditHierarchyMode, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) { drawModeIcon(mode, color) }
+}
+
 @Composable
 internal fun BrushShapeIcon(shape: BrushShape, color: Color, size: Dp = 14.dp) {
     Canvas(Modifier.size(size)) { drawBrushShapeIcon(shape, color) }
@@ -150,6 +159,71 @@ internal fun DrawScope.drawToolIcon(
         CanvasTool.PAINT_EYEDROPPER -> pen.eyedropper()
         // The row carries the face in hand, the way the deform brush's row carries its footprint.
         CanvasTool.PAINT_SHAPE -> pen.paintShape(paintShape ?: PaintShape.LINE)
+    }
+}
+
+internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
+    val pen = IconPen(this, color)
+    when (mode) {
+        // Object: a part inside the transform box it is moved by.
+        EditHierarchyMode.SELECT -> {
+            pen.box(3.4f, 3.4f, 11.2f, 11.2f, 0.6f, width = 1.1f)
+            pen.dot(9f, 9f, 3.4f, pen.soft)
+            pen.ring(9f, 9f, 3.4f)
+            listOf(3.4f to 3.4f, 14.6f to 3.4f, 3.4f to 14.6f, 14.6f to 14.6f).forEach { (x, y) ->
+                pen.fillBox(x - 1.7f, y - 1.7f, 3.4f, 3.4f, 0.6f)
+            }
+        }
+        // Deform: the part's rest shape (dashed) and the shape it is bent into, in front of it.
+        EditHierarchyMode.DEFORM -> {
+            val bent = pen.path {
+                m(6.4f, 2.2f)
+                c(9.4f, 0.6f, 12.4f, 4f, 15.8f, 2.4f)
+                c(14f, 5.6f, 17.4f, 9.2f, 15.6f, 12.2f)
+                c(12.4f, 13.8f, 9.4f, 10.4f, 6.2f, 12f)
+                c(7.8f, 8.8f, 4.6f, 5.4f, 6.4f, 2.2f)
+                z()
+            }
+            val dash = 1.8f * pen.s
+            clipPath(bent, ClipOp.Difference) {
+                drawRoundRect(
+                    color, pen.p(2.4f, 6f), Size(9.6f * pen.s, 9.6f * pen.s), CornerRadius(0.8f * pen.s),
+                    style = Stroke(1.1f * pen.s, pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash, dash))),
+                )
+            }
+            pen.fill(bent, pen.soft)
+            pen.outline(bent)
+        }
+        // Edit: the mesh itself, its triangles and vertices.
+        EditHierarchyMode.EDIT -> {
+            val a = 2.8f to 14.6f
+            val b = 7.6f to 3.2f
+            val c = 15.2f to 5.4f
+            val d = 12.6f to 15f
+            listOf(a to b, b to c, c to d, d to a, b to d).forEach { (p, q) ->
+                pen.line(p.first, p.second, q.first, q.second, width = if (p == b && q == d) 1f else LINE_WIDTH)
+            }
+            listOf(a, b, c, d).forEach { (x, y) -> pen.dot(x, y, 1.9f) }
+        }
+        // Paint: a palette with its wells.
+        EditHierarchyMode.PAINT -> {
+            val palette = pen.path {
+                m(9f, 2f)
+                c(13f, 2f, 16f, 5f, 16f, 8.6f)
+                c(16f, 11f, 14.3f, 11.4f, 12.8f, 11.1f)
+                c(11.2f, 10.8f, 10.3f, 12.2f, 11f, 13.6f)
+                c(11.6f, 15f, 10.6f, 16f, 9f, 16f)
+                c(5.1f, 16f, 2f, 12.9f, 2f, 9f)
+                c(2f, 5.1f, 5.1f, 2f, 9f, 2f)
+                z()
+            }
+            pen.fill(palette, pen.soft)
+            pen.outline(palette)
+            pen.dot(5.6f, 7.6f, 1.4f)
+            pen.dot(8.8f, 5.2f, 1.4f)
+            pen.dot(12.4f, 6.4f, 1.4f)
+            pen.dot(5.8f, 11.8f, 1.4f)
+        }
     }
 }
 

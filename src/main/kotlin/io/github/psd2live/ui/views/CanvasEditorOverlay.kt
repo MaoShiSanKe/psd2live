@@ -2335,59 +2335,6 @@ private fun ShapeItemRow(
     }
 }
 
-@Composable
-private fun ModeIcon(mode: EditHierarchyMode, color: Color) {
-    Canvas(Modifier.size(14.dp)) {
-        val s = size.width / 14f
-        when (mode) {
-            EditHierarchyMode.SELECT -> {
-                drawRect(color, Offset(2 * s, 2 * s), Size(10 * s, 10 * s), style = Stroke(1.3f * s))
-                listOf(2f to 2f, 12f to 2f, 2f to 12f, 12f to 12f).forEach { (x, y) ->
-                    drawCircle(color, 1.4f * s, Offset(x * s, y * s))
-                }
-            }
-            EditHierarchyMode.DEFORM -> {
-                val path = Path().apply {
-                    moveTo(2 * s, 10 * s)
-                    cubicTo(5 * s, 3 * s, 9 * s, 11 * s, 12 * s, 4 * s)
-                }
-                drawPath(path, color, style = Stroke(1.4f * s, cap = StrokeCap.Round))
-                drawCircle(color, 1.3f * s, Offset(2 * s, 10 * s))
-                drawCircle(color, 1.3f * s, Offset(12 * s, 4 * s))
-            }
-            EditHierarchyMode.EDIT -> {
-                val path = Path().apply {
-                    moveTo(7 * s, 2 * s)
-                    lineTo(12 * s, 11 * s)
-                    lineTo(2 * s, 11 * s)
-                    close()
-                }
-                drawPath(path, color, style = Stroke(1.3f * s))
-                drawLine(color, Offset(7 * s, 2 * s), Offset(7 * s, 11 * s), 1f * s)
-                drawCircle(color, 1.3f * s, Offset(7 * s, 2 * s))
-                drawCircle(color, 1.3f * s, Offset(12 * s, 11 * s))
-                drawCircle(color, 1.3f * s, Offset(2 * s, 11 * s))
-            }
-            EditHierarchyMode.PAINT -> {
-                val handle = Path().apply {
-                    moveTo(12 * s, 2 * s)
-                    lineTo(10 * s, 4 * s)
-                    lineTo(7 * s, 7 * s)
-                    lineTo(5 * s, 9 * s)
-                    lineTo(3 * s, 12 * s)
-                    lineTo(2 * s, 12 * s)
-                    lineTo(2 * s, 11 * s)
-                    lineTo(5 * s, 7 * s)
-                    lineTo(8 * s, 4 * s)
-                    close()
-                }
-                drawPath(handle, color, style = Stroke(1.3f * s, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                drawCircle(color, 1.2f * s, Offset(2.5f * s, 11.5f * s))
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun BoxScope.HierarchyModeBar(
