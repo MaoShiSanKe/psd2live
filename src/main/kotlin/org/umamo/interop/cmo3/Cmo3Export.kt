@@ -56,6 +56,7 @@ object Cmo3Export {
 			DrawableField.CULLING,
 			DrawableField.VISIBLE,
 			DrawableField.SELECTABLE,
+			DrawableField.USER_DATA,
 			DrawableField.MESH_TOPOLOGY,
 			DrawableField.GEOMETRY,
 			DrawableField.CHANNELS,

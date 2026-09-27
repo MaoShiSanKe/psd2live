@@ -248,7 +248,7 @@ internal class Cmo3StructureLowering(
 			// CArtMeshSource field userData - present on every corpus drawable, never omitted.
 			keyformMorphTargetSet = Cmo3SkeletonBuilder.emptyMorphTargetSet()
 			labelColor = Cmo3SkeletonBuilder.undefinedLabelColor()
-			userData = ""
+			userData = editedDrawable.userData
 			// CMO3: ACDrawableSource fields icon32 / icon16 - the drawable's own thumbnails of its
 			// texture patch, minted by whoever built the binding; a drawable with no binding (a clone
 			// of a source with no art of its own) carries none.

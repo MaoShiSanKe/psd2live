@@ -641,6 +641,7 @@ internal class CanvasEditor(
     val state: PSD2LiveState
         get() = viewModel.uiState.value.forCanvas(canvasId, workspaceId, CanvasMode.EDIT)
     internal fun selectLayer(id: String?) {
+		if (id != null && viewModel.tryApplyClipMaskPick(id)) return
         viewModel.updateCanvasPresentation(workspaceId, canvasId, CanvasMode.EDIT) {
             it.copy(
                 selectedLayerId = id,
@@ -3266,6 +3267,25 @@ internal class CanvasEditor(
             bezierState = null
         }
     }
+
+	/** Refit Level-2 Bezier anchors and handles from the current warp lattice and persist the sampled result. */
+	fun resetBezierControlPoints() {
+		val t = target() ?: return
+		if (t.kind != "warp" || !editable || busy) return
+		val warp = model.deformers.filterIsInstance<Deformer.Warp>().firstOrNull { it.id.raw == t.id } ?: return
+		val (bRows, bCols) = warpBezierDivisions[t.id] ?: (2 to 2)
+		val reset = BezierDeformerState(bRows, bCols).apply {
+			initFromLattice(t.geometry.points, warp.rows, warp.columns)
+		}
+		bezierState = reset
+		bezierTargetId = t.id
+		val evaluated = reset.evaluateLattice(warp.rows, warp.columns)
+		bezierSourcePoints = evaluated.copyOf()
+		clearHover()
+		if (!evaluated.contentEquals(t.geometry.points)) {
+			commit(canvasGeometryCommand(EditHierarchyMode.DEFORM, t.kind, t.id, coordinate(t), evaluated))
+		}
+	}
 
     fun clearHover() {
         cursor = null

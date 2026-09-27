@@ -315,6 +315,8 @@ data class Drawable(
 	 * result; empty when the drawable has none. (CMO3 keyformMorphTargetSet.)
 	 */
 	val blendShapes: List<BlendShapeBinding<MeshForm>> = emptyList(),
+	/** Free-form author metadata stored on the ArtMesh (CMO3 CArtMeshSource.userData). */
+	val userData: String = "",
 )
 
 /**

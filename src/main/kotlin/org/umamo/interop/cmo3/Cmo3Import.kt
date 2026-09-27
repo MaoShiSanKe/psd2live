@@ -447,6 +447,7 @@ object Cmo3Import {
 					isVisible = source.isVisible,
 					// CMO3: ACParameterControllableSource.isLocked (inverted: Cubism lock = not selectable).
 					isSelectable = !source.isLocked,
+					userData = source.userData.orEmpty(),
 					mesh = mesh,
 					geometryGrid = fannedMesh?.geometry,
 					channelGrids = fannedMesh?.channels ?: ChannelGrids.Empty,

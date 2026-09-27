@@ -3213,6 +3213,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** Plain click replaces, Shift extends, Alt removes the focused canvas's layer set. */
 	fun selectLayer(layerId: String?, additive: Boolean = false, subtractive: Boolean = false) {
+		if (layerId != null && tryApplyClipMaskPick(layerId)) return
 		updateState { current ->
 			val previous = LinkedHashSet(current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) })
 			val selected = when {
@@ -3235,6 +3236,40 @@ class PSD2LiveViewModel : AutoCloseable {
 			subtractive && selectionAnchorId == layerId -> selectionAnchorId = _state.value.selectedLayerId
 		}
 	    markWorkspaceChanged()
+	}
+
+	fun beginClipMaskPick(sourceDrawableId: String) {
+		val current = _state.value
+		val valid = current.previewModel?.rig?.puppet?.drawables?.any { it.id.raw == sourceDrawableId } == true
+		if (!valid) return
+		updateState {
+			it.copy(
+				clipMaskPickSourceId = if (it.clipMaskPickSourceId == sourceDrawableId) null else sourceDrawableId,
+				statusText = if (it.clipMaskPickSourceId == sourceDrawableId) tr("inspector.clipPickCancelled") else tr("inspector.clipPickPrompt"),
+			)
+		}
+	}
+
+	/** Consumes a layer selection while the Inspector is waiting for a clipping-mask target. */
+	internal fun tryApplyClipMaskPick(layerId: String): Boolean {
+		val current = _state.value
+		val sourceId = current.clipMaskPickSourceId ?: return false
+		val preview = current.previewModel ?: return false
+		val pickedId = preview.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key ?: layerId
+		val source = preview.rig.puppet.drawables.firstOrNull { it.id.raw == sourceId }
+		val picked = preview.rig.puppet.drawables.firstOrNull { it.id.raw == pickedId }
+		if (source == null) {
+			updateState { it.copy(clipMaskPickSourceId = null) }
+			return false
+		}
+		if (picked == null || picked.id == source.id) {
+			updateState { it.copy(statusText = tr("inspector.clipPickInvalid")) }
+			return true
+		}
+		val masks = (source.maskedBy + picked.id).distinct()
+		updateState { it.copy(clipMaskPickSourceId = null, statusText = tr("inspector.clipPickApplied", picked.name)) }
+		applyRigStaticNow("mesh", sourceId, "masked_by" to kotlinx.serialization.json.JsonArray(masks.map { kotlinx.serialization.json.JsonPrimitive(it.raw) }))
+		return true
 	}
 
 	/**

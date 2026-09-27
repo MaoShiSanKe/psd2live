@@ -430,6 +430,8 @@ data class PSD2LiveState(
 	/** Object multi-selection of the focused canvas; [selectedLayerId] is its primary item. */
 	val selectedLayerIds: Set<String> = emptySet(),
 	val selectedDeformerId: String? = null,
+	/** Source ArtMesh waiting for the next canvas/layer pick to become its clipping mask. UI-transient. */
+	val clipMaskPickSourceId: String? = null,
 	val clickToSelectLayer: Boolean = AppSettings.clickToSelectLayer,
 	val autoDetectMeshSplitsOnImport: Boolean = AppSettings.autoDetectMeshSplitsOnImport,
 	val hoveredLayerId: String? = null,

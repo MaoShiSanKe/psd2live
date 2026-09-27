@@ -373,6 +373,10 @@ internal class Cmo3PropertyLowering(
 							DrawableField.NAME -> lowerLocalName(source, editedDrawable.name)
 							DrawableField.VISIBLE -> lowerIsVisible(source, editedDrawable.isVisible)
 							DrawableField.SELECTABLE -> lowerIsLocked(source, editedDrawable.isSelectable)
+							DrawableField.USER_DATA -> {
+								source.userData = editedDrawable.userData
+								editor.ensureChildSlot(source, "CArtMeshSource", "userData")
+							}
 							DrawableField.PARENT_DEFORMER -> {
 								// CMO3: ACDrawableSource field targetDeformerGuid - the deforming parent, or
 								// the editor's fixed root-deformer sentinel when the drawable sits at the

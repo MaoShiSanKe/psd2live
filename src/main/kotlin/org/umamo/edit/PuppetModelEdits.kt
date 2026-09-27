@@ -291,6 +291,15 @@ fun PuppetModel.withDrawableCulling(id: DrawableId, culling: Boolean): PuppetMod
 	return copy(drawables = updated)
 }
 
+/** Returns a copy with the ArtMesh's durable free-form user metadata updated. */
+fun PuppetModel.withDrawableUserData(id: DrawableId, userData: String): PuppetModel {
+	val index = drawables.indexOfFirst { drawable -> drawable.id == id }
+	if (index < 0 || drawables[index].userData == userData) return this
+	val updated = drawables.toMutableList()
+	updated[index] = updated[index].copy(userData = userData)
+	return copy(drawables = updated)
+}
+
 /**
  * Returns a copy of [this] with the drawable [id]'s static opacity set to [opacity], sharing every other
  * entity. A no-op id (no such drawable, or the value already matches) returns the same instance.

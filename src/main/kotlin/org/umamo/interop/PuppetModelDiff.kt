@@ -77,6 +77,7 @@ enum class DrawableField {
 	CULLING,
 	VISIBLE,
 	SELECTABLE,
+	USER_DATA,
 	TEXTURE_SOURCE,
 	ATLAS_TILE,
 	MESH_TOPOLOGY,
@@ -479,6 +480,9 @@ private fun drawableFields(baseline: Drawable, edited: Drawable): Set<DrawableFi
 		}
 		if (baseline.isSelectable != edited.isSelectable) {
 			add(DrawableField.SELECTABLE)
+		}
+		if (baseline.userData != edited.userData) {
+			add(DrawableField.USER_DATA)
 		}
 		if (baseline.textureSourceId != edited.textureSourceId) {
 			add(DrawableField.TEXTURE_SOURCE)

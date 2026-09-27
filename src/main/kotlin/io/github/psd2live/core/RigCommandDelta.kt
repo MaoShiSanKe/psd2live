@@ -251,6 +251,10 @@ internal object RigCommandDelta {
             any = true
             if (drawable == null || drawable.culling != value) return false
         }
+        edit["user_data"]?.jsonPrimitive?.contentOrNull?.let { value ->
+            any = true
+            if (drawable == null || drawable.userData != value) return false
+        }
         edit["selectable"]?.jsonPrimitive?.booleanOrNull?.let { value ->
             any = true
             val stored = when (kind) {

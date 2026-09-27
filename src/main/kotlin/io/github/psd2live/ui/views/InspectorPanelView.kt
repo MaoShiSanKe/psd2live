@@ -311,15 +311,6 @@ private fun DeformPathInspector(
                 )
             }
 
-            InspectorFormRow(label = tr("inspector.pathChild")) {
-                CompactTextField(
-                    value = "",
-                    onValueChange = {},
-                    enabled = false,
-                    modifier = Modifier.fillMaxWidth(),
-                    height = 23.dp,
-                )
-            }
         }
     }
 }
@@ -367,7 +358,6 @@ private fun ArtMeshInspector(
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
     var userDataExpanded by remember { mutableStateOf(false) }
-    var userDataText by remember { mutableStateOf("") }
     var clipIdPickerOpen by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -483,7 +473,12 @@ private fun ArtMeshInspector(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    CompactCheckbox(checked = isMask, onCheckedChange = {})
+                                    Box(
+                                        modifier = Modifier.size(14.dp).border(1.dp, colors.border, RoundedCornerShape(2.dp)),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        if (isMask) Text("✓", fontSize = 10.sp, color = colors.textPrimary)
+                                    }
                                     Text("$dName ($dId)", fontSize = 11.sp)
                                 }
                             }
@@ -493,15 +488,7 @@ private fun ArtMeshInspector(
 
                 // Target crosshair Button (pick from canvas)
                 ActionButton(
-                    onClick = {
-                        state.selectedLayerId?.let { currentLayer ->
-                            val otherLayers = state.effectiveVisibleLayerIds - currentLayer
-                            otherLayers.firstOrNull()?.let { maskLayer ->
-                                val maskId = state.previewModel?.rig?.layerIdByDrawableId?.entries?.firstOrNull { it.value == maskLayer }?.key ?: maskLayer
-                                viewModel.applyRigStaticNow("mesh", drawable.id.raw, "masked_by" to JsonArray(listOf(JsonPrimitive(maskId))))
-                            }
-                        }
-                    },
+                    onClick = { viewModel.beginClipMaskPick(drawable.id.raw) },
                     tooltip = tr("inspector.pickClipFromCanvas"),
                 ) {
                     TargetIcon(color = colors.textPrimary)
@@ -539,7 +526,6 @@ private fun ArtMeshInspector(
                     decimals = 0,
                     height = 23.dp,
                 )
-                KeyframeDotButton()
             }
         }
 
@@ -653,8 +639,16 @@ private fun ArtMeshInspector(
                 exit = shrinkVertically() + fadeOut(),
             ) {
                 CompactTextField(
-                    value = userDataText,
-                    onValueChange = { userDataText = it },
+                    value = drawable.userData,
+                    onValueChange = {
+                        viewModel.applyRigStaticLive(
+                            "mesh.user_data.${drawable.id.raw}",
+                            "mesh",
+                            drawable.id.raw,
+                            "user_data" to JsonPrimitive(it),
+                        )
+                    },
+                    onEditEnd = { viewModel.endEditorField("mesh.user_data.${drawable.id.raw}") },
                     placeholder = tr("inspector.userDataPlaceholder"),
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 4.dp),
                     height = 23.dp,
@@ -890,39 +884,22 @@ private fun WarpDeformerInspector(
             }
         }
 
-        // 11. 贝塞尔编辑类型 (Bezier Edit Type)
-        InspectorFormRow(label = tr("inspector.bezierEditType")) {
-            val editTypes = listOf("retainStructure" to tr("inspector.retainStructure"))
-            CompactDropdown(
-                items = editTypes,
-                selectedItem = editTypes.first(),
-                onItemSelected = {},
-                itemLabel = { it.second },
-                modifier = Modifier.fillMaxWidth(),
-                height = 23.dp,
-            )
-        }
-
-        // 12. 重置贝塞尔控制点 (Reset Bezier Control Points Button)
+        // Reset Bezier control points to smooth handles fitted to the current lattice.
         Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp)) {
             Spacer(Modifier.width(88.dp))
             CompactButton(
                 text = tr("inspector.resetBezier"),
-                onClick = {
-                    // Trigger resetting warp control points to uniform grid
-                    editor.target()?.let { t ->
-                        if (t.kind == "warp") editor.topology("reset")
-                    }
-                },
+                onClick = editor::resetBezierControlPoints,
+                enabled = editor.editable && !editor.busy,
                 modifier = Modifier.fillMaxWidth(),
                 height = 24.dp,
             )
         }
 
-        // 13. 顶点信息 (Vertex Info X, Y)
+        // 顶点信息 (Vertex Info X, Y)
         VertexInfoRows(editor = editor)
 
-        // 14. 变形器转换(3.2方法) (isQuadTransform)
+        // 变形器转换(3.2方法) (isQuadTransform)
         InspectorFormRow(label = tr("inspector.quadTransform")) {
             CompactCheckbox(
                 checked = warp.isQuadTransform,
@@ -1178,58 +1155,22 @@ private fun VertexInfoRows(editor: CanvasEditor) {
     }
 
     InspectorFormRow(label = "${tr("inspector.vertexInfo")} X:") {
-        Row(
+        CompactTextField(
+            value = coords.first,
+            onValueChange = {},
+            enabled = false,
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            CompactTextField(
-                value = coords.first,
-                onValueChange = {},
-                enabled = false,
-                modifier = Modifier.weight(1f),
-                height = 23.dp,
-            )
-            KeyframeDotButton()
-        }
+            height = 23.dp,
+        )
     }
 
     InspectorFormRow(label = "Y:") {
-        Row(
+        CompactTextField(
+            value = coords.second,
+            onValueChange = {},
+            enabled = false,
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            CompactTextField(
-                value = coords.second,
-                onValueChange = {},
-                enabled = false,
-                modifier = Modifier.weight(1f),
-                height = 23.dp,
-            )
-            KeyframeDotButton()
-        }
-    }
-}
-
-/**
- * Small Square Button with centered dot/keyframe indicator
- */
-@Composable
-private fun KeyframeDotButton(modifier: Modifier = Modifier) {
-    val colors = LocalToolColors.current
-    Box(
-        modifier = modifier
-            .size(23.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .background(colors.panelElevated)
-            .border(1.dp, colors.border, RoundedCornerShape(3.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(4.5.dp)
-                .background(colors.textMuted, RoundedCornerShape(1.dp))
+            height = 23.dp,
         )
     }
 }

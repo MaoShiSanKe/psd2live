@@ -395,7 +395,6 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			step("open", TutorialTargetId.INSPECTOR_DOCK, selectDock = "inspector", showAction = true),
 			step("artmesh", TutorialTargetId.INSPECTOR_DOCK, selectDock = "inspector"),
 			step("deformers", TutorialTargetId.INSPECTOR_DOCK, selectDock = "inspector"),
-			step("keyframes", TutorialTargetId.INSPECTOR_DOCK, selectDock = "inspector"),
 			step("drawOrder", TutorialTargetId.DRAW_ORDER_RULER, ensureHierarchyVisible = true, selectDock = "hierarchy"),
 			step("done", isDone = true, preferSideBubble = false),
 		),

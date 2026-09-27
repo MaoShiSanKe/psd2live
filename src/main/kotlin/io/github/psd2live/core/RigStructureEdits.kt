@@ -24,6 +24,7 @@ import org.umamo.edit.withDrawableName
 import org.umamo.edit.withDrawableOpacity
 import org.umamo.edit.withDrawableScreenColor
 import org.umamo.edit.withDrawableSelectable
+import org.umamo.edit.withDrawableUserData
 import org.umamo.edit.withOrgChildMoved
 import org.umamo.edit.withParameterGroupCreated
 import org.umamo.edit.withParameterGroupDeleted
@@ -55,7 +56,7 @@ internal object RigStructureEdits {
             "visibility" -> setOf("visible")
             "move" -> setOf("parent_id", "before_id", "before_kind", "space")
             "bind" -> setOf("parent_id", "space")
-            "static" -> setOf("opacity", "draw_order", "multiply_color", "screen_color", "blend_mode", "masked_by", "invert_mask", "culling", "selectable", "quad")
+            "static" -> setOf("opacity", "draw_order", "multiply_color", "screen_color", "blend_mode", "masked_by", "invert_mask", "culling", "selectable", "quad", "user_data")
             // A deformer's organizational part. Distinct from `move`, which walks the deformer parent
             // chain: this is only the Parts-panel membership, and meshes use `move` instead because they
             // are org children in a way a deformer is not.
@@ -129,6 +130,10 @@ internal object RigStructureEdits {
                 edit["culling"]?.jsonPrimitive?.booleanOrNull?.let { value ->
                     require(kind == "mesh") { "Culling belongs to a mesh" }
                     next = next.withDrawableCulling(mesh!!.id, value)
+                }
+                edit["user_data"]?.jsonPrimitive?.contentOrNull?.let { value ->
+                    require(kind == "mesh") { "User data belongs to a mesh" }
+                    next = next.withDrawableUserData(mesh!!.id, value)
                 }
                 edit["selectable"]?.jsonPrimitive?.booleanOrNull?.let { value ->
                     next = when (kind) {
