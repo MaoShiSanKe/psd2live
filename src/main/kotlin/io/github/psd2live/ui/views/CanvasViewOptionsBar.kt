@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.IconDeformPath
+import io.github.psd2live.ui.components.IconPathHardness
+import io.github.psd2live.ui.components.IconPathWidth
 import io.github.psd2live.ui.components.IconSkeleton
 import io.github.psd2live.ui.components.IconMeshWireframe
 import io.github.psd2live.ui.components.IconRotationDeformer
@@ -176,7 +178,7 @@ internal fun CanvasViewOptionsBar(
 					isToolbarExpanded = isExpanded,
 					textAlpha = textAlpha,
 					textOffset = textOffset,
-					icon = { IconDeformPath(tint = it.copy(alpha = 0.75f), modifier = Modifier.size(14.dp)) },
+					icon = { IconPathWidth(tint = it) },
 					onClick = { apply(options.copy(pathShowWidth = !options.pathShowWidth)) },
 				)
 				ViewOptionRow(
@@ -185,7 +187,7 @@ internal fun CanvasViewOptionsBar(
 					isToolbarExpanded = isExpanded,
 					textAlpha = textAlpha,
 					textOffset = textOffset,
-					icon = { IconDeformPath(tint = it.copy(alpha = 0.55f), modifier = Modifier.size(14.dp)) },
+					icon = { IconPathHardness(tint = it) },
 					onClick = { apply(options.copy(pathShowHardness = !options.pathShowHardness)) },
 				)
 			}

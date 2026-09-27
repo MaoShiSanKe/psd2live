@@ -9,9 +9,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import kotlin.math.PI
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
@@ -350,65 +352,56 @@ fun IconWarpShowIndices(
 	}
 }
 
-/** Vector Path Width / Measurement Dimension '<->' Icon */
+/** The deform path icon's end anchors, as the canvas draws a path's points: each with its own ring. */
+private val PATH_ICON_ENDS = listOf(0.2f to 0.76f, 0.8f to 0.24f)
+
+private fun DrawScope.drawPathIconBase(tint: Color) {
+	val w = size.width
+	val h = size.height
+	drawPath(
+		Path().apply {
+			moveTo(w * 0.2f, h * 0.76f)
+			cubicTo(w * 0.28f, h * 0.3f, w * 0.72f, h * 0.7f, w * 0.8f, h * 0.24f)
+		},
+		color = tint,
+		style = Stroke(width = 1.3f, cap = StrokeCap.Round),
+	)
+	PATH_ICON_ENDS.forEach { (x, y) -> drawCircle(tint, w * 0.07f, Offset(w * x, h * y)) }
+}
+
+/** Path width: each point's reach, drawn as the dashed radius ring the canvas shows around it. */
 @Composable
 fun IconPathWidth(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
 ) {
 	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = 1.2f
-
-		drawLine(tint, Offset(w * 0.14f, h * 0.20f), Offset(w * 0.14f, h * 0.80f), strokeWidth = stroke, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.86f, h * 0.20f), Offset(w * 0.86f, h * 0.80f), strokeWidth = stroke, cap = StrokeCap.Round)
-
-		val midY = h * 0.50f
-		drawLine(tint, Offset(w * 0.18f, midY), Offset(w * 0.82f, midY), strokeWidth = stroke)
-
-		val arrowSize = w * 0.16f
-		val leftArrow = Path().apply {
-			moveTo(w * 0.18f + arrowSize, midY - arrowSize * 0.8f)
-			lineTo(w * 0.18f, midY)
-			lineTo(w * 0.18f + arrowSize, midY + arrowSize * 0.8f)
+		val r = size.width * 0.19f
+		val dash = (2 * PI * r / 8).toFloat()
+		PATH_ICON_ENDS.forEach { (x, y) ->
+			drawCircle(
+				tint, r, Offset(size.width * x, size.height * y),
+				style = Stroke(width = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash * 0.55f, dash * 0.45f))),
+			)
 		}
-		drawPath(leftArrow, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
-
-		val rightArrow = Path().apply {
-			moveTo(w * 0.82f - arrowSize, midY - arrowSize * 0.8f)
-			lineTo(w * 0.82f, midY)
-			lineTo(w * 0.82f - arrowSize, midY + arrowSize * 0.8f)
-		}
-		drawPath(rightArrow, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+		drawPathIconBase(tint)
 	}
 }
 
-/** Vector Path Hardness / Falloff Curve Profile Icon */
+/** Path hardness: each point's solid core, drawn as the filled hardness disc the canvas shows around it. */
 @Composable
 fun IconPathHardness(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
 ) {
 	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-
-		val axisPath = Path().apply {
-			moveTo(w * 0.16f, h * 0.18f)
-			lineTo(w * 0.16f, h * 0.82f)
-			lineTo(w * 0.84f, h * 0.82f)
+		val r = size.width * 0.17f
+		PATH_ICON_ENDS.forEach { (x, y) ->
+			val c = Offset(size.width * x, size.height * y)
+			drawCircle(tint.copy(alpha = tint.alpha * 0.35f), r, c)
+			drawCircle(tint, r, c, style = Stroke(width = 1f))
 		}
-		drawPath(axisPath, color = tint.copy(alpha = 0.5f), style = Stroke(width = 1.0f, cap = StrokeCap.Round))
-
-		val curvePath = Path().apply {
-			moveTo(w * 0.16f, h * 0.28f)
-			lineTo(w * 0.46f, h * 0.28f)
-			cubicTo(w * 0.60f, h * 0.28f, w * 0.62f, h * 0.82f, w * 0.78f, h * 0.82f)
-		}
-		drawPath(curvePath, color = tint, style = stroke)
-		drawCircle(color = tint, radius = 1.4f, center = Offset(w * 0.46f, h * 0.28f), style = Fill)
+		drawPathIconBase(tint)
 	}
 }
 
