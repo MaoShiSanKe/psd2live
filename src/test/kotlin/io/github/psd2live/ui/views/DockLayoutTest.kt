@@ -3,6 +3,7 @@ package io.github.psd2live.ui.views
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.DEFAULT_DOCK_MODULES
 import io.github.psd2live.ui.state.PRIMARY_CANVAS_ID
+import io.github.psd2live.ui.state.SidebarSide
 import io.github.psd2live.ui.state.WorkspacePreset
 import io.github.psd2live.ui.state.isCanvasModule
 import io.github.psd2live.ui.state.presetEditorWorkspace
@@ -75,12 +76,50 @@ class DockLayoutTest {
 
             assertEquals(modules.size, modules.toSet().size, "$preset docks a panel twice")
             assertEquals(DEFAULT_DOCK_MODULES - PRIMARY_CANVAS_ID + canvasIds, modules.toSet(), "$preset")
+            if (preset == WorkspacePreset.BLANK) return@forEach
             assertTrue(preset.hiddenModules.none(::isCanvasModule), "$preset")
             // Legacy repair must leave a preset layout alone, and every panel must have a place to reappear.
             assertSame(layout, repairLegacyCanvasDocking(layout))
             assertSame(layout, reconcileDockModules(layout, canvasIds, emptyList()))
             val visible = preset.hiddenModules.fold<String, DockNode?>(layout) { node, module -> node?.remove(module) }
             assertTrue(visible?.allModules()?.containsAll(canvasIds) == true, "$preset")
+        }
+    }
+
+    @Test fun blankPresetShowsNothingButKeepsEveryPanelsPlace() {
+        val (visible, workspace) = presetVisibleLayout(WorkspacePreset.BLANK)
+        assertEquals(null, visible)
+        assertEquals(listOf(CanvasMode.EDIT), workspace.canvases.map { it.mode })
+        assertEquals(defaultDockLayout().allModules().toSet(), presetDockLayout(workspace).allModules().toSet())
+        WorkspacePreset.entries.filter { it != WorkspacePreset.BLANK }.forEach { preset ->
+            assertTrue(presetVisibleLayout(preset).first?.allModules()?.any(::isCanvasModule) == true, "$preset")
+        }
+    }
+
+    @Test fun sidebarsAreTheRegionsAroundTheCanvases() {
+        assertEquals(
+            mapOf(
+                SidebarSide.RIGHT to listOf("settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics"),
+                SidebarSide.LEFT to listOf("hierarchy", "skeleton"),
+                SidebarSide.BOTTOM to listOf("log", "animationEditor"),
+            ),
+            dockSidebars(defaultDockLayout()),
+        )
+        // Physics puts its canvas on the left edge: there is no left sidebar to toggle.
+        val physics = presetEditorWorkspace("w", WorkspacePreset.PHYSICS).sidebars()
+        assertEquals(setOf(SidebarSide.RIGHT, SidebarSide.BOTTOM), physics.keys)
+        // A panel docked above the canvas is a top sidebar; a tab beside the canvas is not a sidebar.
+        val canvasWithLog = DockNode(modules = listOf("canvas", "log"))
+        val withTop = dockModule(canvasWithLog, "history", canvasWithLog.id, DockSide.TOP)
+        assertEquals(mapOf(SidebarSide.TOP to listOf("history")), dockSidebars(withTop))
+        assertTrue(dockSidebars(DockNode(modules = listOf("canvas", "log"))).isEmpty())
+        // Two canvases split apart: the split holding both is the canvas area.
+        val twoCanvases = presetEditorWorkspace("w", WorkspacePreset.RIG)
+        assertTrue(twoCanvases.sidebars().values.flatten().none(::isCanvasModule))
+        WorkspacePreset.entries.forEach { preset ->
+            val workspace = presetEditorWorkspace("w", preset)
+            val sides = workspace.sidebars().values.flatten()
+            assertEquals(sides.size, sides.toSet().size, "$preset")
         }
     }
 

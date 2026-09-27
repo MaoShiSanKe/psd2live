@@ -223,6 +223,9 @@ internal object WorkspaceStateCodec {
                 ?: WorkspacePreset.EDIT,
             layoutJson = obj["layout"]?.jsonPrimitive?.contentOrNull,
             hiddenModules = obj["hiddenModules"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty().toSet(),
+            sidebarRestore = (obj["sidebarRestore"] as? JsonObject)?.mapNotNull { (side, modules) ->
+                (modules as? JsonArray)?.let { array -> side to array.mapNotNull { it.jsonPrimitive.contentOrNull }.toSet() }
+            }?.toMap().orEmpty(),
             canvases = canvases,
             activeCanvasId = activeCanvasId,
         )
@@ -389,6 +392,11 @@ internal object WorkspaceStateCodec {
             put("preset", workspace.preset.name)
             workspace.layoutJson?.let { put("layout", it) }
             putJsonArray("hiddenModules") { workspace.hiddenModules.sorted().forEach { add(it) } }
+            if (workspace.sidebarRestore.isNotEmpty()) putJsonObject("sidebarRestore") {
+                workspace.sidebarRestore.toSortedMap().forEach { (side, modules) ->
+                    putJsonArray(side) { modules.sorted().forEach { add(it) } }
+                }
+            }
             put("activeCanvasId", workspace.activeCanvasId)
             putJsonArray("canvases") { workspace.canvases.forEach { canvas -> add(buildJsonObject {
                 put("id", canvas.id)
@@ -509,13 +517,11 @@ internal object WorkspaceStateCodec {
         historySearch = value["historySearch"]?.jsonPrimitive?.content ?: base.historySearch,
         historyShowHidden = value["historyShowHidden"]?.jsonPrimitive?.boolean ?: base.historyShowHidden,
         hierarchyWidth = value["hierarchyWidth"]?.jsonPrimitive?.float ?: base.hierarchyWidth,
-        hierarchyCollapsed = value["hierarchyCollapsed"]?.jsonPrimitive?.boolean ?: base.hierarchyCollapsed,
         hierarchySearch = value["hierarchySearch"]?.jsonPrimitive?.content ?: base.hierarchySearch,
         drawOrderRulerWidth = value["drawOrderRulerWidth"]?.jsonPrimitive?.float ?: base.drawOrderRulerWidth,
         modelSettingsExpanded = value["modelSettingsExpanded"]?.jsonPrimitive?.boolean ?: base.modelSettingsExpanded,
 
         workspaceSplitRatio = value["workspaceSplitRatio"]?.jsonPrimitive?.float ?: base.workspaceSplitRatio,
-        inspectorCollapsed = value["inspectorCollapsed"]?.jsonPrimitive?.boolean ?: base.inspectorCollapsed,
         workspaces = workspaces,
         activeWorkspaceId = activeWorkspaceId,
         outputPath = value["outputPath"]?.jsonPrimitive?.content ?: base.outputPath,
@@ -595,7 +601,6 @@ internal object WorkspaceStateCodec {
         dynamicsSubExpanded = value["dynamicsSubExpanded"]?.jsonPrimitive?.boolean ?: base.dynamicsSubExpanded,
         projectOutputsExpanded = value["projectOutputsExpanded"]?.jsonPrimitive?.boolean ?: base.projectOutputsExpanded,
         advancedExpanded = value["advancedExpanded"]?.jsonPrimitive?.boolean ?: base.advancedExpanded,
-        logPanelExpanded = value["logPanelExpanded"]?.jsonPrimitive?.boolean ?: base.logPanelExpanded,
         logPanelHeight = value["logPanelHeight"]?.jsonPrimitive?.float ?: base.logPanelHeight,
         selectedHistoryNodeId = if ("selectedHistoryNodeId" in value) value["selectedHistoryNodeId"]?.jsonPrimitive?.contentOrNull else base.selectedHistoryNodeId,
         selectedLayerId = if ("selectedLayerId" in value) value["selectedLayerId"]?.jsonPrimitive?.contentOrNull else base.selectedLayerId,
@@ -652,9 +657,11 @@ internal object WorkspaceStateCodec {
             if ("workspaces" in value) decoded
             else decoded.updateActiveWorkspace { workspace ->
                 val hidden = workspace.hiddenModules.toMutableSet()
-                if (decoded.hierarchyCollapsed) hidden += "hierarchy" else hidden -= "hierarchy"
-                if (!decoded.logPanelExpanded) hidden += "log" else hidden -= "log"
-                if (decoded.inspectorCollapsed) hidden += INSPECTOR_DOCK_MODULES else hidden -= INSPECTOR_DOCK_MODULES
+                // Files from before workspaces kept the three title-bar toggles as flags.
+                fun flag(key: String) = value[key]?.jsonPrimitive?.booleanOrNull
+                flag("hierarchyCollapsed")?.let { if (it) hidden += "hierarchy" else hidden -= "hierarchy" }
+                flag("logPanelExpanded")?.let { if (it) hidden -= "log" else hidden += "log" }
+                flag("inspectorCollapsed")?.let { if (it) hidden += INSPECTOR_DOCK_MODULES else hidden -= INSPECTOR_DOCK_MODULES }
                 workspace.copy(hiddenModules = hidden)
             }
         }

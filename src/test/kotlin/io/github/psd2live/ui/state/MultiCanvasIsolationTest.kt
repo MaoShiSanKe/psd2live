@@ -46,6 +46,53 @@ class MultiCanvasIsolationTest {
         }
     }
 
+    @Test fun blankWorkspaceReusesItsHiddenCanvas() {
+        PSD2LiveViewModel().use { vm ->
+            vm.addWorkspace(WorkspacePreset.BLANK)
+            val blank = vm.state.value.activeWorkspace
+            assertEquals(WorkspacePreset.BLANK, blank.preset)
+            assertTrue(blank.canvases.all { it.id in blank.hiddenModules })
+
+            vm.showCanvas(CanvasMode.PREVIEW)
+            val shown = vm.state.value.activeWorkspace
+            assertEquals(1, shown.canvases.size)
+            assertEquals(CanvasMode.PREVIEW, shown.activeCanvas.mode)
+            assertFalse(shown.activeCanvas.id in shown.hiddenModules)
+
+            vm.showCanvas(CanvasMode.EDIT)
+            assertEquals(listOf(CanvasMode.PREVIEW, CanvasMode.EDIT), vm.state.value.activeWorkspace.canvases.map { it.mode })
+        }
+    }
+
+    @Test fun sidebarToggleRestoresThePanelsItHid() {
+        PSD2LiveViewModel().use { vm ->
+            vm.addWorkspace(WorkspacePreset.MESH)
+            val shownRight = vm.state.value.activeWorkspace.let { ws -> listOf("mesh", "tools", "inspector").filter { it !in ws.hiddenModules } }
+            assertEquals(listOf("mesh", "tools", "inspector"), shownRight)
+            vm.setModuleVisible("parameters", true)
+
+            vm.toggleSidebar(SidebarSide.RIGHT)
+            val hidden = vm.state.value.activeWorkspace.hiddenModules
+            assertTrue(listOf("mesh", "tools", "inspector", "parameters").all { it in hidden })
+            assertFalse("layers" in hidden, "layers sits in the mesh preset's left sidebar")
+
+            val settings = io.github.psd2live.project.WorkspaceStateCodec.settings(vm.state.value)
+            val decoded = io.github.psd2live.project.WorkspaceStateCodec.decode(settings, vm.state.value)
+            assertEquals(vm.state.value.activeWorkspace.sidebarRestore, decoded.activeWorkspace.sidebarRestore)
+
+            vm.toggleSidebar(SidebarSide.RIGHT)
+            val restored = vm.state.value.activeWorkspace.hiddenModules
+            assertTrue(listOf("mesh", "tools", "inspector", "parameters").none { it in restored })
+            assertTrue(listOf("settings", "animation", "physics").all { it in restored })
+
+            // Physics docks nothing left of its canvas, so there is nothing to toggle there.
+            vm.addWorkspace(WorkspacePreset.PHYSICS)
+            val before = vm.state.value.activeWorkspace
+            vm.toggleSidebar(SidebarSide.LEFT)
+            assertEquals(before, vm.state.value.activeWorkspace)
+        }
+    }
+
     /** Every canvas authoring commit rebuilds state through a settings-only decode; it must keep a multi-selection. */
     @Test fun authoringCommitKeepsTheMultiSelection() {
         PSD2LiveViewModel().use { vm ->

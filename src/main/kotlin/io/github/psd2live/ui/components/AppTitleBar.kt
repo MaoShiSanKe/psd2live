@@ -1,5 +1,14 @@
 package io.github.psd2live.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -85,15 +94,22 @@ import io.github.psd2live.ui.state.Keymap
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.utils.DesktopUtils
+import io.github.psd2live.ui.state.SidebarSide
 import java.awt.Cursor
 import java.awt.MouseInfo
 import java.awt.Point
 
-private enum class LayoutPanelIcon {
-	LEFT,
-	BOTTOM,
-	RIGHT,
-}
+/** One title-bar layout toggle: the panels docked on [side] of the canvases. */
+@Immutable
+data class SidebarToggle(
+	val side: SidebarSide,
+	/** Whether any panel on that side is shown. */
+	val active: Boolean,
+	/** Titles of the panels on that side, listed in the tooltip. */
+	val modules: List<String>,
+	/** The tutorial's hierarchy step points at whichever toggle hides the hierarchy. */
+	val hostsHierarchy: Boolean = false,
+)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -109,12 +125,9 @@ fun AppTitleBar(
 	fontScale: Float = 1.0f,
 	darkTheme: Boolean = true,
 	keymap: Keymap = Keymap.DEFAULT,
-	hierarchyVisible: Boolean = true,
-	logVisible: Boolean = true,
-	inspectorVisible: Boolean = true,
-	onToggleHierarchy: () -> Unit = {},
-	onToggleLog: () -> Unit = {},
-	onToggleInspector: () -> Unit = {},
+	/** Only the sides the active workspace docks panels on; a side with none gets no button. */
+	sidebarToggles: List<SidebarToggle> = emptyList(),
+	onToggleSidebar: (SidebarSide) -> Unit = {},
 	onOpenPsd: () -> Unit,
     onOpenProject: () -> Unit,
     onSaveProject: () -> Unit,
@@ -829,25 +842,26 @@ fun AppTitleBar(
 			modifier = Modifier.fillMaxHeight(),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
-			TitleBarLayoutToggle(
-				tooltip = tr("layout.toggle.hierarchy"),
-				active = hierarchyVisible,
-				icon = LayoutPanelIcon.LEFT,
-				onClick = onToggleHierarchy,
-				modifier = Modifier.tutorialTarget(TutorialTargetId.LAYOUT_HIERARCHY_TOGGLE),
-			)
-			TitleBarLayoutToggle(
-				tooltip = tr("layout.toggle.log"),
-				active = logVisible,
-				icon = LayoutPanelIcon.BOTTOM,
-				onClick = onToggleLog,
-			)
-			TitleBarLayoutToggle(
-				tooltip = tr("layout.toggle.inspector"),
-				active = inspectorVisible,
-				icon = LayoutPanelIcon.RIGHT,
-				onClick = onToggleInspector,
-			)
+			SidebarSide.entries.forEach { side ->
+				val toggle = sidebarToggles.firstOrNull { it.side == side }
+				// A button leaving the bar keeps its last look while it slides out.
+				val last = remember(side) { arrayOfNulls<SidebarToggle>(1) }
+				if (toggle != null) last[0] = toggle
+				AnimatedVisibility(
+					visible = toggle != null,
+					enter = fadeIn(tween(160)) + expandHorizontally(tween(200), expandFrom = Alignment.Start),
+					exit = fadeOut(tween(120)) + shrinkHorizontally(tween(200), shrinkTowards = Alignment.Start),
+				) {
+					val shown = toggle ?: last[0] ?: return@AnimatedVisibility
+					TitleBarLayoutToggle(
+						tooltip = sidebarTooltip(shown),
+						active = shown.active,
+						side = shown.side,
+						onClick = { onToggleSidebar(shown.side) },
+						modifier = if (shown.hostsHierarchy) Modifier.tutorialTarget(TutorialTargetId.LAYOUT_HIERARCHY_TOGGLE) else Modifier,
+					)
+				}
+			}
 			TitleBarThemeToggle(
 				darkTheme = darkTheme,
 				onClick = onToggleTheme,
@@ -1263,18 +1277,28 @@ fun AppMenuHeader(text: String) {
 	)
 }
 
+private fun sidebarTooltip(toggle: SidebarToggle): String {
+	val name = tr("layout.sidebar.${toggle.side.name.lowercase()}")
+	val action = tr(if (toggle.active) "layout.sidebar.hide" else "layout.sidebar.show", name)
+	return if (toggle.modules.isEmpty()) action
+	else action + "\n" + toggle.modules.joinToString(tr("layout.sidebar.separator"))
+}
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun TitleBarLayoutToggle(
 	tooltip: String,
 	active: Boolean,
-	icon: LayoutPanelIcon,
+	side: SidebarSide,
 	onClick: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	var isHovered by remember { mutableStateOf(false) }
+	// The band grows in from the frame edge as the sidebar opens and shrinks as it closes.
+	val open by animateFloatAsState(if (active) 1f else 0f, tween(200), label = "sidebarOpen")
+	val hover by animateFloatAsState(if (isHovered) 1f else 0f, tween(120), label = "sidebarHover")
 
 	TooltipArea(
 		tooltip = {
@@ -1307,14 +1331,14 @@ private fun TitleBarLayoutToggle(
 			Canvas(modifier = Modifier.size(14.dp)) {
 				val stroke = 1.15.dp.toPx()
 				val inset = 0.5.dp.toPx()
-				val band = size.width * 0.28f
+				val band = size.width * (0.14f + 0.16f * open)
 				val corner = CornerRadius(1.75.dp.toPx())
-				val outline = if (active || isHovered) colors.textPrimary else colors.textMuted
-				val fill = when {
-					active -> colors.textPrimary.copy(alpha = 0.75f)
-					isHovered -> colors.textPrimary.copy(alpha = 0.45f)
-					else -> colors.textMuted.copy(alpha = 0.35f)
-				}
+				val outline = lerp(colors.textMuted, colors.textPrimary, maxOf(open, hover))
+				val fill = lerp(
+					lerp(colors.textMuted.copy(alpha = 0.35f), colors.textPrimary.copy(alpha = 0.45f), hover),
+					colors.textPrimary.copy(alpha = 0.75f),
+					open,
+				)
 				val frame = Path().apply {
 					addRoundRect(
 						RoundRect(
@@ -1330,22 +1354,29 @@ private fun TitleBarLayoutToggle(
 				// Clip to the rounded frame so outer corners follow the outline,
 				// while the inner divider stays a hard straight edge.
 				clipPath(frame) {
-					when (icon) {
-						LayoutPanelIcon.LEFT -> {
+					when (side) {
+						SidebarSide.TOP -> {
+							drawRect(
+								color = fill,
+								topLeft = Offset(inset, inset),
+								size = Size(size.width - inset * 2, band),
+							)
+						}
+						SidebarSide.LEFT -> {
 							drawRect(
 								color = fill,
 								topLeft = Offset(inset, inset),
 								size = Size(band, size.height - inset * 2),
 							)
 						}
-						LayoutPanelIcon.BOTTOM -> {
+						SidebarSide.BOTTOM -> {
 							drawRect(
 								color = fill,
 								topLeft = Offset(inset, size.height - inset - band),
 								size = Size(size.width - inset * 2, band),
 							)
 						}
-						LayoutPanelIcon.RIGHT -> {
+						SidebarSide.RIGHT -> {
 							drawRect(
 								color = fill,
 								topLeft = Offset(size.width - inset - band, inset),

@@ -106,6 +106,7 @@ import io.github.psd2live.ui.theme.CompactToolTheme
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.utils.NativeFilePicker
+import io.github.psd2live.ui.components.SidebarToggle
 import java.awt.Cursor
 import java.awt.Desktop
 import java.awt.Toolkit
@@ -449,6 +450,18 @@ fun FrameWindowScope.PSD2LiveApp(
 			) {
 				// Custom Window Title Bar & Tool Menu Bar
 				if (windowState != null) {
+					val workspace = state.activeWorkspace
+					val sidebars = remember(workspace.id, workspace.preset, workspace.layoutJson, workspace.canvases.map { it.id }, workspace.placeModules) {
+						workspace.sidebars()
+					}
+					val sidebarToggles = sidebars.map { (side, modules) ->
+						SidebarToggle(
+							side = side,
+							active = modules.any { it !in workspace.hiddenModules },
+							modules = modules.map(::moduleTitle).distinct(),
+							hostsHierarchy = "hierarchy" in modules,
+						)
+					}
 					AppTitleBar(
 						window = window,
 						windowState = windowState,
@@ -460,12 +473,8 @@ fun FrameWindowScope.PSD2LiveApp(
 						fontScale = state.fontScale,
 						darkTheme = state.darkTheme,
 						keymap = state.keymap,
-						hierarchyVisible = !state.hierarchyCollapsed,
-						logVisible = state.logPanelExpanded,
-						inspectorVisible = !state.inspectorCollapsed,
-						onToggleHierarchy = { viewModel.setHierarchyView(collapsed = !state.hierarchyCollapsed) },
-						onToggleLog = { viewModel.setLogPanelExpanded(!state.logPanelExpanded) },
-						onToggleInspector = { viewModel.setInspectorCollapsed(!state.inspectorCollapsed) },
+						sidebarToggles = sidebarToggles,
+						onToggleSidebar = viewModel::toggleSidebar,
 						onOpenPsd = onOpenPsdAction,
                         onOpenProject = onOpenProjectAction,
                         onSaveProject = { viewModel.requestProjectSave() },

@@ -73,6 +73,7 @@ import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
 import org.umamo.edit.freshParameterGroupId
 import io.github.psd2live.ui.CanvasEditor
+import io.github.psd2live.ui.views.sidebars
 import io.github.psd2live.ui.keyformAxesFor
 import io.github.psd2live.ui.EditHierarchyMode
 import org.umamo.format.art.SourceArt
@@ -2772,13 +2773,7 @@ class PSD2LiveViewModel : AutoCloseable {
 					pointerActive = false
 					motionPlayer.stop()
 				}
-				val (hierarchy, log, inspector) = target.panelFlags()
-				current.copy(
-					activeWorkspaceId = id,
-					hierarchyCollapsed = hierarchy,
-					logPanelExpanded = log,
-					inspectorCollapsed = inspector,
-				)
+				current.copy(activeWorkspaceId = id)
 			}
 		}
 		if (changed) {
@@ -2835,14 +2830,10 @@ class PSD2LiveViewModel : AutoCloseable {
 			val index = current.workspaces.indexOf(workspace)
 			remaining.getOrNull(index - 1) ?: remaining.getOrNull(index) ?: remaining.first()
 		}
-		val (hierarchy, log, inspector) = next.panelFlags()
 		updateState {
 			it.copy(
 				workspaces = remaining,
 				activeWorkspaceId = next.id,
-				hierarchyCollapsed = hierarchy,
-				logPanelExpanded = log,
-				inspectorCollapsed = inspector,
 				statusText = tr("status.workspaceClosed", workspace.displayName()),
 			)
 		}
@@ -2978,6 +2969,32 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun showHistoryModule() = setModuleVisible("history", true)
 
+	/**
+	 * Hides the panels docked on [side] of the canvases, or shows them again. Hiding remembers which
+	 * were shown; showing brings those back, or else what the preset shows there, or else all of them.
+	 */
+	fun toggleSidebar(side: SidebarSide) {
+		val workspace = _state.value.activeWorkspace
+		val modules = workspace.sidebars()[side] ?: return
+		val shown = modules.filter { it !in workspace.hiddenModules }
+		val next = if (shown.isNotEmpty()) {
+			workspace.copy(
+				hiddenModules = workspace.hiddenModules + modules,
+				sidebarRestore = workspace.sidebarRestore + (side.name to shown.toSet()),
+			)
+		} else {
+			val restore = workspace.sidebarRestore[side.name].orEmpty().intersect(modules.toSet())
+				.ifEmpty { (modules - workspace.preset.hiddenModules).toSet() }
+				.ifEmpty { modules.toSet() }
+			workspace.copy(
+				hiddenModules = workspace.hiddenModules - restore,
+				sidebarRestore = workspace.sidebarRestore - side.name,
+			)
+		}
+		updateState { current -> current.updateWorkspace(workspace.id) { next } }
+		markWorkspaceChanged()
+	}
+
 	fun setPlaceModules(modules: List<String>) {
 		updateState { current ->
 			if (current.activeWorkspace.placeModules == modules) current
@@ -3003,7 +3020,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun resetWorkspaceArrangement() {
 		updateState { current ->
 			current.updateActiveWorkspace {
-				it.copy(layoutJson = null, placeModules = emptyList(), hiddenModules = it.preset.hiddenModules)
+				it.copy(layoutJson = null, placeModules = emptyList(), hiddenModules = it.preset.hiddenModules, sidebarRestore = emptyMap())
 			}
 		}
 		markWorkspaceChanged()
@@ -3033,6 +3050,25 @@ class PSD2LiveViewModel : AutoCloseable {
 		} else {
 			addCanvas(CanvasMode.PREVIEW, focus = focus)
 		}
+	}
+
+	/**
+	 * Shows a canvas of [mode] and focuses it. A hidden canvas is reused before a new one is added,
+	 * switching its mode when none has [mode], so a blank workspace does not keep an unused canvas.
+	 */
+	fun showCanvas(mode: CanvasMode) {
+		val workspace = _state.value.activeWorkspace
+		val hidden = workspace.canvases.filter { it.id in workspace.hiddenModules }
+		val canvas = workspace.canvases.firstOrNull { it.mode == mode && it.id !in workspace.hiddenModules }
+			?: hidden.firstOrNull { it.mode == mode }
+			?: hidden.firstOrNull()
+			?: run {
+				addCanvas(mode)
+				return
+			}
+		if (canvas.id in workspace.hiddenModules) setModuleVisible(canvas.id, true)
+		if (canvas.mode != mode) setCanvasMode(canvas.id, mode) else focusCanvas(canvas.id)
+		if (mode == CanvasMode.PREVIEW) ensureSdkSessionLoaded()
 	}
 
 	fun canvasTitle(canvas: CanvasWindowState, workspace: EditorWorkspace = _state.value.activeWorkspace): String {
@@ -4637,9 +4673,7 @@ class PSD2LiveViewModel : AutoCloseable {
 						message = tr("log.upscaleStarting", current.textureUpscale.scale),
 						level = LogLevel.INFO,
 						tag = "Upscale",
-					).copy(
-						logPanelExpanded = true,
-					)
+					).updateActiveWorkspace { it.copy(hiddenModules = it.hiddenModules - "log") }
 				} else {
 					current
 				}

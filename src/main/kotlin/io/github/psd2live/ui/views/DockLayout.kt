@@ -2,10 +2,14 @@ package io.github.psd2live.ui.views
 
 import kotlinx.serialization.Serializable
 import java.util.UUID
+import io.github.psd2live.ui.state.DEFAULT_DOCK_MODULES
 import io.github.psd2live.ui.state.EditorWorkspace
+import io.github.psd2live.ui.state.SidebarSide
+import kotlinx.serialization.json.Json
 import io.github.psd2live.ui.state.PRIMARY_CANVAS_ID
 import io.github.psd2live.ui.state.WorkspacePreset
 import io.github.psd2live.ui.state.isCanvasModule
+import io.github.psd2live.ui.state.presetEditorWorkspace
 
 internal enum class DockSide { CENTER, LEFT, RIGHT, TOP, BOTTOM }
 
@@ -195,7 +199,7 @@ internal fun presetDockLayout(workspace: EditorWorkspace): DockNode {
     // Placeholders keep each tree readable; an unfilled one is pruned below.
     val names = slots.mapIndexed { index, id -> id ?: "#slot$index" }
     val layout = when (preset) {
-        WorkspacePreset.EDIT -> defaultDockLayout(names[0])
+        WorkspacePreset.EDIT, WorkspacePreset.BLANK -> defaultDockLayout(names[0])
         WorkspacePreset.MESH -> row(.22f, leaf("layers", "hierarchy", "skeleton"),
             row(.72f, column(.78f, leaf(names[0]), leaf("log", "animationEditor")),
                 column(.55f, leaf("mesh", "tools"), leaf("inspector", "parameters", "settings", "animation", "physics"))))
@@ -215,3 +219,52 @@ internal fun presetDockLayout(workspace: EditorWorkspace): DockNode {
     return names.filterIndexed { index, _ -> slots[index] == null }
         .fold(layout) { node, placeholder -> node.remove(placeholder) ?: node }
 }
+
+/** What a new workspace of [preset] shows: its arrangement without the panels it starts hidden. */
+internal fun presetVisibleLayout(preset: WorkspacePreset): Pair<DockNode?, EditorWorkspace> {
+    val workspace = presetEditorWorkspace("preset:${preset.name}", preset)
+    val visible = workspace.hiddenModules.fold<String, DockNode?>(presetDockLayout(workspace)) { node, module -> node?.remove(module) }
+    return visible to workspace
+}
+
+internal val dockJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * The dock tree [workspace] is arranged by: its saved layout when that still decodes and names only
+ * known modules, otherwise its preset's. Hidden modules are still in it; the dock projects them out.
+ */
+internal fun workspaceDockRoot(workspace: EditorWorkspace): DockNode {
+    val allowed = DEFAULT_DOCK_MODULES + setOf("history") + workspace.canvases.map { it.id }
+    val saved = workspace.layoutJson?.let { raw ->
+        runCatching { dockJson.decodeFromString<DockNode>(raw) }.getOrNull()?.remove("export")
+    }?.takeIf { node -> node.allModules().all { it in allowed } }
+    return saved?.let(::repairLegacyCanvasDocking) ?: presetDockLayout(workspace)
+}
+
+/**
+ * Panels around the canvases, by side. Walking from the root toward the smallest subtree that
+ * holds every canvas, each split's other half is a sidebar on the side it sits. Whatever shares a
+ * split or a tab group with a canvas is part of the canvas area, not a sidebar.
+ */
+internal fun dockSidebars(root: DockNode?): Map<SidebarSide, List<String>> {
+    val result = linkedMapOf<SidebarSide, List<String>>()
+    var node = root ?: return result
+    while (true) {
+        val first = node.first ?: break
+        val second = node.second ?: break
+        val inFirst = first.allModules().any(::isCanvasModule)
+        val inSecond = second.allModules().any(::isCanvasModule)
+        if (inFirst == inSecond) break
+        val side = when {
+            node.horizontal -> if (inFirst) SidebarSide.RIGHT else SidebarSide.LEFT
+            else -> if (inFirst) SidebarSide.BOTTOM else SidebarSide.TOP
+        }
+        result[side] = result[side].orEmpty() + (if (inFirst) second else first).allModules()
+        node = if (inFirst) first else second
+    }
+    return result
+}
+
+/** [dockSidebars] of the arrangement [workspace] is docked in, hidden panels included. */
+internal fun EditorWorkspace.sidebars(): Map<SidebarSide, List<String>> =
+    dockSidebars(reconcileDockModules(workspaceDockRoot(this), canvases.map { it.id }, placeModules))

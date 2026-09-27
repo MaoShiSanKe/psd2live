@@ -40,6 +40,9 @@ internal val DEFAULT_DOCK_MODULES = setOf(
 	PRIMARY_CANVAS_ID, "hierarchy", "skeleton", "log", "animationEditor",
 ) + INSPECTOR_DOCK_MODULES
 
+/** Which edge of the dock a sidebar hugs, relative to the region holding the canvases. */
+enum class SidebarSide { LEFT, TOP, BOTTOM, RIGHT }
+
 fun isCanvasModule(id: String): Boolean = id == PRIMARY_CANVAS_ID || id.startsWith("canvas:")
 
 /**
@@ -159,7 +162,8 @@ data class CanvasWindowState(
  * `presetDockLayout`) and which panels start hidden; "reset layout" returns to it.
  *
  * Every preset's dock tree holds every panel, so a hidden panel shown from the window menu
- * reappears where that task expects it rather than at an arbitrary edge.
+ * reappears where that task expects it rather than at an arbitrary edge. Only [BLANK] starts
+ * with its canvas hidden.
  */
 enum class WorkspacePreset(
 	/** Canvas modes in dock order. The first canvas takes [PRIMARY_CANVAS_ID]. */
@@ -198,6 +202,12 @@ enum class WorkspacePreset(
 		listOf(CanvasMode.PREVIEW),
 		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "animation"),
 	),
+
+	/**
+	 * An empty dock to build up from the window menu. It keeps one hidden edit canvas, so a canvas
+	 * is always there to show, and the edit arrangement, so each panel shown lands where it usually sits.
+	 */
+	BLANK(listOf(CanvasMode.EDIT), DEFAULT_DOCK_MODULES),
 	;
 
 	fun title(): String = tr("workspace.preset.${name.lowercase()}")
@@ -223,6 +233,8 @@ data class EditorWorkspace(
 	/** Serialized dock tree. Null means the [preset]'s arrangement. */
 	val layoutJson: String? = null,
 	val hiddenModules: Set<String> = emptySet(),
+	/** Panels each hidden sidebar had shown, keyed by [SidebarSide] name, so showing it again brings back the same ones. */
+	val sidebarRestore: Map<String, Set<String>> = emptyMap(),
 	/** Modules the user asked to show that are not in the layout yet. The dock consumes this list. */
 	val placeModules: List<String> = emptyList(),
 	val canvases: List<CanvasWindowState> = listOf(defaultEditCanvas()),
@@ -256,12 +268,6 @@ internal fun presetEditorWorkspace(id: String, preset: WorkspacePreset, name: St
 /** Blank names stay localized and follow the preset; a name the user typed is kept as written. */
 fun EditorWorkspace.displayName(): String = name.ifBlank { preset.title() }
 
-/** Title-bar toggles projected from this workspace's hidden modules. */
-internal fun EditorWorkspace.panelFlags(): Triple<Boolean, Boolean, Boolean> = Triple(
-	"hierarchy" in hiddenModules,
-	"log" !in hiddenModules,
-	INSPECTOR_DOCK_MODULES.all { it in hiddenModules },
-)
 
 enum class LogSource {
 	SYSTEM,
@@ -336,13 +342,10 @@ data class PSD2LiveState(
     val historySearch: String = "",
     val historyShowHidden: Boolean = false,
     val hierarchyWidth: Float = 210f,
-    val hierarchyCollapsed: Boolean = false,
     val hierarchySearch: String = "",
     val drawOrderRulerWidth: Float = 24f,
     val modelSettingsExpanded: Boolean = true,
     val workspaceSplitRatio: Float = 0.60f,
-    /** When true, the right inspector / parameters sidebar is hidden. */
-    val inspectorCollapsed: Boolean = false,
 	/** One-shot request for DockWorkspaceView to select a dock module tab (e.g. "layers"). */
 	val requestedDockModule: String? = null,
     val workspaces: List<EditorWorkspace> = listOf(defaultEditorWorkspace()),
@@ -414,7 +417,6 @@ data class PSD2LiveState(
 	val statusText: String = "",
 	val logLines: List<String> = emptyList(),
 	val logEntries: List<AppLogEntry> = emptyList(),
-	val logPanelExpanded: Boolean = true,
 	val logPanelHeight: Float = 190f,
 	val historySnapshot: AgentHistorySnapshot? = null,
 	val selectedHistoryNodeId: String? = null,
@@ -528,16 +530,13 @@ data class PSD2LiveState(
 	val canvasPanX: Float get() = activeCanvas.camera.panX
 	val canvasPanY: Float get() = activeCanvas.camera.panY
 
-	fun updateWorkspace(id: String, transform: (EditorWorkspace) -> EditorWorkspace): PSD2LiveState {
-		val next = copy(workspaces = workspaces.map { if (it.id == id) transform(it) else it })
-		if (id != next.activeWorkspaceId) return next
-		val (hierarchy, log, inspector) = next.activeWorkspace.panelFlags()
-		return next.copy(
-			hierarchyCollapsed = hierarchy,
-			logPanelExpanded = log,
-			inspectorCollapsed = inspector,
-		)
-	}
+	// Panel visibility lives in the active workspace's hidden modules; these read it back.
+	val hierarchyCollapsed: Boolean get() = "hierarchy" in activeWorkspace.hiddenModules
+	val logPanelExpanded: Boolean get() = "log" !in activeWorkspace.hiddenModules
+	val inspectorCollapsed: Boolean get() = INSPECTOR_DOCK_MODULES.all { it in activeWorkspace.hiddenModules }
+
+	fun updateWorkspace(id: String, transform: (EditorWorkspace) -> EditorWorkspace): PSD2LiveState =
+		copy(workspaces = workspaces.map { if (it.id == id) transform(it) else it })
 
 	fun updateActiveWorkspace(transform: (EditorWorkspace) -> EditorWorkspace): PSD2LiveState =
 		updateWorkspace(activeWorkspace.id, transform)

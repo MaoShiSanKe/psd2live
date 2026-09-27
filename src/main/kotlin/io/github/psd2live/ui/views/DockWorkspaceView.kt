@@ -46,7 +46,6 @@ import io.github.psd2live.ui.theme.*
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
 import kotlinx.coroutines.delay
-import kotlinx.serialization.json.Json
 import java.awt.MouseInfo
 import java.awt.Cursor
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -181,8 +180,6 @@ private class DockSession(initial: DockNode) {
     }
 }
 
-private val dockJson = Json { ignoreUnknownKeys = true }
-
 @Composable
 internal fun DockWorkspaceView(
     state: PSD2LiveState,
@@ -195,13 +192,7 @@ internal fun DockWorkspaceView(
 ) {
     val sessions = remember(state.projectOpenGeneration) { mutableMapOf<String, DockSession>() }
     val workspace = state.activeWorkspace
-    val session = sessions.getOrPut(workspace.id) {
-        val allowed = DEFAULT_DOCK_MODULES + setOf("history") + workspace.canvases.map { it.id }
-        val saved = workspace.layoutJson?.let { raw ->
-            runCatching { dockJson.decodeFromString<DockNode>(raw) }.getOrNull()?.remove("export")
-        }?.takeIf { node -> node.allModules().all { it in allowed } }
-        DockSession(saved?.let(::repairLegacyCanvasDocking) ?: presetDockLayout(workspace))
-    }
+    val session = sessions.getOrPut(workspace.id) { DockSession(workspaceDockRoot(workspace)) }
     LaunchedEffect(workspace.id, workspace.layoutJson) {
         val saved = workspace.layoutJson?.let { runCatching { dockJson.decodeFromString<DockNode>(it) }.getOrNull() }
             ?: return@LaunchedEffect
@@ -303,7 +294,11 @@ internal fun DockWorkspaceView(
                         ?: Box(Modifier.fillMaxSize().background(
                             if (session.target?.first == "empty") colors.accent.copy(alpha = .08f) else Color.Transparent),
                             contentAlignment = Alignment.Center) {
-                            Text(tr("dock.empty"), color = colors.textMuted, fontSize = 11.sp)
+                            if (session.floating.keys.any { it !in hiddenModules }) {
+                                Text(tr("dock.empty"), color = colors.textMuted, fontSize = 11.sp)
+                            } else {
+                                EmptyDockPrompt(viewModel)
+                            }
                         }
                 }
             }
@@ -857,3 +852,18 @@ private fun Modifier.clipWithoutLayer(shape: Shape): Modifier = drawWithContent 
 	}
 }
 
+
+/** A dock with nothing shown (a blank workspace, or every panel hidden): offer a canvas to start from. */
+@Composable
+private fun EmptyDockPrompt(viewModel: PSD2LiveViewModel) {
+    val colors = LocalToolColors.current
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        WorkspacePresetIcon(WorkspacePreset.BLANK, colors.textMuted, Modifier.size(28.dp))
+        Text(tr("dock.blank"), color = colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text(tr("dock.blank.hint"), color = colors.textMuted, fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            io.github.psd2live.ui.components.CompactButton(tr("dock.blank.editCanvas"), { viewModel.showCanvas(CanvasMode.EDIT) }, isPrimary = true)
+            io.github.psd2live.ui.components.CompactButton(tr("dock.blank.previewCanvas"), { viewModel.showCanvas(CanvasMode.PREVIEW) })
+        }
+    }
+}
