@@ -35,7 +35,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `view` | `request.mode` | `model/layer/context/poses/coverage/compare/motion` |
 | `parameter` | `request.mode` | `create/update/delete`；删除时在旧默认值处折叠关键形轴 |
 | `asset` | `request.mode` | `psd/create/split/reference/import/register/preview/add/place/finalize/inspect/reprocess/remove`；`psd` 从本地绝对路径导入空工作区 |
-| `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
+| `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics` | `request.mode` | `put/delete`，创建、替换或删除自定义简化摆锤组 |
 | `path` | `request.mode` | `get/list/preview/put/delete/deform` |
 | `revision` | `request.mode` | `save/checkpoint/list/restore` |

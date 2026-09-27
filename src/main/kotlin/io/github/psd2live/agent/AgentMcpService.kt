@@ -1107,6 +1107,12 @@ private fun swingSchema(): ToolSchema = ToolSchema(
             putJsonObject("items") { put("type", "object"); putJsonObject("properties") { motionFields() } } }
         putJsonObject("fulcrum") { put("type", "string"); putJsonArray("enum") { listOf("auto", "top", "bottom", "left", "right").forEach { add(it) } }
             put("description", "Pinned lattice edge; auto hangs tall targets from the top and pivots wide ones on the side nearer the body center") }
+        putJsonObject("tilt") { put("type", "number"); put("minimum", -75); put("maximum", 75)
+            put("description", "Degrees the swing rectangle turns about the pinned edge's midpoint, for art hanging at a slant; + turns the tip toward the right end of a top/bottom edge or the bottom end of a side edge") }
+        putJsonObject("offset_along") { put("type", "number"); put("minimum", -1); put("maximum", 1)
+            put("description", "Moves the swing rectangle's pinned edge toward the tip, in pinned-edge-to-tip lengths; what lies behind it stays put") }
+        putJsonObject("offset_across") { put("type", "number"); put("minimum", -1); put("maximum", 1)
+            put("description", "Moves the swing rectangle along its pinned edge, in edge widths; + toward the right end of a top/bottom edge or the bottom end of a side edge") }
         putJsonObject("preset") { put("type", "string"); putJsonArray("enum") { listOf("hair", "accessory", "cloth").forEach { add(it) } } }
         putJsonObject("physics_enabled") { put("type", "boolean"); put("description", "Default true: generate the pendulums") }
     },

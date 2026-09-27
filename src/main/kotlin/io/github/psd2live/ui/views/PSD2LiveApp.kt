@@ -187,7 +187,7 @@ fun FrameWindowScope.PSD2LiveApp(
 					// exists — otherwise Unsupported messaging looks like a PSD hijack.
 					if (rasters.isNotEmpty() && hasPreview) {
 						val target = screenLocation?.let { point ->
-							val origin = window?.locationOnScreen
+							val origin = window.locationOnScreen
 							val windowX = if (origin != null) point.x - origin.x else point.x
 							val windowY = if (origin != null) point.y - origin.y else point.y
 							viewModel.hierarchyImportHitTest?.invoke(windowX, windowY)

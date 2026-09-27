@@ -48,7 +48,7 @@ import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.core.rememberTransition
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.DropdownMenu
@@ -1076,7 +1076,7 @@ fun TreeContextMenu(
 				LocalToolColors provides colors,
 				LocalToolTypography provides typography,
 			) {
-				val transition = updateTransition(expandedStates, "TreeContextMenuTransition")
+				val transition = rememberTransition(expandedStates, "TreeContextMenuTransition")
 				val alpha by transition.animateFloat(
 					transitionSpec = {
 						if (false isTransitioningTo true) tween(durationMillis = 110, easing = LinearOutSlowInEasing)

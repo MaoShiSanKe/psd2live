@@ -243,8 +243,7 @@ internal object CanvasEdits {
                     val remapped = model.deformers.map { d ->
                         if (d.id != childId) d else when (d) {
                             is Deformer.Warp -> {
-                                val pts = d.geometryGrid?.cells?.firstOrNull()?.form?.controlPoints ?: return@map d.copy(parent = warp.id)
-                                val norm = FloatArray(pts.size) { j -> if (j % 2 == 0) (pts[j] - x) / w else (pts[j] - y) / h }
+                                d.geometryGrid?.cells?.firstOrNull() ?: return@map d.copy(parent = warp.id)
                                 d.copy(
                                     parent = warp.id,
                                     geometryGrid = d.geometryGrid.let { grid ->
@@ -253,7 +252,7 @@ internal object CanvasEdits {
                                                 if (j % 2 == 0) (cell.form.controlPoints[j] - x) / w else (cell.form.controlPoints[j] - y) / h
                                             }))
                                         })
-                                    } ?: KeyformGrid(emptyList(), listOf(KeyformCell(intArrayOf(), WarpLatticeForm(norm)))),
+                                    },
                                 )
                             }
                             is Deformer.Rotation -> {

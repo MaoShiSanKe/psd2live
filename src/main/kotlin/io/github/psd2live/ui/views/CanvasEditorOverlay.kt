@@ -757,6 +757,7 @@ internal fun BoxScope.CanvasEditorOverlay(
             drawPath(path(gizmo.outline(1f), true), colors.accent.copy(alpha = 0.9f), style = Stroke(1.6f))
             drawPath(path(gizmo.centerline(1f), false), colors.accent.copy(alpha = 0.9f), style = Stroke(1.4f))
             drawPath(path(gizmo.pinnedEdge, false), colors.accent, style = Stroke(4f, cap = StrokeCap.Round))
+            drawPath(path(gizmo.axis, false), colors.accent.copy(alpha = 0.6f), style = Stroke(1.2f, pathEffect = dash))
             val lit = editor.swingHandle ?: editor.swingHover
             for ((handle, o) in editor.swingHandles(viewport)) {
                 // Hover and drag read like every other canvas handle: an accent fill inside a white outer ring.
@@ -776,6 +777,19 @@ internal fun BoxScope.CanvasEditorOverlay(
                         drawPath(diamond(6f), colors.accent)
                         if (hot) drawPath(diamond(9.5f), Color.White, style = Stroke(1.8f))
                         else drawPath(diamond(6f), Color.White, style = Stroke(1.2f))
+                    }
+                    SwingGizmo.Handle.MOVE -> {
+                        // A filled dot with a cross: it moves the whole rectangle.
+                        drawCircle(colors.accent, 6f, o)
+                        drawCircle(Color.White, if (hot) 9.5f else 6f, o, style = Stroke(if (hot) 1.8f else 1.2f))
+                        drawLine(Color.White, o - Offset(3.5f, 0f), o + Offset(3.5f, 0f), 1.2f)
+                        drawLine(Color.White, o - Offset(0f, 3.5f), o + Offset(0f, 3.5f), 1.2f)
+                    }
+                    SwingGizmo.Handle.AXIS -> {
+                        // A hollow ring: it turns the axis rather than posing the art.
+                        drawCircle(colors.panelElevated.copy(alpha = 0.85f), 5.5f, o)
+                        drawCircle(colors.accent, 5.5f, o, style = Stroke(2f))
+                        if (hot) drawCircle(Color.White, 9f, o, style = Stroke(1.8f))
                     }
                     SwingGizmo.Handle.CORNER_START, SwingGizmo.Handle.CORNER_END -> {
                         if (hot) square(8f)
@@ -1033,7 +1047,7 @@ internal fun BoxScope.CanvasEditorOverlay(
         }
 
         // 5. PATH_DEFORM: live Catmull-Rom curves + control points (create, select binding, deform)
-        if (pathEditable && target != null && target.kind == "mesh") {
+        if (pathEditable && target.kind == "mesh") {
             editor.paths().forEach { path ->
                 if (editor.drawingPath && path.id == editor.draftPathId) return@forEach
                 val local = DeformPathTools.positions(path, target.geometry.points)

@@ -14,8 +14,9 @@ import kotlin.math.sign
  *
  * Handles sit on the +1 pose of the [motion] being edited, so dragging one puts that part of the pose
  * under the pointer: the tip sets the sway (and flips when dragged across) and the rise, the middle of
- * the strand sets the softness, a tip corner sets the width change and how level the tip edge stays, and
- * a pivot handle picks the pinned edge.
+ * the strand sets the softness, a tip corner sets the width change and how level the tip edge stays, the
+ * axis handle past the rest tip turns the whole swing rectangle about its pinned edge's midpoint, the
+ * handle on that midpoint moves the rectangle, and a pivot handle picks the pinned edge. Everything drawn is that rectangle, not the lattice.
  */
 internal class SwingGizmo private constructor(
     private val space: SwingSpace,
@@ -25,7 +26,7 @@ internal class SwingGizmo private constructor(
     /** The index in [RigSwingEdit.motions] the handles edit. */
     val motion: Int,
 ) {
-    enum class Handle { PIVOT_TOP, PIVOT_BOTTOM, PIVOT_LEFT, PIVOT_RIGHT, TIP, MID, CORNER_START, CORNER_END }
+    enum class Handle { PIVOT_TOP, PIVOT_BOTTOM, PIVOT_LEFT, PIVOT_RIGHT, TIP, MID, CORNER_START, CORNER_END, AXIS, MOVE }
 
     private val warp = space.warp
     private val rows = warp.rows
@@ -37,12 +38,6 @@ internal class SwingGizmo private constructor(
         indices.map(::local).let { ps -> ps.map { it.first }.average().toFloat() to ps.map { it.second }.average().toFloat() }
     private fun row(r: Int) = (0..columns).map { index(r, it) }
     private fun column(c: Int) = (0..rows).map { index(it, c) }
-    private fun edge(f: SwingFulcrum) = when (f) {
-        SwingFulcrum.TOP, SwingFulcrum.AUTO -> row(0)
-        SwingFulcrum.BOTTOM -> row(rows)
-        SwingFulcrum.LEFT -> column(0)
-        SwingFulcrum.RIGHT -> column(columns)
-    }
     private fun opposite(f: SwingFulcrum) = when (f) {
         SwingFulcrum.TOP, SwingFulcrum.AUTO -> SwingFulcrum.BOTTOM
         SwingFulcrum.BOTTOM -> SwingFulcrum.TOP
@@ -59,23 +54,32 @@ internal class SwingGizmo private constructor(
     /** Local [targets] with the edited motion at pose [value] (every segment) and the others at rest, mapped to world. */
     private fun posed(e: RigSwingEdit, value: Float, targets: List<Pair<Float, Float>>): List<Pair<Float, Float>> {
         val flat = FloatArray(targets.size * 2) { if (it % 2 == 0) targets[it / 2].first else targets[it / 2].second }
-        val shapes = e.motions.map { it.shape.deformer(it.kind, fulcrum, it.segments) }
+        val shapes = e.motions.map { it.shape.deformer(it.kind, fulcrum, it.segments, e.placement) }
         val moved = SwingDeformer.compose(shapes, flat) { m, t ->
             SwingDeformer.transform(rest, rows, columns, space.sx, space.sy, shapes[m], FloatArray(shapes[m].segments) { if (m == motion) value else 0f }, t)
         }
         return targets.indices.map { world(moved[it * 2] to moved[it * 2 + 1]) }
     }
 
-    private val boundary: List<Int> = row(0) + column(columns).drop(1) + row(rows).reversed().drop(1) + column(0).reversed().drop(1)
-    private val rootLocal = localMid(edge(fulcrum))
-    private val tipLocal = localMid(edge(opposite(fulcrum)))
-    private fun axisLocal(s: Float) = (rootLocal.first + (tipLocal.first - rootLocal.first) * s) to
-        (rootLocal.second + (tipLocal.second - rootLocal.second) * s)
-    private val tipEdge = edge(opposite(fulcrum))
-    private val cornerLocals = listOf(local(tipEdge.first()), local(tipEdge.last()))
+    /** A point of the rest swing rectangle placed by [placement], in local units; see [SwingDeformer.rectPoint]. */
+    private fun rectLocal(s: Float, t: Float = 0f, placement: SwingDeformer.Placement = edit.placement) =
+        SwingDeformer.rectPoint(rest, rows, columns, space.sx, space.sy, fulcrum, placement, s, t)
+    private fun axisLocal(s: Float, placement: SwingDeformer.Placement = edit.placement) = rectLocal(s, 0f, placement)
+    private val rootLocal = axisLocal(0f)
+    private val tipLocal = axisLocal(1f)
+    private val cornerLocals = listOf(rectLocal(1f, -0.5f), rectLocal(1f, 0.5f))
 
-    /** The lattice outline at pose [value]; 0 is the rest pose. */
-    fun outline(value: Float): List<Pair<Float, Float>> = cache.getOrPut("outline$value") { posed(edit, value, boundary.map(::local)) }
+    /** The swing rectangle's rest outline, pinned edge first; the long sides are sampled finely so they bend smoothly. */
+    private val boundary: List<Pair<Float, Float>> = buildList {
+        val across = 4; val along = 16
+        for (k in 0 until across) add(rectLocal(0f, -0.5f + k.toFloat() / across))
+        for (k in 0 until along) add(rectLocal(k.toFloat() / along, 0.5f))
+        for (k in 0 until across) add(rectLocal(1f, 0.5f - k.toFloat() / across))
+        for (k in 0 until along) add(rectLocal(1f - k.toFloat() / along, -0.5f))
+    }
+
+    /** The swing rectangle's outline at pose [value]; 0 is the rest pose. */
+    fun outline(value: Float): List<Pair<Float, Float>> = cache.getOrPut("outline$value") { posed(edit, value, boundary) }
 
     /** The strand's centerline at pose [value], pinned edge first. */
     fun centerline(value: Float): List<Pair<Float, Float>> = cache.getOrPut("center$value") { posed(edit, value, (0..16).map { axisLocal(it / 16f) }) }
@@ -83,12 +87,23 @@ internal class SwingGizmo private constructor(
     // The gizmo is immutable and the canvas redraws every frame, so each pose is computed once.
     private val cache = HashMap<String, List<Pair<Float, Float>>>()
 
-    /** The pinned edge at rest. */
-    val pinnedEdge: List<Pair<Float, Float>> by lazy { edge(fulcrum).map { world(local(it)) } }
+    /** The rest hanging axis, from the pinned edge out to the axis handle. */
+    val axis: List<Pair<Float, Float>> by lazy { listOf(world(rootLocal), world(axisLocal(AXIS_REACH))) }
 
-    /** The midpoint of every rest edge; the pinned one is [fulcrum]. */
+    /** The swing rectangle's pinned edge at rest. */
+    val pinnedEdge: List<Pair<Float, Float>> by lazy { listOf(-0.5f, 0f, 0.5f).map { world(rectLocal(0f, it)) } }
+
+    /**
+     * The midpoint of every edge of the rest swing rectangle, by the lattice edge it stands for; the pinned one
+     * is [fulcrum]. The sides follow the pinned edge's lattice order: its last point is the right or bottom end.
+     */
     val pivots: Map<SwingFulcrum, Pair<Float, Float>> by lazy {
-        listOf(SwingFulcrum.TOP, SwingFulcrum.BOTTOM, SwingFulcrum.LEFT, SwingFulcrum.RIGHT).associateWith { world(localMid(edge(it))) }
+        val sideways = fulcrum == SwingFulcrum.LEFT || fulcrum == SwingFulcrum.RIGHT
+        mapOf(
+            fulcrum to world(rectLocal(0f)), opposite(fulcrum) to world(rectLocal(1f)),
+            (if (sideways) SwingFulcrum.TOP else SwingFulcrum.LEFT) to world(rectLocal(0.5f, -0.5f)),
+            (if (sideways) SwingFulcrum.BOTTOM else SwingFulcrum.RIGHT) to world(rectLocal(0.5f, 0.5f)),
+        )
     }
 
     /** The draggable handles at their current positions. */
@@ -101,6 +116,7 @@ internal class SwingGizmo private constructor(
             Handle.PIVOT_TOP to pivots.getValue(SwingFulcrum.TOP), Handle.PIVOT_BOTTOM to pivots.getValue(SwingFulcrum.BOTTOM),
             Handle.PIVOT_LEFT to pivots.getValue(SwingFulcrum.LEFT), Handle.PIVOT_RIGHT to pivots.getValue(SwingFulcrum.RIGHT),
             Handle.TIP to tip, Handle.MID to mid, Handle.CORNER_START to corners[0], Handle.CORNER_END to corners[1],
+            Handle.AXIS to axis[1], Handle.MOVE to axis[0],
         )
     }
 
@@ -118,13 +134,70 @@ internal class SwingGizmo private constructor(
 
     /** The swing with [handle] dragged to world point [p]. */
     fun drag(handle: Handle, p: Pair<Float, Float>): RigSwingEdit = when (handle) {
-        Handle.PIVOT_TOP -> edit.copy(fulcrum = SwingFulcrum.TOP)
-        Handle.PIVOT_BOTTOM -> edit.copy(fulcrum = SwingFulcrum.BOTTOM)
-        Handle.PIVOT_LEFT -> edit.copy(fulcrum = SwingFulcrum.LEFT)
-        Handle.PIVOT_RIGHT -> edit.copy(fulcrum = SwingFulcrum.RIGHT)
+        Handle.PIVOT_TOP -> repinned(SwingFulcrum.TOP)
+        Handle.PIVOT_BOTTOM -> repinned(SwingFulcrum.BOTTOM)
+        Handle.PIVOT_LEFT -> repinned(SwingFulcrum.LEFT)
+        Handle.PIVOT_RIGHT -> repinned(SwingFulcrum.RIGHT)
         Handle.TIP -> dragTip(p)
         Handle.MID -> fit(0f, 1f, { v -> reshaped { it.copy(softness = v) } }, p) { e -> posed(e, 1f, listOf(axisLocal(0.5f))).single() }
         Handle.CORNER_START, Handle.CORNER_END -> dragCorner(handle, p)
+        Handle.AXIS -> dragAxis(p)
+        Handle.MOVE -> dragMove(p)
+    }
+
+    /**
+     * Moves the rectangle so its pinned midpoint lands on [p]. The parent mapping may bend, so a few Newton
+     * steps on the offsets, with the Jacobian measured by probing, stand in for its inverse.
+     */
+    private fun dragMove(p: Pair<Float, Float>): RigSwingEdit {
+        val max = RigSwingEdit.MAX_OFFSET
+        var along = edit.offsetAlong; var across = edit.offsetAcross
+        fun at(a: Float, c: Float) = world(rectLocal(0f, 0f, SwingDeformer.Placement(edit.tilt, a, c)))
+        repeat(4) {
+            val h = 0.01f
+            val here = at(along, across)
+            val rx = p.first - here.first; val ry = p.second - here.second
+            if (hypot(rx, ry) < 1e-3f) return@repeat
+            val da = at(along + h, across).let { (it.first - here.first) / h to (it.second - here.second) / h }
+            val dc = at(along, across + h).let { (it.first - here.first) / h to (it.second - here.second) / h }
+            val det = da.first * dc.second - da.second * dc.first
+            if (abs(det) < 1e-6f) return@repeat
+            along = (along + (rx * dc.second - ry * dc.first) / det).coerceIn(-max, max)
+            across = (across + (da.first * ry - da.second * rx) / det).coerceIn(-max, max)
+        }
+        fun rounded(v: Float) = kotlin.math.round(v * 1000f) / 1000f
+        return edit.copy(offsetAlong = rounded(along), offsetAcross = rounded(across))
+    }
+
+    /** Pinned on another edge the swing sits square on it again: the turn and move were measured from the old edge. */
+    private fun repinned(to: SwingFulcrum) =
+        if (to == fulcrum) edit.copy(fulcrum = to) else edit.copy(fulcrum = to, tilt = 0f, offsetAlong = 0f, offsetAcross = 0f)
+
+    /**
+     * Turns the axis so the handle points at [p] from the pinned edge's midpoint. Only the direction counts,
+     * so the pointer can be anywhere along the ray; near square it snaps back to no tilt.
+     */
+    private fun dragAxis(p: Pair<Float, Float>): RigSwingEdit {
+        val root = world(rootLocal)
+        if (hypot(p.first - root.first, p.second - root.second) < 1e-3f) return edit
+        val wanted = kotlin.math.atan2(p.second - root.second, p.first - root.first)
+        fun cost(tilt: Float): Float {
+            val h = world(axisLocal(AXIS_REACH, edit.placement.copy(tilt = tilt)))
+            val d = kotlin.math.atan2(h.second - root.second, h.first - root.first) - wanted
+            return abs(kotlin.math.atan2(kotlin.math.sin(d), kotlin.math.cos(d)))
+        }
+        val max = RigSwingEdit.MAX_TILT
+        var best = 0f; var bestCost = Float.MAX_VALUE
+        var t = -max
+        while (t <= max) { val c = cost(t); if (c < bestCost) { bestCost = c; best = t }; t += 1f }
+        var a = (best - 1f).coerceAtLeast(-max); var b = (best + 1f).coerceAtMost(max)
+        val golden = 0.618034f
+        repeat(12) {
+            val c = b - (b - a) * golden; val d = a + (b - a) * golden
+            if (cost(c) < cost(d)) b = d else a = c
+        }
+        val tilt = (kotlin.math.round((a + b) / 2f * 10f) / 10f).let { if (abs(it) < AXIS_SNAP) 0f else it }
+        return edit.copy(tilt = tilt.coerceIn(-max, max))
     }
 
     /**
@@ -189,6 +262,11 @@ internal class SwingGizmo private constructor(
     }
 
     companion object {
+        /** How far past the rest tip the axis handle sits, so it stays clear of the tip handle. */
+        private const val AXIS_REACH = 1.18f
+        /** Degrees within which a dragged axis snaps back to square. */
+        private const val AXIS_SNAP = 1.5f
+
         /**
          * The controls of [edit] on [targetId], by default its first target; null when that is not a Warp.
          * [values] is the pose on screen, so the handles sit on the art as drawn; the swing itself is at rest.

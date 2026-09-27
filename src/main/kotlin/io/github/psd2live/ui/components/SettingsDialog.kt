@@ -795,17 +795,17 @@ private fun ShortcutRow(
 			} else {
 				bindings.forEachIndexed { index, binding ->
 					KeyChip(
-						text = if (isRecording && capture?.index == index) {
+						text = if (isRecording && capture.index == index) {
 							tr("dialog.settings.shortcuts.captureShort")
 						} else {
 							binding.format()
 						},
 						tint = when {
-							isRecording && capture?.index == index -> colors.accent
+							isRecording && capture.index == index -> colors.accent
 							conflicts[binding].orEmpty().any { it != action } -> colors.error
 							else -> colors.selectionText
 						},
-						highlighted = isRecording && capture?.index == index,
+						highlighted = isRecording && capture.index == index,
 						onClick = { onBeginCapture(action, index) },
 					)
 					if (bindings.size > 1) {

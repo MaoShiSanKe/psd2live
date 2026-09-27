@@ -221,6 +221,83 @@ class SwingDeformerTest {
 	}
 
 	@Test
+	fun aTiltedRectangleSwingsAcrossItsTurnedAxis() {
+		val rest = lattice(100f, 300f)
+		fun rect(tilt: Float, u: Float, t: Float) = SwingDeformer.rectPoint(rest, rows, columns, 1f, 1f, SwingFulcrum.TOP, SwingDeformer.Placement(tilt), u, t)
+		assertEquals(50f to 300f, rect(0f, 1f, 0f))
+		assertEquals(0f to 0f, rect(0f, 0f, -0.5f))
+		// +30° turns the rectangle about the pinned edge's midpoint, the tip toward the top edge's right end.
+		val sin30 = 0.5f; val cos30 = kotlin.math.cos(Math.toRadians(30.0)).toFloat()
+		val tip = rect(30f, 1f, 0f)
+		assertEquals(50f + 300f * sin30, tip.first, 0.01f); assertEquals(300f * cos30, tip.second, 0.01f)
+		val end = rect(30f, 0f, 0.5f)
+		assertEquals(50f + 50f * cos30, end.first, 0.01f); assertEquals(-50f * sin30, end.second, 0.01f)
+		// Its pinned edge stays; the tip travels the magnitude square to the turned axis, the arc keeping the length.
+		val tilted = shape(SwingKind.LATERAL, SwingFulcrum.TOP, 0.3f).copy(placement = SwingDeformer.Placement(30f))
+		val probe = listOf(rect(30f, 0f, -0.5f), rect(30f, 0f, 0.5f), tip)
+		val moved = SwingDeformer.transform(rest, rows, columns, 1f, 1f, tilted, floatArrayOf(1f),
+			FloatArray(6) { if (it % 2 == 0) probe[it / 2].first else probe[it / 2].second })
+		for (k in 0..1) { assertEquals(probe[k].first, moved[k * 2], 1e-3f); assertEquals(probe[k].second, moved[k * 2 + 1], 1e-3f) }
+		val across = (moved[4] - tip.first) * cos30 - (moved[5] - tip.second) * sin30
+		assertEquals(0.3f * 300f, across, 3f)
+		assertTrue(hypot(moved[4] - 50f, moved[5]) < 300f)
+		// Unturned, nothing changes.
+		val square = SwingDeformer.deform(rest, rows, columns, 1f, 1f, shape(SwingKind.LATERAL, SwingFulcrum.TOP, 0.3f), floatArrayOf(1f))
+		assertTrue(square.contentEquals(SwingDeformer.deform(rest, rows, columns, 1f, 1f, tilted.copy(placement = SwingDeformer.Placement()), floatArrayOf(1f))))
+		assertTrue(SwingAuthoring.request(Json.parseToJsonElement("""{"id":"s","kind":"lateral","targets":["A"],"tilt":-20}""").jsonObject).edit.tilt == -20f)
+	}
+
+	@Test
+	fun aMovedRectanglePinsItsOwnEdgeAndTurnsAboutIt() {
+		val rest = lattice(100f, 300f)
+		val placement = SwingDeformer.Placement(30f, 0.1f, 0.2f)
+		fun rect(u: Float, t: Float) = SwingDeformer.rectPoint(rest, rows, columns, 1f, 1f, SwingFulcrum.TOP, placement, u, t)
+		// Moved a tenth of the length down and a fifth of the width right, then turned about that point.
+		assertEquals(70f, rect(0f, 0f).first, 1e-3f); assertEquals(30f, rect(0f, 0f).second, 1e-3f)
+		assertEquals(70f + 150f, rect(1f, 0f).first, 0.01f)
+		val moved = shape(SwingKind.LATERAL, SwingFulcrum.TOP, 0.3f).copy(placement = placement)
+		val swung = SwingDeformer.deform(rest, rows, columns, 1f, 1f, moved, floatArrayOf(1f))
+		// The lattice's own top edge now lies behind the pinned edge, so it stays; the rest swings.
+		for (c in 0..columns) assertEquals(point(rest, 0, c), point(swung, 0, c))
+		assertTrue(point(swung, rows, 1) != point(rest, rows, 1))
+		val edit = swing().copy(tilt = 30f, offsetAlong = 0.1f, offsetAcross = -0.2f)
+		assertEquals(edit, RigSwingEdit.fromJson(edit.toJson()))
+	}
+
+	@Test
+	fun theAxisHandleTurnsTheAxisToThePointer() {
+		val base = swing().copy(fulcrum = SwingFulcrum.TOP)
+		val gizmo = SwingGizmo.of(model(), base)!!
+		val target = SwingGizmo.of(model(), base.copy(tilt = 25f))!!.handles().getValue(SwingGizmo.Handle.AXIS)
+		assertEquals(25f, gizmo.drag(SwingGizmo.Handle.AXIS, target).tilt, 0.3f)
+		// Only the direction counts, and near square it snaps back.
+		val root = gizmo.axis.first()
+		assertEquals(25f, gizmo.drag(SwingGizmo.Handle.AXIS, (root.first + (target.first - root.first) * 2f) to (root.second + (target.second - root.second) * 2f)).tilt, 0.3f)
+		val square = gizmo.handles().getValue(SwingGizmo.Handle.AXIS)
+		assertEquals(0f, SwingGizmo.of(model(), base.copy(tilt = 10f))!!.drag(SwingGizmo.Handle.AXIS, square.first + 1f to square.second).tilt)
+		// The whole rectangle turns with the axis, and pinning another edge squares it again.
+		val turned = SwingGizmo.of(model(), base.copy(tilt = 25f))!!
+		assertTrue(turned.pinnedEdge.first().second != turned.pinnedEdge.last().second)
+		assertTrue(turned.outline(0f) != gizmo.outline(0f))
+		assertEquals(0f, turned.drag(SwingGizmo.Handle.PIVOT_LEFT, 0f to 0f).tilt)
+	}
+
+	@Test
+	fun theMoveHandleCarriesTheRectangleToThePointer() {
+		val base = swing().copy(fulcrum = SwingFulcrum.TOP, tilt = 20f)
+		val gizmo = SwingGizmo.of(model(), base)!!
+		assertEquals(gizmo.axis.first(), gizmo.handles().getValue(SwingGizmo.Handle.MOVE))
+		val target = SwingGizmo.of(model(), base.copy(offsetAlong = 0.15f, offsetAcross = -0.3f))!!.handles().getValue(SwingGizmo.Handle.MOVE)
+		val moved = gizmo.drag(SwingGizmo.Handle.MOVE, target)
+		assertEquals(0.15f, moved.offsetAlong, 0.005f); assertEquals(-0.3f, moved.offsetAcross, 0.005f)
+		assertEquals(20f, moved.tilt)
+		// The turn happens about the moved point, and pinning another edge clears both.
+		val after = SwingGizmo.of(model(), moved)!!
+		assertEquals(target.first, after.axis.first().first, 0.5f); assertEquals(target.second, after.axis.first().second, 0.5f)
+		assertEquals(0f, after.drag(SwingGizmo.Handle.PIVOT_LEFT, 0f to 0f).offsetAlong)
+	}
+
+	@Test
 	fun generatorReportsMissingTargetsWithoutFailing() {
 		val missing = swing().copy(targets = listOf("Nope"))
 		val base = model()
@@ -358,12 +435,14 @@ class SwingDeformerTest {
 		val edit = RigSwingEdit("s", "Swing", listOf("A", "B"), listOf(
 			SwingMotion(SwingKind.LATERAL, listOf("X"), SwingShape(0.3f, 0.02f, 0.4f, 0f, 0.8f), null),
 			SwingMotion(SwingKind.VERTICAL, listOf("P1", "P2"), SwingShape(0.2f, -0.1f, 0.3f, 0.05f, flip = true), SwingPhysics(8f, 0.8f, 1.1f, 0.9f, 1.2f))),
-			SwingFulcrum.LEFT, SwingPreset.CLOTH, baked = true)
+			SwingFulcrum.LEFT, SwingPreset.CLOTH, baked = true, tilt = -22.5f)
 		assertEquals(edit, RigSwingEdit.fromJson(edit.toJson()))
 		// Swings saved before directions could combine: one motion at the top level, swinging like one board.
 		assertEquals(null, RigSwingEdit.fromJson(Json.parseToJsonElement(
 			"""{"id":"s","kind":"lateral","targets":["A"],"parameters":["P"],"physics":null}""").jsonObject).motions[0].physics)
-		val old = RigSwingEdit.fromJson(Json.parseToJsonElement("""{"id":"s","kind":"LATERAL","targets":["A"],"parameters":["P"]}""").jsonObject).shape
+		val legacy = RigSwingEdit.fromJson(Json.parseToJsonElement("""{"id":"s","kind":"LATERAL","targets":["A"],"parameters":["P"]}""").jsonObject)
+		assertEquals(0f, legacy.tilt)
+		val old = legacy.shape
 		assertTrue(abs(old.magnitude - 0.22f) < 1e-6f)
 		assertEquals(0f, old.parallel)
 	}

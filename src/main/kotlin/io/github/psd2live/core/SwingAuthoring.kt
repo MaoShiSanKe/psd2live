@@ -117,6 +117,9 @@ internal object SwingAuthoring {
             motions = motions,
             fulcrum = arguments["fulcrum"]?.jsonPrimitive?.contentOrNull?.let { SwingFulcrum.valueOf(it.uppercase()) } ?: SwingFulcrum.AUTO,
             preset = preset,
+            tilt = arguments["tilt"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            offsetAlong = arguments["offset_along"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            offsetAcross = arguments["offset_across"]?.jsonPrimitive?.floatOrNull ?: 0f,
         )
         return Request(if (placeholders) canonical(edit, "ParamSwing${asciiStem(id)}") else edit, enabled && !givenPhysics)
     }

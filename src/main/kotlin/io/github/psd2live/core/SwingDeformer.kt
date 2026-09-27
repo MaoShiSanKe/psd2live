@@ -21,6 +21,11 @@ import kotlin.math.sqrt
  * A bend normally turns each cross-section with the centerline, so a wide lattice swings like one board.
  * [Shape.parallel] keeps the cross-sections level instead: toward 1 every column hangs from its own spot on
  * the pinned edge and sways alongside the others, which is how hair with several strands in one Warp moves.
+ *
+ * All of this happens in the swing rectangle: as wide as the pinned edge and as long as its midpoint is from
+ * the tip edge's, moved and turned about its pinned edge's midpoint by [Shape.placement] for art that hangs
+ * at a slant or from somewhere other than the lattice edge.
+ * Turned, its pinned edge is no longer a lattice edge; what lies behind it stays put.
  */
 internal object SwingDeformer {
     data class Shape(
@@ -35,11 +40,26 @@ internal object SwingDeformer {
         val segments: Int,
         /** 0 turns the cross-sections with the bend; 1 keeps them level, so the tip edge sways without tilting. */
         val parallel: Float = 0f,
+        val placement: Placement = Placement(),
     ) {
         init { require(fulcrum != SwingFulcrum.AUTO && segments in 1..RigSwingEdit.MAX_SEGMENTS) }
 
         /** Whether the tip moves across the pinned axis, which bends; otherwise it stretches. */
         val bends: Boolean get() = (fulcrum == SwingFulcrum.TOP || fulcrum == SwingFulcrum.BOTTOM) == (kind == SwingKind.LATERAL)
+    }
+
+    /**
+     * Where the swing rectangle sits against the lattice's own: its pinned edge's midpoint moved [along] lengths
+     * toward the tip and [across] widths toward the pinned edge's last lattice point, then turned [tilt] degrees
+     * about that point. Relative units keep it on the same spot of the art in every keyform of the Warp.
+     */
+    data class Placement(val tilt: Float = 0f, val along: Float = 0f, val across: Float = 0f) {
+        init {
+            require(listOf(tilt, along, across).all(Float::isFinite)) { "Swing placement must be finite" }
+            require(abs(tilt) <= RigSwingEdit.MAX_TILT && abs(along) <= RigSwingEdit.MAX_OFFSET && abs(across) <= RigSwingEdit.MAX_OFFSET) {
+                "Swing placement out of range"
+            }
+        }
     }
 
     private const val SAMPLES = 256
@@ -173,6 +193,26 @@ internal object SwingDeformer {
         return (low + high) / 2f
     }
 
+    /**
+     * A point of the rest swing rectangle of [lattice] in its local units: [s] runs from the pinned edge (0) to
+     * the tip edge (1), [t] across from -0.5 to 0.5, positive toward the pinned edge's last lattice point.
+     * The canvas draws the rectangle and places its handles with it.
+     */
+    fun rectPoint(lattice: FloatArray, rows: Int, columns: Int, sx: Float, sy: Float, fulcrum: SwingFulcrum, placement: Placement,
+        s: Float, t: Float = 0f): Pair<Float, Float> {
+        val a = axis(lattice, rows, columns, sx, sy, fulcrum, placement)
+        return (a.rootX + a.ex * a.length * s + a.px * a.width * t) / sx to (a.rootY + a.ey * a.length * s + a.py * a.width * t) / sy
+    }
+
+    private class Axis(
+        val rootX: Float, val rootY: Float,
+        val ex: Float, val ey: Float,
+        /** Unit perpendicular to the axis, toward the pinned edge's last lattice point. */
+        val px: Float, val py: Float,
+        val length: Float,
+        val width: Float,
+    )
+
     private class Frame(
         val rootX: Float, val rootY: Float,
         val ex: Float, val ey: Float,
@@ -187,32 +227,48 @@ internal object SwingDeformer {
         out[i * 2 + 1] = (f.rootY + along * f.ey + across * f.ny) / sy
     }
 
-    private fun frame(points: FloatArray, rows: Int, columns: Int, sx: Float, sy: Float, shape: Shape): Frame {
-        fun rowMid(r: Int): Pair<Float, Float> {
-            var x = 0f; var y = 0f
-            for (c in 0..columns) { val i = (r * (columns + 1) + c) * 2; x += points[i] * sx; y += points[i + 1] * sy }
-            return x / (columns + 1) to y / (columns + 1)
-        }
-        fun columnMid(c: Int): Pair<Float, Float> {
-            var x = 0f; var y = 0f
-            for (r in 0..rows) { val i = (r * (columns + 1) + c) * 2; x += points[i] * sx; y += points[i + 1] * sy }
-            return x / (rows + 1) to y / (rows + 1)
-        }
-        val (root, tip) = when (shape.fulcrum) {
-            SwingFulcrum.TOP -> rowMid(0) to rowMid(rows)
-            SwingFulcrum.BOTTOM -> rowMid(rows) to rowMid(0)
-            SwingFulcrum.LEFT -> columnMid(0) to columnMid(columns)
-            SwingFulcrum.RIGHT -> columnMid(columns) to columnMid(0)
+    private fun mid(points: FloatArray, indices: List<Int>, sx: Float, sy: Float): Pair<Float, Float> {
+        var x = 0f; var y = 0f
+        for (i in indices) { x += points[i * 2] * sx; y += points[i * 2 + 1] * sy }
+        return x / indices.size to y / indices.size
+    }
+    private fun row(r: Int, columns: Int) = (0..columns).map { r * (columns + 1) + it }
+    private fun column(c: Int, rows: Int, columns: Int) = (0..rows).map { it * (columns + 1) + c }
+
+    private fun axis(points: FloatArray, rows: Int, columns: Int, sx: Float, sy: Float, fulcrum: SwingFulcrum, placement: Placement): Axis {
+        val (pinned, opposite) = when (fulcrum) {
+            SwingFulcrum.TOP -> row(0, columns) to row(rows, columns)
+            SwingFulcrum.BOTTOM -> row(rows, columns) to row(0, columns)
+            SwingFulcrum.LEFT -> column(0, rows, columns) to column(columns, rows, columns)
+            SwingFulcrum.RIGHT -> column(columns, rows, columns) to column(0, rows, columns)
             SwingFulcrum.AUTO -> error("Resolve AUTO first")
         }
-        // Positive values move the tip toward the lattice's right edge (left/right) or bottom edge (up/down).
-        val (motionFrom, motionTo) = if (shape.kind == SwingKind.LATERAL) columnMid(0) to columnMid(columns) else rowMid(0) to rowMid(rows)
-        val mx = motionTo.first - motionFrom.first; val my = motionTo.second - motionFrom.second
+        val root = mid(points, pinned, sx, sy); val tip = mid(points, opposite, sx, sy)
         val length = hypot(tip.first - root.first, tip.second - root.second).coerceAtLeast(1e-6f)
-        val ex = (tip.first - root.first) / length; val ey = (tip.second - root.second) / length
-        var nx = -ey; var ny = ex
+        val e0x = (tip.first - root.first) / length; val e0y = (tip.second - root.second) / length
+        val dx = (points[pinned.last() * 2] - points[pinned.first() * 2]) * sx
+        val dy = (points[pinned.last() * 2 + 1] - points[pinned.first() * 2 + 1]) * sy
+        // The perpendicular on the side of the edge's last point; a mirrored parent mirrors the turn with it.
+        val side = if (-e0y * dx + e0x * dy < 0f) -1f else 1f
+        val width = hypot(dx, dy).coerceAtLeast(1e-6f)
+        // Moved in the unturned frame, so turning it keeps the pinned midpoint where it was put.
+        val rootX = root.first + e0x * length * placement.along - side * e0y * width * placement.across
+        val rootY = root.second + e0y * length * placement.along + side * e0x * width * placement.across
+        val radians = Math.toRadians(placement.tilt.toDouble()).toFloat()
+        val ex = e0x * cos(radians) - side * e0y * sin(radians)
+        val ey = e0y * cos(radians) + side * e0x * sin(radians)
+        return Axis(rootX, rootY, ex, ey, -side * ey, side * ex, length, width)
+    }
+
+    private fun frame(points: FloatArray, rows: Int, columns: Int, sx: Float, sy: Float, shape: Shape): Frame {
+        val a = axis(points, rows, columns, sx, sy, shape.fulcrum, shape.placement)
+        // Positive values move the tip toward the lattice's right edge (left/right) or bottom edge (up/down).
+        val (motionFrom, motionTo) = if (shape.kind == SwingKind.LATERAL) mid(points, column(0, rows, columns), sx, sy) to mid(points, column(columns, rows, columns), sx, sy)
+            else mid(points, row(0, columns), sx, sy) to mid(points, row(rows, columns), sx, sy)
+        val mx = motionTo.first - motionFrom.first; val my = motionTo.second - motionFrom.second
+        var nx = -a.ey; var ny = a.ex
         if (nx * mx + ny * my < 0f) { nx = -nx; ny = -ny }
-        val stretchSign = if (ex * mx + ey * my < 0f) -1f else 1f
-        return Frame(root.first, root.second, ex, ey, nx, ny, length, stretchSign)
+        val stretchSign = if (a.ex * mx + a.ey * my < 0f) -1f else 1f
+        return Frame(a.rootX, a.rootY, a.ex, a.ey, nx, ny, a.length, stretchSign)
     }
 }

@@ -720,7 +720,7 @@ internal class CanvasEditor(
             hierarchyMode == EditHierarchyMode.PAINT -> "editor.paintHint"
             hierarchyMode == EditHierarchyMode.SELECT && tool == CanvasTool.SELECT -> "editor.objectHint"
             hierarchyMode == EditHierarchyMode.EDIT && tool == CanvasTool.SELECT &&
-                target?.kind == "mesh" && source != null &&
+                target?.kind == "mesh" &&
                 source.deformPaths.any { it.drawableId.raw == target.id && it.editLevel == pathLevel } ->
                 "editor.pathBindHint"
             // drawsTransformBox reads model via target(); only evaluate once a puppet exists.
@@ -3178,13 +3178,13 @@ internal class CanvasEditor(
         if (request.tool in CREATION_TOOLS) {
             if (request.tool == CanvasTool.GLUE) {
                 deferredMode = null
-                activateCreationTool(request.tool!!)
+                activateCreationTool(request.tool)
                 return
             }
             if (request.tool == CanvasTool.CREATE_WARP && warpAddTo == WarpAddTo.CHILD_OF_SELECTED_DEFORMER) {
                 if (state.selectedDeformerId == null) return
                 deferredMode = null
-                activateCreationTool(request.tool!!)
+                activateCreationTool(request.tool)
                 return
             }
             if (target()?.kind != "mesh") return
@@ -4911,7 +4911,7 @@ internal class CanvasEditor(
         // Place-then-confirm sessions own the canvas until Confirm/Esc (Warp / Rotation / Layer).
         val activePlacement = placement
         if (activePlacement != null && activePlacement.kind != CreatePlacementKind.PATH) {
-            val handle = hitPlacementHandle(pos, viewport!!)
+            val handle = hitPlacementHandle(pos, viewport)
             if (handle != PlacementHandle.NONE) {
                 placementHandle = handle
                 placementDragStart = pos

@@ -72,8 +72,8 @@ data class SwingShape(
         }
     }
 
-    internal fun deformer(kind: SwingKind, fulcrum: SwingFulcrum, segments: Int) =
-        SwingDeformer.Shape(kind, fulcrum, flip, magnitude, lift, softness, zoom, segments, parallel)
+    internal fun deformer(kind: SwingKind, fulcrum: SwingFulcrum, segments: Int, placement: SwingDeformer.Placement = SwingDeformer.Placement()) =
+        SwingDeformer.Shape(kind, fulcrum, flip, magnitude, lift, softness, zoom, segments, parallel, placement)
 
     internal fun write(o: JsonObjectBuilder) {
         o.put("magnitude", magnitude); o.put("lift", lift); o.put("softness", softness); o.put("zoom", zoom)
@@ -115,8 +115,22 @@ data class RigSwingEdit(
     val fulcrum: SwingFulcrum = SwingFulcrum.AUTO,
     val preset: SwingPreset = SwingPreset.HAIR,
     val baked: Boolean = false,
+    /**
+     * Degrees the swing rectangle turns about the pinned edge's midpoint, for art that hangs at a slant.
+     * Positive turns the tip toward the pinned edge's last lattice point (the right end of a top or bottom
+     * edge, the bottom end of a side one).
+     */
+    val tilt: Float = 0f,
+    /**
+     * How far the swing rectangle's pinned edge sits from the lattice's: [offsetAlong] in lengths toward the tip,
+     * [offsetAcross] in widths toward the pinned edge's last lattice point. Turning happens about the moved point.
+     */
+    val offsetAlong: Float = 0f,
+    val offsetAcross: Float = 0f,
 ) {
     init {
+        require(tilt.isFinite() && abs(tilt) <= MAX_TILT) { "Swing tilt must be within ±$MAX_TILT degrees" }
+        require(listOf(offsetAlong, offsetAcross).all { it.isFinite() && abs(it) <= MAX_OFFSET }) { "Swing offset must be within ±$MAX_OFFSET" }
         require(listOf(id, name).all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Swing ID and name are required" }
         require(targets.isNotEmpty() && targets.distinct().size == targets.size && targets.all { it.isNotBlank() }) { "Swing needs distinct targets" }
         require(motions.size in 1..2 && motions.map { it.kind }.distinct().size == motions.size) { "Swing needs one motion per direction" }
@@ -131,6 +145,8 @@ data class RigSwingEdit(
 
     val hasPhysics: Boolean get() = motions.any { it.physics != null }
 
+    internal val placement: SwingDeformer.Placement get() = SwingDeformer.Placement(tilt, offsetAlong, offsetAcross)
+
     /** The shape of motion [motion] passed through [change]. */
     fun withShape(motion: Int, change: (SwingShape) -> SwingShape) =
         copy(motions = motions.mapIndexed { m, entry -> if (m == motion) entry.copy(shape = change(entry.shape)) else entry })
@@ -143,6 +159,9 @@ data class RigSwingEdit(
         put("id", id); put("name", name)
         putJsonArray("targets") { targets.forEach { add(it) } }
         put("fulcrum", fulcrum.name); put("preset", preset.name)
+        if (tilt != 0f) put("tilt", tilt)
+        if (offsetAlong != 0f) put("offset_along", offsetAlong)
+        if (offsetAcross != 0f) put("offset_across", offsetAcross)
         putJsonArray("motions") {
             for (motion in motions) addJsonObject {
                 put("kind", motion.kind.name)
@@ -157,6 +176,10 @@ data class RigSwingEdit(
     companion object {
         const val MAX_SEGMENTS = 3
         const val MAX_MAGNITUDE = 0.7f
+        /** Beyond this the axis runs nearly along the pinned edge and there is no length left to swing. */
+        const val MAX_TILT = 75f
+        /** The swing rectangle moves at most one length along and one width across. */
+        const val MAX_OFFSET = 1f
 
         /** A swing in one direction, the shape every swing had before directions could combine. */
         fun single(id: String, name: String, kind: SwingKind, targets: List<String>, parameterIds: List<String>,
@@ -182,7 +205,8 @@ data class RigSwingEdit(
             // Before directions could combine, the one motion's fields sat at the top level.
             val motions = o["motions"]?.jsonArray?.map { motion(it.jsonObject) } ?: listOf(motion(o))
             return RigSwingEdit(id, o["name"]?.jsonPrimitive?.contentOrNull ?: id, o.getValue("targets").jsonArray.map { it.jsonPrimitive.content },
-                motions, fulcrum, preset, o["baked"]?.jsonPrimitive?.booleanOrNull ?: false)
+                motions, fulcrum, preset, o["baked"]?.jsonPrimitive?.booleanOrNull ?: false, o.number("tilt", 0f),
+                o.number("offset_along", 0f), o.number("offset_across", 0f))
         }
     }
 }
@@ -276,7 +300,7 @@ internal object SwingGenerator {
             val space = SwingSpace(current, warp.copy(geometryGrid = base))
             val rest = space.rest ?: continue
             val fulcrum = if (swing.fulcrum == SwingFulcrum.AUTO) space.autoFulcrum(rest) else swing.fulcrum
-            val shapes = swing.motions.map { it.shape.deformer(it.kind, fulcrum, it.segments) }
+            val shapes = swing.motions.map { it.shape.deformer(it.kind, fulcrum, it.segments, swing.placement) }
             val cells = ArrayList<KeyformCell<WarpLatticeForm>>(base.cells.size * combinations.toInt())
             val combo = IntArray(axes.size)
             repeat(combinations.toInt()) {

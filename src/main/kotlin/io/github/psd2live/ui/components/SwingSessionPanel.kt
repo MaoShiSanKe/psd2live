@@ -122,6 +122,19 @@ internal fun SwingSessionPanel(
                 style = typography.caption, color = colors.textPrimary,
             )
         }
+        // The rectangle turns by its ring and moves by its pinned midpoint on the canvas; these read and reset them.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Label(tr("swing.tilt"))
+            Text("%+.1f°".format(draft.tilt), style = typography.monoSmall, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            CompactButton(tr("swing.tilt.reset"), { update { it.copy(tilt = 0f) } }, enabled = draft.tilt != 0f, height = 20.dp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Label(tr("swing.offset"))
+            Text("%+.2f, %+.2f".format(draft.offsetAlong, draft.offsetAcross), style = typography.monoSmall, color = colors.textPrimary,
+                modifier = Modifier.weight(1f))
+            CompactButton(tr("swing.tilt.reset"), { update { it.copy(offsetAlong = 0f, offsetAcross = 0f) } },
+                enabled = draft.offsetAlong != 0f || draft.offsetAcross != 0f, height = 20.dp)
+        }
         val shape = shown.shape
         Text(
             tr("swing.readout", "%.2f".format(shape.magnitude), "%+.2f".format(shape.lift), "%.2f".format(shape.softness), "%+.2f".format(shape.zoom),

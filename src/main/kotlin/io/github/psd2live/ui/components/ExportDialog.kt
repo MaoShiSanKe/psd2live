@@ -324,7 +324,7 @@ internal fun ExportActionSection(
 			Spacer(Modifier.width(8.dp))
 			if (custom) {
 				CompactNumberSpinner(
-					value = (state.exportPixelsPerUnit ?: autoPpu).toDouble(),
+					value = state.exportPixelsPerUnit.toDouble(),
 					onValueChange = { viewModel.setExportPixelsPerUnit(it.toFloat()) },
 					min = 1.0,
 					max = 100000.0,

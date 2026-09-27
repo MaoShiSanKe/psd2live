@@ -45,7 +45,7 @@ internal class RotationCreationSpace(private val x: Float, private val y: Float,
         }
 
         fun mapPoints(input: FloatArray, paramValue: (ParameterId) -> Float = defaults): FloatArray =
-            if (parentIsWarp) throughParent(model, parentId!!, input, paramValue) else points(input)
+            if (parentIsWarp) throughParent(model, parentId, input, paramValue) else points(input)
 
         val deformers = model.deformers.map { d ->
             if (d.id !in remountDeformers) d else when (d) {
@@ -130,7 +130,7 @@ internal class RotationCreationSpace(private val x: Float, private val y: Float,
             }
 
             val base = mesh.positions
-            val newBase = throughParent(model, parentId!!, base, defaults)
+            val newBase = throughParent(model, parentId, base, defaults)
             val newGrid = d.geometryGrid?.let { grid ->
                 KeyformGrid(grid.axes, grid.cells.map { cell ->
                     val abs = FloatArray(base.size) { i -> base[i] + cell.form.positionDeltas[i] }

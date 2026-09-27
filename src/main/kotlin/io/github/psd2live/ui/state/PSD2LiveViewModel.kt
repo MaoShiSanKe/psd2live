@@ -871,7 +871,7 @@ class PSD2LiveViewModel : AutoCloseable {
         val patched = runCatching { RigStructureEdits.apply(current.rig.puppet, listOf(edit)) }.getOrNull() ?: return
         updateState {
             it.copy(
-                previewModel = it.previewModel?.copy(rig = it.previewModel!!.rig.copy(puppet = patched)) ?: current,
+                previewModel = it.previewModel?.copy(rig = it.previewModel.rig.copy(puppet = patched)) ?: current,
                 previewModelDirty = true,
                 projectDirty = true,
             )
