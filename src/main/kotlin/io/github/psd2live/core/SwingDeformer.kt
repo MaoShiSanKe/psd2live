@@ -17,6 +17,10 @@ import kotlin.math.sqrt
  *
  * Segment k of n bends only past `k/n`, so a later segment turns what hangs below it, like the relative
  * angle a multi-vertex pendulum outputs for that vertex.
+ *
+ * A bend normally turns each cross-section with the centerline, so a wide lattice swings like one board.
+ * [Shape.parallel] keeps the cross-sections level instead: toward 1 every column hangs from its own spot on
+ * the pinned edge and sways alongside the others, which is how hair with several strands in one Warp moves.
  */
 internal object SwingDeformer {
     data class Shape(
@@ -29,6 +33,8 @@ internal object SwingDeformer {
         val softness: Float,
         val zoom: Float,
         val segments: Int,
+        /** 0 turns the cross-sections with the bend; 1 keeps them level, so the tip edge sways without tilting. */
+        val parallel: Float = 0f,
     ) {
         init { require(fulcrum != SwingFulcrum.AUTO && segments in 1..RigSwingEdit.MAX_SEGMENTS) }
 
@@ -77,7 +83,7 @@ internal object SwingDeformer {
         val length = frame.length
         if (shape.bends) {
             // Solved with every segment at 1, so a full swing reaches the magnitude however it is split.
-            val theta = solveTipAngle(shape.magnitude) { s -> weightSumAt(s, n, power) }
+            val theta = tipAngle(shape.magnitude, n, power)
             // Centerline in units of length: tangent angle θ(s) = θ*·drive(s), integrated with the midpoint rule.
             val ds = maxS / SAMPLES
             val cx = FloatArray(SAMPLES + 1); val cy = FloatArray(SAMPLES + 1); val angle = FloatArray(SAMPLES + 1)
@@ -91,7 +97,8 @@ internal object SwingDeformer {
                 if (s <= 0f) continue
                 val f = (s / ds).coerceAtMost(SAMPLES.toFloat())
                 val j = f.toInt().coerceAtMost(SAMPLES - 1); val t = f - j
-                val a = angle[j] + (angle[j + 1] - angle[j]) * t
+                // The cross-section turns only as far as the parallel setting lets it.
+                val a = (angle[j] + (angle[j + 1] - angle[j]) * t) * (1f - shape.parallel)
                 val px = cx[j] + (cx[j + 1] - cx[j]) * t
                 val py = cy[j] + (cy[j + 1] - cy[j]) * t
                 val d = drive(s)
@@ -115,10 +122,29 @@ internal object SwingDeformer {
         return out
     }
 
+    /** Applies each motion in turn, stretches before bends, so a bounce lengthens the strand that then bends. */
+    fun compose(shapes: List<Shape>, points: FloatArray, move: (Int, FloatArray) -> FloatArray): FloatArray {
+        var out = points
+        for (m in shapes.indices.sortedBy { if (shapes[it].bends) 1 else 0 }) out = move(m, out)
+        return out
+    }
+
     private fun weightSumAt(s: Float, n: Int, power: Float): Float {
         var sum = 0f
         for (k in 0 until n) sum += ((s - k.toFloat() / n) * n).coerceIn(0f, 1f).pow(power)
         return sum / n
+    }
+
+    private data class TipKey(val magnitude: Float, val segments: Int, val power: Float)
+    private val tipAngles = java.util.concurrent.ConcurrentHashMap<TipKey, Float>()
+
+    /**
+     * [solveTipAngle] for these settings, remembered: every cell of every pose shares it, and a canvas drag
+     * poses the lattice many times over with the same few settings.
+     */
+    private fun tipAngle(magnitude: Float, segments: Int, power: Float): Float {
+        if (tipAngles.size > 4096) tipAngles.clear()
+        return tipAngles.getOrPut(TipKey(magnitude, segments, power)) { solveTipAngle(magnitude) { s -> weightSumAt(s, segments, power) } }
     }
 
     /** The tip angle θ* whose centerline ends [magnitude] lengths off the rest axis. */

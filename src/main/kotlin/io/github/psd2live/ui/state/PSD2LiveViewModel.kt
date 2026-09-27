@@ -107,10 +107,12 @@ class PSD2LiveViewModel : AutoCloseable {
     /**
      * A swing being authored on the canvas. [draft] keeps the targets as picked (meshes stay meshes until the
      * commit wraps them); [gizmo] is the handle geometry on the live preview, where those meshes are wrapped.
+     * [motion] is the direction the handles edit.
      */
     internal class SwingSession(val existingId: String?, draft: RigSwingEdit) {
         var draft by mutableStateOf(draft)
         var gizmo by mutableStateOf<io.github.psd2live.core.SwingGizmo?>(null)
+        var motion by mutableStateOf(0)
         var playing by mutableStateOf(false)
         var busy by mutableStateOf(false)
         var error by mutableStateOf<String?>(null)
@@ -137,7 +139,7 @@ class PSD2LiveViewModel : AutoCloseable {
         endSwing()
         val parents = targets.mapNotNull { id -> puppet.drawables.firstOrNull { it.id.raw == id }?.parentDeformerId?.raw }
         val existing = state.rigEdits.swingEdits.firstOrNull { swing -> swing.targets.any { it in targets || it in parents } }
-        val draft = existing ?: swingDefaults(targets, SwingKind.LATERAL, SwingPreset.HAIR, 1) ?: return
+        val draft = existing ?: swingDefaults(targets, SwingPreset.HAIR) ?: return
         setCanvasMode(state.activeCanvas.id, CanvasMode.EDIT)
         // One canvas session at a time: a pending placement would fight over the corner and the pointer.
         if (canvasEditor.placement != null) canvasEditor.cancelPlacement()
@@ -157,8 +159,9 @@ class PSD2LiveViewModel : AutoCloseable {
         val session = swingSession ?: return
         session.draft = draft
         session.error = null
+        session.motion = session.motion.coerceIn(0, draft.motions.size - 1)
         val result = previewSwing(draft)
-        if (result == null) { session.error = tr("swing.failed"); return }
+        if (result == null) { session.error = session.error ?: tr("swing.failed"); return }
         session.preview = result
         refreshSwingGizmo()
     }
@@ -167,27 +170,69 @@ class PSD2LiveViewModel : AutoCloseable {
     internal fun refreshSwingGizmo() {
         val session = swingSession ?: return
         val (puppet, prepared) = session.preview ?: return
-        session.gizmo = io.github.psd2live.core.SwingGizmo.of(puppet, prepared, values = _state.value.parameterValues)
+        session.gizmo = io.github.psd2live.core.SwingGizmo.of(puppet, prepared, values = _state.value.parameterValues, motion = session.motion)
     }
 
     /** Takes the settings a handle produced; the handles work on the wrap, the draft keeps the picked targets. */
     internal fun updateSwingSettings(settings: RigSwingEdit) {
         val draft = swingSession?.draft ?: return
-        updateSwing(settings.copy(id = draft.id, name = draft.name, targets = draft.targets, parameterIds = draft.parameterIds))
+        updateSwing(settings.copy(id = draft.id, name = draft.name, targets = draft.targets))
     }
 
-    /** A new swing on [targets] with fresh IDs, preset values and a pendulum sized from the first target. */
-    internal fun swingDefaults(targets: List<String>, kind: SwingKind, preset: SwingPreset, segments: Int): RigSwingEdit? {
+    /** The draft reshaped by [change] against the rig without the session's preview; null when that fails. */
+    private fun swingStructure(change: (PuppetModel, io.github.psd2live.core.RigEditOverlay) -> RigSwingEdit): RigSwingEdit? {
+        val state = _state.value
+        val puppet = (swingPreviewBase?.first ?: state.previewModel)?.rig?.puppet ?: return null
+        return runCatching { change(puppet, state.rigEdits) }.onFailure { swingSession?.error = it.message }.getOrNull()
+    }
+
+    /** Sets which directions the draft moves in. */
+    internal fun setSwingKinds(kinds: List<SwingKind>) {
+        val draft = swingSession?.draft ?: return
+        if (kinds.isEmpty()) return
+        swingStructure { puppet, overlay -> SwingAuthoring.withKinds(puppet, overlay, draft, kinds) }?.let(::updateSwing)
+    }
+
+    /** Sets the number of segment parameters in [motion]. */
+    internal fun setSwingSegments(motion: Int, segments: Int) {
+        val draft = swingSession?.draft ?: return
+        swingStructure { puppet, overlay -> SwingAuthoring.withSegments(puppet, overlay, draft, motion, segments) }?.let(::updateSwing)
+    }
+
+    /** Selects the direction the canvas handles edit. */
+    internal fun selectSwingMotion(motion: Int) {
+        val session = swingSession ?: return
+        session.motion = motion.coerceIn(0, session.draft.motions.size - 1)
+        refreshSwingGizmo()
+    }
+
+    /** Starts every direction of the draft from [preset]'s shape, with its pendulums sized again. */
+    internal fun setSwingPreset(preset: SwingPreset) {
+        val draft = swingSession?.draft ?: return
+        val next = draft.copy(preset = preset, motions = draft.motions.map { m ->
+            m.copy(shape = SwingPresets.shape(preset, m.kind).copy(flip = m.shape.flip))
+        })
+        swingStructure { puppet, _ -> SwingAuthoring.resized(puppet, next) }?.let(::updateSwing)
+    }
+
+    /** Gives every direction a pendulum sized from the target, or takes them all away. */
+    internal fun setSwingPhysicsEnabled(enabled: Boolean) {
+        val draft = swingSession?.draft ?: return
+        val next = draft.withPhysics { _, _ -> if (enabled) io.github.psd2live.core.SwingPhysics() else null }
+        if (!enabled) updateSwing(next) else swingStructure { puppet, _ -> SwingAuthoring.resized(puppet, next) }?.let(::updateSwing)
+    }
+
+    /** A new left/right swing on [targets] with fresh IDs, preset values and a pendulum sized from the first target. */
+    internal fun swingDefaults(targets: List<String>, preset: SwingPreset): RigSwingEdit? {
         val state = _state.value
         val puppet = (swingPreviewBase?.first ?: state.previewModel)?.rig?.puppet ?: return null
         val first = targets.firstOrNull() ?: return null
         val name = puppet.deformers.firstOrNull { it.id.raw == first }?.name
             ?: puppet.drawables.firstOrNull { it.id.raw == first }?.name ?: first
-        val (id, parameters) = SwingAuthoring.freshIds(puppet, state.rigEdits, first, segments)
-        val shape = SwingPresets.shape(preset, kind)
-        return RigSwingEdit(id, tr("swing.defaultName", name), kind, targets, parameters,
-            magnitude = shape.magnitude, lift = shape.lift, softness = shape.softness, zoom = shape.zoom,
-            preset = preset, physics = SwingPresets.physics(preset, kind, swingLength(puppet, first)))
+        val (id, parameters) = SwingAuthoring.freshIds(puppet, state.rigEdits, first, 1)
+        return RigSwingEdit.single(id, tr("swing.defaultName", name), SwingKind.LATERAL, targets, parameters,
+            shape = SwingPresets.shape(preset, SwingKind.LATERAL), preset = preset,
+            physics = SwingPresets.physics(preset, SwingKind.LATERAL, swingLength(puppet, first)))
     }
 
     /** The pinned-edge-to-tip length of a Warp, or the long side of a mesh, in canvas pixels. */
@@ -220,19 +265,21 @@ class PSD2LiveViewModel : AutoCloseable {
         }
         val (preview, _) = base ?: ((current.previewModel ?: return null) to current.previewModelDirty).also { swingPreviewBase = it }
         val result = runCatching {
-            val puppet = preview.rig.puppet
+            // The committed version of this swing may drive other parameters: take its forms out first.
+            val puppet = current.rigEdits.swingEdits.firstOrNull { it.id == edit.id }
+                ?.let { SwingGenerator.strip(preview.rig.puppet, it) } ?: preview.rig.puppet
             val overlay = SwingAuthoring.put(current.rigEdits, puppet, edit)
             val prepared = overlay.swingEdits.single { it.id == edit.id }
             val wrapped = overlay.authoringJournal.drop(current.rigEdits.authoringJournal.size).fold(puppet, RigAuthoringJournal::apply)
             SwingGenerator.apply(wrapped, listOf(prepared)) to prepared
-        }.getOrNull() ?: return null
+        }.onFailure { swingSession?.error = it.message }.getOrNull() ?: return null
         val patched = preview.copy(rig = preview.rig.copy(puppet = result.first))
         swingPatched = patched
         updateState { it.copy(previewModel = patched, previewModelDirty = true) }
         return result
     }
 
-    /** Sways the session's parameters between -1 and 1, each lower segment trailing, until stopped. */
+    /** Sways the session's parameters between -1 and 1, each lower segment trailing and up/down out of step, until stopped. */
     internal fun playSwing(play: Boolean) {
         val session = swingSession
         swingPlayer?.cancel()
@@ -248,9 +295,11 @@ class PSD2LiveViewModel : AutoCloseable {
             val start = System.nanoTime()
             while (isActive) {
                 val t = (System.nanoTime() - start) / 1e9f
-                val values = session.draft.parameterIds.withIndex().associate { (k, id) ->
-                    ParameterId(id) to sin(2f * PI.toFloat() * t / 1.6f - k * 0.7f)
-                }
+                val values = session.draft.motions.withIndex().flatMap { (m, motion) ->
+                    motion.parameterIds.withIndex().map { (k, id) ->
+                        ParameterId(id) to sin(2f * PI.toFloat() * t / (if (m == 0) 1.6f else 1.3f) - k * 0.7f - m * 1.3f)
+                    }
+                }.toMap()
                 updateState { it.copy(parameterValues = it.parameterValues + values) }
                 delay(16)
             }

@@ -9,17 +9,14 @@ internal object SwingAuthoring {
     /**
      * Adds or replaces [edit] in [overlay]. Mesh targets are wrapped in a tight Warp per shared parent,
      * recorded in the journal so the wrap replays before the swing. [model] is the current rig.
-     * With [estimatePhysics] the pendulum defaults are sized from the first target.
+     * With [estimatePhysics] every pendulum is sized from the first target.
      */
     fun put(overlay: RigEditOverlay, model: PuppetModel, edit: RigSwingEdit, estimatePhysics: Boolean = false): RigEditOverlay {
         val others = overlay.swingEdits.filterNot { it.id == edit.id }
         require(others.none { other -> other.parameterIds.any { it in edit.parameterIds } }) { "Another swing already drives these parameters" }
         val (wrapped, commands, targets) = wrap(model, edit)
         var next = edit.copy(targets = targets)
-        if (estimatePhysics && next.physics != null) {
-            val length = SwingGenerator.measure(wrapped, targets.first(), next.fulcrum)?.second
-            next = next.copy(physics = SwingPresets.physics(next.preset, next.kind, length))
-        }
+        if (estimatePhysics) next = sized(wrapped, next)
         val issues = SwingGenerator.issues(wrapped, next)
         require(issues.isEmpty()) { issues.joinToString("; ") }
         val index = overlay.swingEdits.indexOfFirst { it.id == edit.id }
@@ -27,9 +24,106 @@ internal object SwingAuthoring {
         return overlay.copy(authoringJournal = overlay.authoringJournal + commands, swingEdits = swings)
     }
 
+    /** [edit] moving in [kinds]: a kept direction keeps its settings, a new one starts from the preset. */
+    fun withKinds(model: PuppetModel, overlay: RigEditOverlay, edit: RigSwingEdit, kinds: List<SwingKind>): RigSwingEdit {
+        require(kinds.isNotEmpty())
+        val motions = kinds.distinct().sortedBy { it.ordinal }.map { kind ->
+            edit.motions.firstOrNull { it.kind == kind } ?: run {
+                // Placeholders keep the parameters distinct until they are named.
+                val template = edit.motions.first()
+                SwingMotion(kind, template.parameterIds.indices.map { "#$kind/$it" }, SwingPresets.shape(edit.preset, kind),
+                    template.physics?.copy(outputScale = SwingPresets.physics(edit.preset, kind, null).outputScale))
+            }
+        }
+        return named(model, overlay, edit, edit.copy(motions = motions))
+    }
+
+    /** [edit] with [segments] parameters in motion [motion]. */
+    fun withSegments(model: PuppetModel, overlay: RigEditOverlay, edit: RigSwingEdit, motion: Int, segments: Int): RigSwingEdit {
+        val motions = edit.motions.mapIndexed { m, entry ->
+            if (m != motion) entry else entry.copy(parameterIds = (0 until segments).map { "${entry.parameterIds.first()}#$it" })
+        }
+        return named(model, overlay, edit, edit.copy(motions = motions))
+    }
+
+    /**
+     * [next] with every parameter named for its place: `ParamSwing<stem>[_X|_Y][_<segment>]`. [old]'s own
+     * parameters may be reused; any other taken ID moves the whole set to a numbered stem.
+     */
+    fun named(model: PuppetModel, overlay: RigEditOverlay, old: RigSwingEdit, next: RigSwingEdit): RigSwingEdit {
+        val used = (model.parameters.map { it.id.raw } + overlay.swingEdits.filter { it.id != old.id }.flatMap { it.parameterIds }).toSet() - old.parameterIds.toSet()
+        val base = asciiStem(next.id)
+        var n = 1
+        while (true) {
+            val candidate = canonical(next, "ParamSwing$base" + if (n == 1) "" else "$n")
+            if (candidate.parameterIds.none { it in used }) return candidate
+            n++
+        }
+    }
+
+    /** [edit] with its parameters named `<stem>[_X|_Y][_<segment>]`, leaving out what does not vary. */
+    private fun canonical(edit: RigSwingEdit, stem: String) = edit.copy(motions = edit.motions.map { m ->
+        m.copy(parameterIds = (0 until m.segments).map { j ->
+            val parts = listOfNotNull(
+                if (edit.motions.size > 1) if (m.kind == SwingKind.LATERAL) "X" else "Y" else null,
+                if (m.segments > 1) "${j + 1}" else null,
+            )
+            stem + parts.joinToString("") { "_$it" }
+        })
+    })
+
+    /** [edit] with every pendulum sized from the first target of [model], a rig where the targets are Warps. */
+    fun sized(model: PuppetModel, edit: RigSwingEdit): RigSwingEdit {
+        val length = SwingGenerator.measure(model, edit.targets.first(), edit.fulcrum)?.second
+        return edit.withPhysics { kind, physics -> physics?.let { SwingPresets.physics(edit.preset, kind, length) } }
+    }
+
+    /** [edit] with every pendulum sized from its first target, measured on [model] with the mesh targets wrapped. */
+    fun resized(model: PuppetModel, edit: RigSwingEdit): RigSwingEdit {
+        val (wrapped, _, targets) = wrap(SwingGenerator.strip(model, edit), edit)
+        return sized(wrapped, edit.copy(targets = targets)).copy(targets = edit.targets)
+    }
+
+    /** A swing request from the agent tools; [estimatePhysics] when no pendulum was given. */
+    data class Request(val edit: RigSwingEdit, val estimatePhysics: Boolean)
+
+    /**
+     * Reads `swing_put` arguments: either `motions`, one entry per direction with its own fields, or the flat
+     * fields of a single direction. Missing parameters are named `ParamSwing<id>[_X|_Y][_<segment>]`.
+     */
+    fun request(arguments: JsonObject): Request {
+        val id = requireNotNull(arguments["id"]?.jsonPrimitive?.contentOrNull) { "id is required" }
+        val preset = arguments["preset"]?.jsonPrimitive?.contentOrNull?.let { SwingPreset.valueOf(it.uppercase()) } ?: SwingPreset.HAIR
+        val enabled = arguments["physics_enabled"]?.jsonPrimitive?.booleanOrNull ?: true
+        val motionObjects = arguments["motions"]?.jsonArray?.map { it.jsonObject }
+            ?: listOf(JsonObject(arguments.filterKeys { it in setOf("kind", "segments", "parameters", "magnitude", "lift", "softness", "zoom", "parallel", "flip", "physics") }))
+        require(motionObjects.isNotEmpty()) { "Give at least one motion" }
+        var givenPhysics = false
+        var placeholders = false
+        val motions = motionObjects.map { m ->
+            val kind = SwingKind.valueOf(requireNotNull(m["kind"]?.jsonPrimitive?.contentOrNull) { "kind is required" }.uppercase())
+            val given = m["parameters"]?.jsonArray?.map { it.jsonPrimitive.content }
+            val segments = m["segments"]?.jsonPrimitive?.int ?: given?.size ?: 1
+            if (given == null) placeholders = true
+            val physics = m["physics"]?.takeIf { it is JsonObject }?.jsonObject
+            if (physics != null) givenPhysics = true
+            SwingMotion(kind, given ?: (1..segments).map { "#$kind/$it" }, SwingShape.fromJson(m, SwingPresets.shape(preset, kind)),
+                if (!enabled) null else physics?.let(SwingPhysics::fromJson) ?: SwingPresets.physics(preset, kind, null))
+        }
+        val edit = RigSwingEdit(
+            id = id,
+            name = arguments["name"]?.jsonPrimitive?.contentOrNull ?: id,
+            targets = requireNotNull(arguments["targets"]?.jsonArray) { "targets is required" }.map { it.jsonPrimitive.content },
+            motions = motions,
+            fulcrum = arguments["fulcrum"]?.jsonPrimitive?.contentOrNull?.let { SwingFulcrum.valueOf(it.uppercase()) } ?: SwingFulcrum.AUTO,
+            preset = preset,
+        )
+        return Request(if (placeholders) canonical(edit, "ParamSwing${asciiStem(id)}") else edit, enabled && !givenPhysics)
+    }
+
     /**
      * Writes [id]'s current forms into the journal as ordinary keys, so they can be edited by hand. The
-     * swing stays, baked, to keep its pendulum; without one it is removed.
+     * swing stays, baked, to keep its pendulums; without any it is removed.
      */
     fun bake(overlay: RigEditOverlay, model: PuppetModel, id: String): RigEditOverlay {
         val swing = requireNotNull(overlay.swingEdits.firstOrNull { it.id == id }) { "Swing not found: $id" }
@@ -60,7 +154,7 @@ internal object SwingAuthoring {
                 next = next.upsert(RigParameterEdit(p.id.raw, p.name, p.min, p.max, p.default, p.kind, p.repeat, created = true))
             }
         }
-        val swings = if (swing.physics == null) next.swingEdits.filterNot { it.id == id }
+        val swings = if (!swing.hasPhysics) next.swingEdits.filterNot { it.id == id }
             else next.swingEdits.map { if (it.id == id) it.copy(baked = true) else it }
         return next.copy(authoringJournal = next.authoringJournal + commands, swingEdits = swings)
     }
@@ -89,9 +183,10 @@ internal object SwingAuthoring {
     /** Cubism IDs stay ASCII even when the art is named in another script. */
     fun asciiStem(text: String): String = text.filter { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' }.take(24).ifEmpty { "Swing" }
 
-    private data class Wrapped(val model: PuppetModel, val commands: List<JsonObject>, val targets: List<String>)
+    data class Wrapped(val model: PuppetModel, val commands: List<JsonObject>, val targets: List<String>)
 
-    private fun wrap(model: PuppetModel, edit: RigSwingEdit): Wrapped {
+    /** [model] with [edit]'s mesh targets wrapped, the wrap commands, and the targets as Warps. */
+    fun wrap(model: PuppetModel, edit: RigSwingEdit): Wrapped {
         val deformerTargets = mutableListOf<String>()
         val meshes = mutableListOf<Drawable>()
         for (target in edit.targets) {

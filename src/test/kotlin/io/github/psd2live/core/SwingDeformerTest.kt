@@ -37,8 +37,8 @@ class SwingDeformerTest {
 		}
 
 	private fun shape(kind: SwingKind, fulcrum: SwingFulcrum, magnitude: Float = 0.3f, segments: Int = 1, flip: Boolean = false,
-		lift: Float = 0f, softness: Float = 0.5f, zoom: Float = 0f) =
-		SwingDeformer.Shape(kind, fulcrum, flip, magnitude, lift, softness, zoom, segments)
+		lift: Float = 0f, softness: Float = 0.5f, zoom: Float = 0f, parallel: Float = 0f) =
+		SwingDeformer.Shape(kind, fulcrum, flip, magnitude, lift, softness, zoom, segments, parallel)
 
 	private fun point(p: FloatArray, r: Int, c: Int) = p[(r * (columns + 1) + c) * 2] to p[(r * (columns + 1) + c) * 2 + 1]
 
@@ -83,6 +83,24 @@ class SwingDeformerTest {
 		fun upper(softness: Float) = point(SwingDeformer.deform(rest, rows, columns, 1f, 1f,
 			shape(SwingKind.LATERAL, SwingFulcrum.TOP, softness = softness), floatArrayOf(1f)), 2, 1).first - 50f
 		assertTrue(upper(1f) < upper(0f), "stiff root at softness 1: ${upper(1f)} vs ${upper(0f)}")
+	}
+
+	@Test
+	fun parallelKeepsTheTipEdgeLevelSoColumnsSwayAlongside() {
+		// A wide lattice, as unsplit hair with several strands side by side would have.
+		val rest = lattice(300f, 300f)
+		fun tipEdge(parallel: Float) = SwingDeformer.deform(rest, rows, columns, 1f, 1f,
+			shape(SwingKind.LATERAL, SwingFulcrum.TOP, 0.3f, parallel = parallel), floatArrayOf(1f)).let { p -> point(p, rows, 0) to point(p, rows, columns) }
+		val (boardLeft, boardRight) = tipEdge(0f)
+		assertTrue(abs(boardLeft.second - boardRight.second) > 60f, "a board tilts its tip edge: $boardLeft $boardRight")
+		val (left, right) = tipEdge(1f)
+		assertEquals(left.second, right.second, 1e-2f, "level")
+		assertEquals(300f, right.first - left.first, 1e-2f, "every column keeps its place beside the others")
+		// The middle still follows the same arc, so only the cross-sections changed.
+		val middle = SwingDeformer.deform(rest, rows, columns, 1f, 1f, shape(SwingKind.LATERAL, SwingFulcrum.TOP, 0.3f, parallel = 1f), floatArrayOf(1f))
+		val board = SwingDeformer.deform(rest, rows, columns, 1f, 1f, shape(SwingKind.LATERAL, SwingFulcrum.TOP, 0.3f), floatArrayOf(1f))
+		assertEquals(point(board, rows, 1).first, point(middle, rows, 1).first, 1e-2f)
+		assertEquals(point(board, rows, 1).second, point(middle, rows, 1).second, 1e-2f)
 	}
 
 	@Test
@@ -143,7 +161,10 @@ class SwingDeformerTest {
 	}
 
 	private fun swing(kind: SwingKind = SwingKind.LATERAL, parameters: List<String> = listOf("ParamSwingTail")) =
-		RigSwingEdit("tail", "Tail swing", kind, listOf("WarpTail"), parameters)
+		RigSwingEdit.single("tail", "Tail swing", kind, listOf("WarpTail"), parameters, shape = SwingShape())
+
+	private fun RigSwingEdit.shaped(change: (SwingShape) -> SwingShape) = withShape(0, change)
+	private val RigSwingEdit.shape: SwingShape get() = motions[0].shape
 
 	@Test
 	fun generatorAddsItsAxisOverTheExistingKeysAndCreatesTheParameter() {
@@ -160,6 +181,43 @@ class SwingDeformerTest {
 		// Replaying the same swing replaces its axis instead of stacking another one.
 		val again = SwingGenerator.apply(swung, listOf(swing()))
 		assertEquals(6, (again.deformers.single() as Deformer.Warp).geometryGrid!!.cells.size)
+	}
+
+	@Test
+	fun bothDirectionsComposeStretchBeforeBend() {
+		val edit = SwingAuthoring.withKinds(model(), RigEditOverlay.Empty, swing().copy(fulcrum = SwingFulcrum.TOP), listOf(SwingKind.LATERAL, SwingKind.VERTICAL))
+		assertEquals(listOf("ParamSwingtail_X", "ParamSwingtail_Y"), edit.parameterIds)
+		val (swung, issues) = SwingGenerator.applyOne(model(), edit)
+		assertTrue(issues.isEmpty(), issues.toString())
+		val grid = (swung.deformers.single() as Deformer.Warp).geometryGrid!!
+		assertEquals(listOf("ParamAngleX", "ParamSwingtail_X", "ParamSwingtail_Y"), grid.axes.map { it.parameterId.raw })
+		assertEquals(18, grid.cells.size)
+		val rest = lattice(100f, 300f)
+		val bend = edit.motions[0].shape.deformer(SwingKind.LATERAL, SwingFulcrum.TOP, 1)
+		val stretch = edit.motions[1].shape.deformer(SwingKind.VERTICAL, SwingFulcrum.TOP, 1)
+		val expected = SwingDeformer.transform(rest, rows, columns, 1f, 1f, bend, floatArrayOf(1f),
+			SwingDeformer.transform(rest, rows, columns, 1f, 1f, stretch, floatArrayOf(1f), rest))
+		val actual = grid.cells.single { it.coordinate.contentEquals(intArrayOf(0, 2, 2)) }.form.controlPoints
+		for (i in expected.indices) assertEquals(expected[i], actual[i], 1e-3f)
+		// Each direction is its own pendulum, named by its direction.
+		val available = setOf("ParamAngleX", "ParamAngleY") + edit.parameterIds
+		assertEquals(listOf("PhysicsSwing_tail_X", "PhysicsSwing_tail_Y"), PhysicsGenerator.swingRules(listOf(edit), available).map { it.id })
+		// Back to one direction, the parameter drops its suffix again.
+		assertEquals(listOf("ParamSwingtail"), SwingAuthoring.withKinds(model(), RigEditOverlay.Empty, edit, listOf(SwingKind.LATERAL)).parameterIds)
+	}
+
+	@Test
+	fun agentRequestsReadDirectionsAndTheFlatFields() {
+		val both = SwingAuthoring.request(Json.parseToJsonElement(
+			"""{"id":"hair","targets":["A"],"motions":[{"kind":"lateral","parallel":0.9},{"kind":"vertical","segments":2}]}""").jsonObject)
+		assertEquals(listOf("ParamSwinghair_X", "ParamSwinghair_Y_1", "ParamSwinghair_Y_2"), both.edit.parameterIds)
+		assertEquals(0.9f, both.edit.motions[0].shape.parallel); assertTrue(both.estimatePhysics)
+		val flat = SwingAuthoring.request(Json.parseToJsonElement(
+			"""{"id":"s","kind":"vertical","targets":["A"],"parameters":["P1","P2"],"physics_enabled":false}""").jsonObject)
+		assertEquals(listOf("P1", "P2"), flat.edit.parameterIds)
+		assertTrue(!flat.edit.hasPhysics && !flat.estimatePhysics)
+		// New swings start from the preset, which sways hair side by side.
+		assertEquals(SwingPresets.shape(SwingPreset.HAIR, SwingKind.VERTICAL).parallel, flat.edit.motions[0].shape.parallel)
 	}
 
 	@Test
@@ -212,13 +270,13 @@ class SwingDeformerTest {
 	@Test
 	fun meshTargetsAreWrappedAndBakingKeepsTheForms() {
 		val base = meshModel()
-		val put = SwingAuthoring.put(RigEditOverlay.Empty, base, RigSwingEdit("strip", "Strip", SwingKind.LATERAL, listOf("Strip"), listOf("ParamSwingStrip")),
+		val put = SwingAuthoring.put(RigEditOverlay.Empty, base, RigSwingEdit.single("strip", "Strip", SwingKind.LATERAL, listOf("Strip"), listOf("ParamSwingStrip")),
 			estimatePhysics = true)
 		assertEquals(1, put.authoringJournal.size)
 		val swing = put.swingEdits.single()
 		assertEquals(listOf("Warp_Swing_strip"), swing.targets)
 		// Sized from the 300px-tall strip wrap (+10%): 330/30 = 11.
-		assertEquals(11f, swing.physics!!.length, 0.1f)
+		assertEquals(11f, swing.motions[0].physics!!.length, 0.1f)
 		val swung = put.applyTo(base)
 		assertEquals(DeformerId("Warp_Swing_strip"), swung.drawables.single().parentDeformerId)
 		val grid = (swung.deformers.single { it.id.raw == "Warp_Swing_strip" } as Deformer.Warp).geometryGrid!!
@@ -239,20 +297,25 @@ class SwingDeformerTest {
 
 	@Test
 	fun canvasHandlesDragBackToTheSettingsThatPlacedThem() {
-		val base = swing().copy(magnitude = 0.3f, lift = 0.05f, softness = 0.3f, zoom = 0.2f, fulcrum = SwingFulcrum.TOP)
+		val base = swing().copy(fulcrum = SwingFulcrum.TOP).shaped { it.copy(magnitude = 0.3f, lift = 0.05f, softness = 0.3f, zoom = 0.2f) }
 		val gizmo = SwingGizmo.of(model(), base)!!
 		val handles = gizmo.handles()
 		// At Angle X 0 the lattice sits halfway to its +20px key: rest tip (60, 300); +1 swings it right.
 		assertTrue(handles.getValue(SwingGizmo.Handle.TIP).first > 120f)
-		val tip = gizmo.drag(SwingGizmo.Handle.TIP, handles.getValue(SwingGizmo.Handle.TIP))
+		val tip = gizmo.drag(SwingGizmo.Handle.TIP, handles.getValue(SwingGizmo.Handle.TIP)).shape
 		assertEquals(0.3f, tip.magnitude, 0.01f); assertEquals(0.05f, tip.lift, 0.01f); assertTrue(!tip.flip)
-		val crossed = gizmo.drag(SwingGizmo.Handle.TIP, 60f - 0.4f * 300f to 280f)
+		val crossed = gizmo.drag(SwingGizmo.Handle.TIP, 60f - 0.4f * 300f to 280f).shape
 		assertTrue(crossed.flip); assertEquals(0.4f, crossed.magnitude, 0.01f)
 
-		val soft = SwingGizmo.of(model(), base.copy(softness = 0.9f))!!
-		assertEquals(0.3f, soft.drag(SwingGizmo.Handle.MID, handles.getValue(SwingGizmo.Handle.MID)).softness, 0.03f)
-		val narrow = SwingGizmo.of(model(), base.copy(zoom = -0.3f))!!
-		assertEquals(0.2f, narrow.drag(SwingGizmo.Handle.CORNER_END, handles.getValue(SwingGizmo.Handle.CORNER_END)).zoom, 0.03f)
+		val soft = SwingGizmo.of(model(), base.shaped { it.copy(softness = 0.9f) })!!
+		assertEquals(0.3f, soft.drag(SwingGizmo.Handle.MID, handles.getValue(SwingGizmo.Handle.MID)).shape.softness, 0.03f)
+		val narrow = SwingGizmo.of(model(), base.shaped { it.copy(zoom = -0.3f) })!!
+		assertEquals(0.2f, narrow.drag(SwingGizmo.Handle.CORNER_END, handles.getValue(SwingGizmo.Handle.CORNER_END)).shape.zoom, 0.03f)
+		// A tip corner also sets how level the tip edge stays.
+		val tilted = base.shaped { it.copy(parallel = 0.8f) }
+		val corner = SwingGizmo.of(model(), tilted)!!.handles().getValue(SwingGizmo.Handle.CORNER_START)
+		val fitted = SwingGizmo.of(model(), base)!!.drag(SwingGizmo.Handle.CORNER_START, corner).shape
+		assertEquals(0.8f, fitted.parallel, 0.08f); assertEquals(0.2f, fitted.zoom, 0.05f)
 
 		assertEquals(SwingFulcrum.LEFT, gizmo.drag(SwingGizmo.Handle.PIVOT_LEFT, 0f to 0f).fulcrum)
 		assertEquals(listOf(10f to 0f, 60f to 0f, 110f to 0f), gizmo.pinnedEdge)
@@ -278,26 +341,30 @@ class SwingDeformerTest {
 		assertTrue(still.handles().getValue(SwingGizmo.Handle.TIP).second > 200f)
 		// Dragging in the posed frame lands where the pointer is.
 		val tip = posed.handles().getValue(SwingGizmo.Handle.TIP)
-		assertEquals(edit.magnitude, posed.drag(SwingGizmo.Handle.TIP, tip).magnitude, 0.01f)
+		assertEquals(edit.shape.magnitude, posed.drag(SwingGizmo.Handle.TIP, tip).shape.magnitude, 0.01f)
 	}
 
 	@Test
 	fun aStretchTipDragsAlongTheAxis() {
-		val gizmo = SwingGizmo.of(model(), swing(SwingKind.VERTICAL).copy(fulcrum = SwingFulcrum.TOP, magnitude = 0.1f))!!
+		val gizmo = SwingGizmo.of(model(), swing(SwingKind.VERTICAL).copy(fulcrum = SwingFulcrum.TOP).shaped { it.copy(magnitude = 0.1f) })!!
 		assertEquals(330f, gizmo.handles().getValue(SwingGizmo.Handle.TIP).second, 1f)
-		val longer = gizmo.drag(SwingGizmo.Handle.TIP, 50f to 360f)
+		val longer = gizmo.drag(SwingGizmo.Handle.TIP, 50f to 360f).shape
 		assertEquals(0.2f, longer.magnitude, 0.01f); assertTrue(!longer.flip)
-		assertTrue(gizmo.drag(SwingGizmo.Handle.TIP, 50f to 270f).flip)
+		assertTrue(gizmo.drag(SwingGizmo.Handle.TIP, 50f to 270f).shape.flip)
 	}
 
 	@Test
 	fun swingEditsRoundTripThroughJson() {
-		val edit = RigSwingEdit("s", "Swing", SwingKind.VERTICAL, listOf("A", "B"), listOf("P1", "P2"), SwingFulcrum.LEFT, true,
-			0.2f, -0.1f, 0.3f, 0.05f, SwingPreset.CLOTH, SwingPhysics(8f, 0.8f, 1.1f, 0.9f, 1.2f), baked = true)
+		val edit = RigSwingEdit("s", "Swing", listOf("A", "B"), listOf(
+			SwingMotion(SwingKind.LATERAL, listOf("X"), SwingShape(0.3f, 0.02f, 0.4f, 0f, 0.8f), null),
+			SwingMotion(SwingKind.VERTICAL, listOf("P1", "P2"), SwingShape(0.2f, -0.1f, 0.3f, 0.05f, flip = true), SwingPhysics(8f, 0.8f, 1.1f, 0.9f, 1.2f))),
+			SwingFulcrum.LEFT, SwingPreset.CLOTH, baked = true)
 		assertEquals(edit, RigSwingEdit.fromJson(edit.toJson()))
+		// Swings saved before directions could combine: one motion at the top level, swinging like one board.
 		assertEquals(null, RigSwingEdit.fromJson(Json.parseToJsonElement(
-			"""{"id":"s","kind":"lateral","targets":["A"],"parameters":["P"],"physics":null}""").jsonObject).physics)
-		assertTrue(abs(RigSwingEdit.fromJson(Json.parseToJsonElement(
-			"""{"id":"s","kind":"LATERAL","targets":["A"],"parameters":["P"]}""").jsonObject).magnitude - 0.22f) < 1e-6f)
+			"""{"id":"s","kind":"lateral","targets":["A"],"parameters":["P"],"physics":null}""").jsonObject).motions[0].physics)
+		val old = RigSwingEdit.fromJson(Json.parseToJsonElement("""{"id":"s","kind":"LATERAL","targets":["A"],"parameters":["P"]}""").jsonObject).shape
+		assertTrue(abs(old.magnitude - 0.22f) < 1e-6f)
+		assertEquals(0f, old.parallel)
 	}
 }

@@ -57,6 +57,8 @@ import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.addJsonObject
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.prefs.Preferences
@@ -759,29 +761,21 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
 
     server.addTool(
         name = "swing_list",
-        description = "List regenerating swings: target Warps, driven parameters and pendulum settings.",
+        description = "List regenerating swings: target Warps and, per direction, the driven parameters, shape and pendulum.",
         inputSchema = ToolSchema(properties = buildJsonObject {}), toolAnnotations = READ_ONLY,
     ) { mutationResult { buildJsonObject { putJsonArray("swings") { workspace.listSwings().forEach { add(it.toJson()) } } } } }
 
     server.addTool(
         name = "swing_put",
-        description = "Create or replace a regenerating swing by ID. Each target Warp gets a -1/0/1 axis per segment parameter, recomputed from its current forms whenever the rig rebuilds; mesh targets are wrapped in a tight Warp in the same commit. kind=lateral swings the tip left/right, kind=vertical up/down: a bend across the pinned edge, or a stretch along it (vertical under a top pivot bounces). Missing parameters are created (-1..1). Omit physics to size a pendulum from the target, pass false for none; lateral pendulums take head/body X and Z, vertical ones head/body pitch. Segments (1..3 parameters) share one pendulum with a vertex per segment. Rotation deformers are not targets.",
+        description = "Create or replace a regenerating swing by ID. Each target Warp gets a -1/0/1 axis per parameter, recomputed from its current forms whenever the rig rebuilds; mesh targets are wrapped in a tight Warp in the same commit. " +
+            "kind=lateral swings the tip left/right, kind=vertical up/down: a bend across the pinned edge, or a stretch along it (vertical under a top pivot bounces). Pass motions=[{kind:lateral,...},{kind:vertical,...}] to combine both on the same Warp; each direction has its own fields, parameters and pendulum. " +
+            "parallel (0..1) keeps the tip edge level while bending, so every column sways alongside the others: use it high for hair whose several strands share one Warp. " +
+            "Missing parameters are created (-1..1) as ParamSwing<id>[_X|_Y][_<segment>]. Omit physics to size the pendulums from the target, physics_enabled=false for none; lateral pendulums take head/body X and Z, vertical ones head/body pitch. Segments (1..3) share a direction's pendulum with a vertex per segment. Rotation deformers are not targets.",
         inputSchema = swingSchema(), toolAnnotations = MUTATING,
     ) { request -> mutationResult {
         val arguments = request.arguments ?: error("Missing arguments")
-        val id = request.requiredString("id")
-        val segments = arguments["segments"]?.jsonPrimitive?.int ?: arguments["parameters"]?.jsonArray?.size ?: 1
-        val stem = io.github.psd2live.core.SwingAuthoring.asciiStem(id)
-        val defaults = buildJsonObject {
-            put("name", id)
-            putJsonArray("parameters") { (1..segments).forEach { k -> add("ParamSwing$stem" + if (segments == 1) "" else "_$k") } }
-        }
-        val physics = arguments["physics"] as? JsonObject
-        val enabled = arguments["physics_enabled"]?.jsonPrimitive?.booleanOrNull ?: true
-        val normalized = JsonObject(defaults + arguments.filterKeys { it !in setOf("segments", "expected_history_head_node_id", "task_id", "physics", "physics_enabled") } +
-            mapOf("physics" to if (!enabled) JsonNull else physics ?: JsonObject(emptyMap())))
-        val edit = io.github.psd2live.core.RigSwingEdit.fromJson(normalized)
-        workspace.putSwing(edit, enabled && physics == null, request.requiredString("expected_history_head_node_id"), request.optionalString("task_id")).toJson()
+        val parsed = io.github.psd2live.core.SwingAuthoring.request(arguments)
+        workspace.putSwing(parsed.edit, parsed.estimatePhysics, request.requiredString("expected_history_head_node_id"), request.optionalString("task_id")).toJson()
     } }
 
     server.addTool(
@@ -1087,25 +1081,36 @@ private fun rigObjectCreateSchema(physics: Boolean): ToolSchema = ToolSchema(
 private fun swingSchema(): ToolSchema = ToolSchema(
     properties = buildJsonObject {
         listOf("id", "name", "expected_history_head_node_id", "task_id").forEach { key -> putJsonObject(key) { put("type", "string") } }
-        putJsonObject("kind") { put("type", "string"); putJsonArray("enum") { add("lateral"); add("vertical") } }
         putJsonObject("targets") { put("type", "array"); put("minItems", 1); putJsonObject("items") { put("type", "string") }
             put("description", "Warp or mesh IDs; meshes sharing a parent are wrapped in one Warp") }
-        putJsonObject("parameters") { put("type", "array"); put("minItems", 1); put("maxItems", 3); putJsonObject("items") { put("type", "string") }
-            put("description", "One per segment, root first; defaults to ParamSwing<id>[_k]") }
-        putJsonObject("segments") { put("type", "integer"); put("minimum", 1); put("maximum", 3) }
+        fun JsonObjectBuilder.shapeFields() {
+            putJsonObject("magnitude") { put("type", "number"); put("minimum", 0); put("maximum", 0.7); put("description", "Tip travel at ±1 as a fraction of the pinned-edge-to-tip length") }
+            putJsonObject("lift") { put("type", "number"); put("minimum", -0.5); put("maximum", 0.5); put("description", "Extra rise (+) or droop (-) of a bending tip at ±1") }
+            putJsonObject("softness") { put("type", "number"); put("minimum", 0); put("maximum", 1); put("description", "0 bends evenly; 1 keeps the root stiff") }
+            putJsonObject("zoom") { put("type", "number"); put("minimum", -0.5); put("maximum", 0.5); put("description", "Tip width change at ±1") }
+            putJsonObject("parallel") { put("type", "number"); put("minimum", 0); put("maximum", 1)
+                put("description", "0 swings the lattice like one board (tip edge tilts); 1 keeps the tip edge level, columns swaying side by side like separate strands") }
+            putJsonObject("flip") { put("type", "boolean") }
+            putJsonObject("physics") { put("type", "object"); put("description", "Pendulum override; omit to size it from the target")
+                putJsonObject("properties") { listOf("length", "mobility", "delay", "acceleration", "output_scale").forEach { key -> putJsonObject(key) { put("type", "number") } } } }
+        }
+        fun JsonObjectBuilder.motionFields() {
+            putJsonObject("kind") { put("type", "string"); putJsonArray("enum") { add("lateral"); add("vertical") } }
+            putJsonObject("segments") { put("type", "integer"); put("minimum", 1); put("maximum", 3) }
+            putJsonObject("parameters") { put("type", "array"); put("minItems", 1); put("maxItems", 3); putJsonObject("items") { put("type", "string") }
+                put("description", "One per segment, root first") }
+            shapeFields()
+        }
+        motionFields()
+        putJsonObject("motions") { put("type", "array"); put("minItems", 1); put("maxItems", 2)
+            put("description", "One entry per direction; replaces the flat kind/segments/shape fields")
+            putJsonObject("items") { put("type", "object"); putJsonObject("properties") { motionFields() } } }
         putJsonObject("fulcrum") { put("type", "string"); putJsonArray("enum") { listOf("auto", "top", "bottom", "left", "right").forEach { add(it) } }
             put("description", "Pinned lattice edge; auto hangs tall targets from the top and pivots wide ones on the side nearer the body center") }
         putJsonObject("preset") { put("type", "string"); putJsonArray("enum") { listOf("hair", "accessory", "cloth").forEach { add(it) } } }
-        putJsonObject("flip") { put("type", "boolean") }
-        putJsonObject("magnitude") { put("type", "number"); put("minimum", 0); put("maximum", 0.7); put("description", "Tip travel at ±1 as a fraction of the pinned-edge-to-tip length") }
-        putJsonObject("lift") { put("type", "number"); put("minimum", -0.5); put("maximum", 0.5); put("description", "Extra rise (+) or droop (-) of a bending tip at ±1") }
-        putJsonObject("softness") { put("type", "number"); put("minimum", 0); put("maximum", 1); put("description", "0 bends evenly; 1 keeps the root stiff") }
-        putJsonObject("zoom") { put("type", "number"); put("minimum", -0.5); put("maximum", 0.5); put("description", "Tip width change at ±1") }
-        putJsonObject("physics_enabled") { put("type", "boolean"); put("description", "Default true: generate the pendulum") }
-        putJsonObject("physics") { put("type", "object"); put("description", "Pendulum override; omit to size it from the target")
-            putJsonObject("properties") { listOf("length", "mobility", "delay", "acceleration", "output_scale").forEach { key -> putJsonObject(key) { put("type", "number") } } } }
+        putJsonObject("physics_enabled") { put("type", "boolean"); put("description", "Default true: generate the pendulums") }
     },
-    required = listOf("id", "kind", "targets", "expected_history_head_node_id"),
+    required = listOf("id", "targets", "expected_history_head_node_id"),
 )
 
 private fun pngImportSchema(): ToolSchema = ToolSchema(

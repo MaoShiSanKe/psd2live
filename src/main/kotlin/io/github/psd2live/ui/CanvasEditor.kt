@@ -3478,7 +3478,13 @@ internal class CanvasEditor(
         isHoveringObject = false
         hoveredPick = null
         // A swing session locks the canvas, so nothing under the cursor is advertised as pickable.
-        if (viewModel.swingSession != null) { setHoveredItem(null, null); return }
+        val swing = viewModel.swingSession
+        if (swing != null) {
+            setHoveredItem(null, null)
+            swingHover = swingHandle ?: if (swing.busy) null else hitSwingHandle(pos, viewport)
+            return
+        }
+        swingHover = null
 
         if (tool in CREATION_TOOLS) {
             if (tool == CanvasTool.GLUE) {
@@ -3626,6 +3632,8 @@ internal class CanvasEditor(
         val cross = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.CROSSHAIR_CURSOR)
         val move = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR)
         if (space) return if (dragging) move else hand
+        // A swing session locks the canvas to its handles, so the tool's own pointer never applies.
+        if (viewModel.swingSession != null) return if (swingHandle != null || swingHover != null) hand else arrow
         if (dragging) {
             if (isCreatingWarp || isCreatingRotation) return cross
             if (marquee.isNotEmpty()) return cross
@@ -3967,7 +3975,12 @@ internal class CanvasEditor(
     }
 
     /** The swing handle under a drag; the swing session itself lives on the view model. */
-    private var swingHandle: io.github.psd2live.core.SwingGizmo.Handle? = null
+    var swingHandle by mutableStateOf<io.github.psd2live.core.SwingGizmo.Handle?>(null)
+        private set
+
+    /** The swing handle under the pointer; state, so the handle lights up and the cursor follows it. */
+    var swingHover by mutableStateOf<io.github.psd2live.core.SwingGizmo.Handle?>(null)
+        private set
 
     /** Whether a swing handle is being dragged; its preview updates must not read as the document changing. */
     val swingDragging: Boolean get() = swingHandle != null
@@ -5576,6 +5589,7 @@ internal class CanvasEditor(
     fun release() {
         if (!dragging) return
         if (swingHandle != null) {
+            swingHover = swingHandle
             swingHandle = null
             dragging = false
             return

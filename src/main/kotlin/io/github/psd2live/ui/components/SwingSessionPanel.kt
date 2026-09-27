@@ -18,7 +18,6 @@ import io.github.psd2live.core.SwingFulcrum
 import io.github.psd2live.core.SwingKind
 import io.github.psd2live.core.SwingPhysics
 import io.github.psd2live.core.SwingPreset
-import io.github.psd2live.core.SwingPresets
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -41,12 +40,16 @@ internal fun SwingSessionPanel(
     val typography = LocalToolTypography.current
     val draft = session.draft
     val existing = session.existingId != null
+    val motion = session.motion.coerceIn(0, draft.motions.size - 1)
+    val shown = draft.motions[motion]
+    val kind = shown.kind
     var collapsed by remember(session) { mutableStateOf(false) }
     var physicsOpen by remember(session) { mutableStateOf(false) }
     fun update(change: (RigSwingEdit) -> RigSwingEdit) {
         runCatching { change(draft) }.onSuccess(viewModel::updateSwing).onFailure { session.error = it.message }
         focus()
     }
+    fun act(action: () -> Unit) { action(); focus() }
 
     Column(
         modifier = Modifier
@@ -87,22 +90,30 @@ internal fun SwingSessionPanel(
         }
         Text(tr("swing.canvasHint"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
 
-        Choice(tr("swing.kind"), SwingKind.entries, draft.kind, { tr("swing.kind.${it.name.lowercase()}") }) { kind ->
-            val shape = SwingPresets.shape(draft.preset, kind)
-            update { it.copy(kind = kind, magnitude = shape.magnitude, lift = shape.lift, softness = shape.softness, zoom = shape.zoom,
-                physics = it.physics?.copy(outputScale = SwingPresets.physics(it.preset, kind, null).outputScale)) }
+        // Both directions can be on at once; at least one stays.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Label(tr("swing.kind"))
+            val kinds = draft.motions.map { it.kind }
+            SwingKind.entries.forEach { k ->
+                CompactToggleChip(tr("swing.kind.${k.name.lowercase()}"), k in kinds, {
+                    val next = if (k in kinds) kinds - k else kinds + k
+                    if (next.isNotEmpty()) act { viewModel.setSwingKinds(next) }
+                }, height = 20.dp)
+            }
+        }
+        if (draft.motions.size > 1) {
+            Choice(tr("swing.editing"), draft.motions.indices.toList(), motion, { tr("swing.kind.${draft.motions[it].kind.name.lowercase()}") }) {
+                act { viewModel.selectSwingMotion(it) }
+            }
         }
         Choice(tr("swing.preset"), SwingPreset.entries, draft.preset, { tr("swing.preset.${it.name.lowercase()}") }) { preset ->
-            val defaults = viewModel.swingDefaults(draft.targets, draft.kind, preset, draft.segments)
-            update { it.copy(preset = preset, magnitude = defaults?.magnitude ?: it.magnitude, lift = defaults?.lift ?: it.lift,
-                softness = defaults?.softness ?: it.softness, zoom = defaults?.zoom ?: it.zoom,
-                physics = if (it.physics == null) null else defaults?.physics ?: it.physics) }
+            act { viewModel.setSwingPreset(preset) }
         }
-        Choice(tr("swing.segments"), listOf(1, 2, 3), draft.segments, { it.toString() }) { n ->
-            update { e -> e.copy(parameterIds = (0 until n).map { k -> e.parameterIds.getOrNull(k) ?: "${e.parameterIds.first()}_${k + 1}" }) }
+        Choice(tr("swing.segments"), listOf(1, 2, 3), draft.motions[motion].segments, { it.toString() }) { n ->
+            act { viewModel.setSwingSegments(motion, n) }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(tr("swing.fulcrum"), style = typography.caption, color = colors.textMuted, modifier = Modifier.width(48.dp))
+            Label(tr("swing.fulcrum"))
             CompactToggleChip(tr("swing.fulcrum.auto"), draft.fulcrum == SwingFulcrum.AUTO, { update { it.copy(fulcrum = SwingFulcrum.AUTO) } },
                 showCheckWhenSelected = false)
             Text(
@@ -111,31 +122,33 @@ internal fun SwingSessionPanel(
                 style = typography.caption, color = colors.textPrimary,
             )
         }
+        val shape = shown.shape
         Text(
-            tr("swing.readout", "%.2f".format(draft.magnitude), "%+.2f".format(draft.lift), "%.2f".format(draft.softness), "%+.2f".format(draft.zoom)) +
-                if (draft.flip) " · ${tr("swing.flip")}" else "",
+            tr("swing.readout", "%.2f".format(shape.magnitude), "%+.2f".format(shape.lift), "%.2f".format(shape.softness), "%+.2f".format(shape.zoom),
+                "%.2f".format(shape.parallel)) +
+                if (shape.flip) " · ${tr("swing.flip")}" else "",
             style = typography.monoSmall, color = colors.textPrimary,
         )
 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            CompactCheckbox(draft.physics != null, { enabled ->
-                update { it.copy(physics = if (enabled) viewModel.swingDefaults(it.targets, it.kind, it.preset, it.segments)?.physics ?: SwingPhysics() else null) }
-            }, label = tr("swing.physics.enabled"), modifier = Modifier.weight(1f))
-            if (draft.physics != null) {
+            CompactCheckbox(draft.hasPhysics, { enabled -> act { viewModel.setSwingPhysicsEnabled(enabled) } },
+                label = tr("swing.physics.enabled"), modifier = Modifier.weight(1f))
+            if (draft.hasPhysics) {
                 CompactIconButton(onClick = { physicsOpen = !physicsOpen }, size = 18.dp, tooltip = tr("swing.physics")) {
                     IconChevron(expanded = physicsOpen, tint = colors.textMuted, modifier = Modifier.size(10.dp))
                 }
             }
         }
-        val physics = draft.physics
+        val physics = shown.physics
         if (physics != null && physicsOpen) {
-            // A pendulum has no shape on the canvas, so these stay sliders.
-            PhysicsRow(tr("physics.length"), physics.length, 1f..30f) { v -> update { it.copy(physics = physics.copy(length = v)) } }
-            PhysicsRow(tr("physics.shakiness"), physics.mobility, 0f..1f) { v -> update { it.copy(physics = physics.copy(mobility = v)) } }
-            PhysicsRow(tr("physics.reactionSpeed"), physics.delay, 0.1f..3f) { v -> update { it.copy(physics = physics.copy(delay = v)) } }
-            PhysicsRow(tr("physics.convergenceSpeed"), physics.acceleration, 0f..5f) { v -> update { it.copy(physics = physics.copy(acceleration = v)) } }
-            PhysicsRow(tr("physics.outputScale"), physics.outputScale, 0.1f..5f) { v -> update { it.copy(physics = physics.copy(outputScale = v)) } }
-            Text(tr(if (draft.kind == SwingKind.LATERAL) "swing.physics.inputs.lateral" else "swing.physics.inputs.vertical"),
+            // A pendulum has no shape on the canvas, so these stay sliders; they set the edited direction's.
+            fun set(change: (SwingPhysics) -> SwingPhysics) = update { it.withPhysics(motion) { _, p -> p?.let(change) } }
+            PhysicsRow(tr("physics.length"), physics.length, 1f..30f) { v -> set { it.copy(length = v) } }
+            PhysicsRow(tr("physics.shakiness"), physics.mobility, 0f..1f) { v -> set { it.copy(mobility = v) } }
+            PhysicsRow(tr("physics.reactionSpeed"), physics.delay, 0.1f..3f) { v -> set { it.copy(delay = v) } }
+            PhysicsRow(tr("physics.convergenceSpeed"), physics.acceleration, 0f..5f) { v -> set { it.copy(acceleration = v) } }
+            PhysicsRow(tr("physics.outputScale"), physics.outputScale, 0.1f..5f) { v -> set { it.copy(outputScale = v) } }
+            Text(tr(if (kind == SwingKind.LATERAL) "swing.physics.inputs.lateral" else "swing.physics.inputs.vertical"),
                 style = typography.caption.copy(fontSize = 9.sp), color = colors.textMuted)
         }
         if (draft.baked) Text(tr("swing.bakedNote"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
@@ -159,9 +172,14 @@ internal fun SwingSessionPanel(
 }
 
 @Composable
+private fun Label(text: String) {
+    Text(text, style = LocalToolTypography.current.caption, color = LocalToolColors.current.textMuted, modifier = Modifier.width(48.dp))
+}
+
+@Composable
 private fun <T> Choice(title: String, options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = LocalToolTypography.current.caption, color = LocalToolColors.current.textMuted, modifier = Modifier.width(48.dp))
+        Label(title)
         options.forEach { option -> CompactToggleChip(label(option), option == selected, { onSelect(option) }, showCheckWhenSelected = false, height = 20.dp) }
     }
 }

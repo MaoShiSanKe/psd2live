@@ -757,26 +757,41 @@ internal fun BoxScope.CanvasEditorOverlay(
             drawPath(path(gizmo.outline(1f), true), colors.accent.copy(alpha = 0.9f), style = Stroke(1.6f))
             drawPath(path(gizmo.centerline(1f), false), colors.accent.copy(alpha = 0.9f), style = Stroke(1.4f))
             drawPath(path(gizmo.pinnedEdge, false), colors.accent, style = Stroke(4f, cap = StrokeCap.Round))
+            val lit = editor.swingHandle ?: editor.swingHover
             for ((handle, o) in editor.swingHandles(viewport)) {
+                // Hover and drag read like every other canvas handle: an accent fill inside a white outer ring.
+                val hot = handle == lit
+                fun square(side: Float) {
+                    val half = Offset(side / 2f, side / 2f)
+                    drawRect(Color.White, o - half - Offset(2.5f, 2.5f), Size(side + 5f, side + 5f), style = Stroke(1.8f))
+                    drawRect(colors.accent, o - half, Size(side, side))
+                }
                 when (handle) {
                     SwingGizmo.Handle.TIP -> {
                         drawCircle(colors.accent, 7f, o)
-                        drawCircle(Color.White, 7f, o, style = Stroke(1.5f))
+                        drawCircle(Color.White, if (hot) 10f else 7f, o, style = Stroke(if (hot) 2f else 1.5f))
                     }
                     SwingGizmo.Handle.MID -> {
-                        val d = Path().apply { moveTo(o.x, o.y - 6f); lineTo(o.x + 6f, o.y); lineTo(o.x, o.y + 6f); lineTo(o.x - 6f, o.y); close() }
-                        drawPath(d, colors.accent)
-                        drawPath(d, Color.White, style = Stroke(1.2f))
+                        fun diamond(r: Float) = Path().apply { moveTo(o.x, o.y - r); lineTo(o.x + r, o.y); lineTo(o.x, o.y + r); lineTo(o.x - r, o.y); close() }
+                        drawPath(diamond(6f), colors.accent)
+                        if (hot) drawPath(diamond(9.5f), Color.White, style = Stroke(1.8f))
+                        else drawPath(diamond(6f), Color.White, style = Stroke(1.2f))
                     }
                     SwingGizmo.Handle.CORNER_START, SwingGizmo.Handle.CORNER_END -> {
-                        drawRect(colors.accent, Offset(o.x - 4f, o.y - 4f), Size(8f, 8f))
-                        drawRect(Color.White, Offset(o.x - 4f, o.y - 4f), Size(8f, 8f), style = Stroke(1f))
+                        if (hot) square(8f)
+                        else {
+                            drawRect(colors.accent, Offset(o.x - 4f, o.y - 4f), Size(8f, 8f))
+                            drawRect(Color.White, Offset(o.x - 4f, o.y - 4f), Size(8f, 8f), style = Stroke(1f))
+                        }
                     }
                     else -> {
                         // Pivot choices: the pinned edge is already drawn; the others are hollow squares to click.
                         if (handle.name.removePrefix("PIVOT_") == gizmo.fulcrum.name) continue
-                        drawRect(colors.panelElevated.copy(alpha = 0.85f), Offset(o.x - 5f, o.y - 5f), Size(10f, 10f))
-                        drawRect(colors.accent.copy(alpha = 0.8f), Offset(o.x - 5f, o.y - 5f), Size(10f, 10f), style = Stroke(1.2f))
+                        if (hot) square(10f)
+                        else {
+                            drawRect(colors.panelElevated.copy(alpha = 0.85f), Offset(o.x - 5f, o.y - 5f), Size(10f, 10f))
+                            drawRect(colors.accent.copy(alpha = 0.8f), Offset(o.x - 5f, o.y - 5f), Size(10f, 10f), style = Stroke(1.2f))
+                        }
                     }
                 }
             }

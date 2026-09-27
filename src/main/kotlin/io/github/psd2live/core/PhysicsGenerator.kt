@@ -136,49 +136,54 @@ object PhysicsGenerator {
 	}
 
 	/**
-	 * One pendulum per regenerating swing, with a vertex per segment. Left/right swings take the hair
-	 * inputs. A rigid pendulum hanging straight down ignores vertical travel, so up/down swings feed head
-	 * and body pitch in as sideways travel, and the resulting angle drives the up/down forms.
+	 * One pendulum per direction of every regenerating swing, with a vertex per segment. Left/right swings
+	 * take the hair inputs. A rigid pendulum hanging straight down ignores vertical travel, so up/down swings
+	 * feed head and body pitch in as sideways travel, and the resulting angle drives the up/down forms.
 	 */
-	internal fun swingRules(swings: List<RigSwingEdit>, available: Set<String>): List<PhysicsRule> = swings.mapNotNull { swing ->
-		val physics = swing.physics ?: return@mapNotNull null
-		if (swing.parameterIds.any { it !in available }) return@mapNotNull null
-		val inputs = when (swing.kind) {
-			SwingKind.LATERAL -> listOf(
-				InputRule("ParamAngleX", 60f, InputType.X),
-				InputRule("ParamAngleZ", 60f, InputType.ANGLE),
-				InputRule("ParamBodyAngleX", 40f, InputType.X),
-				InputRule("ParamBodyAngleZ", 40f, InputType.ANGLE),
+	internal fun swingRules(swings: List<RigSwingEdit>, available: Set<String>): List<PhysicsRule> = swings.flatMap { swing ->
+		if (swing.parameterIds.any { it !in available }) return@flatMap emptyList()
+		swing.motions.mapNotNull { motion ->
+			val physics = motion.physics ?: return@mapNotNull null
+			val inputs = when (motion.kind) {
+				SwingKind.LATERAL -> listOf(
+					InputRule("ParamAngleX", 60f, InputType.X),
+					InputRule("ParamAngleZ", 60f, InputType.ANGLE),
+					InputRule("ParamBodyAngleX", 40f, InputType.X),
+					InputRule("ParamBodyAngleZ", 40f, InputType.ANGLE),
+				)
+				SwingKind.VERTICAL -> listOf(
+					InputRule("ParamAngleY", 60f, InputType.X),
+					InputRule("ParamBodyAngleY", 40f, InputType.X),
+					InputRule("ParamAngleZ", 20f, InputType.ANGLE),
+				)
+			}.filter { it.parameter in available && it.parameter !in swing.parameterIds }
+			if (inputs.isEmpty()) return@mapNotNull null
+			val segment = physics.length / motion.segments
+			val id = swingPhysicsId(swing, motion.kind)
+			PhysicsRule(
+				id = id,
+				name = if (swing.motions.size == 1) swing.name else "${swing.name} ${id.substringAfterLast('_')}",
+				outputParameter = motion.parameterIds.first(),
+				outputScale = physics.outputScale,
+				outputVertexIndex = 1,
+				inputs = inputs,
+				vertices = listOf(VertexRule(0f, 1f, 1f, 1f, 0f)) + (1..motion.segments).map { k ->
+					VertexRule(segment * k, physics.mobility, physics.delay, physics.acceleration, segment)
+				},
+				positionMinimum = -10f,
+				positionDefault = 0f,
+				positionMaximum = 10f,
+				angleMinimum = -30f,
+				angleDefault = 0f,
+				angleMaximum = 30f,
+				extraOutputs = motion.parameterIds.drop(1).mapIndexed { k, id -> OutputRule(id, k + 2, physics.outputScale) },
 			)
-			SwingKind.VERTICAL -> listOf(
-				InputRule("ParamAngleY", 60f, InputType.X),
-				InputRule("ParamBodyAngleY", 40f, InputType.X),
-				InputRule("ParamAngleZ", 20f, InputType.ANGLE),
-			)
-		}.filter { it.parameter in available && it.parameter !in swing.parameterIds }
-		if (inputs.isEmpty()) return@mapNotNull null
-		val segment = physics.length / swing.segments
-		PhysicsRule(
-			id = swingPhysicsId(swing),
-			name = swing.name,
-			outputParameter = swing.parameterIds.first(),
-			outputScale = physics.outputScale,
-			outputVertexIndex = 1,
-			inputs = inputs,
-			vertices = listOf(VertexRule(0f, 1f, 1f, 1f, 0f)) + (1..swing.segments).map { k ->
-				VertexRule(segment * k, physics.mobility, physics.delay, physics.acceleration, segment)
-			},
-			positionMinimum = -10f,
-			positionDefault = 0f,
-			positionMaximum = 10f,
-			angleMinimum = -30f,
-			angleDefault = 0f,
-			angleMaximum = 30f,
-			extraOutputs = swing.parameterIds.drop(1).mapIndexed { k, id -> OutputRule(id, k + 2, physics.outputScale) },
-		)
+		}
 	}
 
-	internal fun swingPhysicsId(swing: RigSwingEdit) = "PhysicsSwing_${swing.id}"
+	/** `PhysicsSwing_<id>` for a swing in one direction; with both, suffixed `_X` (left/right) or `_Y` (up/down). */
+	internal fun swingPhysicsId(swing: RigSwingEdit, kind: SwingKind = swing.motions.first().kind): String =
+		"PhysicsSwing_${swing.id}" + if (swing.motions.size == 1) "" else if (kind == SwingKind.LATERAL) "_X" else "_Y"
 
 	private fun hairRule(
 		id: String,

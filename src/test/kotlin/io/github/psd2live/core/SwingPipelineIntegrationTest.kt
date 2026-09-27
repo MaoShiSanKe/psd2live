@@ -29,11 +29,14 @@ class SwingPipelineIntegrationTest {
 		val front = meshOf(SemanticTag.FRONT_HAIR)
 
 		var overlay = initial.config.rigEdits
-		overlay = SwingAuthoring.put(overlay, puppet, RigSwingEdit("back", "Back", SwingKind.LATERAL, listOf(back.id.raw),
-			listOf("ParamSwingBack"), magnitude = 0.25f), estimatePhysics = true)
+		overlay = SwingAuthoring.put(overlay, puppet, RigSwingEdit.single("back", "Back", SwingKind.LATERAL, listOf(back.id.raw),
+			listOf("ParamSwingBack"), shape = SwingShape(magnitude = 0.25f, parallel = 0.7f)), estimatePhysics = true)
 		val withBack = overlay.applyTo(puppet)
-		overlay = SwingAuthoring.put(overlay, withBack, RigSwingEdit("front", "Front", SwingKind.VERTICAL, listOf(front.id.raw),
-			listOf("ParamSwingFront_1", "ParamSwingFront_2"), fulcrum = SwingFulcrum.TOP, magnitude = 0.1f), estimatePhysics = true)
+		// The front hair moves both ways at once: a bounce and a side sway on one Warp.
+		overlay = SwingAuthoring.put(overlay, withBack, RigSwingEdit("front", "Front", listOf(front.id.raw), listOf(
+			SwingMotion(SwingKind.VERTICAL, listOf("ParamSwingFront_1", "ParamSwingFront_2"), SwingShape(magnitude = 0.1f)),
+			SwingMotion(SwingKind.LATERAL, listOf("ParamSwingFrontX"), SwingShape(magnitude = 0.2f, parallel = 0.8f))),
+			fulcrum = SwingFulcrum.TOP), estimatePhysics = true)
 		val config = initial.config.copy(rigEdits = overlay, generatePhysics = true)
 		val preview = PSD2LivePipeline().buildPreview(initial.analysis, config)
 		val swung = preview.rig.puppet
@@ -52,13 +55,15 @@ class SwingPipelineIntegrationTest {
 		}
 		assertTrue(shift(back.id, "ParamSwingBack", 0) > 10f, "back hair swings sideways")
 		assertTrue(shift(front.id, "ParamSwingFront_1", 1) > 3f, "front hair bounces vertically")
+		assertTrue(shift(front.id, "ParamSwingFrontX", 0) > 5f, "front hair also sways sideways")
 
 		val output = Files.createTempDirectory("swing-export")
 		val result = PSD2LivePipeline().run(psd, output, config)
 		val physicsFile = result.exportedFiles.map { it.path }.single { it.toString().endsWith(".physics3.json") }
 		val physics = Json.parseToJsonElement(physicsFile.readText()).jsonObject
 		val settings = physics.getValue("PhysicsSettings").jsonArray.map { it.jsonObject }
-		val frontSetting = settings.single { it.getValue("Id").jsonPrimitive.content == "PhysicsSwing_front" }
+		val frontSetting = settings.single { it.getValue("Id").jsonPrimitive.content == "PhysicsSwing_front_Y" }
+		assertTrue(settings.any { it.getValue("Id").jsonPrimitive.content == "PhysicsSwing_front_X" })
 		assertEquals(listOf(1, 2), frontSetting.getValue("Output").jsonArray.map { it.jsonObject.getValue("VertexIndex").jsonPrimitive.int })
 		assertEquals(3, frontSetting.getValue("Vertices").jsonArray.size)
 		assertTrue(settings.any { it.getValue("Id").jsonPrimitive.content == "PhysicsSwing_back" })

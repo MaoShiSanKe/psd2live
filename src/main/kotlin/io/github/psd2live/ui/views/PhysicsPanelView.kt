@@ -419,8 +419,8 @@ private fun SwingPhysicsCard(viewModel: PSD2LiveViewModel, state: PSD2LiveState)
 		state.rigEdits.swingEdits.forEach { swing ->
 			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 				Text(
-					text = "${swing.name} · ${tr("swing.kind.${swing.kind.name.lowercase()}")}" +
-						if (swing.physics == null) " · ${tr("swing.physics.off")}" else "",
+					text = "${swing.name} · ${swing.motions.joinToString("+") { tr("swing.kind.${it.kind.name.lowercase()}") }}" +
+						if (!swing.hasPhysics) " · ${tr("swing.physics.off")}" else "",
 					style = typography.caption,
 					color = colors.textPrimary,
 					modifier = Modifier.weight(1f),

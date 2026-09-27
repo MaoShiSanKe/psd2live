@@ -1266,7 +1266,7 @@ class ViewModelAgentWorkspace(
         taskId: String?, author: MutationAuthor) =
         mutateRigKeyform(expectedHead, taskId, "Set swing ${edit.id}", edit.id, author) { document, puppet ->
             val rigEdits = io.github.psd2live.core.SwingAuthoring.put(document.rigEdits, puppet, edit, estimatePhysics)
-            val physics = rigEdits.swingEdits.single { it.id == edit.id }.physics != null
+            val physics = rigEdits.swingEdits.single { it.id == edit.id }.hasPhysics
             document.copy(rigEdits = rigEdits, settings = if (!physics) document.settings else
                 kotlinx.serialization.json.JsonObject(document.settings + ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
         }

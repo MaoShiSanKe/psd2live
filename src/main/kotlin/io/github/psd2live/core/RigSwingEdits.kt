@@ -23,7 +23,7 @@ enum class SwingFulcrum { AUTO, TOP, BOTTOM, LEFT, RIGHT }
 /** Starting values for the sliders and the pendulum; only the defaults differ. */
 enum class SwingPreset { HAIR, ACCESSORY, CLOTH }
 
-/** The pendulum that drives a swing. One vertex per segment; outputs are relative segment angles. */
+/** The pendulum that drives one direction of a swing. One vertex per segment; outputs are relative segment angles. */
 data class SwingPhysics(
     val length: Float = 10f,
     val mobility: Float = 0.9f,
@@ -47,19 +47,8 @@ data class SwingPhysics(
     }
 }
 
-/**
- * A regenerating sway: every target Warp gets one -1/0/1 axis per segment parameter, computed from its
- * current forms each time the rig is rebuilt, so changing a setting replaces the whole motion. The
- * swing owns those axes; [baked] keeps only the physics once the forms were written into the journal.
- */
-data class RigSwingEdit(
-    val id: String,
-    val name: String,
-    val kind: SwingKind,
-    val targets: List<String>,
-    val parameterIds: List<String>,
-    val fulcrum: SwingFulcrum = SwingFulcrum.AUTO,
-    val flip: Boolean = false,
+/** How the target moves in one direction. */
+data class SwingShape(
     /** Tip travel at ±1, as a fraction of the pinned-edge-to-tip length. */
     val magnitude: Float = 0.25f,
     /** Extra rise (positive) or droop (negative) of the tip at ±1, as a fraction of the length. */
@@ -68,29 +57,100 @@ data class RigSwingEdit(
     val softness: Float = 0.5f,
     /** Width change at ±1 toward the tip; negative narrows. */
     val zoom: Float = 0f,
-    val preset: SwingPreset = SwingPreset.HAIR,
+    /**
+     * 0 swings the whole lattice like one board, its tip edge tilting with the bend; 1 keeps the tip edge
+     * level, every column swaying alongside the others as separate strands would.
+     */
+    val parallel: Float = 0f,
+    val flip: Boolean = false,
+) {
+    init {
+        require(listOf(magnitude, lift, softness, zoom, parallel).all(Float::isFinite)) { "Swing values must be finite" }
+        require(magnitude in 0f..RigSwingEdit.MAX_MAGNITUDE) { "Swing magnitude must be within 0..${RigSwingEdit.MAX_MAGNITUDE}" }
+        require(lift in -0.5f..0.5f && softness in 0f..1f && zoom in -0.5f..0.5f && parallel in 0f..1f) {
+            "Swing lift, softness, zoom or parallel out of range"
+        }
+    }
+
+    internal fun deformer(kind: SwingKind, fulcrum: SwingFulcrum, segments: Int) =
+        SwingDeformer.Shape(kind, fulcrum, flip, magnitude, lift, softness, zoom, segments, parallel)
+
+    internal fun write(o: JsonObjectBuilder) {
+        o.put("magnitude", magnitude); o.put("lift", lift); o.put("softness", softness); o.put("zoom", zoom)
+        o.put("parallel", parallel)
+        if (flip) o.put("flip", true)
+    }
+
+    companion object {
+        /** Reads the shape fields of [o], each falling back to [defaults]. */
+        fun fromJson(o: JsonObject, defaults: SwingShape) = SwingShape(o.number("magnitude", defaults.magnitude),
+            o.number("lift", defaults.lift), o.number("softness", defaults.softness), o.number("zoom", defaults.zoom),
+            o.number("parallel", defaults.parallel), o["flip"]?.jsonPrimitive?.booleanOrNull ?: defaults.flip)
+    }
+}
+
+/** One direction of travel: its segment parameters (root first), shape and pendulum. */
+data class SwingMotion(
+    val kind: SwingKind,
+    val parameterIds: List<String>,
+    val shape: SwingShape = SwingShape(),
     val physics: SwingPhysics? = SwingPhysics(),
+) {
+    val segments: Int get() = parameterIds.size
+}
+
+/**
+ * A regenerating sway: every target Warp gets one -1/0/1 axis per parameter, computed from its current
+ * forms each time the rig is rebuilt, so changing a setting replaces the whole motion. The swing owns
+ * those axes; [baked] keeps only the physics once the forms were written into the journal.
+ *
+ * [motions] can combine left/right with up/down on the same Warp: the stretch applies before the bend,
+ * so the combined keys are exact rather than a sum.
+ */
+data class RigSwingEdit(
+    val id: String,
+    val name: String,
+    val targets: List<String>,
+    val motions: List<SwingMotion>,
+    val fulcrum: SwingFulcrum = SwingFulcrum.AUTO,
+    val preset: SwingPreset = SwingPreset.HAIR,
     val baked: Boolean = false,
 ) {
     init {
         require(listOf(id, name).all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Swing ID and name are required" }
         require(targets.isNotEmpty() && targets.distinct().size == targets.size && targets.all { it.isNotBlank() }) { "Swing needs distinct targets" }
-        require(parameterIds.size in 1..MAX_SEGMENTS && parameterIds.distinct().size == parameterIds.size &&
-            parameterIds.all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Swing needs 1..$MAX_SEGMENTS distinct parameters" }
-        require(listOf(magnitude, lift, softness, zoom).all(Float::isFinite)) { "Swing values must be finite" }
-        require(magnitude in 0f..MAX_MAGNITUDE) { "Swing magnitude must be within 0..$MAX_MAGNITUDE" }
-        require(lift in -0.5f..0.5f && softness in 0f..1f && zoom in -0.5f..0.5f) { "Swing lift, softness or zoom out of range" }
+        require(motions.size in 1..2 && motions.map { it.kind }.distinct().size == motions.size) { "Swing needs one motion per direction" }
+        require(motions.all { it.segments in 1..MAX_SEGMENTS }) { "Swing needs 1..$MAX_SEGMENTS parameters per direction" }
+        require(parameterIds.distinct().size == parameterIds.size && parameterIds.all { it.isNotBlank() && it.none(Char::isISOControl) }) {
+            "Swing parameters must be distinct"
+        }
     }
 
-    val segments: Int get() = parameterIds.size
+    /** Every parameter the swing drives: direction by direction, root segment first. */
+    val parameterIds: List<String> get() = motions.flatMap { it.parameterIds }
+
+    val hasPhysics: Boolean get() = motions.any { it.physics != null }
+
+    /** The shape of motion [motion] passed through [change]. */
+    fun withShape(motion: Int, change: (SwingShape) -> SwingShape) =
+        copy(motions = motions.mapIndexed { m, entry -> if (m == motion) entry.copy(shape = change(entry.shape)) else entry })
+
+    /** The pendulums passed through [change]; [motion] limits it to one direction. */
+    fun withPhysics(motion: Int? = null, change: (SwingKind, SwingPhysics?) -> SwingPhysics?) =
+        copy(motions = motions.mapIndexed { m, entry -> if (motion != null && m != motion) entry else entry.copy(physics = change(entry.kind, entry.physics)) })
 
     fun toJson() = buildJsonObject {
-        put("id", id); put("name", name); put("kind", kind.name)
+        put("id", id); put("name", name)
         putJsonArray("targets") { targets.forEach { add(it) } }
-        putJsonArray("parameters") { parameterIds.forEach { add(it) } }
-        put("fulcrum", fulcrum.name); put("flip", flip); put("magnitude", magnitude); put("lift", lift)
-        put("softness", softness); put("zoom", zoom); put("preset", preset.name)
-        physics?.let { put("physics", it.toJson()) }
+        put("fulcrum", fulcrum.name); put("preset", preset.name)
+        putJsonArray("motions") {
+            for (motion in motions) addJsonObject {
+                put("kind", motion.kind.name)
+                putJsonArray("parameters") { motion.parameterIds.forEach { add(it) } }
+                motion.shape.write(this)
+                put("physics", motion.physics?.toJson() ?: JsonNull)
+            }
+        }
         if (baked) put("baked", true)
     }
 
@@ -98,42 +158,41 @@ data class RigSwingEdit(
         const val MAX_SEGMENTS = 3
         const val MAX_MAGNITUDE = 0.7f
 
+        /** A swing in one direction, the shape every swing had before directions could combine. */
+        fun single(id: String, name: String, kind: SwingKind, targets: List<String>, parameterIds: List<String>,
+            fulcrum: SwingFulcrum = SwingFulcrum.AUTO, shape: SwingShape = SwingPresets.shape(SwingPreset.HAIR, kind),
+            preset: SwingPreset = SwingPreset.HAIR, physics: SwingPhysics? = SwingPhysics(), baked: Boolean = false) =
+            RigSwingEdit(id, name, targets, listOf(SwingMotion(kind, parameterIds, shape, physics)), fulcrum, preset, baked)
+
         fun fromJson(o: JsonObject): RigSwingEdit {
-            val kind = SwingKind.valueOf(o.text("kind").uppercase())
             val preset = o["preset"]?.jsonPrimitive?.contentOrNull?.let { SwingPreset.valueOf(it.uppercase()) } ?: SwingPreset.HAIR
-            val defaults = SwingPresets.shape(preset, kind)
-            return RigSwingEdit(
-                id = o.text("id"),
-                name = o["name"]?.jsonPrimitive?.contentOrNull ?: o.text("id"),
-                kind = kind,
-                targets = o.getValue("targets").jsonArray.map { it.jsonPrimitive.content },
-                parameterIds = o.getValue("parameters").jsonArray.map { it.jsonPrimitive.content },
-                fulcrum = o["fulcrum"]?.jsonPrimitive?.contentOrNull?.let { SwingFulcrum.valueOf(it.uppercase()) } ?: SwingFulcrum.AUTO,
-                flip = o["flip"]?.jsonPrimitive?.booleanOrNull ?: false,
-                magnitude = o.number("magnitude", defaults.magnitude),
-                lift = o.number("lift", defaults.lift),
-                softness = o.number("softness", defaults.softness),
-                zoom = o.number("zoom", defaults.zoom),
-                preset = preset,
-                physics = when (val p = o["physics"]) {
+            val fulcrum = o["fulcrum"]?.jsonPrimitive?.contentOrNull?.let { SwingFulcrum.valueOf(it.uppercase()) } ?: SwingFulcrum.AUTO
+            val id = o.text("id")
+            fun motion(m: JsonObject): SwingMotion {
+                val kind = SwingKind.valueOf(m.text("kind").uppercase())
+                // Swings saved before the parallel setting swung like one board.
+                val shape = SwingShape.fromJson(m, SwingPresets.shape(preset, kind).copy(parallel = 0f))
+                val physics = when (val p = m["physics"]) {
                     null -> SwingPresets.physics(preset, kind, null)
                     is JsonNull -> null
                     else -> SwingPhysics.fromJson(p.jsonObject)
-                },
-                baked = o["baked"]?.jsonPrimitive?.booleanOrNull ?: false,
-            )
+                }
+                return SwingMotion(kind, m.getValue("parameters").jsonArray.map { it.jsonPrimitive.content }, shape, physics)
+            }
+            // Before directions could combine, the one motion's fields sat at the top level.
+            val motions = o["motions"]?.jsonArray?.map { motion(it.jsonObject) } ?: listOf(motion(o))
+            return RigSwingEdit(id, o["name"]?.jsonPrimitive?.contentOrNull ?: id, o.getValue("targets").jsonArray.map { it.jsonPrimitive.content },
+                motions, fulcrum, preset, o["baked"]?.jsonPrimitive?.booleanOrNull ?: false)
         }
     }
 }
 
 /** Default slider values and pendulums per preset; the pendulum length follows the target size. */
 object SwingPresets {
-    data class Shape(val magnitude: Float, val lift: Float, val softness: Float, val zoom: Float)
-
-    fun shape(preset: SwingPreset, kind: SwingKind): Shape = when (preset) {
-        SwingPreset.HAIR -> if (kind == SwingKind.LATERAL) Shape(0.22f, 0.04f, 0.6f, 0f) else Shape(0.10f, 0f, 0.5f, 0.04f)
-        SwingPreset.ACCESSORY -> if (kind == SwingKind.LATERAL) Shape(0.30f, 0.06f, 0.1f, 0f) else Shape(0.14f, 0f, 0.2f, 0f)
-        SwingPreset.CLOTH -> if (kind == SwingKind.LATERAL) Shape(0.16f, 0.02f, 0.8f, 0.04f) else Shape(0.08f, 0f, 0.7f, 0.06f)
+    fun shape(preset: SwingPreset, kind: SwingKind): SwingShape = when (preset) {
+        SwingPreset.HAIR -> if (kind == SwingKind.LATERAL) SwingShape(0.22f, 0.04f, 0.6f, 0f, 0.7f) else SwingShape(0.10f, 0f, 0.5f, 0.04f, 0.5f)
+        SwingPreset.ACCESSORY -> if (kind == SwingKind.LATERAL) SwingShape(0.30f, 0.06f, 0.1f, 0f, 0f) else SwingShape(0.14f, 0f, 0.2f, 0f, 0f)
+        SwingPreset.CLOTH -> if (kind == SwingKind.LATERAL) SwingShape(0.16f, 0.02f, 0.8f, 0.04f, 0.6f) else SwingShape(0.08f, 0f, 0.7f, 0.06f, 0.5f)
     }
 
     /** [lengthPx] is the target's pinned-edge-to-tip length in canvas pixels, when known. */
@@ -168,18 +227,43 @@ internal object SwingGenerator {
         return resolved to hypot(tip.first - root.first, tip.second - root.second)
     }
 
+    /**
+     * [model] without [swing]'s forms: its axes collapsed to their defaults. A baked swing's forms are
+     * ordinary keys by then, so they stay.
+     */
+    fun strip(model: PuppetModel, swing: RigSwingEdit): PuppetModel {
+        if (swing.baked) return model
+        val parameters = model.parameters.filter { it.id.raw in swing.parameterIds }
+        return model.copy(deformers = model.deformers.map { d ->
+            if (d !is Deformer.Warp) d else d.geometryGrid?.let { grid -> d.copy(geometryGrid = parameters.fold(grid) { g, p -> g.collapsed(p) }) } ?: d
+        })
+    }
+
+    /** The swing's name, followed by what sets this parameter apart from its others (direction, segment). */
+    fun parameterName(swing: RigSwingEdit, raw: String): String {
+        val stem = "ParamSwing${SwingAuthoring.asciiStem(swing.id)}"
+        val suffix = if (raw.startsWith(stem)) raw.removePrefix(stem).trim('_').replace('_', ' ') else ""
+        return if (swing.parameterIds.size == 1 || suffix.isEmpty()) swing.name else "${swing.name} $suffix"
+    }
+
+    private class Axis(val motion: Int, val segment: Int, val parameter: Parameter, val keys: List<Float>)
+
     fun applyOne(model: PuppetModel, swing: RigSwingEdit): Pair<PuppetModel, List<String>> {
         if (swing.baked) return model to emptyList()
         val issues = mutableListOf<String>()
         var current = model
-        val parameters = swing.parameterIds.mapIndexed { index, raw ->
+        val parameters = swing.parameterIds.map { raw ->
             val id = ParameterId(raw)
-            val name = if (swing.segments == 1) swing.name else "${swing.name} ${index + 1}"
-            current = current.withParameterCreated(id, name)
+            current = current.withParameterCreated(id, parameterName(swing, raw))
             current.parameters.single { it.id == id }
         }
         if (parameters.any { it.kind != ParameterKind.NORMAL }) return model to listOf("${swing.id}: swing parameters must be normal parameters")
-        val keys = parameters.map { p -> listOf(p.min, p.default, p.max).distinct().sorted() }
+        val byId = parameters.associateBy { it.id.raw }
+        val keys = parameters.associate { p -> p.id.raw to listOf(p.min, p.default, p.max).distinct().sorted() }
+        val axes = swing.motions.flatMapIndexed { m, motion ->
+            motion.parameterIds.mapIndexed { j, raw -> Axis(m, j, byId.getValue(raw), keys.getValue(raw)) }
+        }
+        val combinations = axes.fold(1L) { n, a -> n * a.keys.size }
         for (target in swing.targets) {
             val warp = current.deformers.firstOrNull { it.id.raw == target } as? Deformer.Warp
             if (warp == null) { issues += "${swing.id}: target Warp not found: $target"; continue }
@@ -188,30 +272,32 @@ internal object SwingGenerator {
             // The swing owns its axes: earlier keys on them collapse to the parameter default.
             var base: KeyformGrid<WarpLatticeForm> = grid
             for (p in parameters) base = base.collapsed(p)
-            val combinations = keys.fold(1L) { n, k -> n * k.size }
             if (base.cells.size * combinations > 1_000_000L) { issues += "${swing.id}: $target has too many keyform cells"; continue }
             val space = SwingSpace(current, warp.copy(geometryGrid = base))
             val rest = space.rest ?: continue
-            val shape = SwingDeformer.Shape(swing.kind,
-                if (swing.fulcrum == SwingFulcrum.AUTO) space.autoFulcrum(rest) else swing.fulcrum,
-                swing.flip, swing.magnitude, swing.lift, swing.softness, swing.zoom, swing.segments)
+            val fulcrum = if (swing.fulcrum == SwingFulcrum.AUTO) space.autoFulcrum(rest) else swing.fulcrum
+            val shapes = swing.motions.map { it.shape.deformer(it.kind, fulcrum, it.segments) }
             val cells = ArrayList<KeyformCell<WarpLatticeForm>>(base.cells.size * combinations.toInt())
-            val combo = IntArray(parameters.size)
+            val combo = IntArray(axes.size)
             repeat(combinations.toInt()) {
-                val values = FloatArray(parameters.size) { k -> normalized(parameters[k], keys[k][combo[k]]) }
+                val values = swing.motions.map { FloatArray(it.segments) }
+                for ((i, a) in axes.withIndex()) values[a.motion][a.segment] = normalized(a.parameter, a.keys[combo[i]])
+                val still = values.all { v -> v.all { it == 0f } }
                 for (cell in base.cells) {
-                    val points = if (values.all { it == 0f }) cell.form.controlPoints
-                        else SwingDeformer.deform(cell.form.controlPoints, warp.rows, warp.columns, space.sx, space.sy, shape, values)
+                    val lattice = cell.form.controlPoints
+                    val points = if (still) lattice else SwingDeformer.compose(shapes, lattice) { m, targets ->
+                        SwingDeformer.transform(lattice, warp.rows, warp.columns, space.sx, space.sy, shapes[m], values[m], targets)
+                    }
                     cells += KeyformCell(cell.coordinate + combo, WarpLatticeForm(points))
                 }
-                for (k in combo.indices) { if (++combo[k] < keys[k].size) break; combo[k] = 0 }
+                for (k in combo.indices) { if (++combo[k] < axes[k].keys.size) break; combo[k] = 0 }
             }
-            val axes = base.axes + parameters.mapIndexed { k, p -> KeyformAxis(p.id, keys[k].toFloatArray()) }
-            current = current.withReplacedGeometryGrid(KeyformOwner.Deformer(warp.id), KeyformGrid(axes, cells))
+            val gridAxes = base.axes + axes.map { KeyformAxis(it.parameter.id, it.keys.toFloatArray()) }
+            current = current.withReplacedGeometryGrid(KeyformOwner.Deformer(warp.id), KeyformGrid(gridAxes, cells))
         }
-        for ((k, p) in parameters.withIndex()) {
+        for (p in parameters) {
             val authored = current.parameters.single { it.id == p.id }.keys ?: continue
-            current = current.withParameterKeys(p.id, (authored + keys[k]).distinct().sorted())
+            current = current.withParameterKeys(p.id, (authored + keys.getValue(p.id.raw)).distinct().sorted())
         }
         return current to issues
     }
