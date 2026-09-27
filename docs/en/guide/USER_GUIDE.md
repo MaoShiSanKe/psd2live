@@ -10,7 +10,7 @@ Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit →
 
 ## Workspaces
 
-The UI is organized into workspace tabs, each with its own canvases and panel layout. Click **+** at the end of the tab bar to add one from six presets or a blank layout; the right side previews the layout and its purpose. The screenshot shows the Chinese UI.
+The UI is organized into workspace tabs, each with its own canvases and panel layout. Click **+** at the end of the tab bar to add one from seven presets or a blank layout; the right side previews the layout and its purpose. The screenshot shows the Chinese UI.
 
 ![New workspace menu](../../imgs/workspace-presets.webp)
 
@@ -22,6 +22,7 @@ The UI is organized into workspace tabs, each with its own canvases and panel la
 | Animation | Motion list, preview canvas and animation editor |
 | Preview | Large preview with only the motion list |
 | Physics | Preview canvas with Parameters and Physics panels, to tune while moving the model |
+| History | Only the history tree and its operation list, to browse and check out history |
 | Blank | Empty dock; add canvases and panels from the **Windows** menu |
 
 **Reset layout** restores the current workspace's preset layout.

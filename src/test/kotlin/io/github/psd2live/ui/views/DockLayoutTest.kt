@@ -75,8 +75,9 @@ class DockLayoutTest {
             val canvasIds = workspace.canvases.map { it.id }
 
             assertEquals(modules.size, modules.toSet().size, "$preset docks a panel twice")
-            assertEquals(DEFAULT_DOCK_MODULES - PRIMARY_CANVAS_ID + canvasIds, modules.toSet(), "$preset")
-            if (preset == WorkspacePreset.BLANK) return@forEach
+            val extra = if (preset == WorkspacePreset.HISTORY) setOf("history") else emptySet()
+            assertEquals(DEFAULT_DOCK_MODULES - PRIMARY_CANVAS_ID + canvasIds + extra, modules.toSet(), "$preset")
+            if (preset == WorkspacePreset.BLANK || preset == WorkspacePreset.HISTORY) return@forEach
             assertTrue(preset.hiddenModules.none(::isCanvasModule), "$preset")
             // Legacy repair must leave a preset layout alone, and every panel must have a place to reappear.
             assertSame(layout, repairLegacyCanvasDocking(layout))
@@ -91,9 +92,16 @@ class DockLayoutTest {
         assertEquals(null, visible)
         assertEquals(listOf(CanvasMode.EDIT), workspace.canvases.map { it.mode })
         assertEquals(defaultDockLayout().allModules().toSet(), presetDockLayout(workspace).allModules().toSet())
-        WorkspacePreset.entries.filter { it != WorkspacePreset.BLANK }.forEach { preset ->
+        WorkspacePreset.entries.filter { it != WorkspacePreset.BLANK && it != WorkspacePreset.HISTORY }.forEach { preset ->
             assertTrue(presetVisibleLayout(preset).first?.allModules()?.any(::isCanvasModule) == true, "$preset")
         }
+    }
+
+    @Test fun historyPresetShowsOnlyTheHistoryTree() {
+        val (visible, workspace) = presetVisibleLayout(WorkspacePreset.HISTORY)
+        assertEquals(listOf("history"), visible?.allModules())
+        assertTrue(workspace.canvases.all { it.id in workspace.hiddenModules })
+        assertEquals(defaultDockLayout().allModules().toSet() + "history", presetDockLayout(workspace).allModules().toSet())
     }
 
     @Test fun sidebarsAreTheRegionsAroundTheCanvases() {

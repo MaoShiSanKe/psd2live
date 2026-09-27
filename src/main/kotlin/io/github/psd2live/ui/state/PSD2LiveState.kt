@@ -165,8 +165,8 @@ data class CanvasWindowState(
  * `presetDockLayout`) and which panels start hidden; "reset layout" returns to it.
  *
  * Every preset's dock tree holds every panel, so a hidden panel shown from the window menu
- * reappears where that task expects it rather than at an arbitrary edge. Only [BLANK] starts
- * with its canvas hidden.
+ * reappears where that task expects it rather than at an arbitrary edge. Only [HISTORY] and
+ * [BLANK] start with their canvas hidden.
  */
 enum class WorkspacePreset(
 	/** Canvas modes in dock order. The first canvas takes [PRIMARY_CANVAS_ID]. */
@@ -205,6 +205,12 @@ enum class WorkspacePreset(
 		listOf(CanvasMode.PREVIEW),
 		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "animation"),
 	),
+
+	/**
+	 * Browsing history: only the history tree and its operation list. Like [BLANK] it keeps one
+	 * hidden edit canvas and the edit arrangement beside the history, for panels shown later.
+	 */
+	HISTORY(listOf(CanvasMode.EDIT), DEFAULT_DOCK_MODULES),
 
 	/**
 	 * An empty dock to build up from the window menu. It keeps one hidden edit canvas, so a canvas
@@ -533,7 +539,7 @@ data class PSD2LiveState(
 			val workspace = activeWorkspace
 			if ("history" in workspace.hiddenModules) return false
 			if ("history" in workspace.placeModules) return true
-			val json = workspace.layoutJson ?: return false
+			val json = workspace.layoutJson ?: return workspace.preset == WorkspacePreset.HISTORY
 			return "\"history\"" in json
 		}
 

@@ -319,6 +319,19 @@ internal fun WorkspacePresetIcon(preset: WorkspacePreset, tint: Color, modifier:
 					}
 					drawLine(tint, Offset(w * 0.40f, h * 0.18f), Offset(w * 0.40f, h * 0.86f), strokeWidth = 1f)
 				}
+				// A trunk with one branch forking off, like the history tree.
+				WorkspacePreset.HISTORY -> {
+					val root = Offset(w * 0.30f, h * 0.84f)
+					val fork = Offset(w * 0.30f, h * 0.50f)
+					val head = Offset(w * 0.30f, h * 0.16f)
+					val branch = Offset(w * 0.74f, h * 0.24f)
+					drawLine(tint.copy(alpha = 0.7f), root, head, strokeWidth = line, cap = StrokeCap.Round)
+					drawPath(Path().apply {
+						moveTo(fork.x, fork.y)
+						quadraticTo(branch.x, fork.y, branch.x, branch.y)
+					}, tint.copy(alpha = 0.7f), style = stroke)
+					listOf(root, fork, head, branch).forEach { drawCircle(tint, radius = w * 0.1f, center = it) }
+				}
 				// An empty dashed frame with a plus.
 				else -> {
 					drawRoundRect(
