@@ -2813,28 +2813,48 @@ class PSD2LiveViewModel : AutoCloseable {
 		return workspace.id
 	}
 
-	fun closeWorkspace(id: String) {
+	fun closeWorkspace(id: String) = closeWorkspaces(listOf(id))
+
+	/** Closes every workspace but [id]. */
+	fun closeOtherWorkspaces(id: String) =
+		closeWorkspaces(_state.value.workspaces.map { it.id }.filter { it != id })
+
+	/** Closes the workspaces after [id] in strip order. */
+	fun closeWorkspacesToRight(id: String) {
+		val ids = _state.value.workspaces.map { it.id }
+		val index = ids.indexOf(id)
+		if (index >= 0) closeWorkspaces(ids.drop(index + 1))
+	}
+
+	/** Closes [ids], always keeping at least one workspace open. */
+	fun closeWorkspaces(ids: Collection<String>) {
 		val current = _state.value
-		val workspace = current.workspaces.firstOrNull { it.id == id } ?: return
-		if (current.workspaces.size <= 1) {
+		val closing = current.workspaces.filter { it.id in ids }
+		if (closing.isEmpty()) return
+		if (closing.size >= current.workspaces.size) {
 			updateState { it.copy(statusText = tr("status.workspaceLast")) }
 			return
 		}
 		// The skeleton belongs to the project, not the canvas: an edit open on a closing canvas is kept.
-		canvasEditors.keys.filter { it.first == id }.forEach { key ->
+		val closingIds = closing.map { it.id }.toSet()
+		canvasEditors.keys.filter { it.first in closingIds }.forEach { key ->
 			canvasEditors[key]?.commitSkeletonDraft()
 			canvasEditors.remove(key)?.resetPaintSession()
 		}
-		val remaining = current.workspaces.filterNot { it.id == id }
-		val next = if (current.activeWorkspaceId != id) remaining.first { it.id == current.activeWorkspaceId } else {
-			val index = current.workspaces.indexOf(workspace)
-			remaining.getOrNull(index - 1) ?: remaining.getOrNull(index) ?: remaining.first()
+		val remaining = current.workspaces.filterNot { it.id in closingIds }
+		val next = if (current.activeWorkspaceId !in closingIds) remaining.first { it.id == current.activeWorkspaceId } else {
+			// The nearest open workspace before the active one, else the first after it.
+			val index = current.workspaces.indexOfFirst { it.id == current.activeWorkspaceId }
+			current.workspaces.take(index).lastOrNull { it.id !in closingIds }
+				?: current.workspaces.drop(index + 1).firstOrNull { it.id !in closingIds }
+				?: remaining.first()
 		}
 		updateState {
 			it.copy(
 				workspaces = remaining,
 				activeWorkspaceId = next.id,
-				statusText = tr("status.workspaceClosed", workspace.displayName()),
+				statusText = if (closing.size == 1) tr("status.workspaceClosed", closing.single().displayName())
+				else tr("status.workspacesClosed", closing.size),
 			)
 		}
 		markWorkspaceChanged()
@@ -2843,6 +2863,23 @@ class PSD2LiveViewModel : AutoCloseable {
 			pointerActive = false
 			motionPlayer.stop()
 		}
+	}
+
+	/** Moves workspace [id] to [toIndex] in the strip; the active workspace stays active. */
+	fun moveWorkspace(id: String, toIndex: Int) {
+		var changed = false
+		updateState { current ->
+			val from = current.workspaces.indexOfFirst { it.id == id }
+			val to = toIndex.coerceIn(0, current.workspaces.lastIndex)
+			if (from < 0 || from == to) current
+			else {
+				changed = true
+				val reordered = current.workspaces.toMutableList()
+				reordered.add(to, reordered.removeAt(from))
+				current.copy(workspaces = reordered)
+			}
+		}
+		if (changed) markWorkspaceChanged()
 	}
 
 	fun renameWorkspace(id: String, name: String) {

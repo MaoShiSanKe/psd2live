@@ -46,6 +46,27 @@ class MultiCanvasIsolationTest {
         }
     }
 
+    @Test fun freshSessionOpensOneWorkspacePerPresetAndReordersAndClosesThem() {
+        PSD2LiveViewModel().use { vm ->
+            val presets = WorkspacePreset.entries.filter { it != WorkspacePreset.BLANK }
+            assertEquals(presets, vm.state.value.workspaces.map { it.preset })
+            assertEquals(WorkspacePreset.EDIT, vm.state.value.activeWorkspace.preset)
+            assertEquals(PSD2LiveState().workspaces, vm.state.value.workspaces)
+
+            val ids = vm.state.value.workspaces.map { it.id }
+            vm.moveWorkspace(ids[0], 2)
+            assertEquals(listOf(ids[1], ids[2], ids[0]) + ids.drop(3), vm.state.value.workspaces.map { it.id })
+            assertEquals(ids[0], vm.state.value.activeWorkspaceId)
+
+            vm.closeWorkspacesToRight(ids[0])
+            assertEquals(listOf(ids[1], ids[2], ids[0]), vm.state.value.workspaces.map { it.id })
+            vm.setActiveWorkspace(ids[2])
+            vm.closeOtherWorkspaces(ids[1])
+            assertEquals(listOf(ids[1]), vm.state.value.workspaces.map { it.id })
+            assertEquals(ids[1], vm.state.value.activeWorkspaceId)
+        }
+    }
+
     @Test fun blankWorkspaceReusesItsHiddenCanvas() {
         PSD2LiveViewModel().use { vm ->
             vm.addWorkspace(WorkspacePreset.BLANK)

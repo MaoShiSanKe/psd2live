@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -26,14 +27,22 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -51,6 +60,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -102,6 +112,35 @@ fun WorkspaceStrip(
 ) {
 	var showWindowMenu by remember { mutableStateOf(false) }
 	val workspace = state.activeWorkspace
+	val chipSpacing = 2.dp
+	val chipSpacingPx = with(LocalDensity.current) { chipSpacing.toPx() }
+	// Left edge and width of each chip in the strip, for dragging past its neighbours.
+	val chipBounds = remember { mutableStateMapOf<String, Pair<Float, Float>>() }
+	var draggingId by remember { mutableStateOf<String?>(null) }
+	var dragOffset by remember { mutableFloatStateOf(0f) }
+
+	// The dragged chip follows the pointer; once its centre passes a neighbour's centre the two
+	// swap, and the offset drops by the neighbour's width so the chip stays under the pointer.
+	fun dragChip(id: String, amount: Float) {
+		dragOffset += amount
+		// Read the live order: several drag events can land before the strip recomposes.
+		val workspaces = viewModel.state.value.workspaces
+		val index = workspaces.indexOfFirst { it.id == id }
+		val (left, width) = chipBounds[id] ?: return
+		val center = left + dragOffset + width / 2
+		val forward = dragOffset > 0
+		val neighbour = workspaces.getOrNull(if (forward) index + 1 else index - 1) ?: return
+		val (otherLeft, otherWidth) = chipBounds[neighbour.id] ?: return
+		val passed = if (forward) center > otherLeft + otherWidth / 2 else center < otherLeft + otherWidth / 2
+		if (!passed) return
+		viewModel.moveWorkspace(id, if (forward) index + 1 else index - 1)
+		val shift = otherWidth + chipSpacingPx
+		val back = width + chipSpacingPx
+		dragOffset += if (forward) -shift else shift
+		// The layout catches up next frame; move the cached edges now so a fast drag keeps swapping.
+		chipBounds[id] = (if (forward) left + shift else left - shift) to width
+		chipBounds[neighbour.id] = (if (forward) otherLeft - back else otherLeft + back) to otherWidth
+	}
 
 	Row(
 		modifier = modifier.fillMaxHeight(),
@@ -114,17 +153,34 @@ fun WorkspaceStrip(
 				.horizontalScroll(rememberScrollState())
 				.padding(start = 4.dp),
 			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(2.dp),
+			horizontalArrangement = Arrangement.spacedBy(chipSpacing),
 		) {
-			state.workspaces.forEach { item ->
+			state.workspaces.forEachIndexed { index, item ->
+				val dragging = draggingId == item.id
 				WorkspaceChip(
 					workspace = item,
 					isActive = item.id == state.activeWorkspaceId,
 					canClose = state.workspaces.size > 1,
+					canCloseRight = index < state.workspaces.lastIndex,
 					onSelect = { viewModel.setActiveWorkspace(item.id) },
 					onClose = { viewModel.closeWorkspace(item.id) },
+					onCloseOthers = { viewModel.closeOtherWorkspaces(item.id) },
+					onCloseRight = { viewModel.closeWorkspacesToRight(item.id) },
 					onRename = { viewModel.renameWorkspace(item.id, it) },
 					onDuplicate = { viewModel.duplicateWorkspace(item.id) },
+					onDragStart = {
+						draggingId = item.id
+						dragOffset = 0f
+					},
+					onDrag = { dragChip(item.id, it) },
+					onDragEnd = {
+						draggingId = null
+						dragOffset = 0f
+					},
+					modifier = Modifier
+						.onGloballyPositioned { chipBounds[item.id] = it.positionInParent().x to it.size.width.toFloat() }
+						.zIndex(if (dragging) 1f else 0f)
+						.graphicsLayer { translationX = if (dragging) dragOffset else 0f },
 				)
 			}
 			NewWorkspaceButton(onCreate = { viewModel.addWorkspace(it) })
@@ -181,10 +237,17 @@ private fun WorkspaceChip(
 	workspace: EditorWorkspace,
 	isActive: Boolean,
 	canClose: Boolean,
+	canCloseRight: Boolean,
 	onSelect: () -> Unit,
 	onClose: () -> Unit,
+	onCloseOthers: () -> Unit,
+	onCloseRight: () -> Unit,
 	onRename: (String) -> Unit,
 	onDuplicate: () -> Unit,
+	onDragStart: () -> Unit,
+	onDrag: (Float) -> Unit,
+	onDragEnd: () -> Unit,
+	modifier: Modifier = Modifier,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -195,6 +258,9 @@ private fun WorkspaceChip(
 	var draft by remember(workspace.id, workspace.name) { mutableStateOf(workspace.displayName()) }
 	var renameArmed by remember(workspace.id) { mutableStateOf(false) }
 	val focusRequester = remember(workspace.id) { FocusRequester() }
+	val currentOnDragStart by rememberUpdatedState(onDragStart)
+	val currentOnDrag by rememberUpdatedState(onDrag)
+	val currentOnDragEnd by rememberUpdatedState(onDragEnd)
 
 	// Workspace tabs are top-level pills; dock tabs below stay flat and join their panel.
 	val bg = when {
@@ -203,7 +269,7 @@ private fun WorkspaceChip(
 		else -> Color.Transparent
 	}
 
-	Box {
+	Box(modifier) {
 		Row(
 			modifier = Modifier
 				.height(22.dp)
@@ -211,9 +277,26 @@ private fun WorkspaceChip(
 				.background(bg)
 				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
 				.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) { event ->
-					if (event.button == PointerButton.Secondary) {
-						showMenu = true
-						event.changes.forEach { it.consume() }
+					when {
+						event.button == PointerButton.Secondary -> {
+							showMenu = true
+							event.changes.forEach { it.consume() }
+						}
+						event.button == PointerButton.Tertiary && !renaming -> {
+							if (canClose) onClose()
+							event.changes.forEach { it.consume() }
+						}
+					}
+				}
+				.pointerInput(workspace.id, renaming) {
+					if (renaming) return@pointerInput
+					detectHorizontalDragGestures(
+						onDragStart = { currentOnDragStart() },
+						onDragEnd = { currentOnDragEnd() },
+						onDragCancel = { currentOnDragEnd() },
+					) { change, amount ->
+						change.consume()
+						currentOnDrag(amount)
 					}
 				}
 				.combinedClickable(
@@ -317,9 +400,18 @@ private fun WorkspaceChip(
 				showMenu = false
 				onDuplicate()
 			})
+			AppMenuSeparator()
 			AppMenuItem(text = tr("workspace.close"), enabled = canClose, onClick = {
 				showMenu = false
 				onClose()
+			})
+			AppMenuItem(text = tr("workspace.closeOthers"), enabled = canClose, onClick = {
+				showMenu = false
+				onCloseOthers()
+			})
+			AppMenuItem(text = tr("workspace.closeRight"), enabled = canCloseRight, onClick = {
+				showMenu = false
+				onCloseRight()
 			})
 		}
 	}

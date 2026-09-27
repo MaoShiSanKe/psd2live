@@ -214,9 +214,10 @@ enum class WorkspacePreset(
 
 	fun description(): String = tr("workspace.preset.${name.lowercase()}.desc")
 
-	fun canvases(): List<CanvasWindowState> = canvasModes.mapIndexed { index, mode ->
-		CanvasWindowState(id = if (index == 0) PRIMARY_CANVAS_ID else "canvas:${java.util.UUID.randomUUID()}", mode = mode)
-	}
+	fun canvases(secondaryId: (Int) -> String = { "canvas:${java.util.UUID.randomUUID()}" }): List<CanvasWindowState> =
+		canvasModes.mapIndexed { index, mode ->
+			CanvasWindowState(id = if (index == 0) PRIMARY_CANVAS_ID else secondaryId(index), mode = mode)
+		}
 }
 
 /**
@@ -253,8 +254,25 @@ internal fun defaultEditCanvas(): CanvasWindowState = CanvasWindowState(
 
 internal fun defaultEditorWorkspace(): EditorWorkspace = EditorWorkspace(id = DEFAULT_WORKSPACE_ID)
 
-internal fun presetEditorWorkspace(id: String, preset: WorkspacePreset, name: String = ""): EditorWorkspace {
-	val canvases = preset.canvases()
+/**
+ * A fresh session opens one workspace per task preset, edit first. [BLANK][WorkspacePreset.BLANK]
+ * is left out: it only exists to be built up. Ids are fixed so default states compare equal.
+ */
+internal fun defaultEditorWorkspaces(): List<EditorWorkspace> =
+	WorkspacePreset.entries.filter { it != WorkspacePreset.BLANK }.map { preset ->
+		if (preset == WorkspacePreset.EDIT) defaultEditorWorkspace()
+		else {
+			val id = "$DEFAULT_WORKSPACE_ID:${preset.name.lowercase()}"
+			presetEditorWorkspace(id, preset, canvases = preset.canvases { index -> "canvas:$id:$index" })
+		}
+	}
+
+internal fun presetEditorWorkspace(
+	id: String,
+	preset: WorkspacePreset,
+	name: String = "",
+	canvases: List<CanvasWindowState> = preset.canvases(),
+): EditorWorkspace {
 	return EditorWorkspace(
 		id = id,
 		name = name,
@@ -348,7 +366,7 @@ data class PSD2LiveState(
     val workspaceSplitRatio: Float = 0.60f,
 	/** One-shot request for DockWorkspaceView to select a dock module tab (e.g. "layers"). */
 	val requestedDockModule: String? = null,
-    val workspaces: List<EditorWorkspace> = listOf(defaultEditorWorkspace()),
+    val workspaces: List<EditorWorkspace> = defaultEditorWorkspaces(),
     val activeWorkspaceId: String = DEFAULT_WORKSPACE_ID,
     val historyAnnotations: Map<String, HistoryAnnotation> = emptyMap(),
     val inputPath: String = "",
