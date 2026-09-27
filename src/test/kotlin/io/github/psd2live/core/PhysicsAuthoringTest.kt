@@ -119,7 +119,7 @@ class PhysicsAuthoringTest {
 		val json = Json.parseToJsonElement(Physics3Json.write(listOf(group("Tail", "ParamTail1")), 120)!!).jsonObject
 		assertEquals(120, json.getValue("Meta").jsonObject.getValue("Fps").jsonPrimitive.int)
 		assertEquals(120f, Physics3Json.read(json.toString()).fps)
-		assertFailsWith<IllegalArgumentException> { PhysicsAuthoring.setFps(RigEditOverlay(), 0) }
+		assertFailsWith<IllegalArgumentException> { PhysicsAuthoring.setFps(RigEditOverlay(), -1) }
 		assertEquals(30, PhysicsAuthoring.setFps(RigEditOverlay(), 30).physicsFps)
 	}
 }

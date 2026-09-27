@@ -85,6 +85,8 @@ import io.github.psd2live.ui.CachedSkiaPicture
 import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.visibleCanvasGuideIds
 import io.github.psd2live.ui.state.forCanvas
+import io.github.psd2live.ui.state.FramePacer
+import io.github.psd2live.ui.state.frameIntervalNanos
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PRIMARY_CANVAS_ID
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -108,6 +110,8 @@ import kotlin.math.pow
 
 /** How long a paused preview keeps rendering after a pointer change, so the eased follow settles. */
 private const val PAUSED_TRACKING_SETTLE_NANOS = 750_000_000L
+/** A restarted paused-physics pump renders at least this long before it may sleep on a settled model. */
+private const val PAUSED_PHYSICS_WARMUP_NANOS = 400_000_000L
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -391,7 +395,12 @@ fun CanvasViewportComposable(
     // Animated previews read the latest camera each frame. Restarting their pump for
     // every pointer move stalls rendering and makes panning visibly trail the cursor.
     val pausedCameraKey = if (canvasState.animationEnabled) Unit else Triple(zoom, panX, panY)
-	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, canvasState.parameterValues, simultaneousPreviews) {
+	// The project's frame rate paces the pump; unlimited follows the display. Native Cubism renders every
+	// preview on one GL thread, so several visible previews never go past 30 FPS each.
+	val projectFps = canvasState.rigEdits.physicsFps
+	val pumpInterval = maxOf(frameIntervalNanos(projectFps), if (simultaneousPreviews > 1) 33_333_333L else 0L)
+	val physicsLive = canvasState.generatePhysics && !canvasState.meshOnly
+	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, canvasState.parameterValues, pumpInterval, physicsLive) {
 		if (previewModel != null && viewSize.width > 0 && viewSize.height > 0) {
 			if (mode == CanvasMode.PREVIEW) {
 				fun requestFrame(deltaTime: Float, frameNanos: Long) {
@@ -416,12 +425,10 @@ fun CanvasViewportComposable(
 				}
 				if (canvasState.animationEnabled) {
 					var previousFrameNanos = 0L
-					// Native Cubism renders every preview on one GL thread. With multiple visible previews,
-					// cap each pump at 30 FPS so they cannot saturate that thread and stall input.
-					val frameIntervalNanos = if (simultaneousPreviews > 1) 30_000_000L else 0L
+					val pacer = FramePacer(pumpInterval)
 					while (isActive) {
 						val frameNanos = withFrameNanos { it }
-						if (previousFrameNanos != 0L && frameNanos - previousFrameNanos < frameIntervalNanos) continue
+						if (!pacer.due(frameNanos)) continue
 						val deltaTime = if (previousFrameNanos == 0L) {
 							1f / 60f
 						} else {
@@ -429,6 +436,21 @@ fun CanvasViewportComposable(
 						}
 						previousFrameNanos = frameNanos
 						requestFrame(deltaTime, frameNanos)
+					}
+				} else if (physicsLive) {
+					// Paused with physics on: the pose the user sets swings it, so render until it comes to
+					// rest, then sleep until the pointer moves (a slider edit restarts this effect).
+					val started = System.nanoTime()
+					val pacer = FramePacer(pumpInterval)
+					while (isActive) {
+						val now = System.nanoTime()
+						if (now - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.pausedPhysicsSettled &&
+							now - lastPointerActivityNanos.get() > PAUSED_TRACKING_SETTLE_NANOS) {
+							pointerActivity.receive()
+						}
+						val frameNanos = withFrameNanos { it }
+						if (!pacer.due(frameNanos)) continue
+						requestFrame(0f, frameNanos)
 					}
 				} else {
 					requestFrame(0f, System.nanoTime())
@@ -439,14 +461,12 @@ fun CanvasViewportComposable(
 					// an untouched preview from waking up every vsync.
 					while (isActive && canvasState.mouseTrackingEnabled) {
 						pointerActivity.receive()
-						var previousSettlingFrameNanos = 0L
+						val pacer = FramePacer(pumpInterval)
 						while (isActive &&
 							System.nanoTime() - lastPointerActivityNanos.get() <= PAUSED_TRACKING_SETTLE_NANOS
 						) {
 							val frameNanos = withFrameNanos { it }
-							if (simultaneousPreviews > 1 && previousSettlingFrameNanos != 0L &&
-								frameNanos - previousSettlingFrameNanos < 30_000_000L) continue
-							previousSettlingFrameNanos = frameNanos
+							if (!pacer.due(frameNanos)) continue
 							requestFrame(0f, frameNanos)
 						}
 					}
@@ -1282,9 +1302,14 @@ fun CanvasViewportComposable(
 			CanvasPreviewToolbar(
 				animationEnabled = canvasState.animationEnabled,
 				mouseTrackingEnabled = canvasState.mouseTrackingEnabled,
+				physicsEnabled = canvasState.generatePhysics,
+				physicsAvailable = !canvasState.meshOnly,
+				fps = canvasState.rigEdits.physicsFps,
 				enabled = true,
 				onToggleAnimation = { viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) { it.copy(animationEnabled = !it.animationEnabled) } },
 				onToggleMouseTracking = { viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) { it.copy(mouseTrackingEnabled = !it.mouseTrackingEnabled) } },
+				onTogglePhysics = { viewModel.setGeneratePhysics(!canvasState.generatePhysics) },
+				onSelectFps = viewModel::setProjectFps,
 			)
 		}
         // Overlay: Empty hint or Stats Badge

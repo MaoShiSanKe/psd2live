@@ -45,6 +45,7 @@ import androidx.compose.material.Divider
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -1643,7 +1644,7 @@ private fun ParameterRowItem(
 ) {
 	val colors = LocalToolColors.current
 	val isLocked = param.id in state.lockedParameters
-	val currentValue = liveValue(param, state)
+	val currentValue = liveValue(param, state, viewModel)
 	val sliderMarks = remember(keyMarks) { keyMarks.toSliderMarks() }
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 	val canLink = nextSiblingParam != null
@@ -1722,8 +1723,8 @@ private fun LinkedParameterPad(
 	val colors = LocalToolColors.current
 	val xLocked = horizontal.id in state.lockedParameters
 	val yLocked = vertical.id in state.lockedParameters
-	val xValue = liveValue(horizontal, state)
-	val yValue = liveValue(vertical, state)
+	val xValue = liveValue(horizontal, state, viewModel)
+	val yValue = liveValue(vertical, state, viewModel)
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
 	Row(
@@ -2063,12 +2064,16 @@ private fun ParameterKeyMarks?.toSliderMarks(): List<SliderKeyMark> {
 	}
 }
 
-private fun liveValue(param: Parameter, state: PSD2LiveState): Float =
-	if (state.previewLive && state.animationEnabled) {
-		state.previewParameterValues[param.id] ?: state.parameterValues[param.id] ?: param.default
-	} else {
-		state.parameterValues[param.id] ?: param.default
-	}
+/**
+ * What the preview shows for [param]: its frame-by-frame pose while it plays or follows the pointer, so the
+ * sliders move with the model at the project rate. Only the rows recompose on a frame, not the whole panel.
+ */
+@Composable
+private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2LiveViewModel): Float {
+	val pose by viewModel.livePose.collectAsState()
+	val live = state.previewLive && (state.animationEnabled || state.mouseTrackingEnabled)
+	return (if (live) pose[param.id] else null) ?: state.parameterValues[param.id] ?: param.default
+}
 
 private fun formatParamValue(value: Float): String =
 	if (abs(value) >= 10f) "%.1f".format(value) else "%.2f".format(value)

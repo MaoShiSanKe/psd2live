@@ -50,6 +50,8 @@ import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.previewPanelState
+import io.github.psd2live.ui.state.FramePacer
+import io.github.psd2live.ui.state.frameIntervalNanos
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import java.awt.Cursor
@@ -164,11 +166,11 @@ internal fun PendulumEditor(
 	remember(setting, ranges, fps) {
 		PhysicsEngine(listOf(setting), ranges, fps.toFloat()).also { it.carryOver(runtime.engine); runtime.engine = it }
 	}
+	// The inputs are the pose the preview shows, frame for frame; the edit pose while it holds still.
 	val previewState = state.previewPanelState()
-	val live = previewState.animationEnabled && state.previewLive && !state.meshOnly
-	val staticValues = previewState.previewParameterValues.ifEmpty { previewState.parameterValues }
+	val staticValues = previewState.parameterValues
 	val inputs by rememberUpdatedState {
-		val base = (if (live) viewModel.currentLiveParameters else staticValues).mapKeys { it.key.raw }
+		val base = viewModel.livePose.value.ifEmpty { staticValues }.mapKeys { it.key.raw }
 		val s = runtime.setting
 		if (s == null) base else runtime.drag.apply(base, s.inputs.map { it.parameter }, ranges)
 	}
@@ -180,9 +182,11 @@ internal fun PendulumEditor(
 	val outputSelected by rememberUpdatedState(selectedOutput)
 	var tick by remember { mutableLongStateOf(0L) }
 
-	LaunchedEffect(Unit) {
+	LaunchedEffect(fps) {
 		var last = 0L
+		val pacer = FramePacer(frameIntervalNanos(fps))
 		while (true) withFrameNanos { now ->
+			if (!pacer.due(now)) return@withFrameNanos
 			val dt = if (last == 0L) 0f else ((now - last) / 1e9f).coerceAtMost(0.1f)
 			last = now
 			if (dt > 0f) {

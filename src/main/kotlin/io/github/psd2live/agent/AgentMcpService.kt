@@ -790,10 +790,10 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
 
     server.addTool(
         name = "physics_config",
-        description = "Set the physics evaluation order and/or rate. Cubism runs groups in order and a later group reads an earlier group's outputs in the same step; order lists group IDs to run first, the rest follow in their current order. fps is the rate physics3.json and the CMO3 declare (default 60).",
+        description = "Set the physics evaluation order and/or rate. Cubism runs groups in order and a later group reads an earlier group's outputs in the same step; order lists group IDs to run first, the rest follow in their current order. fps is the project's one frame rate: the preview and physics step at it and physics3.json and the CMO3 declare it (default 60; 0 is unlimited: the preview follows the display and no Fps is declared).",
         inputSchema = ToolSchema(properties = buildJsonObject {
             putJsonObject("order") { put("type", "array"); putJsonObject("items") { put("type", "string") } }
-            putJsonObject("fps") { put("type", "integer"); put("minimum", 1); put("maximum", 240) }
+            putJsonObject("fps") { put("type", "integer"); put("minimum", 0); put("maximum", 240) }
             putJsonObject("expected_history_head_node_id") { put("type", "string") }
         }, required = listOf("expected_history_head_node_id")), toolAnnotations = MUTATING,
     ) { request -> mutationResult {

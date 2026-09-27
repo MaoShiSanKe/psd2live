@@ -50,7 +50,7 @@ class PhysicsWorkspaceTest {
                 val configured = workspace.configurePhysics(listOf("Bow"), 120, fitted.historyNodeId)
                 assertEquals("Bow", workspace.listPhysics().first().id)
                 assertEquals(120, workspace.physicsFps())
-                assertFailsWith<IllegalArgumentException> { workspace.configurePhysics(null, 0, configured.historyNodeId) }
+                assertFailsWith<IllegalArgumentException> { workspace.configurePhysics(null, 500, configured.historyNodeId) }
 
                 // History restores the order and rate with the groups.
                 workspace.checkoutHistory(imported.historyNodeId, MutationAuthor.AGENT)

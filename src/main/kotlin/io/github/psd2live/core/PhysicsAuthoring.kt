@@ -58,7 +58,7 @@ object PhysicsAuthoring {
     }
 
     fun setFps(overlay: RigEditOverlay, fps: Int): RigEditOverlay {
-        require(fps in RigEditOverlay.PHYSICS_FPS_RANGE) { "Physics FPS must be within ${RigEditOverlay.PHYSICS_FPS_RANGE}" }
+        require(RigEditOverlay.validFps(fps)) { "FPS must be ${RigEditOverlay.UNLIMITED_FPS} (unlimited) or within ${RigEditOverlay.PHYSICS_FPS_RANGE}" }
         return overlay.copy(physicsFps = fps)
     }
 

@@ -39,7 +39,6 @@ import io.github.psd2live.core.PhysicsOrigin
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
-import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
@@ -81,7 +80,7 @@ internal fun PhysicsPanelView(
 			.padding(horizontal = 8.dp, vertical = 6.dp),
 		verticalArrangement = Arrangement.spacedBy(8.dp),
 	) {
-		PhysicsHeaderCard(viewModel, previewState, groups, state.rigEdits.physicsFps)
+		PhysicsHeaderCard(viewModel, previewState, groups)
 
 		CompactSectionHeader(
 			title = tr("physics.groups"),
@@ -109,9 +108,12 @@ internal fun PhysicsPanelView(
 	}
 }
 
-/** The global switch, how many groups export, and the preview's play/tracking so inputs can be tried. */
+/**
+ * Whether physics runs and how many groups export, with the preview's play/tracking so inputs can be tried.
+ * The switch and the frame rate are the preview toolbar's, next to the model they act on.
+ */
 @Composable
-internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveState, groups: List<PhysicsGroup>, fps: Int) {
+internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveState, groups: List<PhysicsGroup>) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val on = state.generatePhysics && !state.meshOnly
@@ -123,8 +125,12 @@ internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveStat
 		verticalArrangement = Arrangement.spacedBy(6.dp),
 	) {
 		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-			CompactCheckbox(state.generatePhysics, viewModel::setGeneratePhysics, label = tr("physics.enableSimulation"),
-				enabled = !state.meshOnly, modifier = Modifier.weight(1f))
+			Text(
+				tr(if (on) "physics.status.on" else "physics.status.off", fpsText(state.rigEdits.physicsFps)),
+				style = typography.caption.copy(fontSize = 9.5.sp),
+				color = if (on) colors.textPrimary else colors.textMuted,
+				modifier = Modifier.weight(1f),
+			)
 			Text(
 				tr("physics.activeCount", groups.count { it.active }, groups.size),
 				style = typography.caption.copy(fontSize = 9.5.sp),
@@ -144,14 +150,12 @@ internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveStat
 			)
 			CompactCheckbox(state.mouseTrackingEnabled, viewModel::setMouseTrackingEnabled, label = tr("animation.mouseTracking"),
 				modifier = Modifier.weight(1f))
-			FieldLabel(tr("physics.fps"), width = 64, tooltip = tr("physics.fps.tip"))
-			CompactDropdown((FPS_CHOICES + fps).distinct().sorted(), fps, viewModel::setPhysicsFps, modifier = Modifier.width(56.dp), height = 20.dp)
 		}
 	}
 }
 
-/** Cubism Editor's physics rates. */
-private val FPS_CHOICES = listOf(30, 60, 120)
+@Composable
+private fun fpsText(fps: Int): String = if (fps > 0) "$fps FPS" else tr("preview.fps.unlimited")
 
 @Composable
 private fun OrderButton(text: String, tooltip: String, enabled: Boolean, onClick: () -> Unit) {

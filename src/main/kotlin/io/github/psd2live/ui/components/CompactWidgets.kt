@@ -353,6 +353,29 @@ fun IconMouse(
 	}
 }
 
+/** Physics: a swinging pendulum, its bob filled while physics runs. */
+@Composable
+fun IconPhysics(
+	active: Boolean,
+	modifier: Modifier = Modifier.size(14.dp),
+	tint: Color = LocalToolColors.current.textPrimary,
+) {
+	Canvas(modifier = modifier) {
+		val w = size.width
+		val h = size.height
+		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+		val pivot = Offset(w * 0.5f, h * 0.12f)
+		val bob = Offset(w * 0.72f, h * 0.70f)
+		drawLine(tint, Offset(w * 0.28f, pivot.y), Offset(w * 0.72f, pivot.y), strokeWidth = 1.3f, cap = StrokeCap.Round)
+		drawLine(tint, pivot, bob, strokeWidth = 1.3f, cap = StrokeCap.Round)
+		drawCircle(tint, radius = w * 0.15f, center = bob, style = if (active) Fill else stroke)
+		// The swing it came from.
+		drawArc(tint.copy(alpha = 0.55f), startAngle = 100f, sweepAngle = 45f, useCenter = false,
+			topLeft = Offset(pivot.x - h * 0.62f, pivot.y - h * 0.62f), size = androidx.compose.ui.geometry.Size(h * 1.24f, h * 1.24f),
+			style = Stroke(width = 1f, cap = StrokeCap.Round))
+	}
+}
+
 /** Vector Search Glass Icon */
 @Composable
 fun IconSearch(

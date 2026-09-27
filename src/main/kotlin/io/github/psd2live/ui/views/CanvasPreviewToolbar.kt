@@ -42,30 +42,41 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.core.RigEditOverlay
+import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.IconMouse
+import io.github.psd2live.ui.components.IconPhysics
+import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.frostedGlass
 
 /**
- * Preview-tab twin of the edit left toolbar: play/pause and mouse tracking live on the canvas
- * instead of the parameters dock, so the artist can reach them without leaving the viewport.
+ * Preview-tab twin of the edit left toolbar: play/pause, mouse tracking, physics and the project's frame
+ * rate live on the canvas instead of the docks, so the artist can reach them without leaving the viewport.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun BoxScope.CanvasPreviewToolbar(
 	animationEnabled: Boolean,
 	mouseTrackingEnabled: Boolean,
+	physicsEnabled: Boolean,
+	physicsAvailable: Boolean,
+	fps: Int,
 	enabled: Boolean,
 	onToggleAnimation: () -> Unit,
 	onToggleMouseTracking: () -> Unit,
+	onTogglePhysics: () -> Unit,
+	onSelectFps: (Int) -> Unit,
 	modifier: Modifier = Modifier,
 ) {
 	val toolbarInteractionSource = remember { MutableInteractionSource() }
 	val isHoveredBySource by toolbarInteractionSource.collectIsHoveredAsState()
 	var isHoveredByEvent by remember { mutableStateOf(false) }
-	val isToolbarHovered = isHoveredBySource || isHoveredByEvent
+	var fpsMenu by remember { mutableStateOf(false) }
+	// An open rate menu keeps the toolbar open under it.
+	val isToolbarHovered = isHoveredBySource || isHoveredByEvent || fpsMenu
 
 	val animatedWidth by animateDpAsState(
 		targetValue = if (isToolbarHovered) 156.dp else 34.dp,
@@ -153,8 +164,42 @@ internal fun BoxScope.CanvasPreviewToolbar(
 				)
 			},
 		)
+		val physicsOn = physicsEnabled && physicsAvailable
+		PreviewToolRow(
+			label = tr(if (physicsOn) "preview.physics.on" else "preview.physics.off"),
+			isActive = physicsOn,
+			isToolbarExpanded = isExpanded,
+			textAlpha = textAlpha,
+			textOffset = textOffset,
+			enabled = enabled && physicsAvailable,
+			onClick = onTogglePhysics,
+			icon = { tint -> IconPhysics(active = physicsOn, modifier = Modifier.size(14.dp), tint = tint) },
+		)
+		Box {
+			PreviewToolRow(
+				label = tr("preview.fps", if (fps > 0) "$fps" else tr("preview.fps.unlimited")),
+				isActive = false,
+				isToolbarExpanded = isExpanded,
+				textAlpha = textAlpha,
+				textOffset = textOffset,
+				enabled = enabled,
+				onClick = { fpsMenu = true },
+				icon = { tint ->
+					Text(if (fps > 0) "$fps" else "∞", color = tint, fontSize = if (fps >= 100) 9.sp else 10.5.sp,
+						fontWeight = FontWeight.Medium, maxLines = 1)
+				},
+			)
+			TreeContextMenu(expanded = fpsMenu, onDismissRequest = { fpsMenu = false }, minWidth = 140.dp) {
+				for (choice in (RigEditOverlay.FPS_CHOICES + fps).distinct()) {
+					CompactMenuItem(fpsLabel(choice), { fpsMenu = false; onSelectFps(choice) }, active = choice == fps)
+				}
+			}
+		}
 	}
 }
+
+@Composable
+private fun fpsLabel(fps: Int): String = if (fps > 0) "$fps FPS" else tr("preview.fps.unlimited")
 
 @Composable
 private fun PreviewToolRow(

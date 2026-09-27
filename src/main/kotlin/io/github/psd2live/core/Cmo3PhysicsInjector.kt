@@ -69,7 +69,7 @@ internal object Cmo3PhysicsInjector {
 			sources.add(setting)
 		}
 		physicsSet.selectedCubismPhysics = guid("CPhysicsSettingsGuid", "physics-selection")
-		physicsSet.settingFPS = fps
+		physicsSet.settingFPS = fps.takeIf { it > 0 }
 		return rules.size
 	}
 

@@ -1437,6 +1437,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (canvas == null || canvas.id == current.activeCanvas.id) {
 			_sdkFrame.value = frame
 		}
+		if (canvas == null || canvas.id == current.previewControlCanvas().id) publishLivePose(current, frame)
 		val activeAnimatedCanvas = canvas != null && canvas.id == current.activeCanvas.id &&
 			animationEnabled && !current.meshOnly
 		val publishParameters = activeAnimatedCanvas &&
@@ -1457,6 +1458,19 @@ class PSD2LiveViewModel : AutoCloseable {
 					else latest.copy(sdkStatus = "ready", previewParameterValues = values)
 				}
 			}
+		}
+	}
+
+	/** The frame's pose for the panels: all of it while animating, the pointer's look while paused. */
+	private fun publishLivePose(current: PSD2LiveState, frame: CubismSdkFrame) {
+		val panel = current.previewPanelState()
+		val tracked = canvasPointers[frame.viewId] != null && panel.mouseTrackingEnabled && !current.meshOnly
+		val swinging = pausedPhysics
+		_livePose.value = when {
+			frame.animationEnabled -> panel.parameterValues + frame.parameters
+			tracked || swinging.isNotEmpty() -> mergeUnlockedParameterValues(panel.parameterValues,
+				frame.parameters.filterKeys { (tracked && it in POINTER_POSE_PARAMETERS) || it in swinging }, panel.lockedParameters)
+			else -> emptyMap()
 		}
 	}
 
@@ -2009,7 +2023,8 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** Moves [id] [by] places in the evaluation order. */
 	fun movePhysicsGroup(id: String, by: Int) = changePhysicsOverlay { PhysicsAuthoring.move(it, physicsGroups(), id, by) }
 
-	fun setPhysicsFps(fps: Int) = changePhysicsOverlay { PhysicsAuthoring.setFps(it, fps) }
+	/** The project's one frame rate, [RigEditOverlay.UNLIMITED_FPS] for the display's: preview, parameters and physics. */
+	fun setProjectFps(fps: Int) = changePhysicsOverlay { PhysicsAuthoring.setFps(it, fps) }
 
 	/** Sets each output's scale so the swing measured in [peaks] just reaches its parameter's end. */
 	fun fitPhysicsScales(id: String, peaks: Map<Int, Float>) {
@@ -4666,7 +4681,15 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	@Volatile private var latestLiveParameters: Map<ParameterId, Float> = emptyMap()
 
-	val currentLiveParameters: Map<ParameterId, Float> get() = latestLiveParameters
+	private val _livePose = MutableStateFlow<Map<ParameterId, Float>>(emptyMap())
+	/**
+	 * The pose the preview shows now, one update per rendered frame at the project rate: what the parameters
+	 * list and the physics panel read, so neither runs a clock of its own. Empty while the preview holds the
+	 * edit pose (paused, pointer away); readers then show the document's values.
+	 */
+	val livePose: StateFlow<Map<ParameterId, Float>> = _livePose.asStateFlow()
+	/** When the preview's frame pump last advanced the motion clock; the fallback loop stays out while it runs. */
+	private var lastPumpTickNanos = 0L
 	val activeMotionName: String? get() = motionPlayer.activeName
 
 	/**
@@ -4689,24 +4712,30 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	private fun startMotionLoop() {
+		// The preview's frame pump drives the clock (see [requestSdkFrame]), so motion, follow and physics
+		// step with the frames the preview shows. This loop keeps them going when no pump runs.
 		motionJob = scope.launch {
 			while (isActive) {
-				try {
-					advanceMotionFrame()
-				} catch (cancelled: kotlinx.coroutines.CancellationException) {
-					throw cancelled
-				} catch (failure: Throwable) {
-					// One bad frame must not end the loop: nothing would play again until a restart.
-					motionPlayer.stop()
-					addLog(
-						message = failure.message ?: failure.javaClass.simpleName,
-						level = LogLevel.WARNING,
-						tag = "Motion",
-						detail = failure.stackTraceToString(),
-					)
-				}
-				delay(33)
+				if (System.nanoTime() - lastPumpTickNanos > PUMP_IDLE_NANOS) tickMotion()
+				delay((frameIntervalNanos(_state.value.rigEdits.physicsFps).takeIf { it > 0 } ?: UNLIMITED_TICK_NANOS) / 1_000_000L)
 			}
+		}
+	}
+
+	private fun tickMotion() {
+		try {
+			advanceMotionFrame()
+		} catch (cancelled: kotlinx.coroutines.CancellationException) {
+			throw cancelled
+		} catch (failure: Throwable) {
+			// One bad frame must not end the loop: nothing would play again until a restart.
+			motionPlayer.stop()
+			addLog(
+				message = failure.message ?: failure.javaClass.simpleName,
+				level = LogLevel.WARNING,
+				tag = "Motion",
+				detail = failure.stackTraceToString(),
+			)
 		}
 	}
 
@@ -4761,7 +4790,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				motion = motion,
 			).let { inputs ->
 				// 4. Physics reads the posed inputs and writes its outputs over them, as Cubism evaluates it.
-				if (anim) inputs + softwarePhysics.step(current, model, inputs, dt) else inputs.also { softwarePhysics.reset() }
+				if (anim) inputs + stepSoftwarePhysics(PhysicsClock.PLAYING, current, model, inputs, dt) else inputs
 			}
 			latestLiveParameters = liveParams
 			if (current.sdkStatus != "ready") {
@@ -4769,11 +4798,65 @@ class PSD2LiveViewModel : AutoCloseable {
 					if (!latest.previewLive) latest
 					else {
 						val mergedValues = parameterValuesAfterSoftwareFrame(latest, liveParams, pointerActive)
+						_livePose.value = if (anim || pointerActive) mergedValues else emptyMap()
 						if (mergedValues === latest.previewParameterValues) latest
 						else latest.copy(previewParameterValues = mergedValues)
 					}
 				}
 			}
+		}
+		// 5. Paused, physics still runs, on the pose the user sets: a slider or the pointer's look swings it.
+		stepPausedPhysics(current, model, inPreview && !anim && current.generatePhysics && !isMeshOnly, tracking, dt)
+	}
+
+	/** What the software physics is stepping for; switching starts it from rest, as a fresh Cubism model would. */
+	private enum class PhysicsClock { NONE, PLAYING, PAUSED }
+	private var physicsClock = PhysicsClock.NONE
+
+	private fun stepSoftwarePhysics(clock: PhysicsClock, state: PSD2LiveState, model: RigPreviewModel,
+		inputs: Map<ParameterId, Float>, dt: Float): Map<ParameterId, Float> {
+		if (clock != physicsClock) {
+			softwarePhysics.reset()
+			physicsClock = clock
+		}
+		return softwarePhysics.step(state, model, inputs, dt)
+	}
+
+	/**
+	 * The physics outputs a paused preview shows over the edit pose. Cubism's update would also advance the
+	 * paused motion, so the preview runs physics here, on the engine checked against the SDK frame by frame,
+	 * and hands the outputs to the renderer with the pose.
+	 */
+	private var pausedPhysics: Map<ParameterId, Float> = emptyMap()
+	private var pausedPhysicsStillFor = 0f
+	/** True once the paused physics has come to rest; the preview then stops asking for frames. */
+	@Volatile var pausedPhysicsSettled = true
+		private set
+
+	private fun stepPausedPhysics(current: PSD2LiveState, model: RigPreviewModel?, on: Boolean, tracking: Boolean, dt: Float) {
+		if (!on || model == null) {
+			if (physicsClock == PhysicsClock.PAUSED) physicsClock = PhysicsClock.NONE
+			// The software preview let go of the swing: back to the edit pose, unless the pointer holds a look.
+			if (pausedPhysics.isNotEmpty() && current.sdkStatus != "ready" && !pointerActive) {
+				_livePose.value = emptyMap()
+				updateState { latest -> if (latest.previewParameterValues == latest.parameterValues) latest else latest.copy(previewParameterValues = latest.parameterValues) }
+			}
+			pausedPhysics = emptyMap()
+			pausedPhysicsSettled = true
+			return
+		}
+		val panel = current.previewPanelState()
+		val pointer = if (tracking) canvasPointers[canvasRenderKey(panel.previewControlCanvas().id, CanvasMode.PREVIEW)] else null
+		val pose = pausedPointerPose(panel.parameterValues, pointer?.first ?: 0f, -(pointer?.second ?: 0f))
+		val out = stepSoftwarePhysics(PhysicsClock.PAUSED, current, model, pose, dt).filterKeys { it !in panel.lockedParameters }
+		val moved = out.any { (id, value) -> kotlin.math.abs(value - (pausedPhysics[id] ?: Float.NaN)) > PAUSED_PHYSICS_REST || pausedPhysics[id] == null }
+		pausedPhysicsStillFor = if (moved) 0f else pausedPhysicsStillFor + dt
+		pausedPhysicsSettled = pausedPhysicsStillFor >= PAUSED_PHYSICS_REST_SECONDS
+		pausedPhysics = out
+		if (current.sdkStatus != "ready") {
+			val shown = pose + out
+			_livePose.value = shown
+			updateState { latest -> if (!latest.previewLive || latest.previewParameterValues == shown) latest else latest.copy(previewParameterValues = shown) }
 		}
 	}
 
@@ -4858,6 +4941,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		val presentation = if (canvas == null || canvas.id == snapshot.activeCanvas.id)
 			CanvasPresentation.capture(snapshot) else canvas.presentation
 		if (snapshot.previewModel == null) return
+		// The canvas the panels follow drives the clock, once per frame it asks for.
+		val drivesClock = canvas == null || canvas.id == snapshot.previewControlCanvas().id
+		if (drivesClock) {
+			lastPumpTickNanos = System.nanoTime()
+			tickMotion()
+		}
 		val inPreview = snapshot.previewLive
 		if (inPreview && sdkSessionNeedsReload) {
 			ensureSdkSessionLoaded()
@@ -4868,7 +4957,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val previewValues = parameterValuesForPreview(
 			snapshot, presentation.animationEnabled, presentation.parameterValues,
 			presentation.lockedParameters, liveParams,
-		)
+		).let { if (!isAnim && drivesClock && pausedPhysics.isNotEmpty()) it + pausedPhysics else it }
 		sdkSession.render(
 			CubismSdkPreviewSession.RenderRequest(
 				width = width,
@@ -4910,6 +4999,14 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	private companion object {
 		const val SDK_PARAMETER_PUBLISH_INTERVAL_NANOS = 100_000_000L
+		/** Without a pump frame for this long, the fallback loop runs the clock. */
+		const val PUMP_IDLE_NANOS = 100_000_000L
+		/** A paused physics output moving less than this per step is at rest. */
+		const val PAUSED_PHYSICS_REST = 1e-4f
+		/** How long paused physics stays still before the preview stops rendering it. */
+		const val PAUSED_PHYSICS_REST_SECONDS = 0.5f
+		/** The fallback loop's step when the rate is unlimited. */
+		const val UNLIMITED_TICK_NANOS = 16_000_000L
 		/** Cubism's force priority: a triggered motion always replaces the one playing. */
 		const val MOTION_PRIORITY_FORCE = 3
 		const val PREF_LAST_EXPORT_DIR = "last_export_dir"
@@ -4917,6 +5014,20 @@ class PSD2LiveViewModel : AutoCloseable {
 		const val SLIDER_SESSION = "slider"
 		const val MOTION_DRAG_SESSION = "motion-drag"
 	}
+}
+
+/**
+ * The pose a paused preview shows under the pointer at ([x], [y]): Cubism's look offsets added to [values] the
+ * way the renderer applies them, so paused physics reads what is on screen.
+ */
+internal fun pausedPointerPose(values: Map<ParameterId, Float>, x: Float, y: Float): Map<ParameterId, Float> {
+	if (x == 0f && y == 0f) return values
+	val pose = values.toMutableMap()
+	for (binding in io.github.psd2live.core.CUBISM_POINTER_TRACKING_BINDINGS) {
+		val id = ParameterId(binding.parameterId)
+		pose[id] = (values[id] ?: 0f) + x * binding.xScale + y * binding.yScale
+	}
+	return pose
 }
 
 internal fun mergeUnlockedParameterValues(

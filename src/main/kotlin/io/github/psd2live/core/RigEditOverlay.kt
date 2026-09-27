@@ -215,7 +215,11 @@ data class RigEditOverlay(
      * earlier one's outputs within a step. Groups not listed keep their catalog place after the listed ones.
      */
     val physicsOrder: List<String> = emptyList(),
-    /** The physics rate the model declares (physics3.json `Fps`, CMO3 physics FPS). */
+    /**
+     * The project's one frame rate: the preview, the parameters it reports and physics all step at it, and
+     * the model declares it (physics3.json `Fps`, CMO3 physics FPS). [UNLIMITED_FPS] follows the display and
+     * declares none, so a runtime steps physics with its own frames.
+     */
     val physicsFps: Int = DEFAULT_PHYSICS_FPS,
     /** Regenerating sways; replayed after the journal so a changed setting rebuilds their forms. */
     val swingEdits: List<RigSwingEdit> = emptyList(),
@@ -234,7 +238,7 @@ data class RigEditOverlay(
         require(motionClips.mapNotNull { it.builtin?.lowercase() }.let { it.distinct().size == it.size }) { "A generated motion has one override" }
 		require(warpEdits.map { it.id }.distinct().size == warpEdits.size) { "Duplicate Warp IDs" }
         require(physicsEdits.map { it.id }.distinct().size == physicsEdits.size) { "Duplicate physics IDs" }
-        require(physicsFps in PHYSICS_FPS_RANGE) { "Physics FPS must be within ${PHYSICS_FPS_RANGE}" }
+        require(validFps(physicsFps)) { "FPS must be $UNLIMITED_FPS (unlimited) or within $PHYSICS_FPS_RANGE" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
@@ -319,6 +323,11 @@ data class RigEditOverlay(
 		const val DEFAULT_PHYSICS_FPS = 60
 		// Before [Empty], which checks against it while the companion initializes.
 		val PHYSICS_FPS_RANGE = 1..240
+		/** No fixed rate: the preview follows the display and physics steps with each frame. */
+		const val UNLIMITED_FPS = 0
+		/** The rates the preview toolbar offers. */
+		val FPS_CHOICES = listOf(30, 60, 90, 120, UNLIMITED_FPS)
+		fun validFps(fps: Int) = fps == UNLIMITED_FPS || fps in PHYSICS_FPS_RANGE
 		val Empty = RigEditOverlay()
 	}
 }

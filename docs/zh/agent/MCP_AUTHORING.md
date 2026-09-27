@@ -120,7 +120,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 
 - `physics.put` 只修改给出的字段：已有 ID（含生成组）以当前组为基础，新 ID 以「头部与身体输入、一节长 10、无输出」为基础。列表字段整体替换；`length` 为整串总长并按比例缩放各节，`mobility/delay/acceleration` 与 `output_scale` 作用于全部节段 / 输出，`segment_count` 调整节数。只给 `enabled` 时只开关该组；生成组修改后替换生成版本，直到 `physics.delete`。旧版 `input_parameter` / `output_parameter` 仍按单输入单输出读取。
 - 同一参数只能被一个生效组驱动；自定义组驱动生成组的输出时，生成组让位。`inspect scope=physics` 返回 `fps` 和按计算顺序排列的组，每组带 `origin`、`enabled`、`active`、`overridden`、`replaced_by` 与 `issue`。
-- `physics.config`：`order` 列出要先计算的组 ID，其余组按原顺序排在后面；Cubism 按顺序计算，后面的组在同一步里读到前面组的输出。`fps` 为 1–240 的整数。
+- `physics.config`：`order` 列出要先计算的组 ID，其余组按原顺序排在后面；Cubism 按顺序计算，后面的组在同一步里读到前面组的输出。`fps` 是工程唯一的帧率（预览、参数刷新和物理共用），为 1–240 的整数，0 表示无限制（预览跟随显示器，导出不声明 `Fps`）。
 - `physics.import`：`path` 为 physics3.json 的绝对路径。文件中的组成为自定义组（同 ID 替换已有组，生成组在 `physics.delete` 前保持被替换），按文件顺序排在现有组之后；驱动相同输出的其他自定义组被关闭；文件的 `Fps` 成为工程的计算 FPS。返回导入的 ID、被关闭的组和缺失参数。
 - `physics.fit`：用面板响应曲线的标准晃动（向右牵动 1 秒后松开）运行该组，把每个输出的倍率调整到峰值恰好达到参数端点的 `target`%（默认 100）；不动的输出保持原倍率。
 - 先为输出参数制作运动端点，再接物理。静态姿态拼图不包含时间推进；用 `physics.simulate` 以阶跃输入检查幅度、过冲与稳定时间，整体动作用 `view.motion`（其原生采样环境需可用）。

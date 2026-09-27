@@ -7,7 +7,7 @@ object Physics3Json {
 	/** The settings of a file, in file order, and its `Fps` if it declares one. */
 	data class Physics3(val settings: List<RigPhysicsEdit>, val fps: Float?)
 
-	/** physics3.json for [settings] stepping at [fps], or null when there are none. */
+	/** physics3.json for [settings] stepping at [fps] (no `Fps` when unlimited), or null when there are none. */
 	fun write(settings: List<RigPhysicsEdit>, fps: Int): String? {
 		if (settings.isEmpty()) return null
 		val dictionary = settings.map { rule -> "{ \"Id\": ${JsonPrimitive(rule.id)}, \"Name\": ${JsonPrimitive(rule.name)} }" }
@@ -19,7 +19,7 @@ object Physics3Json {
 		    "TotalInputCount": ${settings.sumOf { it.inputs.size }},
 		    "TotalOutputCount": ${settings.sumOf { it.outputs.size }},
 		    "VertexCount": ${settings.sumOf { it.segments.size + 1 }},
-		    "Fps": $fps,
+		    ${if (fps > 0) "\"Fps\": $fps," else ""}
 		    "EffectiveForces": { "Gravity": { "X": 0, "Y": -1 }, "Wind": { "X": 0, "Y": 0 } },
 		    "PhysicsDictionary": [${dictionary.joinToString(",")}]
 		  },
