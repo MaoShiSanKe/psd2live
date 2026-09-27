@@ -746,6 +746,11 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                         viewModel.closeCanvas(canvas.id)
                     },
                 )
+            } else {
+                CompactMenuItem(text = tr("dock.close"), onClick = {
+                    menu = false
+                    viewModel.setModuleVisible(id, false)
+                })
             }
         }
     }
