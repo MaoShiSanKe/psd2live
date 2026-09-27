@@ -46,12 +46,11 @@ Linux / macOS: `./gradlew`.
 
 ```powershell
 .\gradlew.bat test
-.\gradlew.bat distZip
 .\gradlew.bat createDistributable
 .\gradlew.bat packageDistributionForCurrentOS
 ```
 
-変更に対応するテストを実行してください。distZip は distributions.main に設定された文書等を収集するもので、完全なポータブルアプリではありません。createDistributable はランタイム付きのアプリディレクトリを、packageDistributionForCurrentOS は現在の OS 向けに設定されたインストーラーを作ります。任意のネイティブブリッジは別途ビルドし、専有 SDK リソースをコミット・同梱しないでください。
+変更に対応するテストを実行してください。createDistributable はランタイム付きのアプリディレクトリを、packageDistributionForCurrentOS は現在の OS 向けに設定されたインストーラーを作ります。どちらも現在のプラットフォームのネイティブライブラリだけを含み、アプリのリソースディレクトリに LICENSE、THIRD_PARTY_NOTICES.md、licenses/ を同梱します。任意のネイティブブリッジは別途ビルドし、専有 SDK リソースをコミット・同梱しないでください。
 
 ## 出力確認
 

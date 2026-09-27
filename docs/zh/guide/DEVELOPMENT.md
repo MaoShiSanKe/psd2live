@@ -50,12 +50,11 @@ Linux / macOS: `./gradlew`.
 
 ```powershell
 .\gradlew.bat test
-.\gradlew.bat distZip
 .\gradlew.bat createDistributable
 .\gradlew.bat packageDistributionForCurrentOS
 ```
 
-运行与修改范围相关的测试。`distZip` 只按 `distributions.main` 收集文档等已配置内容，不能当作完整便携应用。`createDistributable` 生成带运行时的应用目录；`packageDistributionForCurrentOS` 生成当前平台已配置的安装格式。原生桥接需另行构建，专有 SDK 资源不应提交或随项目发布。
+运行与修改范围相关的测试。`createDistributable` 生成带运行时的应用目录；`packageDistributionForCurrentOS` 生成当前平台已配置的安装格式，两者都只带当前平台的原生库，并在应用资源目录附带 `LICENSE`、`THIRD_PARTY_NOTICES.md` 与 `licenses/`。原生桥接需另行构建，专有 SDK 资源不应提交或随项目发布。
 
 ## 输出检查
 

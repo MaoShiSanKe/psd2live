@@ -46,12 +46,11 @@ Defaults below come from `Main.kt`. The GUI PipelineConfig starts with mesh spac
 
 ```powershell
 .\gradlew.bat test
-.\gradlew.bat distZip
 .\gradlew.bat createDistributable
 .\gradlew.bat packageDistributionForCurrentOS
 ```
 
-Run tests relevant to your change. `distZip` collects the documentation and other content configured in `distributions.main`; it is not a complete portable app. `createDistributable` builds the application directory with its runtime, and `packageDistributionForCurrentOS` builds the configured installer formats for the current OS. Build the optional native bridge separately and do not commit or redistribute proprietary SDK resources with this project.
+Run tests relevant to your change. `createDistributable` builds the application directory with its runtime, and `packageDistributionForCurrentOS` builds the configured installer formats for the current OS. Both carry only the current platform's native libraries and ship `LICENSE`, `THIRD_PARTY_NOTICES.md` and `licenses/` in the app resources directory. Build the optional native bridge separately and do not commit or redistribute proprietary SDK resources with this project.
 
 ## Inspect outputs
 
