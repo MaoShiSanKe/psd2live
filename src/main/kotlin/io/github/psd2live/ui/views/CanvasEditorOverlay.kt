@@ -2041,17 +2041,7 @@ private fun BoxScope.CanvasToolBar(
                             textAlpha = textAlpha,
                             textOffset = textOffset,
                             isBusy = editor.busy,
-                            icon = { color ->
-                                Canvas(Modifier.size(14.dp)) {
-                                    drawCircle(color, size.minDimension * 0.28f, center = Offset(size.width * 0.32f, size.height * 0.5f), style = Stroke(1.2f))
-                                    drawCircle(
-                                        if (sub == GlueSubTool.BRUSH) GlueColorB else color,
-                                        size.minDimension * 0.28f,
-                                        center = Offset(size.width * 0.68f, size.height * 0.5f),
-                                        style = Stroke(1.2f),
-                                    )
-                                }
-                            },
+                            icon = { color -> GlueSubToolIcon(subTool = sub, color = color) },
                             onClick = {
                                 editor.glueSubTool = sub
                                 editor.activateTool(CanvasTool.GLUE)
@@ -2092,7 +2082,7 @@ private fun BoxScope.CanvasToolBar(
                         textAlpha = textAlpha,
                         textOffset = textOffset,
                         isBusy = editor.busy,
-                        icon = { color -> BrushShapeIcon(shape = shape, color = color, size = 14.dp) },
+                        icon = { color -> BrushShapeIcon(shape = shape, color = color) },
                         onClick = {
                             editor.brushShape = shape
                             if (editor.tool !in listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)) {
@@ -2133,7 +2123,7 @@ private fun BoxScope.CanvasToolBar(
                         textAlpha = textAlpha,
                         textOffset = textOffset,
                         isBusy = editor.busy,
-                        icon = { color -> PaintShapeIcon(shape = shape, color = color, iconSize = 14.dp) },
+                        icon = { color -> PaintShapeIcon(shape = shape, color = color) },
                         onClick = {
                             editor.selectPaintShape(shape)
                             focus()
@@ -2340,225 +2330,6 @@ private fun ShapeItemRow(
                         modifier = Modifier.padding(end = 4.dp),
                     )
                 }
-            }
-        }
-    }
-}
-
-/** The shape tool's icon: whichever of the three faces is in hand. */
-@Composable
-private fun PaintShapeIcon(shape: PaintShape, color: Color, iconSize: Dp = 18.dp) {
-    Canvas(Modifier.size(iconSize)) { drawPaintShape(shape, color) }
-}
-
-/** The shape, drawn in an 18-unit box scaled to whatever the caller's canvas is. */
-private fun DrawScope.drawPaintShape(shape: PaintShape, color: Color) {
-    val s = size.width / 18f
-    when (shape) {
-        PaintShape.LINE -> {
-            drawLine(color, Offset(3 * s, 15 * s), Offset(15 * s, 3 * s), 1.3f * s)
-            drawCircle(color, 1.5f * s, Offset(3 * s, 15 * s))
-            drawCircle(color, 1.5f * s, Offset(15 * s, 3 * s))
-        }
-        PaintShape.RECTANGLE ->
-            drawRect(color, Offset(3 * s, 4 * s), Size(12 * s, 10 * s), style = Stroke(1.3f * s))
-        PaintShape.ELLIPSE ->
-            drawOval(color, Offset(3 * s, 4 * s), Size(12 * s, 10 * s), style = Stroke(1.3f * s))
-    }
-}
-
-@Composable
-private fun ToolIcon(
-    tool: CanvasTool,
-    color: Color,
-    brushShape: BrushShape? = null,
-    paintShape: PaintShape? = null,
-) {
-    Canvas(Modifier.size(18.dp)) {
-        val s = size.width / 18f
-        fun p(x: Float, y: Float) = Offset(x * s, y * s)
-        fun line(x: Float, y: Float, a: Float, b: Float) = drawLine(color, p(x, y), p(a, b), 1.3f * s)
-        when (tool) {
-            CanvasTool.SELECT -> {
-                val path = Path().apply { moveTo(3 * s, 2 * s); lineTo(14 * s, 10 * s); lineTo(9 * s, 11 * s); lineTo(7 * s, 16 * s); close() }
-                drawPath(path, color, style = Stroke(s * 1.3f))
-            }
-            CanvasTool.LASSO_SELECT -> {
-                val path = Path().apply {
-                    moveTo(5 * s, 13 * s)
-                    cubicTo(2 * s, 6 * s, 12 * s, 2 * s, 14 * s, 7 * s)
-                    cubicTo(16 * s, 12 * s, 9 * s, 16 * s, 5 * s, 13 * s)
-                    lineTo(3 * s, 16 * s)
-                }
-                drawPath(path, color, style = Stroke(s * 1.3f))
-            }
-            CanvasTool.BRUSH_SELECT -> {
-                drawCircle(color, 4.5f * s, p(9f, 9f), style = Stroke(s * 1.2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.5f * s, 2f * s))))
-                drawCircle(color, 2f * s, p(9f, 9f))
-            }
-            CanvasTool.BRUSH, CanvasTool.SMOOTH -> {
-                line(6f, 11f, 14f, 3f)
-                line(9f, 14f, 17f, 6f)
-                line(14f, 3f, 17f, 6f)
-                if (brushShape == BrushShape.LINE) {
-                    line(2f, 16f, 8f, 12f)
-                } else if (brushShape == BrushShape.RECTANGLE) {
-                    drawRect(color, Offset(2 * s, 11 * s), Size(6 * s, 5 * s), style = Stroke(1.3f * s))
-                } else {
-                    drawCircle(color, 3 * s, p(5f, 14f), style = Stroke(1.3f * s))
-                }
-                if (tool == CanvasTool.SMOOTH) line(1f, 4f, 7f, 4f)
-            }
-            CanvasTool.INFLATE -> {
-                drawCircle(color, 3.4f * s, p(9f, 9f), style = Stroke(1.3f * s))
-                listOf(0f to -1f, 0f to 1f, -1f to 0f, 1f to 0f).forEach { (dx, dy) ->
-                    val tipX = 9f + dx * 7.8f
-                    val tipY = 9f + dy * 7.8f
-                    line(9f + dx * 5.2f, 9f + dy * 5.2f, tipX, tipY)
-                    val perpX = -dy * 1.6f
-                    val perpY = dx * 1.6f
-                    line(tipX, tipY, tipX - dx * 2.2f + perpX, tipY - dy * 2.2f + perpY)
-                    line(tipX, tipY, tipX - dx * 2.2f - perpX, tipY - dy * 2.2f - perpY)
-                }
-            }
-            CanvasTool.SKELETON_POSE -> {
-                // A bone swung about its head: posing turns bones.
-                drawBoneIcon(p(4f, 14f), p(11f, 7f), color, stroke = 1.2f * s, headRadius = 1.9f * s)
-                drawArc(color, -78f, 58f, false, p(-9f, 1f), Size(26 * s, 26 * s), style = Stroke(1.3f * s, cap = StrokeCap.Round))
-                val end = Math.toRadians(-20.0)
-                val tip = p(4f + 13f * kotlin.math.cos(end).toFloat(), 14f + 13f * kotlin.math.sin(end).toFloat())
-                val along = Offset(-kotlin.math.sin(end).toFloat(), kotlin.math.cos(end).toFloat())
-                val out = Offset(kotlin.math.cos(end).toFloat(), kotlin.math.sin(end).toFloat())
-                drawPath(Path().apply {
-                    moveTo(tip.x + along.x * 2.2f * s, tip.y + along.y * 2.2f * s)
-                    lineTo(tip.x + out.x * 2f * s, tip.y + out.y * 2f * s)
-                    lineTo(tip.x - out.x * 2f * s, tip.y - out.y * 2f * s)
-                    close()
-                }, color)
-            }
-            CanvasTool.SKELETON_EDIT -> {
-                // A bone with its two joints open as handles: editing is about where the joints sit.
-                drawBoneIcon(p(3.5f, 14.5f), p(14.5f, 3.5f), color, stroke = 1.2f * s, headRadius = 0f)
-                drawCircle(color, 2.4f * s, p(3.5f, 14.5f), style = Stroke(1.3f * s))
-                drawCircle(color, 2.4f * s, p(14.5f, 3.5f), style = Stroke(1.3f * s))
-            }
-            CanvasTool.CREATE_WARP -> {
-                drawRect(color, Offset(3 * s, 3 * s), Size(12 * s, 12 * s), style = Stroke(s * 1.3f))
-                line(7f, 3f, 7f, 15f)
-                line(11f, 3f, 11f, 15f)
-                line(3f, 7f, 15f, 7f)
-                line(3f, 11f, 15f, 11f)
-            }
-            CanvasTool.CREATE_ROTATION -> {
-                // Arrow: shaft + head + pivot
-                line(5f, 13f, 13f, 5f)
-                val head = Path().apply {
-                    moveTo(14.5f * s, 3.5f * s)
-                    lineTo(11.2f * s, 4.2f * s)
-                    lineTo(13.8f * s, 6.8f * s)
-                    close()
-                }
-                drawPath(head, color)
-                drawCircle(color, 2.2f * s, p(5f, 13f))
-            }
-            CanvasTool.CREATE_DEFORM_PATH -> {
-                val path = Path().apply { moveTo(2 * s, 14 * s); cubicTo(6 * s, -2 * s, 12 * s, 20 * s, 16 * s, 4 * s) }
-                drawPath(path, color, style = Stroke(1.3f * s))
-                drawCircle(color, 2 * s, p(2f, 14f))
-                drawCircle(color, 2 * s, p(16f, 4f))
-                drawCircle(color, 2 * s, p(9f, 9f))
-            }
-            CanvasTool.SUBDIVIDE -> {
-                // A triangle with its edge midpoints picked out: exactly what the brush makes.
-                line(9f, 3f, 3f, 15f)
-                line(3f, 15f, 15f, 15f)
-                line(15f, 15f, 9f, 3f)
-                drawCircle(color, 1.7f * s, p(6f, 9f), style = Stroke(1.1f * s))
-                drawCircle(color, 1.7f * s, p(12f, 9f), style = Stroke(1.1f * s))
-                drawCircle(color, 1.7f * s, p(9f, 15f), style = Stroke(1.1f * s))
-            }
-            CanvasTool.KNIFE -> {
-                // A blade over the seam it is opening.
-                line(2.5f, 15.5f, 12f, 15.5f)
-                val blade = Path().apply {
-                    moveTo(4f * s, 12.5f * s)
-                    lineTo(11.5f * s, 3f * s)
-                    lineTo(15f * s, 6.5f * s)
-                    lineTo(7.5f * s, 16f * s)
-                    close()
-                }
-                drawPath(blade, color, style = Stroke(1.2f * s))
-            }
-            CanvasTool.GLUE -> {
-                drawCircle(color, 3.5f * s, p(6.5f, 9f), style = Stroke(s * 1.2f))
-                drawCircle(color, 3.5f * s, p(11.5f, 9f), style = Stroke(s * 1.2f))
-                line(7.5f, 7f, 10.5f, 7f)
-                line(7.5f, 11f, 10.5f, 11f)
-            }
-            CanvasTool.PAINT_BRUSH -> {
-                line(6f, 12f, 15f, 3f)
-                line(7.5f, 13.5f, 16.5f, 4.5f)
-                line(15f, 3f, 16.5f, 4.5f)
-                val tip = Path().apply {
-                    moveTo(6f * s, 12f * s)
-                    lineTo(3f * s, 15f * s)
-                    cubicTo(2f * s, 16f * s, 4f * s, 17f * s, 5.5f * s, 15.5f * s)
-                    lineTo(7.5f * s, 13.5f * s)
-                    close()
-                }
-                drawPath(tip, color, style = Stroke(1.3f * s))
-            }
-            CanvasTool.PAINT_PENCIL -> {
-                line(5f, 13f, 14f, 4f)
-                line(7f, 15f, 16f, 6f)
-                line(14f, 4f, 16f, 6f)
-                val point = Path().apply {
-                    moveTo(5f * s, 13f * s)
-                    lineTo(2.5f * s, 15.5f * s)
-                    lineTo(7f * s, 15f * s)
-                    close()
-                }
-                drawPath(point, color, style = Stroke(1.3f * s))
-                drawCircle(color, 0.8f * s, p(2.8f, 15.2f))
-            }
-            CanvasTool.PAINT_ERASER -> {
-                val eraser = Path().apply {
-                    moveTo(4f * s, 10f * s)
-                    lineTo(10f * s, 4f * s)
-                    lineTo(14f * s, 8f * s)
-                    lineTo(8f * s, 14f * s)
-                    close()
-                }
-                drawPath(eraser, color, style = Stroke(1.3f * s))
-                line(7f, 7f, 11f, 11f)
-            }
-            CanvasTool.PAINT_BUCKET -> {
-                val bucket = Path().apply {
-                    moveTo(5f * s, 7f * s)
-                    lineTo(11f * s, 4f * s)
-                    lineTo(14f * s, 10f * s)
-                    lineTo(8f * s, 13f * s)
-                    close()
-                }
-                drawPath(bucket, color, style = Stroke(1.3f * s))
-                drawCircle(color, 1.2f * s, p(4f, 14f))
-            }
-            CanvasTool.PAINT_EYEDROPPER -> {
-                line(6f, 12f, 12f, 6f)
-                line(8f, 14f, 14f, 8f)
-                line(12f, 6f, 14f, 8f)
-                val tip = Path().apply {
-                    moveTo(6f * s, 12f * s)
-                    lineTo(3f * s, 15f * s)
-                    lineTo(8f * s, 14f * s)
-                    close()
-                }
-                drawPath(tip, color, style = Stroke(1.2f * s))
-                drawCircle(color, 1.8f * s, p(14.5f, 5.5f))
-            }
-            CanvasTool.PAINT_SHAPE -> {
-                // The row carries the face in hand, the way the deform brush's row carries its shape.
-                drawPaintShape(paintShape ?: PaintShape.LINE, color)
             }
         }
     }
@@ -3128,45 +2899,6 @@ private fun StructureActionChip(
             fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
         )
-    }
-}
-
-/**
- * Renders a crisp vector glyph representing [shape].
- */
-@Composable
-private fun BrushShapeIcon(
-    shape: BrushShape,
-    color: Color,
-    size: Dp = 14.dp,
-    modifier: Modifier = Modifier,
-) {
-    Canvas(modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val strokeW = 1.3f
-        when (shape) {
-            BrushShape.CIRCLE -> {
-                drawCircle(color, radius = w * 0.42f, center = Offset(w * 0.5f, h * 0.5f), style = Stroke(strokeW))
-                drawCircle(color.copy(alpha = 0.5f), radius = w * 0.18f, center = Offset(w * 0.5f, h * 0.5f), style = Stroke(strokeW * 0.8f))
-            }
-            BrushShape.LINE -> {
-                val p1 = Offset(w * 0.18f, h * 0.82f)
-                val p2 = Offset(w * 0.82f, h * 0.18f)
-                drawLine(color, p1, p2, strokeWidth = strokeW * 1.2f, cap = StrokeCap.Round)
-                drawCircle(color, radius = 1.8f, center = p1)
-                drawCircle(color, radius = 1.8f, center = p2)
-            }
-            BrushShape.RECTANGLE -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(w * 0.16f, h * 0.22f),
-                    size = Size(w * 0.68f, h * 0.56f),
-                    cornerRadius = CornerRadius(1.5f, 1.5f),
-                    style = Stroke(strokeW)
-                )
-            }
-        }
     }
 }
 
