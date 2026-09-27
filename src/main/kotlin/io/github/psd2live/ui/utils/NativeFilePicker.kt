@@ -15,13 +15,6 @@ object NativeFilePicker {
 
 	private val isPicking = AtomicBoolean(false)
 
-	/**
-	 * Resets the active picking state, primarily for testing purposes.
-	 */
-	internal fun resetPickingState() {
-		isPicking.set(false)
-	}
-
 	private fun createFileDialog(window: Window?, title: String, mode: Int): FileDialog {
 		return when (window) {
 			is Dialog -> FileDialog(window, title, mode)

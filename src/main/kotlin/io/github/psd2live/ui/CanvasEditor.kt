@@ -1500,47 +1500,6 @@ internal class CanvasEditor(
         showRebuildMeshDialog = true
     }
 
-    /** Rebuild a tree-selected ArtMesh through the same parameter-aware route as paint apply. */
-    fun rebuildLayerMeshFromHierarchy(layerId: String) {
-        if (!editable) {
-            error = tr("editor.mesh.rebuildBusy")
-            return
-        }
-        if (isPainting || paintSession?.isDirty == true) {
-            error = tr("editor.mesh.rebuildDirtyPaint")
-            return
-        }
-        val preview = state.previewModel ?: run {
-            error = tr("editor.mesh.rebuildUnavailable")
-            return
-        }
-        val drawable = preview.rig.puppet.drawables.firstOrNull {
-            it.id.raw == layerId || preview.rig.layerIdByDrawableId[it.id.raw] == layerId
-        }
-        val sourceLayer = sourceLayerFor(preview.analysis, layerId)
-        if (drawable?.mesh == null || sourceLayer == null || sourceLayer is MouthLipLayer) {
-            error = tr("editor.mesh.rebuildUnavailable")
-            return
-        }
-
-        val previousSession = paintSession
-        val session = startPaintSession(layerId, forceReload = true) ?: run {
-            error = tr("editor.mesh.rebuildUnavailable")
-            return
-        }
-        error = null
-        try {
-            commitPaintSession(
-                rebuildMesh = true,
-                summary = tr("canvas.hierarchy.meshRebuilt", session.layerName),
-                preserveSourceRaster = true,
-            )
-        } catch (failure: Exception) {
-            if (state.previewModel === preview) paintSession = previousSession
-            error = tr("editor.mesh.rebuildFailed", failure.message ?: failure.javaClass.simpleName)
-        }
-    }
-
     private fun resetRebuiltMeshEdits(
         overlay: RigEditOverlay,
         drawableId: String,
@@ -2031,13 +1990,6 @@ internal class CanvasEditor(
         showRebuildMeshDialog = false
     }
 
-    /** The bounds the paint session's layer occupies on the document canvas. */
-    fun activePaintLayerBounds(): LayerBounds? {
-        val layerId = targetLayerId(paintTarget()) ?: state.selectedLayerId ?: return null
-        val analysis = state.analysis ?: state.previewModel?.analysis ?: return null
-        return sourceLayerFor(analysis, layerId)?.bounds
-    }
-
     /**
      * Every id a paint target can be named by: the rig maps generated drawables back to their layer,
      * and generated mouth lips carry a suffix on top of it.
@@ -2144,74 +2096,6 @@ internal class CanvasEditor(
         if (lastPaintBitmapAt != 0L && now - lastPaintBitmapAt < 40_000_000L) return
         lastPaintBitmapAt = now
         paintSession?.refreshPreview()
-    }
-
-    fun screenToAtlasPixel(pos: Offset, t: CanvasTarget, viewport: CanvasViewport): Pair<Int, Int>? {
-        val atlas = state.previewModel?.atlas ?: return null
-        val placement = targetPlacement(t) ?: return null
-        val page = atlas.pages.getOrNull(placement.page) ?: return null
-
-        val screenPts = screen(t.geometry.points, t, viewport)
-        val mesh = (model.drawables.firstOrNull { it.id.raw == t.id }?.mesh) ?: return null
-        val uvs = mesh.uvs
-        val indices = mesh.indices
-
-        for (tri in indices.indices step 3) {
-            val ia = indices[tri]
-            val ib = indices[tri + 1]
-            val ic = indices[tri + 2]
-            val a = screenPts[ia]
-            val b = screenPts[ib]
-            val c = screenPts[ic]
-
-            val v0 = b - a
-            val v1 = c - a
-            val v2 = pos - a
-            val d00 = v0.x * v0.x + v0.y * v0.y
-            val d01 = v0.x * v1.x + v0.y * v1.y
-            val d11 = v1.x * v1.x + v1.y * v1.y
-            val d20 = v2.x * v0.x + v2.y * v0.y
-            val d21 = v2.x * v1.x + v2.y * v1.y
-            val denom = d00 * d11 - d01 * d01
-            if (abs(denom) < 1e-6f) continue
-            val v = (d11 * d20 - d01 * d21) / denom
-            val w = (d00 * d21 - d01 * d20) / denom
-            val u = 1f - v - w
-            if (u in -0.01f..1.01f && v in -0.01f..1.01f && w in -0.01f..1.01f) {
-                val uc = (u.coerceIn(0f, 1f) * uvs[ia * 2] + v.coerceIn(0f, 1f) * uvs[ib * 2] + w.coerceIn(0f, 1f) * uvs[ic * 2])
-                val vc = (u.coerceIn(0f, 1f) * uvs[ia * 2 + 1] + v.coerceIn(0f, 1f) * uvs[ib * 2 + 1] + w.coerceIn(0f, 1f) * uvs[ic * 2 + 1])
-                val px = (uc * page.image.width).toInt()
-                val py = (vc * page.image.height).toInt()
-                if (px in placement.x until (placement.x + placement.width) &&
-                    py in placement.y until (placement.y + placement.height)
-                ) {
-                    return px to py
-                }
-            }
-        }
-
-        // Fallback: direct projection into layer canvas bounds and placement
-        val layerId = targetLayerId(t) ?: return null
-        val classifiedLayer = state.analysis?.layers?.firstOrNull { it.source.id.raw == layerId }
-        val layerBounds = classifiedLayer?.source?.bounds
-        if (layerBounds != null) {
-            val canvasX = viewport.canvasX(pos.x.toInt())
-            val canvasY = viewport.canvasY(pos.y.toInt())
-            val localX = canvasX - layerBounds.left
-            val localY = canvasY - layerBounds.top
-            if (localX >= 0f && localX < layerBounds.width &&
-                localY >= 0f && localY < layerBounds.height
-            ) {
-                val px = (placement.x + localX * placement.scale).toInt()
-                val py = (placement.y + localY * placement.scale).toInt()
-                if (px in placement.x until (placement.x + placement.width) &&
-                    py in placement.y until (placement.y + placement.height)
-                ) {
-                    return px to py
-                }
-            }
-        }
-        return null
     }
 
     fun cancel() {

@@ -1,6 +1,5 @@
 package io.github.psd2live.ui.views
 
-import io.github.psd2live.ui.views.physics.PhysicsPanelView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -68,112 +67,18 @@ import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactSectionHeader
 import io.github.psd2live.ui.components.CompactSlider
-import io.github.psd2live.ui.components.CompactTabBar
 import io.github.psd2live.ui.components.CompactTextField
-import io.github.psd2live.ui.components.ExportActionSection
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.localizedName
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
-import io.github.psd2live.ui.state.InspectorTab
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
 import kotlin.math.roundToInt
-
-@Composable
-fun InspectorView(
-	state: PSD2LiveState,
-	viewModel: PSD2LiveViewModel,
-	onGenerate: () -> Unit = { viewModel.generateRig() },
-	onChooseOutput: () -> Unit = {},
-	modifier: Modifier = Modifier,
-) {
-	val colors = LocalToolColors.current
-	val modelSettingsExpanded = state.modelSettingsExpanded
-
-	Column(
-		modifier = modifier
-			.fillMaxHeight()
-			.background(colors.panelBackground)
-			.border(BorderStroke(1.dp, colors.divider)),
-	) {
-		// 1. Collapsible Model Settings Section (模型与绑定设置)
-		ModelSettingsSection(
-			state = state,
-			viewModel = viewModel,
-			isExpanded = modelSettingsExpanded,
-			onToggleExpand = { viewModel.setModelSettingsExpanded(!modelSettingsExpanded) },
-		)
-
-		Divider(color = colors.divider, thickness = 1.dp)
-
-		// 2. Output Directory & Generate/Export Action (导出与交付)
-		ExportActionSection(
-			state = state,
-			viewModel = viewModel,
-			onGenerate = onGenerate,
-			onChooseOutput = onChooseOutput,
-		)
-
-		Divider(color = colors.divider, thickness = 1.dp)
-
-		// 3. Tabs Section: Layers, Parameters, Tool Details, Mesh, Inspector, Animation & Physics
-		val inspectorTabs = listOf(
-			tr("tab.layers"),
-			tr("tab.parameters"),
-			tr("tab.toolDetails"),
-			tr("tab.mesh"),
-			tr("tab.inspector"),
-			tr("tab.animation"),
-			tr("tab.physics"),
-		)
-		val selectedIndex = when (state.activeInspectorTab) {
-			InspectorTab.LAYERS -> 0
-			InspectorTab.PARAMETERS -> 1
-			InspectorTab.TOOL_DETAILS -> 2
-			InspectorTab.MESH -> 3
-			InspectorTab.INSPECTOR -> 4
-			InspectorTab.ANIMATION -> 5
-			InspectorTab.PHYSICS -> 6
-		}
-
-		CompactTabBar(
-			tabs = inspectorTabs,
-			selectedIndex = selectedIndex,
-			onTabSelected = { index ->
-				viewModel.setInspectorTab(
-					when (index) {
-						0 -> InspectorTab.LAYERS
-						1 -> InspectorTab.PARAMETERS
-						2 -> InspectorTab.TOOL_DETAILS
-						3 -> InspectorTab.MESH
-						4 -> InspectorTab.INSPECTOR
-						5 -> InspectorTab.ANIMATION
-						6 -> InspectorTab.PHYSICS
-						else -> InspectorTab.LAYERS
-					}
-				)
-			},
-			height = 26.dp,
-		)
-
-		Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-			when (state.activeInspectorTab) {
-				InspectorTab.LAYERS -> LayersTableView(state, viewModel)
-				InspectorTab.PARAMETERS -> ParametersListView(state, viewModel)
-				InspectorTab.TOOL_DETAILS -> ToolDetailsView(viewModel.canvasEditor, viewModel, state)
-				InspectorTab.MESH -> MeshPanelView(state, viewModel)
-				InspectorTab.INSPECTOR -> InspectorPanelView(viewModel.canvasEditor, viewModel, state)
-				InspectorTab.ANIMATION -> AnimationPanelView(viewModel, state)
-				InspectorTab.PHYSICS -> PhysicsPanelView(viewModel, state)
-			}
-		}
-	}
-}
 
 @Composable
 private fun MotionItemWithPlay(

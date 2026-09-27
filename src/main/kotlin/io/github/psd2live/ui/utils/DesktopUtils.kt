@@ -123,18 +123,6 @@ object DesktopUtils {
 	}
 
 	/**
-	 * Resets directory open debouncing tracking, primarily for unit tests.
-	 */
-	internal fun resetOpenDebounce() {
-		synchronized(lock) {
-			lastOpenTime = 0L
-			lastOpenDirectory = null
-		}
-		directoryOpener = defaultDirectoryOpener
-		browserOpener = defaultBrowserOpener
-	}
-
-	/**
 	 * Copies plain text to the system clipboard.
 	 */
 	fun copyToClipboard(text: String): Boolean {

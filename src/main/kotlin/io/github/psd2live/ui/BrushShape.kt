@@ -169,22 +169,6 @@ private fun insideTriangle(p: Offset, a: Offset, b: Offset, c: Offset): Boolean 
 }
 
 /**
- * Returns true if [p] is within the influence perimeter of the brush along the stroke segment [from] -> [to].
- */
-internal fun isPointInBrush(
-    p: Offset,
-    from: Offset,
-    to: Offset,
-    radius: Float,
-    shape: BrushShape,
-    angleDeg: Float = 0f,
-    aspect: Float = 1f,
-    hardness: Float = 0f,
-): Boolean {
-    return computeBrushWeight(p, from, to, radius, hardness, shape, angleDeg, aspect) > 0f
-}
-
-/**
  * Computes the falloff weight [0.0..1.0] for point [p] given brush shape, orientation, radius, and hardness.
  * Uses realistic brush core-and-Euclidean-falloff dynamics matching the standard circular brush.
  */

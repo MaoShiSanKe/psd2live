@@ -3,7 +3,6 @@ package io.github.psd2live.core
 import org.umamo.format.art.SourceArt
 import org.umamo.format.art.SourceLayer
 import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
 import java.nio.file.Path
 
 enum class SemanticTag(val canonicalName: String, val group: LayerGroup) {
@@ -243,26 +242,6 @@ data class CubismRuntimeBundle(
 		require(assets.any { it.path == manifestPath }) { "Cubism preview manifest is missing: $manifestPath" }
 	}
 
-	fun encodePreviewBundle(): ByteArray = ByteArrayOutputStream().use { output ->
-		output.write("QDPREVIEW".encodeToByteArray())
-		output.writeLittleEndian(1, Int.SIZE_BYTES)
-		val manifest = manifestPath.encodeToByteArray()
-		output.writeLittleEndian(manifest.size.toLong(), Int.SIZE_BYTES)
-		output.writeLittleEndian(assets.size.toLong(), Int.SIZE_BYTES)
-		output.write(manifest)
-		for (asset in assets) {
-			val path = asset.path.encodeToByteArray()
-			output.writeLittleEndian(path.size.toLong(), Int.SIZE_BYTES)
-			output.writeLittleEndian(asset.bytes.size.toLong(), Long.SIZE_BYTES)
-			output.write(path)
-			output.write(asset.bytes)
-		}
-		output.toByteArray()
-	}
-
-	private fun ByteArrayOutputStream.writeLittleEndian(value: Long, byteCount: Int) {
-		for (index in 0 until byteCount) write((value ushr (index * 8)).toInt() and 0xff)
-	}
 }
 
 data class LayerClassificationOverride(

@@ -134,22 +134,6 @@ internal object MouthContour {
         }
     }
 
-    /** Compatibility adapter for callers expecting Triple<x, topY, bottomY>. */
-    fun denseColumns(boundary: List<Triple<Float, Float, Float>>): List<Triple<Float, Float, Float>> {
-        if (boundary.size < 2) return boundary
-        val loop = (boundary.map { it.first to it.second } + boundary.asReversed().map { it.first to it.third })
-            .fold(mutableListOf<Pair<Float, Float>>()) { result, p ->
-                if (result.lastOrNull() != p) result.add(p)
-                result
-            }.also { if (it.size > 1 && it.first() == it.last()) it.removeAt(it.lastIndex) }
-        val cols = splitAndResample(loop, DEFAULT_SEGMENTS)
-        if (cols.isEmpty()) return boundary
-        return cols.map { col ->
-            val x = (col.top.first + col.bottom.first) * 0.5f
-            Triple(x, col.top.second, col.bottom.second)
-        }
-    }
-
     fun overlapCount(columns: Int): Int = ((columns - 1) * 0.08f).roundToInt().coerceIn(2, 6).coerceAtMost((columns - 1) / 2)
 
     /** Each tip continues along the opposite half; neither tip stops at a mouth corner. */

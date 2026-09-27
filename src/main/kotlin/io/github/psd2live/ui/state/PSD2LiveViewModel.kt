@@ -1028,17 +1028,6 @@ class PSD2LiveViewModel : AutoCloseable {
         applyRigStructure("delete", "param_group", groupId)
     }
 
-    fun setParameterGroupOpen(groupId: String, open: Boolean) {
-        applyRigStructure(
-            "open",
-            "param_group",
-            groupId,
-            kotlinx.serialization.json.buildJsonObject {
-                put("open", kotlinx.serialization.json.JsonPrimitive(open))
-            },
-        )
-    }
-
     fun setParameterGroupLabelColor(groupId: String, color: org.umamo.runtime.model.ParameterLabelColor) {
         applyRigStructure(
             "color",
@@ -1257,13 +1246,6 @@ class PSD2LiveViewModel : AutoCloseable {
             else it.copy(hierarchySearch = search)
         }
     }
-    fun adjustHierarchyWidth(deltaDp: Float, min: Float = 100f, max: Float = 600f) {
-        updateState {
-            val next = (it.hierarchyWidth + deltaDp).coerceIn(min, max)
-            if (next == it.hierarchyWidth) it
-            else it.copy(hierarchyWidth = next, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1)
-        }
-    }
     fun setDrawOrderRulerWidth(width: Float, min: Float = 14f, max: Float = 100f) {
         val clamped = width.coerceIn(min, max)
         updateState {
@@ -1271,21 +1253,7 @@ class PSD2LiveViewModel : AutoCloseable {
             else it.copy(drawOrderRulerWidth = clamped, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1)
         }
     }
-    fun adjustDrawOrderRulerWidth(deltaDp: Float, min: Float = 14f, max: Float = 100f) {
-        updateState {
-            val next = (it.drawOrderRulerWidth + deltaDp).coerceIn(min, max)
-            if (next == it.drawOrderRulerWidth) it
-            else it.copy(drawOrderRulerWidth = next, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1)
-        }
-    }
     fun setModelSettingsExpanded(expanded: Boolean) { updateState { it.copy(modelSettingsExpanded = expanded, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1) } }
-    fun setWorkspaceSplitRatio(value: Float) {
-        val clamped = value.coerceIn(0.25f, 0.85f)
-        updateState {
-            if (it.workspaceSplitRatio == clamped) it
-            else it.copy(workspaceSplitRatio = clamped, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1)
-        }
-    }
 
     fun setInspectorCollapsed(collapsed: Boolean) {
         updateState { current ->
@@ -1307,13 +1275,6 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (it.requestedDockModule == null) it else it.copy(requestedDockModule = null)
 		}
 	}
-    fun adjustWorkspaceSplitRatio(deltaRatio: Float, min: Float = 0.25f, max: Float = 0.85f) {
-        updateState {
-            val next = (it.workspaceSplitRatio + deltaRatio).coerceIn(min, max)
-            if (next == it.workspaceSplitRatio) it
-            else it.copy(workspaceSplitRatio = next, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1)
-        }
-    }
     fun setCanvasView(
         zoom: Float, x: Float, y: Float,
         canvasId: String = _state.value.activeCanvas.id,
@@ -1583,60 +1544,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
-	fun setMeshSpacing(spacing: Int) {
-		updateState { it.copy(meshSpacing = spacing.coerceIn(16, 128), meshMaxEdgeDistance = spacing.toFloat(), meshInteriorDensity = spacing.toFloat()) }
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun setMeshOuterMargin(margin: Float) {
-		updateState { it.copy(meshOuterMargin = margin.coerceIn(0f, 32f)) }
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun setMeshEdgeWidth(width: Float) {
-		updateState { it.copy(meshEdgeWidth = width.coerceIn(0.5f, 32f)) }
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun setMeshEdgeMode(mode: io.github.psd2live.core.MeshEdgeMode) {
-		updateState { it.copy(meshEdgeMode = mode) }
-		schedulePreviewRebuild()
-		editorChanged()
-	}
-
-	fun setMeshMaxEdgeDistance(distance: Float) {
-		updateState { it.copy(meshMaxEdgeDistance = distance.coerceIn(6f, 128f), meshSpacing = distance.toInt().coerceIn(16, 128)) }
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun setMeshInteriorDensity(density: Float) {
-		updateState { it.copy(meshInteriorDensity = density.coerceIn(6f, 128f)) }
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun setMeshFillAlgorithm(algorithm: io.github.psd2live.core.MeshFillAlgorithm) {
-		updateState { it.copy(meshFillAlgorithm = algorithm) }
-		schedulePreviewRebuild()
-		editorChanged()
-	}
-
-	fun setMeshFillParameters(parameters: io.github.psd2live.core.MeshFillParameters) {
-		updateState { it.copy(meshFillParameters = parameters) }
-		schedulePreviewRebuild()
-		editorChanged()
-	}
-
-	fun setMeshSuppressBoundaryDiagonals(enabled: Boolean) {
-		updateState { it.copy(meshSuppressBoundaryDiagonals = enabled) }
-		schedulePreviewRebuild()
-		editorChanged()
-	}
-
 	/** Applies the global mesh defaults in one rebuild (panel “no selection” mode). */
 	fun setGlobalMeshSettings(settings: MeshSettings) {
 		updateState {
@@ -1770,20 +1677,6 @@ class PSD2LiveViewModel : AutoCloseable {
         schedulePreviewRebuild()
         editorChanged()
     }
-    fun setMouthShape(shape: String) {
-        require(shape in listOf("flat", "smile", "w"))
-        updateState { it.copy(mouthShape = shape, mouthCurve = io.github.psd2live.core.MouthCurve.preset(shape)) }
-        schedulePreviewRebuild()
-        editorChanged()
-    }
-    fun setMouthSettings(shape: String, curve: io.github.psd2live.core.MouthCurve, color: Int?, thickness: Float) {
-        require(shape in io.github.psd2live.core.MouthCurve.presets + "custom")
-        require(color == null || color in 0..0xFFFFFF)
-        require(thickness.isFinite() && thickness in 0.5f..8f)
-        updateState { it.copy(mouthShape = shape, mouthCurve = curve, mouthColor = color, mouthThickness = thickness) }
-        schedulePreviewRebuild()
-        editorChanged()
-    }
 
     fun setMouthShapeCurve(shape: String, curve: io.github.psd2live.core.MouthCurve) {
         require(shape in io.github.psd2live.core.MouthCurve.presets + "custom")
@@ -1825,22 +1718,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	    editorChanged()
 	}
 
-	fun setGenerateDeformers(enabled: Boolean) {
-		updateState { it.copy(generateDeformers = enabled) }
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
 	fun setFeatureDisplacementEnabled(enabled: Boolean) {
 		updateState { it.copy(featureDisplacementEnabled = enabled) }
 		schedulePreviewRebuild()
 		editorChanged()
-	}
-
-	fun setExportMotions(enabled: Boolean) {
-		updateState { it.copy(exportMotions = enabled) }
-		scheduleRuntimeBundleUpdate()
-	    editorChanged()
 	}
 
 	fun setMotionIdle(enabled: Boolean) {
@@ -2491,28 +2372,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
-	fun setExportOptionsExpanded(expanded: Boolean) {
-		updateState { it.copy(exportOptionsExpanded = expanded) }
-	    markWorkspaceChanged()
-	}
-
-	fun setMotionSubExpanded(expanded: Boolean) {
-		updateState { it.copy(motionSubExpanded = expanded) }
-	    markWorkspaceChanged()
-	}
-
-	fun setPhysicsSubExpanded(expanded: Boolean) {
-		updateState { it.copy(physicsSubExpanded = expanded) }
-	    markWorkspaceChanged()
-	}
-
 	fun setDynamicsSubExpanded(expanded: Boolean) {
 		updateState { it.copy(dynamicsSubExpanded = expanded) }
-	    markWorkspaceChanged()
-	}
-
-	fun setProjectOutputsExpanded(expanded: Boolean) {
-		updateState { it.copy(projectOutputsExpanded = expanded) }
 	    markWorkspaceChanged()
 	}
 
@@ -2523,11 +2384,6 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun setStrengthSubExpanded(expanded: Boolean) {
 		updateState { it.copy(strengthSubExpanded = expanded) }
-	    markWorkspaceChanged()
-	}
-
-	fun setAdvancedExpanded(expanded: Boolean) {
-		updateState { it.copy(advancedExpanded = expanded) }
 	    markWorkspaceChanged()
 	}
 
@@ -2776,10 +2632,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (capture.index < updated.size) updated[capture.index] = binding else updated.add(binding)
 		applyBindings(capture.action, updated)
 		cancelKeyCapture()
-	}
-
-	fun addKeyBinding(action: ShortcutAction) {
-		beginKeyCapture(action, _state.value.keymap.bindingsFor(action).size)
 	}
 
 	fun removeKeyBinding(action: ShortcutAction, index: Int) {
@@ -3201,8 +3053,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (changed) markWorkspaceChanged()
 	}
 
-	fun setTabViewOptions(options: TabViewOptions) = setCanvasViewOptions(options = options)
-
 	/**
 	 * Swaps the edit session's display toggles to [mode]'s own set. Each hierarchy mode remembers
 	 * what the user left it with; a mode's preset only seeds its first visit.
@@ -3325,15 +3175,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (changed) markWorkspaceChanged()
 	}
 
-	fun adjustLogPanelHeight(deltaDp: Float, min: Float = 80f, max: Float = 450f) {
-		updateState {
-			val next = (it.logPanelHeight + deltaDp).coerceIn(min, max)
-			if (next == it.logPanelHeight) it
-			else it.copy(logPanelHeight = next)
-		}
-		markWorkspaceChanged()
-	}
-
 	fun openLightbox(imageBytes: ByteArray, title: String? = null) {
 		updateState { it.copy(lightboxImage = imageBytes, lightboxTitle = title) }
 	}
@@ -3377,11 +3218,6 @@ class PSD2LiveViewModel : AutoCloseable {
 				updateState { it.copy(errorMessage = err) }
 			}
 		}
-	}
-
-	fun setInspectorTab(tab: InspectorTab) {
-		updateState { it.copy(activeInspectorTab = tab) }
-	    markWorkspaceChanged()
 	}
 
 	fun setAnimationEnabled(enabled: Boolean) {
@@ -3542,11 +3378,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
-	fun toggleDeformerVisibility(deformerId: String) {
-		val current = _state.value.isDeformerVisible(deformerId)
-		setDeformerVisibility(deformerId, !current)
-	}
-
 	fun setDeformerVisibility(deformerId: String, visible: Boolean) {
 		updateState {
 			val updated = it.deformerVisibility + (deformerId to visible)
@@ -3635,21 +3466,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	fun showOnlyLayers(layerIds: Set<String>) {
-		if (layerIds.isEmpty()) return
-		val analysis = _state.value.analysis ?: return
-		val updated = analysis.layers.associate { it.source.id.raw to (it.source.id.raw in layerIds) }
-		updateState {
-			it.copy(
-				layerVisibility = updated,
-				isolationSnapshot = null,
-				isolatedLayerId = null,
-				statusText = tr("status.visibilityChanged"),
-			)
-		}
-	    markWorkspaceChanged()
-	}
-
 	fun deleteLayer(layerId: String) {
 		val analysis = _state.value.analysis
 		val layerName = analysis?.layers?.firstOrNull { it.source.id.raw == layerId }?.source?.name ?: layerId
@@ -3658,19 +3474,6 @@ class PSD2LiveViewModel : AutoCloseable {
 				deletedLayerIds = current.deletedLayerIds + layerId,
 				selectedLayerId = if (current.selectedLayerId == layerId) null else current.selectedLayerId,
 				statusText = tr("status.layerDeleted", layerName),
-			)
-		}
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun restoreLayer(layerId: String) {
-		val analysis = _state.value.analysis
-		val layerName = analysis?.layers?.firstOrNull { it.source.id.raw == layerId }?.source?.name ?: layerId
-		updateState { current ->
-			current.copy(
-				deletedLayerIds = current.deletedLayerIds - layerId,
-				statusText = tr("status.layerRestored", layerName),
 			)
 		}
 		schedulePreviewRebuild()
@@ -3980,28 +3783,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
-	fun resetHierarchyOverrides() {
-		updateState { current ->
-			current.copy(
-				parentOverrides = emptyMap(),
-				statusText = tr("status.hierarchyReset"),
-			)
-		}
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
-	fun resetItemHierarchy(itemId: String) {
-		updateState { current ->
-			current.copy(
-				parentOverrides = current.parentOverrides - itemId,
-				statusText = tr("status.hierarchyUpdated"),
-			)
-		}
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
 	fun setLayerDrawOrder(targetId: String, order: Float) {
 		val clamped = order.coerceIn(0f, 1000f)
 		val model = _state.value.previewModel
@@ -4018,13 +3799,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		val layerId = model?.rig?.layerIdByDrawableId?.get(targetId) ?: targetId
 		updateState { current ->
 			current.copy(drawOrderOverrides = current.drawOrderOverrides - layerId - targetId)
-		}
-		editorChanged()
-	}
-
-	fun resetAllDrawOrders() {
-		updateState { current ->
-			current.copy(drawOrderOverrides = emptyMap())
 		}
 		editorChanged()
 	}

@@ -119,10 +119,6 @@ private val CURVE_COLORS = listOf(
 
 internal fun motionCurveColor(index: Int): Color = CURVE_COLORS[index.mod(CURVE_COLORS.size)]
 
-/** A generated motion's label, or a user clip's name. */
-internal fun motionTitle(clip: MotionClip): String =
-	clip.builtin?.let { builtinMotionTitle(it) } ?: clip.name
-
 internal fun builtinMotionTitle(name: String): String = tr("export.motion.${name.replaceFirstChar(Char::lowercase)}")
 
 /** One choice in the editor's motion picker: a generated motion or a user clip. */

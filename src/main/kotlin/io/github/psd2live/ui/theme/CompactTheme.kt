@@ -110,7 +110,6 @@ data class ToolColors(
 			tagUserText = Color(0xFF1A5FA8),
 		)
 
-		fun forTheme(dark: Boolean): ToolColors = if (dark) Dark else Light
 	}
 }
 

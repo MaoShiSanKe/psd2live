@@ -85,7 +85,6 @@ internal fun ToolDetailsView(
         return
     }
     val target = editor.target()
-    val isPathTool = editor.tool == CanvasTool.CREATE_DEFORM_PATH || editor.drawingPath
 
     Column(
         modifier = modifier

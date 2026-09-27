@@ -670,14 +670,6 @@ data class PSD2LiveState(
 		return defaultSettings
 	}
 
-	fun getLayerDrawOrder(layerId: String): Float? {
-		drawOrderOverrides[layerId]?.let { return it }
-		val model = previewModel ?: return null
-		val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
-		val drawable = model.rig.puppet.drawables.firstOrNull { it.id.raw == drawableId }
-		return drawable?.drawOrder
-	}
-
 	fun isLayerVisible(layerId: String, defaultVisible: Boolean = true): Boolean {
 		layerVisibility[layerId]?.let { return it }
 		val parentId = when {

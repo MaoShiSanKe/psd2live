@@ -136,9 +136,6 @@ data class TutorialStep(
 			TutorialCompletion.HISTORY_TAB,
 			TutorialCompletion.EXPORT_DIALOG -> false
 		}
-
-	/** @deprecated Prefer [forcesMenu]; kept so call sites migrate cleanly. */
-	val forcesFileMenu: Boolean get() = forcesMenu == "file"
 }
 
 data class TutorialDefinition(

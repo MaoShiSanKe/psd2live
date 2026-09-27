@@ -118,7 +118,6 @@ internal class PixelPatch {
 internal data class PaintStrokeRecord(
     val id: String,
     val name: String,
-    val timestampMillis: Long = System.currentTimeMillis(),
     val patch: PixelPatch,
 )
 

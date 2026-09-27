@@ -93,36 +93,4 @@ internal object MouthStrokeMesh {
         }
     }.toIntArray()
 
-    /** Coordinates in the independently packed capsule texture, in pixels. */
-    fun texturePositions(count: Int, roundJoins: List<Int> = emptyList()): FloatArray {
-        val result = FloatArray((count * 2 + (CAP_SEGMENTS + 2) * 2 + roundJoins.size * (JOIN_SEGMENTS + 2)) * 2)
-        for (i in 0 until count) for (v in 0..1) {
-            val j = i * 4 + v * 2
-            result[j] = 20f + 88f * i / (count - 1)
-            result[j + 1] = 8f + 16f * v
-        }
-        for (end in 0..1) {
-            val base = count * 4 + end * (CAP_SEGMENTS + 2) * 2
-            val centerX = if (end == 0) 10f else 118f
-            result[base] = centerX
-            result[base + 1] = 16f
-            for (step in 0..CAP_SEGMENTS) {
-                val angle = PI * step / CAP_SEGMENTS
-                val j = base + (step + 1) * 2
-                result[j] = centerX + 8f * sin(angle).toFloat() * if (end == 0) -1f else 1f
-                result[j + 1] = 16f + 8f * cos(angle).toFloat()
-            }
-        }
-        for (join in roundJoins.indices) {
-            val base = (count * 2 + (CAP_SEGMENTS + 2) * 2 + join * (JOIN_SEGMENTS + 2)) * 2
-            result[base] = 10f
-            result[base + 1] = 42f
-            for (step in 0..JOIN_SEGMENTS) {
-                val angle = 2.0 * PI * step / JOIN_SEGMENTS
-                result[base + (step + 1) * 2] = 10f + 8f * cos(angle).toFloat()
-                result[base + (step + 1) * 2 + 1] = 42f + 8f * sin(angle).toFloat()
-            }
-        }
-        return result
-    }
 }

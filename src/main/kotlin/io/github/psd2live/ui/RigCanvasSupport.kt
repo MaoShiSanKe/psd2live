@@ -44,30 +44,6 @@ internal object RigCanvasSupport {
 	fun evaluate(model: RigPreviewModel, parameters: Map<ParameterId, Float> = emptyMap()): DeformedGeometry =
 		evaluator.evaluate(model.rig.puppet, parameters)
 
-	fun paintChecker(g: Graphics2D, width: Int, height: Int) {
-		val cell = 14
-		for (row in 0..height / cell) for (column in 0..width / cell) {
-			g.color = if ((row + column) and 1 == 0) Color(61, 64, 70) else Color(54, 57, 63)
-			g.fillRect(
-				column * cell,
-				row * cell,
-				minOf(cell, width - column * cell),
-				minOf(cell, height - row * cell),
-			)
-		}
-	}
-
-	fun paintCanvasBoundary(g: Graphics2D, viewport: CanvasViewport) {
-		g.color = Color(198, 205, 216, 105)
-		g.stroke = BasicStroke(1f)
-		g.drawRect(
-			viewport.offsetX.toInt(),
-			viewport.offsetY.toInt(),
-			(viewport.canvasWidth * viewport.scale).toInt().coerceAtLeast(1),
-			(viewport.canvasHeight * viewport.scale).toInt().coerceAtLeast(1),
-		)
-	}
-
 	fun paintTexturedRig(
 		g: Graphics2D,
 		model: RigPreviewModel,

@@ -216,9 +216,6 @@ data class SkeletonSpec(
 		return out
 	}
 
-	/** The bone that owns [drawableId], if any; the first owner in hierarchy order wins. */
-	fun ownerOf(drawableId: String): SkeletonBone? = topological().firstOrNull { drawableId in it.drawableIds }
-
 	/** Moves a joint: the bone head and the tail of a parent that ends on it travel together. */
 	fun withJointMoved(boneId: String, end: BoneEnd, x: Float, y: Float): SkeletonSpec {
 		val bone = bone(boneId) ?: return this

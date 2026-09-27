@@ -847,43 +847,6 @@ fun IconCollapseAll(
 	}
 }
 
-/** Conversion / lattice division grid. */
-@Composable
-fun IconGridDivision(
-	modifier: Modifier = Modifier.size(12.dp),
-	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.1f, cap = StrokeCap.Round)
-		drawRect(tint, Offset(w * 0.15f, h * 0.15f), Size(w * 0.7f, h * 0.7f), style = stroke)
-		drawLine(tint, Offset(w * 0.15f, h * 0.5f), Offset(w * 0.85f, h * 0.5f), stroke.width)
-		drawLine(tint, Offset(w * 0.5f, h * 0.15f), Offset(w * 0.5f, h * 0.85f), stroke.width)
-	}
-}
-
-/** Bezier edit division (curved lattice). */
-@Composable
-fun IconBezierDivision(
-	modifier: Modifier = Modifier.size(12.dp),
-	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.15f, cap = StrokeCap.Round)
-		val path = Path().apply {
-			moveTo(w * 0.15f, h * 0.78f)
-			cubicTo(w * 0.2f, h * 0.2f, w * 0.8f, h * 0.8f, w * 0.85f, h * 0.22f)
-		}
-		drawPath(path, tint, style = stroke)
-		drawCircle(tint, w * 0.1f, Offset(w * 0.15f, h * 0.78f), style = Fill)
-		drawCircle(tint, w * 0.1f, Offset(w * 0.85f, h * 0.22f), style = Fill)
-		drawCircle(tint, w * 0.08f, Offset(w * 0.5f, h * 0.5f), style = Fill)
-	}
-}
-
 /** Draw-order / stacking icon. */
 @Composable
 fun IconDrawOrder(

@@ -2012,14 +2012,6 @@ object RigBuilder {
         )
     }
 
-    private fun mouthBoundarySamples(data: MeshData): List<Triple<Float, Float, Float>> {
-        val columns = MouthContour.uniformColumns(data, MouthContour.DEFAULT_SEGMENTS)
-        return columns.map { col ->
-            val x = (col.top.first + col.bottom.first) * 0.5f
-            Triple(x, col.top.second, col.bottom.second)
-        }
-    }
-
     // Shared columns guarantee that the fill and both lip ribbons interpolate identical curves.
     private fun mouthContourMesh(data: MeshData, layer: ClassifiedLayer, frame: Bounds,
                                  space: HeadCoordinateSpace?, placement: AtlasPlacement, atlasWidth: Int, atlasHeight: Int = atlasWidth): MeshData {

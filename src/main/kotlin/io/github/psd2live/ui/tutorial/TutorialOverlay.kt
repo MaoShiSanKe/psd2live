@@ -193,7 +193,6 @@ fun TutorialCoachCard(
 	val nextId = nextTutorialId
 	val bodyStyle = typography.caption.copy(fontSize = 11.5.sp, lineHeight = 16.sp)
 	val actionStyle = typography.caption.copy(lineHeight = 17.sp)
-	val canAdvance = prerequisiteMet && (step.allowsNext || reviewing)
 
 	Column(
 		modifier = modifier

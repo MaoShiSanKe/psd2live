@@ -36,8 +36,6 @@ internal data class HeadCoordinateSpace(
 
 	fun boundsToAligned(bounds: Bounds): Bounds = transformedBounds(bounds, ::toAligned)
 
-	fun boundsToCanvas(bounds: Bounds): Bounds = transformedBounds(bounds, ::toCanvas)
-
 	private fun transformedBounds(
 		bounds: Bounds,
 		transform: (Float, Float) -> Pair<Float, Float>,

@@ -115,7 +115,6 @@ import io.github.psd2live.ui.components.DrawOrderRuler
 import io.github.psd2live.ui.components.DrawOrderInputDialog
 import io.github.psd2live.ui.components.IconContextualWarp
 import io.github.psd2live.ui.components.IconMeshWireframe
-import io.github.psd2live.ui.components.RebuildMeshPromptDialog
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -133,228 +132,6 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
-
-@Composable
-fun WorkspaceView(
-	state: PSD2LiveState,
-	viewModel: PSD2LiveViewModel,
-	modifier: Modifier = Modifier,
-) {
-	val colors = LocalToolColors.current
-
-	Box(modifier = modifier.fillMaxSize()) {
-		Column(
-			modifier = Modifier
-				.fillMaxSize()
-				.background(colors.panelBackground)
-				.border(BorderStroke(1.dp, colors.divider)),
-		) {
-			// Browser-style tab strip with the integrated deform-path tool
-			Row(
-				modifier = Modifier
-					.fillMaxWidth()
-					.height(26.dp)
-					.background(colors.windowBackground)
-					.border(BorderStroke(1.dp, colors.divider)),
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				WorkspaceStrip(
-					state = state,
-					viewModel = viewModel,
-					layoutModules = emptySet(),
-					modifier = Modifier.weight(1f),
-				)
-
-			}
-
-			// Main workspace area: the active tab owns its canvas mode and view options.
-			// The hierarchy sidebar is a full-height sibling of (canvas + log), so the log
-			// dock never sits under the tree.
-			Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-				HierarchyView(
-					state = state,
-					viewModel = viewModel,
-					canvasMode = state.activeCanvas.mode,
-					onRequestOpenDeformPaths = { layerId ->
-						viewModel.selectLayer(layerId)
-						viewModel.requestCanvasPathTool()
-					},
-					onRequestCreate = { kind, relation, isDeformer, id ->
-						viewModel.editorForFocusedCanvas().beginTreeCreate(kind, relation, isDeformer, id)
-					},
-				)
-			}
-		}
-
-		val editor = viewModel.canvasAwaitingMeshRebuild()
-		if (editor != null) {
-			RebuildMeshPromptDialog(
-				layerName = editor.paintSession?.layerName ?: "",
-				onConfirmRebuild = { editor.commitPaintSession(rebuildMesh = true) },
-				onKeepExisting = { editor.commitPaintSession(rebuildMesh = false) },
-				onDismiss = { editor.showRebuildMeshDialog = false },
-			)
-		}
-		viewModel.pendingMeshSplit?.let { offer ->
-			io.github.psd2live.ui.components.MeshSplitDialog(
-				offer = offer,
-				onSplit = viewModel::confirmMeshSplit,
-				onDismiss = viewModel::dismissMeshSplit,
-				onDismissAll = viewModel::dismissAllMeshSplits,
-			)
-		}
-		viewModel.pendingBatchMeshSplit?.let { batchOffer ->
-			io.github.psd2live.ui.components.BatchMeshSplitDialog(
-				batchOffer = batchOffer,
-				onSplit = viewModel::confirmBatchMeshSplit,
-				onDismiss = viewModel::dismissBatchMeshSplit,
-			)
-		}
-	}
-}
-
-@Composable
-private fun HierarchyView(
-	state: PSD2LiveState,
-	viewModel: PSD2LiveViewModel,
-	canvasMode: CanvasMode,
-	onRequestOpenDeformPaths: ((String) -> Unit)? = null,
-	onRequestCreate: ((CreatePlacementKind, CreateRelation, Boolean, String) -> Unit)? = null,
-) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val density = LocalDensity.current
-	val model = state.previewModel
-
-	val treeWidth = state.hierarchyWidth.dp
-	val isTreeCollapsed = state.hierarchyCollapsed
-
-	val meshPreviewHover = remember(model) { mutableStateOf<MeshPreviewHover?>(null) }
-	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
-	var splitterCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
-	var activeDrawOrderTarget by remember { mutableStateOf<DrawOrderDialogTarget?>(null) }
-
-	Box(modifier = Modifier.fillMaxSize()) {
-		Row(
-			modifier = Modifier
-				.fillMaxSize()
-				.onGloballyPositioned { rowCoords = it },
-		) {
-			// Left: Hierarchy Tree (when expanded)
-			if (!isTreeCollapsed) {
-				Column(
-					modifier = Modifier
-						.width(treeWidth)
-						.fillMaxHeight()
-						.background(colors.panelBackground)
-						.border(BorderStroke(1.dp, colors.divider)),
-				) {
-					if (model == null) {
-						Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-							Text(
-								text = tr("canvas.hierarchy.empty"),
-								style = typography.caption.copy(fontSize = 11.sp),
-								color = colors.textMuted,
-								modifier = Modifier.padding(12.dp),
-							)
-						}
-					} else {
-						CompositionLocalProvider(LocalMeshPreviewHover provides meshPreviewHover) {
-						HierarchyTreeList(
-							model = model,
-							state = state,
-							viewModel = viewModel,
-							onRequestSetOrder = { targetId, name, currentOrder, defaultOrder, isOverridden ->
-								activeDrawOrderTarget = DrawOrderDialogTarget(targetId, name, currentOrder, defaultOrder, isOverridden)
-							},
-							onRequestOpenDeformPaths = onRequestOpenDeformPaths,
-							onRequestCreate = onRequestCreate,
-						)
-						}
-					}
-				}
-
-				// Resizable Splitter Handle
-				Box(
-					modifier = Modifier
-						.width(4.dp)
-						.fillMaxHeight()
-						.background(colors.divider)
-						.onGloballyPositioned { splitterCoords = it }
-						.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
-						.pointerInput(density) {
-							awaitEachGesture {
-								val down = awaitFirstDown()
-								val grabOffset = down.position.x
-								while (true) {
-									val event = awaitPointerEvent()
-									val change = event.changes.firstOrNull { it.id == down.id } ?: break
-									if (!change.pressed) break
-									change.consume()
-									val row = rowCoords
-									val splitter = splitterCoords
-									if (row != null && splitter != null && row.isAttached && splitter.isAttached) {
-										val mouseInRow = row.localPositionOf(splitter, change.position)
-										val splitterLeftPx = mouseInRow.x - grabOffset
-										val widthDp = with(density) { splitterLeftPx.toDp() }
-										viewModel.setHierarchyView(width = widthDp.value.coerceIn(100f, 600f))
-									}
-								}
-							}
-						},
-				)
-			}
-
-			// Right: canvas stacked above the shared log dock. The tree to the left
-			// keeps the remaining height, so expanding the log only shrinks the viewport.
-			Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-				Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-					CanvasViewportComposable(
-						mode = canvasMode,
-						state = state,
-						viewModel = viewModel,
-						modifier = Modifier.fillMaxSize(),
-					)
-				}
-				BottomLogDock(
-					state = state,
-					viewModel = viewModel,
-				)
-			}
-		}
-
-		if (!isTreeCollapsed && model != null) {
-			meshPreviewHover.value?.let { hover ->
-				val originY = rowCoords?.takeIf { it.isAttached }?.positionInRoot()?.y ?: 0f
-				HierarchyMeshPreview(model, hover.drawableId, treeWidth + 4.dp, hover.centerYInRoot - originY)
-			}
-		}
-
-		// Modal Dialog for setting Draw Order
-		if (activeDrawOrderTarget != null) {
-			val target = activeDrawOrderTarget!!
-			DrawOrderInputDialog(
-				targetId = target.id,
-				targetName = target.name,
-				initialOrder = target.currentOrder,
-				defaultOrder = target.defaultOrder,
-				isOverridden = target.isOverridden,
-				onConfirm = { newOrder ->
-					viewModel.setLayerDrawOrder(target.id, newOrder)
-					activeDrawOrderTarget = null
-				},
-				onReset = {
-					viewModel.resetLayerDrawOrder(target.id)
-					activeDrawOrderTarget = null
-				},
-				onDismiss = {
-					activeDrawOrderTarget = null
-				},
-			)
-		}
-
-	}
-}
 
 @Composable
 internal fun DockHierarchyView(
@@ -489,7 +266,6 @@ private data class CompactedDeformerChain(
 ) {
 	val head: Deformer get() = deformers.first()
 	val tail: Deformer get() = deformers.last()
-	val isChained: Boolean get() = deformers.size > 1
 	val displayName: String get() = deformers.joinToString("\\") { it.name }
 }
 
@@ -515,8 +291,6 @@ private data class HierarchySearchFilter(
 	fun isMatch(id: String): Boolean = active && id in matchedIds
 	fun isChainVisible(chain: CompactedDeformerChain): Boolean =
 		!active || chain.deformers.any { it.id.raw in visibleIds }
-	fun isChainMatch(chain: CompactedDeformerChain): Boolean =
-		active && chain.deformers.any { it.id.raw in matchedIds }
 
 	companion object {
 		val Inactive = HierarchySearchFilter(

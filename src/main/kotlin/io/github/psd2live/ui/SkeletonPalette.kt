@@ -23,7 +23,4 @@ internal object SkeletonPalette {
 		return colors[index % colors.size]
 	}
 
-	/** The bone [drawableId] is bound to, for tinting that mesh. */
-	fun ownerColor(spec: SkeletonSpec, drawableId: String): Color? =
-		spec.ownerOf(drawableId)?.let { color(spec, it.id) }
 }

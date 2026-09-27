@@ -21,8 +21,6 @@ object ComponentPalette {
 
 	fun strong(key: String): Color = colors[Math.floorMod(key.hashCode(), colors.size)]
 
-	fun pale(key: String, background: Color = Color.WHITE): Color = mix(background, strong(key), 0.16f)
-
 	fun selected(key: String): Color = mix(Color.WHITE, strong(key), 0.42f)
 
 	private fun mix(base: Color, tint: Color, amount: Float): Color = Color(

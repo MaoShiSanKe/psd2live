@@ -130,9 +130,6 @@ private val KEY_TO_NAME: Map<Key, String> = NAME_TO_KEY.entries.associate { (nam
 
 internal fun nameOf(key: Key): String = KEY_TO_NAME[key] ?: "?"
 
-/** True for a key the recorder cannot produce a name for, i.e. anything outside [NAME_TO_KEY]. */
-internal fun isBindableKey(key: Key): Boolean = key in KEY_TO_NAME
-
 /** Bare modifier presses carry no meaning on their own and are never valid as a binding key. */
 internal fun isModifierKey(key: Key): Boolean = when (key) {
     Key.ShiftLeft, Key.ShiftRight,

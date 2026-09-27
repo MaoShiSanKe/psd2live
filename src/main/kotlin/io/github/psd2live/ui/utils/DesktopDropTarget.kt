@@ -323,10 +323,5 @@ object DesktopDropTarget {
 		return DroppedAction.Unsupported(files, tr("dialog.unsupportedDrop", unsupportedNames))
 	}
 
-	internal fun clearInstalledComponentsForTesting() {
-		synchronized(installedComponents) {
-			installedComponents.clear()
-		}
-	}
 }
 

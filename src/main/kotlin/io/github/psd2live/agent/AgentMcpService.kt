@@ -101,11 +101,6 @@ data class AgentMcpConnectionInfo(
 			""".trimIndent()
 		}
 
-	// Kept for source compatibility with integrations created before the
-	// connection dialog exposed ChatGPT/Codex and Gemini as peer hosts.
-	val configAntigravityJson: String
-		get() = configGeminiJson
-
 	val configToml: String
 		get() = """
 			[mcp_servers.psd2live]
@@ -180,10 +175,6 @@ object AgentMcpCredentials {
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes).also { preferences.put(TOKEN_KEY, it) }
 	}
 
-	fun rotateToken(): String {
-		preferences.remove(TOKEN_KEY)
-		return loadOrCreateToken()
-	}
 }
 
 internal fun Application.configureAgentMcp(workspace: AgentWorkspace, authToken: String, maxRequestBodyBytes: Long = DEFAULT_MCP_MAX_REQUEST_BODY_BYTES) {
