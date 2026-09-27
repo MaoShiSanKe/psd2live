@@ -8,10 +8,18 @@ import kotlin.test.assertTrue
 
 class InteractiveTutorialCatalogTest {
 	@Test
+	fun defaultStateCanInitializeFromTheGuiEntryPath() {
+		val state = InteractiveTutorialState()
+		assertEquals(TutorialPath.BEGINNER, state.path)
+		assertEquals(TutorialId.BASIC, state.tutorialId)
+	}
+
+	@Test
 	fun progressiveOrderCoversAllIds() {
-		assertEquals(TutorialId.entries, TutorialId.progressiveOrder)
-		assertEquals(TutorialId.WORKSPACE, TutorialId.BASIC.nextId)
-		assertEquals(null, TutorialId.TEXTURE_UPSCALE.nextId)
+		assertEquals(TutorialId.entries.toSet(), TutorialId.progressiveOrder.toSet())
+		assertEquals(TutorialId.WORKSPACE, TutorialPath.BEGINNER.nextAfter(TutorialId.BASIC))
+		assertEquals(TutorialId.WORKSPACE, TutorialPath.EXPERIENCED.nextAfter(TutorialId.LIVE2D_BRIDGE))
+		assertEquals(null, TutorialPath.BEGINNER.nextAfter(TutorialId.TEXTURE_UPSCALE))
 	}
 
 	@Test
@@ -27,7 +35,7 @@ class InteractiveTutorialCatalogTest {
 
 	@Test
 	fun advanceAndContinueNextTutorial() {
-		var state = InteractiveTutorialState().start(TutorialId.BASIC)
+		var state = InteractiveTutorialState().start(TutorialId.BASIC, TutorialPath.BEGINNER)
 		assertTrue(state.active)
 		assertEquals(TutorialId.BASIC, state.tutorialId)
 		while (!state.isDoneStep) {
@@ -37,6 +45,15 @@ class InteractiveTutorialCatalogTest {
 		state = state.continueNextTutorial()
 		assertEquals(TutorialId.WORKSPACE, state.tutorialId)
 		assertEquals(0, state.stepIndex)
+	}
+
+	@Test
+	fun experiencedPathKeepsItsTrackWhenContinuing() {
+		var state = InteractiveTutorialState().start(TutorialId.LIVE2D_BRIDGE, TutorialPath.EXPERIENCED)
+		while (!state.isDoneStep) state = state.advance()
+		state = state.continueNextTutorial()
+		assertEquals(TutorialPath.EXPERIENCED, state.path)
+		assertEquals(TutorialId.WORKSPACE, state.tutorialId)
 	}
 
 	@Test
@@ -95,5 +112,15 @@ class InteractiveTutorialCatalogTest {
 		val brushes = tutorialDefinition(TutorialId.DEFORM_MODE).steps.first { it.key == "brushes" }
 		assertTrue(brushes.requireSelection)
 		assertTrue(brushes.showAction)
+	}
+
+	@Test
+	fun newFeatureLessonsUseCanvasAndTheirRealDocks() {
+		assertEquals(TutorialTargetId.SKELETON_DOCK, tutorialDefinition(TutorialId.SKELETON).steps.first().targetId)
+		assertTrue(tutorialDefinition(TutorialId.SKELETON).steps.any { it.targetId == TutorialTargetId.CANVAS_VIEWPORT })
+		assertEquals(TutorialTargetId.ANIMATION_DOCK, tutorialDefinition(TutorialId.ANIMATION).steps.first().targetId)
+		assertTrue(tutorialDefinition(TutorialId.ANIMATION).steps.any { it.targetId == TutorialTargetId.ANIMATION_EDITOR_DOCK })
+		assertEquals(TutorialTargetId.PHYSICS_DOCK, tutorialDefinition(TutorialId.PHYSICS).steps.first().targetId)
+		assertTrue(tutorialDefinition(TutorialId.PHYSICS).steps.any { it.targetId == TutorialTargetId.CANVAS_VIEWPORT })
 	}
 }

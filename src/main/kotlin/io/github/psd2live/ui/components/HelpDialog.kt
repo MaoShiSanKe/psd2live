@@ -40,6 +40,7 @@ import io.github.psd2live.ui.state.ShortcutCategory
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.tutorial.TutorialId
+import io.github.psd2live.ui.tutorial.TutorialPath
 import io.github.psd2live.ui.utils.DesktopUtils
 import kotlinx.coroutines.delay
 
@@ -57,7 +58,7 @@ fun HelpDialog(
 	keymap: Keymap = Keymap.DEFAULT,
 	onDismiss: () -> Unit,
 	onOpenUrl: (String) -> Unit = { DesktopUtils.openBrowser(it) },
-	onStartInteractiveTutorial: ((TutorialId) -> Unit)? = null,
+	onStartInteractiveTutorial: ((TutorialId, TutorialPath) -> Unit)? = null,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -199,7 +200,7 @@ fun HelpDialog(
 
 @Composable
 private fun InteractiveTutorialCatalog(
-	onStartInteractiveTutorial: ((TutorialId) -> Unit)? = null,
+	onStartInteractiveTutorial: ((TutorialId, TutorialPath) -> Unit)? = null,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -220,46 +221,35 @@ private fun InteractiveTutorialCatalog(
 		)
 
 		if (onStartInteractiveTutorial != null) {
-			CompactButton(
-				text = tr("tutorial.basic.start"),
-				onClick = { onStartInteractiveTutorial(TutorialId.BASIC) },
-				isPrimary = true,
-				height = 26.dp,
-			)
-
-			Text(
-				text = tr("tutorial.catalog.progressive"),
-				style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-				color = colors.accent,
-			)
-
-			TutorialId.progressiveOrder.forEachIndexed { index, id ->
-				Row(
-					modifier = Modifier
-						.fillMaxWidth()
-						.background(colors.panelElevated, RoundedCornerShape(3.dp))
-						.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(3.dp))
-						.clickable { onStartInteractiveTutorial(id) }
-						.padding(horizontal = 10.dp, vertical = 8.dp),
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
+			TutorialPath.entries.forEach { path ->
+				Column(
+					Modifier.fillMaxWidth()
+						.background(colors.panelElevated, RoundedCornerShape(6.dp))
+						.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(6.dp))
+						.padding(10.dp),
+					verticalArrangement = Arrangement.spacedBy(7.dp),
 				) {
-					Text(
-						text = "%02d".format(index),
-						style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-						color = colors.accent,
+					Text(tr(path.titleKey), style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold), color = colors.textPrimary)
+					Text(tr(path.descKey), style = typography.caption.copy(fontSize = 10.5.sp, lineHeight = 14.sp), color = colors.textMuted)
+					CompactButton(
+						text = tr("tutorial.path.start"),
+						onClick = { onStartInteractiveTutorial(path.chapters.first(), path) },
+						isPrimary = true,
+						height = 25.dp,
 					)
-					Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-						Text(
-							text = tr(id.titleKey),
-							style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-							color = colors.textPrimary,
-						)
-						Text(
-							text = tr(id.descKey),
-							style = typography.caption.copy(fontSize = 10.sp),
-							color = colors.textMuted,
-						)
+					path.chapters.forEachIndexed { index, id ->
+						Row(
+							modifier = Modifier.fillMaxWidth().clickable { onStartInteractiveTutorial(id, path) }
+								.padding(horizontal = 4.dp, vertical = 5.dp),
+							verticalAlignment = Alignment.CenterVertically,
+							horizontalArrangement = Arrangement.spacedBy(8.dp),
+						) {
+							Text("%02d".format(index + 1), style = typography.caption.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = colors.accent)
+							Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+								Text(tr(id.titleKey), style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold), color = colors.textPrimary)
+								Text(tr(id.descKey), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
+							}
+						}
 					}
 				}
 			}

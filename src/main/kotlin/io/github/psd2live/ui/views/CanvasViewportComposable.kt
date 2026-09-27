@@ -98,6 +98,9 @@ import io.github.psd2live.ui.state.ShortcutScope
 import io.github.psd2live.ui.state.TabViewOptions
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
+import io.github.psd2live.ui.tutorial.TutorialTargetId
+import io.github.psd2live.ui.tutorial.TutorialId
+import io.github.psd2live.ui.tutorial.tutorialTarget
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
@@ -129,7 +132,8 @@ fun CanvasViewportComposable(
 	cameraZoom: Float = state.forCanvas(canvasId).canvasZoom,
 	cameraPanX: Float = state.forCanvas(canvasId).canvasPanX,
 	cameraPanY: Float = state.forCanvas(canvasId).canvasPanY,
-	onStartTutorial: (() -> Unit)? = null,
+	onOpenTutorialCatalog: (() -> Unit)? = null,
+	onStartTutorial: ((TutorialId) -> Unit)? = null,
 	onOpenProject: (() -> Unit)? = null,
 	onOpenPsd: (() -> Unit)? = null,
 ) {
@@ -489,6 +493,7 @@ fun CanvasViewportComposable(
 	Box(
 		modifier = modifier
 			.fillMaxSize()
+			.tutorialTarget(TutorialTargetId.CANVAS_VIEWPORT)
 			// clipToBounds() is a graphics layer. On a dock resize that layer's picture keeps the
 			// previous window position until something else invalidates it, so mesh points stay
 			// behind while the artwork moves. A draw-time clip follows layout immediately.
@@ -895,13 +900,15 @@ fun CanvasViewportComposable(
 			val w = size.width.toInt().coerceAtLeast(1)
 			val h = size.height.toInt().coerceAtLeast(1)
 
-			// 1. One cached texture fill replaces thousands of per-frame checkerboard draw calls.
-			drawRect(brush = checkerboardBrush)
-
 			val model = previewModel
 			if (model == null) {
+				// The welcome surface is an application page, not a transparent artwork canvas.
+				drawRect(color = colors.windowBackground)
 				return@Canvas
 			}
+
+			// One cached texture fill replaces thousands of per-frame checkerboard draw calls.
+			drawRect(brush = checkerboardBrush)
 
 			val viewport = computeViewport(model, w, h)
 
@@ -1330,6 +1337,7 @@ fun CanvasViewportComposable(
 				enabled = !canvasState.isBusy,
 				openProjectShortcut = canvasState.keymap.labelFor(ShortcutAction.OPEN_PROJECT),
 				openPsdShortcut = canvasState.keymap.labelFor(ShortcutAction.OPEN_PSD),
+				onOpenTutorialCatalog = onOpenTutorialCatalog,
 				onStartTutorial = onStartTutorial,
 				onOpenProject = onOpenProject,
 				onOpenPsd = onOpenPsd,
@@ -1534,5 +1542,3 @@ private fun computeEditorViewport(model: RigPreviewModel, size: IntSize, zoom: D
     val scale=fit*zoom
     return CanvasViewport(scale,(size.width-width*scale)*0.5+panX,(size.height-height*scale)*0.5+panY,width,height)
 }
-
-

@@ -49,6 +49,7 @@ import io.github.psd2live.ui.components.ViewOptionsMenuItems
 import io.github.psd2live.ui.state.*
 import io.github.psd2live.ui.theme.*
 import io.github.psd2live.ui.tutorial.TutorialTargetId
+import io.github.psd2live.ui.tutorial.TutorialId
 import io.github.psd2live.ui.tutorial.tutorialTarget
 import kotlinx.coroutines.delay
 import java.awt.MouseInfo
@@ -219,7 +220,8 @@ internal fun DockWorkspaceView(
     viewModel: PSD2LiveViewModel,
     modifier: Modifier = Modifier,
     mainWindow: java.awt.Window? = null,
-	onStartTutorial: (() -> Unit)? = null,
+	onOpenTutorialCatalog: (() -> Unit)? = null,
+	onStartTutorial: ((TutorialId) -> Unit)? = null,
 	onOpenProject: (() -> Unit)? = null,
 	onOpenPsd: (() -> Unit)? = null,
 ) {
@@ -274,7 +276,7 @@ internal fun DockWorkspaceView(
     // especially for the canvas that existed before a second canvas was added.
     fun content(id: String): @Composable () -> Unit = {
         key(workspace.id, id) {
-            DockModuleContent(id, state, viewModel, onStartTutorial, onOpenProject, onOpenPsd)
+            DockModuleContent(id, state, viewModel, onOpenTutorialCatalog, onStartTutorial, onOpenProject, onOpenPsd)
         }
     }
     DisposableEffect(session) { onDispose { session.cancel() } }
@@ -439,6 +441,10 @@ private fun DockTree(node: DockNode, session: DockSession, modifier: Modifier, w
 				"inspector" -> Modifier.tutorialTarget(TutorialTargetId.INSPECTOR_DOCK)
 				"tools" -> Modifier.tutorialTarget(TutorialTargetId.TOOLS_DOCK)
 				"hierarchy" -> Modifier.tutorialTarget(TutorialTargetId.HIERARCHY_DOCK)
+				"skeleton" -> Modifier.tutorialTarget(TutorialTargetId.SKELETON_DOCK)
+				"animation" -> Modifier.tutorialTarget(TutorialTargetId.ANIMATION_DOCK)
+				"animationEditor" -> Modifier.tutorialTarget(TutorialTargetId.ANIMATION_EDITOR_DOCK)
+				"physics" -> Modifier.tutorialTarget(TutorialTargetId.PHYSICS_DOCK)
 				else -> Modifier
 			},
 		)
@@ -959,7 +965,8 @@ private fun DockModuleContent(
 	id: String,
 	state: PSD2LiveState,
 	vm: PSD2LiveViewModel,
-	onStartTutorial: (() -> Unit)? = null,
+	onOpenTutorialCatalog: (() -> Unit)? = null,
+	onStartTutorial: ((TutorialId) -> Unit)? = null,
 	onOpenProject: (() -> Unit)? = null,
 	onOpenPsd: (() -> Unit)? = null,
 ) {
@@ -975,6 +982,7 @@ private fun DockModuleContent(
 			cameraPanX = canvas.camera.panX,
 			cameraPanY = canvas.camera.panY,
 			modifier = Modifier.fillMaxSize(),
+			onOpenTutorialCatalog = onOpenTutorialCatalog,
 			onStartTutorial = onStartTutorial,
 			onOpenProject = onOpenProject,
 			onOpenPsd = onOpenPsd,

@@ -83,6 +83,7 @@ import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.tutorial.InteractiveTutorialState
 import io.github.psd2live.ui.tutorial.LocalTutorialTargets
 import io.github.psd2live.ui.tutorial.TutorialId
+import io.github.psd2live.ui.tutorial.TutorialPath
 import io.github.psd2live.ui.tutorial.TutorialOverlay
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.advance
@@ -140,9 +141,9 @@ fun FrameWindowScope.PSD2LiveApp(
 	var tutorial by remember { mutableStateOf(InteractiveTutorialState()) }
 	val tutorialTargets = rememberTutorialTargetRegistry()
 
-	fun startInteractiveTutorial(id: TutorialId = TutorialId.BASIC) {
+	fun startInteractiveTutorial(id: TutorialId = TutorialId.BASIC, path: TutorialPath = TutorialPath.defaultFor(id)) {
 		helpDialogTab = null
-		tutorial = InteractiveTutorialState().start(id)
+		tutorial = InteractiveTutorialState().start(id, path)
 	}
 
 	fun stopInteractiveTutorial() {
@@ -539,7 +540,8 @@ fun FrameWindowScope.PSD2LiveApp(
 						viewModel,
 						Modifier.weight(1f).fillMaxWidth().padding(top = 2.dp),
 						window,
-						onStartTutorial = { startInteractiveTutorial(TutorialId.BASIC) },
+						onOpenTutorialCatalog = { openTutorialCatalog() },
+						onStartTutorial = { startInteractiveTutorial(it) },
 						onOpenProject = onOpenProjectAction,
 						onOpenPsd = onOpenPsdAction,
 					)
@@ -575,6 +577,7 @@ fun FrameWindowScope.PSD2LiveApp(
 					isFirstStep = tutorial.isFirstStep,
 					prerequisiteMet = prereqOk,
 					spotlightTargetId = step.effectiveTargetId(state),
+					nextTutorialId = tutorial.nextTutorialId,
 					onNext = { if (prereqOk) advanceTutorial() },
 					onPrevious = { retreatTutorial() },
 					onSkip = { if (prereqOk) advanceTutorial() },
@@ -608,8 +611,8 @@ fun FrameWindowScope.PSD2LiveApp(
 				keymap = state.keymap,
 				onDismiss = { helpDialogTab = null },
 				onOpenUrl = { url -> DesktopUtils.openBrowser(url) },
-				onStartInteractiveTutorial = { id ->
-					startInteractiveTutorial(id)
+				onStartInteractiveTutorial = { id, path ->
+					startInteractiveTutorial(id, path)
 				},
 			)
 		}

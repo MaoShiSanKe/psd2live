@@ -52,6 +52,7 @@ fun TutorialOverlay(
 	isFirstStep: Boolean = false,
 	prerequisiteMet: Boolean = true,
 	spotlightTargetId: TutorialTargetId? = null,
+	nextTutorialId: TutorialId? = null,
 	onNext: () -> Unit,
 	onPrevious: () -> Unit,
 	onSkip: () -> Unit,
@@ -109,6 +110,7 @@ fun TutorialOverlay(
 					onFinish = onFinish,
 					onContinueNext = onContinueNext,
 					onOpenCatalog = onOpenCatalog,
+					nextTutorialId = nextTutorialId,
 					targetMissing = target == null && !step.isDone,
 					reviewing = reviewing,
 				)
@@ -171,6 +173,7 @@ fun TutorialCoachCard(
 	onFinish: () -> Unit = {},
 	onContinueNext: (() -> Unit)? = null,
 	onOpenCatalog: (() -> Unit)? = null,
+	nextTutorialId: TutorialId? = null,
 	targetMissing: Boolean = false,
 	reviewing: Boolean = false,
 	modifier: Modifier = Modifier,
@@ -187,7 +190,7 @@ fun TutorialCoachCard(
 	} else {
 		tr("tutorial.basic.progress", displayIndex + 1, stepTotal)
 	}
-	val nextId = tutorialId.nextId
+	val nextId = nextTutorialId
 	val bodyStyle = typography.caption.copy(fontSize = 11.5.sp, lineHeight = 16.sp)
 	val actionStyle = typography.caption.copy(lineHeight = 17.sp)
 	val canAdvance = prerequisiteMet && (step.allowsNext || reviewing)

@@ -6,6 +6,7 @@ import io.github.psd2live.ui.state.CanvasMode
 
 enum class TutorialId {
 	BASIC,
+	LIVE2D_BRIDGE,
 	WORKSPACE,
 	HIERARCHY,
 	VARIANTS,
@@ -19,11 +20,15 @@ enum class TutorialId {
 	TOOL_DETAILS,
 	PROJECT_HISTORY,
 	TEXTURE_UPSCALE,
+	SKELETON,
+	ANIMATION,
+	PHYSICS,
 	;
 
 	val i18nKey: String
 		get() = when (this) {
 			BASIC -> "basic"
+			LIVE2D_BRIDGE -> "live2dBridge"
 			WORKSPACE -> "workspace"
 			HIERARCHY -> "hierarchy"
 			VARIANTS -> "variants"
@@ -37,31 +42,51 @@ enum class TutorialId {
 			TOOL_DETAILS -> "tools"
 			PROJECT_HISTORY -> "project"
 			TEXTURE_UPSCALE -> "upscale"
+			SKELETON -> "skeleton"
+			ANIMATION -> "animation"
+			PHYSICS -> "physics"
 		}
 
 	val titleKey: String get() = "tutorial.$i18nKey.title"
 	val descKey: String get() = "tutorial.$i18nKey.desc"
 
-	val nextId: TutorialId?
-		get() = when (this) {
-			BASIC -> WORKSPACE
-			WORKSPACE -> HIERARCHY
-			HIERARCHY -> VARIANTS
-			VARIANTS -> PARAMETERS
-			PARAMETERS -> SELECT_MODE
-			SELECT_MODE -> CREATE_DEFORMER
-			CREATE_DEFORMER -> DEFORM_MODE
-			DEFORM_MODE -> EDIT_MODE
-			EDIT_MODE -> PAINT_MODE
-			PAINT_MODE -> INSPECTOR
-			INSPECTOR -> TOOL_DETAILS
-			TOOL_DETAILS -> PROJECT_HISTORY
-			PROJECT_HISTORY -> TEXTURE_UPSCALE
-			TEXTURE_UPSCALE -> null
-		}
+	companion object {
+		/** Computed on access to avoid a TutorialId <-> TutorialPath enum initialization cycle. */
+		val progressiveOrder: List<TutorialId>
+			get() = TutorialPath.entries.flatMap { it.chapters }.distinct()
+	}
+}
+
+/** The two paths intentionally teach different mental models instead of only changing the first page. */
+enum class TutorialPath(val i18nKey: String, val chapters: List<TutorialId>) {
+	BEGINNER(
+		"beginner",
+		listOf(
+			TutorialId.BASIC, TutorialId.WORKSPACE, TutorialId.HIERARCHY, TutorialId.VARIANTS,
+			TutorialId.PARAMETERS, TutorialId.SELECT_MODE, TutorialId.CREATE_DEFORMER,
+			TutorialId.DEFORM_MODE, TutorialId.EDIT_MODE, TutorialId.PAINT_MODE,
+			TutorialId.INSPECTOR, TutorialId.TOOL_DETAILS, TutorialId.SKELETON, TutorialId.ANIMATION,
+			TutorialId.PHYSICS, TutorialId.PROJECT_HISTORY, TutorialId.TEXTURE_UPSCALE,
+		),
+	),
+	EXPERIENCED(
+		"experienced",
+		listOf(
+			TutorialId.LIVE2D_BRIDGE, TutorialId.WORKSPACE, TutorialId.HIERARCHY,
+			TutorialId.PARAMETERS, TutorialId.DEFORM_MODE, TutorialId.EDIT_MODE,
+			TutorialId.INSPECTOR, TutorialId.SKELETON, TutorialId.ANIMATION,
+			TutorialId.PHYSICS, TutorialId.PROJECT_HISTORY, TutorialId.TEXTURE_UPSCALE,
+		),
+	),
+	;
+
+	val titleKey: String get() = "tutorial.path.$i18nKey.title"
+	val descKey: String get() = "tutorial.path.$i18nKey.desc"
+	fun nextAfter(id: TutorialId): TutorialId? = chapters.getOrNull(chapters.indexOf(id) + 1)
 
 	companion object {
-		val progressiveOrder: List<TutorialId> = entries
+		fun defaultFor(id: TutorialId): TutorialPath =
+			if (id == TutorialId.LIVE2D_BRIDGE) EXPERIENCED else BEGINNER
 	}
 }
 
@@ -132,6 +157,7 @@ fun tutorialDefinition(id: TutorialId): TutorialDefinition =
 
 data class InteractiveTutorialState(
 	val active: Boolean = false,
+	val path: TutorialPath = TutorialPath.BEGINNER,
 	val tutorialId: TutorialId = TutorialId.BASIC,
 	val stepIndex: Int = 0,
 	val titleBarMenuOpen: String? = null,
@@ -142,11 +168,13 @@ data class InteractiveTutorialState(
 	val step: TutorialStep get() = definition.stepAt(stepIndex)
 	val isFirstStep: Boolean get() = stepIndex <= 0
 	val isDoneStep: Boolean get() = step.isDone
-	val nextTutorialId: TutorialId? get() = tutorialId.nextId
+	val nextTutorialId: TutorialId? get() = path.nextAfter(tutorialId)
 }
 
-fun InteractiveTutorialState.start(id: TutorialId = TutorialId.BASIC): InteractiveTutorialState =
-	InteractiveTutorialState(active = true, tutorialId = id, stepIndex = 0)
+fun InteractiveTutorialState.start(
+	id: TutorialId = TutorialId.BASIC,
+	path: TutorialPath = TutorialPath.defaultFor(id),
+): InteractiveTutorialState = InteractiveTutorialState(active = true, path = path, tutorialId = id, stepIndex = 0)
 
 fun InteractiveTutorialState.stop(): InteractiveTutorialState = InteractiveTutorialState()
 
@@ -162,8 +190,8 @@ fun InteractiveTutorialState.retreat(): InteractiveTutorialState {
 }
 
 fun InteractiveTutorialState.continueNextTutorial(): InteractiveTutorialState {
-	val next = tutorialId.nextId ?: return stop()
-	return InteractiveTutorialState(active = true, tutorialId = next, stepIndex = 0)
+	val next = nextTutorialId ?: return stop()
+	return InteractiveTutorialState(active = true, path = path, tutorialId = next, stepIndex = 0)
 }
 
 fun TutorialStep.isComplete(
@@ -241,6 +269,17 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			step("naming", TutorialTargetId.LAYERS_DOCK, selectDock = "layers", showAction = true),
 			step("settings", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true),
 			step("export", TutorialTargetId.FILE_EXPORT, TutorialCompletion.EXPORT_DIALOG, coachBesideMenu = true, forcesMenu = "file", preferSideBubble = false, showAction = true),
+			step("done", isDone = true, preferSideBubble = false),
+		),
+	),
+	TutorialId.LIVE2D_BRIDGE to TutorialDefinition(
+		TutorialId.LIVE2D_BRIDGE,
+		listOf(
+			step("workspace", TutorialTargetId.EDIT_TAB, ensureEditTab = true),
+			step("structure", TutorialTargetId.HIERARCHY_DOCK, ensureEditTab = true, ensureHierarchyVisible = true, selectDock = "hierarchy"),
+			step("modes", TutorialTargetId.MODE_BAR, ensureEditTab = true),
+			step("parameters", TutorialTargetId.PARAMETERS_DOCK, selectDock = "parameters"),
+			step("export", TutorialTargetId.FILE_EXPORT, coachBesideMenu = true, forcesMenu = "file", preferSideBubble = false),
 			step("done", isDone = true, preferSideBubble = false),
 		),
 	),
@@ -432,6 +471,36 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			),
 			step("scale", TutorialTargetId.MODE_BAR, preferSideBubble = false),
 			step("check", TutorialTargetId.EDIT_TAB, ensureEditTab = true),
+			step("done", isDone = true, preferSideBubble = false),
+		),
+	),
+	TutorialId.SKELETON to TutorialDefinition(
+		TutorialId.SKELETON,
+		listOf(
+			step("panel", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true, showAction = true),
+			step("bind", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "skeleton", ensureEditTab = true),
+			step("pose", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "skeleton", ensureEditTab = true, showAction = true),
+			step("weights", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true),
+			step("done", isDone = true, preferSideBubble = false),
+		),
+	),
+	TutorialId.ANIMATION to TutorialDefinition(
+		TutorialId.ANIMATION,
+		listOf(
+			step("motions", TutorialTargetId.ANIMATION_DOCK, selectDock = "animation", showAction = true),
+			step("editor", TutorialTargetId.ANIMATION_EDITOR_DOCK, selectDock = "animationEditor"),
+			step("keys", TutorialTargetId.ANIMATION_EDITOR_DOCK, selectDock = "animationEditor", showAction = true),
+			step("preview", TutorialTargetId.CANVAS_VIEWPORT),
+			step("done", isDone = true, preferSideBubble = false),
+		),
+	),
+	TutorialId.PHYSICS to TutorialDefinition(
+		TutorialId.PHYSICS,
+		listOf(
+			step("groups", TutorialTargetId.PHYSICS_DOCK, selectDock = "physics", showAction = true),
+			step("pendulum", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "physics"),
+			step("io", TutorialTargetId.PHYSICS_DOCK, selectDock = "physics"),
+			step("test", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "physics", showAction = true),
 			step("done", isDone = true, preferSideBubble = false),
 		),
 	),
