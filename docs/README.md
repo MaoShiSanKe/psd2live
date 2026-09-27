@@ -2,11 +2,11 @@
 
 [中文首页](../README.md) · [English](../README_en.md) · [日本語](../README_ja.md)
 
-**学习操作请先用程序内「帮助 → 教程…」。** 文字版按相同 14 课提供速查；技术参考只讲数据、接口与限制，不再重复整套界面教程。
+**学习操作请先用程序内「帮助 → 教程…」。** 教程目录有两条路线、18 个主题；文字版按零基础路线的 17 课提供速查。技术参考只讲数据、接口与限制，不再重复整套界面教程。
 
-For hands-on learning, open **Help → Tutorials**. The short guides follow the same 14 lessons. 中文专题尚无翻译的地方，其他语言文档会明确指向中文参考。
+For hands-on learning, open **Help → Tutorials**. The catalog has two paths and 18 topics; the short guides follow the 17-lesson beginner path. 中文专题尚无翻译的地方，其他语言文档会明确指向中文参考。
 
-操作学習は **ヘルプ → チュートリアル** から。文字版は同じ全 14 講座の復習用です。未翻訳の専門資料は中国語で提供しています。
+操作学習は **ヘルプ → チュートリアル** から。カタログは 2 コース、全 18 テーマで、文字版は初心者コース 17 講座の復習用です。未翻訳の専門資料は中国語で提供しています。
 
 ## 使用与开发 · Guides
 

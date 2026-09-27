@@ -19,7 +19,7 @@ The same release page offers a Linux amd64 Deb with Cubism Native preview. It re
 3. Edit as needed and save a `.psd2live` project with `Ctrl+S`.
 4. Open export settings with `Ctrl+G` to generate `.cmo3` or the `.moc3` runtime bundle.
 
-**Start with Help → Tutorials.** Interactive lessons highlight the actual controls. The [short user guide](docs/en/guide/USER_GUIDE.md) follows the same 14 lessons.
+**Start with Help → Tutorials.** The catalog offers beginner and Cubism-experienced paths across 18 topics. The [short user guide](docs/en/guide/USER_GUIDE.md) follows the 17-lesson beginner path.
 
 ## Features
 
@@ -40,7 +40,7 @@ Results depend on the source artwork. Separate eye whites, irises and upper lash
 ## Files and compatibility
 
 - `.psd2live` saves source artwork, settings, edits and history for continued work.
-- `.cmo3` is an editor project for further inspection and refinement in Cubism.
+- `.cmo3` is a model project for further inspection and refinement in Cubism Editor.
 - `.moc3`, `.model3.json`, textures and optional sidecars form the runtime delivery.
 - `.psd2live.json` is an export report, not a saved project.
 

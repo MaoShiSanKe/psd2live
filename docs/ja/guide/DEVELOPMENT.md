@@ -12,7 +12,7 @@
 
 Linux / macOS: `./gradlew`.
 
-引数なしでは GUI、引数ありでは CLI が起動します。`--help` 以外では `--input` が必要です。CLI は PSD から生成し、デスクトップ工程を開いて編集する機能ではありません。
+引数なしでは GUI、引数ありでは CLI が起動します。`--help` 以外では `--input` が必要です。CLI は PSD から生成し、デスクトッププロジェクトを開いて編集する機能ではありません。
 
 ## CLI
 
@@ -55,6 +55,6 @@ Linux / macOS: `./gradlew`.
 
 ## 出力確認
 
-model3.json が参照する全ファイルを一緒に渡し、警告と診断を確認してください。.psd2live は GUI の工程保存、CLI の .psd2live.json はレポートです。
+model3.json が参照する全ファイルを一緒に渡し、警告と診断を確認してください。.psd2live は GUI のプロジェクト保存、CLI の .psd2live.json はレポートです。
 
 [Main.kt](../../../src/main/kotlin/io/github/psd2live/Main.kt) · [PipelineConfig](../../../src/main/kotlin/io/github/psd2live/core/Model.kt) · [Gradle](../../../build.gradle.kts) · [SDK](CUBISM_SDK_SETUP.md) · [Texture upscale / 高清化](../../zh/guide/TEXTURE_UPSCALE.md)

@@ -8,7 +8,9 @@ Open **Help → Tutorials** first. Interactive lessons highlight the controls an
 
 Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit → save (`Ctrl+S`) → export (`Ctrl+G`). Open an existing `.psd2live` project with `Ctrl+O`.
 
-## The 14 lessons
+## Tutorial paths
+
+The catalog has 18 topics. The beginner path contains the 17 lessons below; the experienced path starts with a Cubism-to-PSD2Live terminology bridge and skips selected introductory lessons.
 
 | Lesson | Topic | Remember |
 | --- | --- | --- |
@@ -16,7 +18,7 @@ Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit →
 | 2 | Workspace | Edit changes the model; Preview shows it; History restores versions. Each canvas tab has its own camera and overlays. |
 | 3 | Hierarchy and mode bar | Select, search and reparent objects. Drop transparent artwork on the tree and confirm placement. Drawing order and parent deformation are different. |
 | 4 | Layer types and variants | Presets apply part algorithms; toggle variants show/hide; exclusive variants share a parameter with different association IDs. |
-| 5 | Parameters and keyforms | Drag sliders or XY controls; right-click a key marker to snap. Set the desired value before changing a shape. |
+| 5 | Parameters and keyforms | Drag sliders or XY controls; right-click a key mark to snap. Move to the target key before editing its keyform. |
 | 6 | Select mode | Select objects with the canvas tools or hierarchy; selection alone changes no geometry. |
 | 7 | Create deformers | Select a target, use the tree context menu, adjust the placement preview and confirm. |
 | 8 | Deform mode | Edit points or use brushes at the current parameter pose; check the L1 / L2 editing level. |
@@ -24,12 +26,16 @@ Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit →
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
 | 12 | Tool details | Configure the current tool; canvas context menus also change with mode and tool. |
-| 13 | Project and history | Save the project, restore a history node or branch from it. Hiding a branch does not delete it. |
-| 14 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
+| 13 | Skeleton rigging and posing | Build chains, bind ArtMeshes, inspect weights and pose with IK. Export bakes this PSD2Live authoring aid into Cubism parameters, deformers and corrective keyforms. |
+| 14 | Animation editor | Edit parameter tracks and keyframes on the timeline, choose interpolation and preview the motion. |
+| 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
+| 16 | Project and history | Save the project, restore a history node or branch from it. Hiding a branch does not delete it. |
+| 17 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
 
 ## Important distinctions
 
 - Saving preserves artwork, edits and history. Exporting delivers model files. `.psd2live.json` is only a report.
+- Parameter keyforms belong to modeling and interpolate model shapes. Animation keyframes record parameter values at points in time.
 - Deform changes shapes; Edit changes mesh structure; Paint changes pixels in an isolated apply/discard session.
 - Temporary solo visibility and static visibility are not parameter-driven variants. Use variants or opacity keyforms for animated switches.
 
