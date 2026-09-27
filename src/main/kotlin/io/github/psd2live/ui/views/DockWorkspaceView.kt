@@ -2,7 +2,10 @@ package io.github.psd2live.ui.views
 
 import io.github.psd2live.ui.views.physics.PhysicsPanelView
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
 import androidx.compose.runtime.*
@@ -32,6 +35,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
@@ -51,7 +56,13 @@ import java.awt.Cursor
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 
+/** How far a pressed tab or header must travel before it starts dragging. */
+private val DockDragSlop = 16.dp
+
 private data class DockHitArea(val body: Rect, val header: Rect, val edge: Float)
+
+/** Where a dragged module would land: a split on [side] of leaf [node], or a tab before [before] (last when null). */
+private data class DockDrop(val node: String, val side: DockSide, val before: String? = null)
 
 private class DockSession(initial: DockNode) {
     var root by mutableStateOf<DockNode?>(initial)
@@ -60,12 +71,14 @@ private class DockSession(initial: DockNode) {
         get() = hiddenModules.fold(root) { layout, module -> layout?.remove(module) }
     val floating = mutableStateMapOf<String, WindowState>()
     val bounds = mutableMapOf<String, () -> DockHitArea?>()
+    /** Screen bounds of each tab, by leaf and module, for placing a drop between tabs. */
+    val tabs = mutableMapOf<Pair<String, String>, () -> Rect?>()
     var workspaceBounds: (() -> Rect?)? = null
     private val returnTargets = mutableMapOf<String, String>()
     val floatingWindows = mutableMapOf<String, java.awt.Window>()
     var junctionHighlights by mutableStateOf<Set<String>>(emptySet())
     var dragging by mutableStateOf<String?>(null)
-    var target by mutableStateOf<Pair<String, DockSide>?>(null)
+    var target by mutableStateOf<DockDrop?>(null)
     private var dragPreview: javax.swing.JWindow? = null
     private var dragWindow: java.awt.Window? = null
     private var grabOffset = java.awt.Point()
@@ -121,32 +134,52 @@ private class DockSession(initial: DockNode) {
         val point = MouseInfo.getPointerInfo()?.location ?: return
         val p = Offset(point.x.toFloat(), point.y.toFloat())
         target = null
-        if (dragging == null) return
+        val module = dragging ?: return
         dragPreview?.setLocation(point.x + 16, point.y + 16)
         dragWindow?.setLocation(point.x - grabOffset.x, point.y - grabOffset.y)
+        target = dropAt(module, p)
+        // Over a tab strip the insertion mark shows where the tab goes; the ghost would only cover it.
+        val ghost = target?.side != DockSide.CENTER || target?.node == "empty"
+        dragPreview?.let { if (it.isVisible != ghost) it.isVisible = ghost }
+    }
+
+    private fun dropAt(module: String, p: Offset): DockDrop? {
         // A floating window covering a dock is not a dock target.
-        if (floatingWindows.any { (id, window) -> id != dragging && window.isShowing && window.bounds.contains(point) }) return
-        if (visibleRoot == null && workspaceBounds?.invoke()?.contains(p) == true) {
-            target = "empty" to DockSide.CENTER
-            return
-        }
+        if (floatingWindows.any { (id, window) -> id != module && window.isShowing &&
+                window.bounds.contains(p.x.toInt(), p.y.toInt()) }) return null
+        if (visibleRoot == null && workspaceBounds?.invoke()?.contains(p) == true) return DockDrop("empty", DockSide.CENTER)
         for ((id, read) in bounds) {
             val area = read() ?: continue
             val node = visibleRoot?.find(id) ?: continue
-            if (!area.body.contains(p) || node.modules == listOf(dragging)) continue
-            val r = area.body
-            // Only the tab strip and narrow outer edges accept a drop. Content never does.
-            val side = when {
-                p.y < r.top + area.edge / 2 && r.height >= 200f -> DockSide.TOP
-                area.header.contains(p) -> if (dragging in node.modules) null else DockSide.CENTER
-                p.x < r.left + area.edge && r.width >= 320f -> DockSide.LEFT
-                p.x > r.right - area.edge && r.width >= 320f -> DockSide.RIGHT
-                p.y > r.bottom - area.edge && r.height >= 200f -> DockSide.BOTTOM
-                else -> null
+            if (!area.body.contains(p)) continue
+            if (node.modules == listOf(module)) return null
+            // The tab strip takes the module as a tab, between the tabs either side of the pointer.
+            if (area.header.contains(p)) {
+                val others = node.modules - module
+                val before = others.firstOrNull { tabs[id to it]?.invoke()?.let { r -> p.x < r.center.x } == true }
+                val unchanged = module in node.modules &&
+                    node.modules.getOrNull(node.modules.indexOf(module) + 1) == before
+                return if (unchanged) null else DockDrop(id, DockSide.CENTER, before)
             }
-            if (side != null) target = id to side
-            return
+            // A band along each edge splits the panel; the band grows with the panel so it is easy to
+            // hit, and the middle of the content never takes a drop.
+            val r = area.body
+            val bandX = (r.width * .22f).coerceIn(area.edge, area.edge * 8)
+            val bandY = (r.height * .22f).coerceIn(area.edge, area.edge * 8)
+            val reach = buildMap {
+                if (r.width >= 320f) {
+                    put(DockSide.LEFT, (p.x - r.left) / bandX)
+                    put(DockSide.RIGHT, (r.right - p.x) / bandX)
+                }
+                if (r.height >= 200f) {
+                    put(DockSide.TOP, (p.y - area.header.bottom) / bandY)
+                    put(DockSide.BOTTOM, (r.bottom - p.y) / bandY)
+                }
+            }
+            val side = reach.filterValues { it < 1f }.minByOrNull { it.value }?.key ?: return null
+            return DockDrop(id, side)
         }
+        return null
     }
 
     fun detach(module: String) {
@@ -162,7 +195,7 @@ private class DockSession(initial: DockNode) {
         val module = dragging ?: return
         val destination = target
         if (destination != null) {
-            root = dockModule(root, module, destination.first, destination.second)
+            root = dockModule(root, module, destination.node, destination.side, destination.before)
             floating.remove(module)
         } else if (module !in floating) {
             val point = MouseInfo.getPointerInfo()?.location
@@ -292,7 +325,7 @@ internal fun DockWorkspaceView(
                         DockJunctionOverlay(it, session, mainWindow)
                     }
                         ?: Box(Modifier.fillMaxSize().background(
-                            if (session.target?.first == "empty") colors.accent.copy(alpha = .08f) else Color.Transparent),
+                            if (session.target?.node == "empty") colors.accent.copy(alpha = .08f) else Color.Transparent),
                             contentAlignment = Alignment.Center) {
                             if (session.floating.keys.any { it !in hiddenModules }) {
                                 Text(tr("dock.empty"), color = colors.textMuted, fontSize = 11.sp)
@@ -426,33 +459,117 @@ private fun DockTree(node: DockNode, session: DockSession, modifier: Modifier, w
             if (single) {
                 DockHeader(node.selected, session, Modifier.fillMaxWidth(), state, viewModel, standalone = true)
             } else {
-                // Same surface as a single module's header; the selected tab takes the content color
-                // and covers the strip's baseline so it reads as part of its panel.
-                Row(Modifier.fillMaxWidth().height(22.dp)
-                    .background(colors.panelElevated)
-                    .drawBehind {
-                        drawLine(colors.divider, Offset(0f, size.height - .5.dp.toPx()),
-                            Offset(size.width, size.height - .5.dp.toPx()), 1.dp.toPx())
-                    }
-                    .horizontalScroll(rememberScrollState())) {
-                    node.modules.forEach { id ->
-                        DockHeader(id, session, Modifier, state, viewModel, selected = id == node.selected, standalone = false,
-                            onSelect = { session.root = session.root?.update(node.id) { it.copy(selected = id) } })
-                    }
-                }
+                DockTabStrip(node, session, window, state, viewModel)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) { content(node.selected)() }
         }
         val target = session.target
-        if (target?.first == node.id && session.dragging != null) {
-            val highlight = when (target.second) {
+        if (target?.node == node.id && session.dragging != null) {
+            // The half the new panel would take; a drop onto a tab strip is marked between its tabs instead.
+            val highlight = when (target.side) {
                 DockSide.LEFT -> Modifier.fillMaxHeight().fillMaxWidth(.5f).align(Alignment.CenterStart)
                 DockSide.RIGHT -> Modifier.fillMaxHeight().fillMaxWidth(.5f).align(Alignment.CenterEnd)
                 DockSide.TOP -> Modifier.fillMaxWidth().fillMaxHeight(.5f).align(Alignment.TopCenter)
                 DockSide.BOTTOM -> Modifier.fillMaxWidth().fillMaxHeight(.5f).align(Alignment.BottomCenter)
-                DockSide.CENTER -> Modifier.fillMaxWidth().height(22.dp).align(Alignment.TopCenter)
+                DockSide.CENTER -> if (node.modules.size == 1) Modifier.fillMaxWidth().height(22.dp).align(Alignment.TopCenter) else null
             }
-            Box(highlight.background(colors.accent.copy(alpha = .08f)).border(1.dp, colors.accent))
+            if (highlight != null) {
+                Box(highlight.padding(3.dp).clip(RoundedCornerShape(3.dp))
+                    .background(colors.accent.copy(alpha = .14f))
+                    .border(1.dp, colors.accent.copy(alpha = .85f), RoundedCornerShape(3.dp)))
+            }
+        }
+    }
+}
+
+/**
+ * The tabs of a leaf holding several modules. Tabs drag within the strip to reorder and out of it to
+ * dock elsewhere; a mark between tabs shows where a dragged tab would land. When the tabs overflow,
+ * a list button at the end reaches every tab.
+ */
+@Composable
+private fun DockTabStrip(node: DockNode, session: DockSession, window: java.awt.Window?,
+                         state: PSD2LiveState, viewModel: PSD2LiveViewModel) {
+    val colors = LocalToolColors.current
+    val scroll = rememberScrollState()
+    // Each tab's left edge and width in the scrolled content, to keep the selected tab in view.
+    val offsets = remember(node.id) { mutableStateMapOf<String, Pair<Int, Int>>() }
+    var listMenu by remember(node.id) { mutableStateOf(false) }
+    fun select(id: String) {
+        session.root = session.root?.update(node.id) { it.copy(selected = id) }
+    }
+    LaunchedEffect(node.selected, offsets[node.selected], scroll.viewportSize) {
+        val (left, width) = offsets[node.selected] ?: return@LaunchedEffect
+        val viewport = scroll.viewportSize
+        when {
+            left < scroll.value -> scroll.animateScrollTo(left)
+            left + width > scroll.value + viewport -> scroll.animateScrollTo(left + width - viewport)
+        }
+    }
+    val drop = session.target?.takeIf { it.node == node.id && it.side == DockSide.CENTER && session.dragging != null }
+    val shown = node.modules.filter { it != session.dragging || drop == null }
+    // Same surface as a single module's header; the selected tab takes the content color
+    // and covers the strip's baseline so it reads as part of its panel.
+    Row(Modifier.fillMaxWidth().height(22.dp)
+        .background(colors.panelElevated)
+        .drawBehind {
+            drawLine(colors.divider, Offset(0f, size.height - .5.dp.toPx()),
+                Offset(size.width, size.height - .5.dp.toPx()), 1.dp.toPx())
+        }, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(scroll)) {
+            node.modules.forEachIndexed { index, id -> key(id) {
+                DisposableEffect(node.id, id) { onDispose { session.tabs.remove(node.id to id) } }
+                val selected = id == node.selected
+                val next = node.modules.getOrNull(index + 1)
+                val markBefore = drop != null && drop.before == id
+                val markAfter = drop != null && drop.before == null && id == shown.lastOrNull()
+                DockHeader(id, session,
+                    Modifier
+                        .onGloballyPositioned { coordinates ->
+                            offsets[id] = coordinates.positionInParent().x.roundToInt() to coordinates.size.width
+                            session.tabs[node.id to id] = { screenBounds(coordinates, window) }
+                        }
+                        .graphicsLayer { alpha = if (session.dragging == id) .4f else 1f }
+                        .drawWithContent {
+                            drawContent()
+                            // A short divider parts two unselected tabs; the selected tab needs none.
+                            if (!selected && next != null && next != node.selected) {
+                                val inset = size.height * .28f
+                                drawLine(colors.textMuted.copy(alpha = .28f), Offset(size.width - .5f, inset),
+                                    Offset(size.width - .5f, size.height - inset), 1.dp.toPx())
+                            }
+                            val stroke = 2.dp.toPx()
+                            if (markBefore) drawRect(colors.accent, Offset(0f, 0f),
+                                androidx.compose.ui.geometry.Size(stroke, size.height))
+                            if (markAfter) drawRect(colors.accent, Offset(size.width - stroke, 0f),
+                                androidx.compose.ui.geometry.Size(stroke, size.height))
+                        },
+                    state, viewModel, selected = selected, standalone = false, siblings = node.modules,
+                    onSelect = { select(id) })
+            } }
+        }
+        if (scroll.maxValue > 0) {
+            Box {
+                Box(Modifier.size(22.dp)
+                    .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+                    .clickable { listMenu = true }, contentAlignment = Alignment.Center) {
+                    io.github.psd2live.ui.components.IconChevron(expanded = true, tint = colors.textMuted,
+                        modifier = Modifier.size(10.dp))
+                }
+                TabStripDropdown(expanded = listMenu, onDismissRequest = { listMenu = false }) {
+                    node.modules.forEach { id ->
+                        io.github.psd2live.ui.components.AppMenuItem(
+                            text = dockTabTitle(id, state),
+                            isChecked = id == node.selected,
+                            onClick = {
+                                listMenu = false
+                                select(id)
+                                state.activeWorkspace.canvases.firstOrNull { it.id == id }?.let { viewModel.focusCanvas(it.id) }
+                            },
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -635,19 +752,29 @@ private fun screenBounds(coordinates: androidx.compose.ui.layout.LayoutCoordinat
 private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                        state: PSD2LiveState, viewModel: PSD2LiveViewModel,
                        selected: Boolean = true, floating: Boolean = false, standalone: Boolean = true,
-                       floatingWindow: java.awt.Window? = null, onSelect: () -> Unit = {}) {
+                       floatingWindow: java.awt.Window? = null, siblings: List<String> = listOf(id),
+                       onSelect: () -> Unit = {}) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     var menu by remember { mutableStateOf(false) }
     var viewMenu by remember { mutableStateOf(false) }
-    val canvas = state.activeWorkspace.canvases.firstOrNull { it.id == id }
-    val title = canvas?.let { canvasHeaderTitle(it, state.activeWorkspace) } ?: moduleTitle(id)
+    val workspace = state.activeWorkspace
+    val canvas = workspace.canvases.firstOrNull { it.id == id }
+    val title = canvas?.let { canvasHeaderTitle(it, workspace) } ?: moduleTitle(id)
     val showCanvasTools = canvas != null && (standalone || floating || selected)
+    // Closing (menu or middle-click) hides a panel, which the window menu brings back; it removes a
+    // canvas, never the last.
+    val canClose = canvas == null || workspace.canvases.size > 1
+    val close = {
+        if (canvas != null) viewModel.closeCanvas(canvas.id) else viewModel.setModuleVisible(id, false)
+    }
+    val tab = !standalone && !floating
     Row(modifier.height(22.dp)
         .then(if (id == "history") Modifier.tutorialTarget(TutorialTargetId.HISTORY_TAB) else Modifier)
         .clip(if (standalone) RoundedCornerShape(0.dp) else RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+        .hoverable(interaction)
         .background(when {
             standalone -> if (hovered) colors.controlHover else colors.panelElevated
             selected -> colors.panelBackground
@@ -663,33 +790,54 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                     Offset(size.width, size.height - .5.dp.toPx()), .5.dp.toPx())
             }
         }, verticalAlignment = Alignment.CenterVertically) {
-        Text(title, color = if (selected) colors.textPrimary else colors.textMuted,
+        Text(title, color = if (selected || hovered) colors.textPrimary else colors.textMuted,
             style = typography.body.copy(fontSize = if (standalone || floating) 11.sp else 10.5.sp,
                 fontWeight = if (standalone || selected) FontWeight.Medium else FontWeight.Normal),
             maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = (if (standalone || floating) Modifier.weight(1f) else Modifier.widthIn(max = 120.dp))
+            modifier = (if (tab) Modifier.widthIn(max = 120.dp) else Modifier.weight(1f))
                 // The move cursor appears only once a drag passes the slop; until then the
                 // cursor reflects what a click does (switch tab vs. nothing).
                 .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(when {
                     session.dragging == id -> Cursor.MOVE_CURSOR
-                    !standalone && !floating && !selected -> Cursor.HAND_CURSOR
+                    tab && !selected -> Cursor.HAND_CURSOR
                     else -> Cursor.DEFAULT_CURSOR
                 })))
                 .onPointerEvent(PointerEventType.Press) { event ->
-                    if (event.button == PointerButton.Secondary) { menu = true; event.changes.forEach { it.consume() } }
+                    when (event.button) {
+                        PointerButton.Secondary -> { menu = true; event.changes.forEach { it.consume() } }
+                        PointerButton.Tertiary -> { if (canClose) close(); event.changes.forEach { it.consume() } }
+                        else -> {}
+                    }
                 }
                 .pointerInput(id, session, floatingWindow, title) {
-                    detectDragGestures(
-                        onDragStart = { session.begin(id, title, floatingWindow, colors) },
-                        onDrag = { change, _ -> change.consume(); session.track() },
-                        onDragEnd = { session.track(); session.finish() },
-                        onDragCancel = { session.cancel() },
-                    )
-                }.clickable(interactionSource = interaction, indication = null) {
+                    val slop = DockDragSlop.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (currentEvent.button != null && currentEvent.button != PointerButton.Primary) return@awaitEachGesture
+                        // A press only becomes a drag once it travels well past the usual slop, so a
+                        // slightly shaky click still switches tabs instead of tearing one off.
+                        while (true) {
+                            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+                            if (!change.pressed) return@awaitEachGesture
+                            if ((change.position - down.position).getDistance() > slop) {
+                                change.consume()
+                                break
+                            }
+                        }
+                        session.begin(id, title, floatingWindow, colors)
+                        try {
+                            val released = drag(down.id) { it.consume(); session.track() }
+                            if (released) { session.track(); session.finish() } else session.cancel()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            session.cancel()
+                            throw e
+                        }
+                    }
+                }.clickable(indication = null, interactionSource = null) {
                     onSelect()
                     if (canvas != null) viewModel.focusCanvas(canvas.id)
                 }
-                .padding(horizontal = if (standalone || floating) 7.dp else 10.dp, vertical = 2.dp))
+                .padding(horizontal = if (tab) 10.dp else 7.dp, vertical = 2.dp))
         if (showCanvasTools) {
             CanvasModeChip(
                 label = tr("tab.edit"),
@@ -729,30 +877,48 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
             }
         }
         if (floating) {
-            Text("↙", color = colors.textMuted,
-                modifier = Modifier.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))).clickable { session.returnToDock(id) }.padding(horizontal = 7.dp))
+            DockHeaderIcon({ session.returnToDock(id) }) {
+                Text("↙", color = colors.textMuted, fontSize = 11.sp)
+            }
         }
         TreeContextMenu(expanded = menu, onDismissRequest = { menu = false }) {
             CompactMenuItem(text = tr(if (floating) "dock.return" else "dock.detach"), onClick = {
                 menu = false
                 if (floating) session.returnToDock(id) else session.detach(id)
             })
-            if (canvas != null) {
-                CompactMenuItem(
-                    text = tr("window.closeCanvas"),
-                    enabled = state.activeWorkspace.canvases.size > 1,
-                    onClick = {
-                        menu = false
-                        viewModel.closeCanvas(canvas.id)
-                    },
-                )
-            } else {
-                CompactMenuItem(text = tr("dock.close"), onClick = {
+            CompactMenuItem(
+                text = tr(if (canvas != null) "window.closeCanvas" else "dock.close"),
+                enabled = canClose,
+                onClick = {
                     menu = false
-                    viewModel.setModuleVisible(id, false)
+                    close()
+                },
+            )
+            if (siblings.size > 1) {
+                // Other tabs of the group are hidden, not destroyed, so a canvas among them keeps its view.
+                CompactMenuItem(text = tr("dock.closeOthers"), onClick = {
+                    menu = false
+                    siblings.filter { it != id }.forEach { viewModel.setModuleVisible(it, false) }
+                    onSelect()
                 })
             }
         }
+    }
+}
+
+/** A small square button at the end of a floating dock header. */
+@Composable
+private fun DockHeaderIcon(onClick: () -> Unit, content: @Composable () -> Unit) {
+    val colors = LocalToolColors.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp))
+        .background(if (hovered) colors.controlHover else Color.Transparent)
+        .hoverable(interaction)
+        .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        content()
     }
 }
 
@@ -777,6 +943,10 @@ private fun canvasHeaderTitle(canvas: CanvasWindowState, workspace: EditorWorksp
     val base = tr("dock.canvas")
     return if (workspace.canvases.size > 1 && index >= 0) "$base ${index + 1}" else base
 }
+
+private fun dockTabTitle(id: String, state: PSD2LiveState): String =
+    state.activeWorkspace.canvases.firstOrNull { it.id == id }?.let { canvasHeaderTitle(it, state.activeWorkspace) }
+        ?: moduleTitle(id)
 
 private fun floatingTitle(id: String, state: PSD2LiveState, viewModel: PSD2LiveViewModel): String {
     val canvas = state.activeWorkspace.canvases.firstOrNull { it.id == id }

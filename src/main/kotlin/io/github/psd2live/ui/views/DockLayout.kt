@@ -49,7 +49,11 @@ internal data class DockNode(
     }
 }
 
-internal fun dockModule(root: DockNode?, module: String, target: String?, side: DockSide): DockNode {
+/**
+ * Move [module] into leaf [target]: as a tab on [DockSide.CENTER], placed before the tab [before]
+ * (last when null or absent), or as a new split on any other side.
+ */
+internal fun dockModule(root: DockNode?, module: String, target: String?, side: DockSide, before: String? = null): DockNode {
     if (root != null && root.find(target.orEmpty())?.modules == listOf(module)) return root
     val clean = root?.remove(module)
     val leaf = DockNode(modules = listOf(module))
@@ -59,7 +63,10 @@ internal fun dockModule(root: DockNode?, module: String, target: String?, side: 
     var found = false
     val result = clean.update(target.orEmpty()) { node ->
         found = true
-        if (side == DockSide.CENTER) node.copy(modules = node.modules + module, selected = module)
+        if (side == DockSide.CENTER) {
+            val at = node.modules.indexOf(before).takeIf { it >= 0 } ?: node.modules.size
+            node.copy(modules = node.modules.toMutableList().apply { add(at, module) }, selected = module)
+        }
         else DockNode(horizontal = side == DockSide.LEFT || side == DockSide.RIGHT,
             first = if (side == DockSide.LEFT || side == DockSide.TOP) leaf else node,
             second = if (side == DockSide.LEFT || side == DockSide.TOP) node else leaf)

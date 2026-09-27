@@ -123,6 +123,24 @@ class DockLayoutTest {
         }
     }
 
+    @Test fun tabsReorderWithinAGroupAndInsertAtAPositionInAnother() {
+        val group = DockNode(modules = listOf("layers", "parameters", "tools"))
+        val other = DockNode(modules = listOf("log", "history"))
+        val root = DockNode(first = group, second = other)
+        // Within one group: the moved tab lands before the named tab and becomes selected.
+        val reordered = dockModule(root, "tools", group.id, DockSide.CENTER, before = "layers")
+        assertEquals(listOf("tools", "layers", "parameters"), reordered.find(group.id)?.modules)
+        assertEquals("tools", reordered.find(group.id)?.selected)
+        assertEquals(listOf("parameters", "tools", "layers"),
+            dockModule(root, "layers", group.id, DockSide.CENTER).find(group.id)?.modules)
+        // Across groups: inserted before the named tab, or last when it is absent.
+        val moved = dockModule(root, "parameters", other.id, DockSide.CENTER, before = "history")
+        assertEquals(listOf("log", "parameters", "history"), moved.find(other.id)?.modules)
+        assertEquals(listOf("layers", "tools"), moved.find(group.id)?.modules)
+        assertEquals(listOf("log", "history", "parameters"),
+            dockModule(root, "parameters", other.id, DockSide.CENTER, before = "missing").find(other.id)?.modules)
+    }
+
     @Test fun presetLayoutFillsCanvasSlotsFromTheCanvasesThatRemain() {
         val rig = presetEditorWorkspace("w", WorkspacePreset.RIG)
         val onlyEdit = rig.copy(canvases = rig.canvases.filter { it.mode == CanvasMode.EDIT })
