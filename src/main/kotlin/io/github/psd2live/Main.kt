@@ -19,6 +19,7 @@ import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.views.PSD2LiveApp
 import java.io.IOException
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JOptionPane
 import kotlin.io.path.absolutePathString
 import kotlin.system.exitProcess
@@ -99,7 +100,11 @@ private fun runGui() {
 		runCatching { viewModel.close() }
 		Unit
 	}
-	val shutdownHook = Thread(shutdown, "psd2live-shutdown-hook")
+	val watchdog = ExitWatchdog()
+	val shutdownHook = Thread({
+		watchdog.arm()
+		shutdown()
+	}, "psd2live-shutdown-hook")
 	Runtime.getRuntime().addShutdownHook(shutdownHook)
 
 	var status = 0
@@ -108,7 +113,12 @@ private fun runGui() {
 		// the EDT while the shutdown hooks run.
 		application(exitProcessOnExit = false) {
 			val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
-			val closeApp: () -> Unit = { viewModel.withSavedChanges { exitApplication() } }
+			val closeApp: () -> Unit = {
+				viewModel.withSavedChanges {
+					watchdog.arm()
+					exitApplication()
+				}
+			}
 			Window(
 				onCloseRequest = closeApp,
 				title = tr("app.title"),
@@ -130,11 +140,38 @@ private fun runGui() {
 		failure.printStackTrace()
 		status = 1
 	}
+	watchdog.arm()
 	shutdown()
 	runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
 	instanceLock?.close()
 	// AWT, Skiko and pooled threads would otherwise keep the JVM alive.
 	exitProcess(status)
+}
+
+/**
+ * Halts the JVM when an exit stalls, since a hung hook or window would otherwise keep the process,
+ * and with it the instance lock, alive until it is killed by hand. Built at startup, so arming it
+ * loads nothing.
+ */
+private class ExitWatchdog {
+	private val thread = Thread({
+		try {
+			Thread.sleep(EXIT_TIMEOUT_MILLIS)
+		} catch (_: InterruptedException) {
+		}
+		System.err.println("PSD2Live did not exit within ${EXIT_TIMEOUT_MILLIS / 1000} s; halting.")
+		Runtime.getRuntime().halt(1)
+	}, "psd2live-exit-watchdog").apply { isDaemon = true }
+	private val armed = AtomicBoolean(false)
+
+	fun arm() {
+		if (armed.compareAndSet(false, true)) thread.start()
+	}
+
+	private companion object {
+		// Above the longest clean exit: MCP stop, the recovery-write flush and the Cubism shutdown.
+		const val EXIT_TIMEOUT_MILLIS = 15_000L
+	}
 }
 
 private fun configureLanguage(arguments: Array<String>) {

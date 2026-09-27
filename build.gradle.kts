@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
@@ -289,7 +292,21 @@ afterEvaluate {
 			fun quote(arg: String) = "\"" + arg.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 			// Gradle adds its daemon's locale; a direct launch should see the user's own.
 			val jvmArgs = run.allJvmArgs.filterNot { arg -> listOf("-Duser.country", "-Duser.language", "-Duser.variant").any(arg::startsWith) }
-			val args = jvmArgs + listOf("-cp", run.classpath.asPath, run.mainClass.get())
+			// Launch from a content-named copy of the app jar: a build while the app runs rewrites
+			// build/libs, and classes loaded lazily from the rewritten jar fail (Windows refuses the
+			// rewrite instead). Old copies go once nothing holds them; Windows keeps the open one.
+			val jar = tasks.getByName<Jar>("jar").archiveFile.get().asFile
+			val hash = MessageDigest.getInstance("SHA-256").digest(jar.readBytes())
+				.joinToString("") { "%02x".format(it) }.take(16)
+			val snapshot = dir.resolve("app-$hash.jar")
+			if (!snapshot.exists()) {
+				val partial = dir.resolve("${snapshot.name}.${ProcessHandle.current().pid()}.tmp")
+				jar.copyTo(partial, overwrite = true)
+				Files.move(partial.toPath(), snapshot.toPath(), StandardCopyOption.REPLACE_EXISTING)
+			}
+			dir.listFiles { file -> file.name.startsWith("app-") && file != snapshot }?.forEach { it.delete() }
+			val classpath = run.classpath.files.map { if (it == jar) snapshot else it }
+			val args = jvmArgs + listOf("-cp", classpath.joinToString(File.pathSeparator), run.mainClass.get())
 			dir.resolve("jvm.args").writeText(args.joinToString("\n", postfix = "\n") { quote(it) })
 			dir.resolve("java").writeText(run.javaLauncher.get().executablePath.asFile.absolutePath)
 		}
