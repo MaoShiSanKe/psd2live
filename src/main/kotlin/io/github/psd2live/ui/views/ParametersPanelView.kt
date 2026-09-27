@@ -547,19 +547,7 @@ internal fun ParametersListView(
 			BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
 			// Labels appear in this order as the panel widens, each only once everything before it fits.
 			val labels = listOf(tr("parameters.relatedOnly"), tr("parameters.newParameterShort"), tr("parameters.newFolderShort"))
-			val labelStyle = typography.caption.copy(fontSize = 10.5.sp)
-			val labelMeasurer = rememberTextMeasurer()
-			val density = LocalDensity.current
-			val labelWidths = labels.map { with(density) { labelMeasurer.measure(it, labelStyle).size.width.toDp() } + PanelToolLabelGap }
-			val iconCount = if (state.previewLive) 8 else 7
-			val iconsWidth = 22.dp * iconCount + 3.dp * (iconCount + 1) + 5.dp + 8.dp
-			var labelsShown = 0
-			var used = iconsWidth
-			for (width in labelWidths) {
-				if (used + width > maxWidth) break
-				used += width
-				labelsShown++
-			}
+			val labelsShown = shownToolLabels(labels, if (state.previewLive) 8 else 7, maxWidth)
 			Row(
 				modifier = Modifier.fillMaxSize(),
 				verticalAlignment = Alignment.CenterVertically,

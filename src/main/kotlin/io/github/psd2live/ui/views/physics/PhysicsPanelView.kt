@@ -1,14 +1,19 @@
 package io.github.psd2live.ui.views.physics
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,35 +21,58 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.Divider
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.PhysicsGroup
 import io.github.psd2live.core.PhysicsIssue
 import io.github.psd2live.core.PhysicsOrigin
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
-import io.github.psd2live.ui.components.CompactSectionHeader
+import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.IconAdd
+import io.github.psd2live.ui.components.IconClose
+import io.github.psd2live.ui.components.IconEye
+import io.github.psd2live.ui.components.IconMouse
 import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
+import io.github.psd2live.ui.components.IconReset
+import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -52,6 +80,11 @@ import io.github.psd2live.ui.state.previewPanelState
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.utils.NativeFilePicker
+import io.github.psd2live.ui.views.IconArrowVertical
+import io.github.psd2live.ui.views.PanelSectionRow
+import io.github.psd2live.ui.views.PanelToolButton
+import io.github.psd2live.ui.views.PanelToolbarSeparator
+import io.github.psd2live.ui.views.shownToolLabels
 
 /**
  * Physics: every pendulum the model exports, generated or the user's, in one list in evaluation order.
@@ -71,85 +104,202 @@ internal fun PhysicsPanelView(
 	var selectedId by remember { mutableStateOf<String?>(null) }
 	val selected = groups.firstOrNull { it.id == selectedId } ?: groups.firstOrNull()
 	val parameters = state.previewModel?.rig?.puppet?.parameters.orEmpty()
+	var query by remember { mutableStateOf("") }
+	var listOpen by remember { mutableStateOf(true) }
+	val needle = query.trim()
+	val shown = if (needle.isEmpty()) groups else groups.filter { it.setting.name.contains(needle, ignoreCase = true) }
 
-	Column(
-		modifier = modifier
-			.fillMaxSize()
-			.background(colors.panelBackground)
-			.verticalScroll(rememberScrollState())
-			.padding(horizontal = 8.dp, vertical = 6.dp),
-		verticalArrangement = Arrangement.spacedBy(8.dp),
-	) {
-		PhysicsHeaderCard(viewModel, previewState, groups)
-
-		CompactSectionHeader(
-			title = tr("physics.groups"),
-			trailing = {
-				Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-					// Cubism runs groups top to bottom; a later group reads an earlier one's outputs.
-					val index = groups.indexOfFirst { it.id == selected?.id }
-					OrderButton("↑", tr("physics.moveUp"), index > 0) { selected?.let { viewModel.movePhysicsGroup(it.id, -1) } }
-					OrderButton("↓", tr("physics.moveDown"), index in 0 until groups.size - 1) { selected?.let { viewModel.movePhysicsGroup(it.id, 1) } }
-					NewPhysicsButton(viewModel, selected) { id -> selectedId = id }
-				}
-			},
-		)
+	Column(modifier.fillMaxSize().background(colors.panelBackground)) {
+		PhysicsToolbar(viewModel, state, previewState, groups, selected, query, { query = it }) { id -> selectedId = id }
+		Divider(color = colors.divider)
 		if (state.previewModel == null) {
-			Text(tr("physics.noModel"), style = typography.caption, color = colors.textMuted, modifier = Modifier.padding(4.dp))
+			Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+				Text(tr("physics.noModel"), style = typography.caption.copy(fontSize = 11.sp), color = colors.textMuted, modifier = Modifier.padding(12.dp))
+			}
 			return@Column
 		}
-		PhysicsGroupList(groups, selected?.id, state.generatePhysics && !state.meshOnly,
-			onSelect = { selectedId = it }, onEnabled = viewModel::setPhysicsGroupEnabled)
-
-		if (selected != null) {
-			PhysicsGroupEditor(viewModel, state, selected, groups, parameters) { id -> selectedId = id }
+		val scroll = rememberScrollState()
+		Box(Modifier.fillMaxSize()) {
+			Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(end = 6.dp)) {
+				PanelSectionRow(tr("physics.groups"), listOpen || needle.isNotEmpty(), { listOpen = !listOpen }, count = groups.size)
+				PhysicsRowDivider()
+				if (listOpen || needle.isNotEmpty()) {
+					PhysicsGroupList(viewModel, state, groups, shown, selected?.id, previewState.generatePhysics && !previewState.meshOnly,
+						empty = if (needle.isEmpty()) tr("physics.empty") else tr("physics.noResults"),
+						onSelect = { selectedId = it })
+				}
+				if (selected != null) {
+					PhysicsGroupEditor(viewModel, state, selected, groups, parameters) { id -> selectedId = id }
+				}
+				Spacer(Modifier.height(8.dp))
+			}
+			VerticalScrollbar(
+				adapter = rememberScrollbarAdapter(scroll),
+				modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
+			)
 		}
-		Spacer(Modifier.height(8.dp))
 	}
 }
 
 /**
- * Whether physics runs and how many groups export, with the preview's play/tracking so inputs can be tried.
- * The switch and the frame rate are the preview toolbar's, next to the model they act on.
+ * Search, the preview's play and tracking so inputs can be tried, new group and evaluation order, with a
+ * status line under it. The physics switch and frame rate stay on the preview toolbar, next to the model.
  */
 @Composable
-internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveState, groups: List<PhysicsGroup>) {
+private fun PhysicsToolbar(
+	viewModel: PSD2LiveViewModel,
+	state: PSD2LiveState,
+	previewState: PSD2LiveState,
+	groups: List<PhysicsGroup>,
+	selected: PhysicsGroup?,
+	query: String,
+	onQuery: (String) -> Unit,
+	onCreated: (String) -> Unit,
+) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val on = state.generatePhysics && !state.meshOnly
-	val playing = state.animationEnabled && !state.meshOnly
+	val on = previewState.generatePhysics && !previewState.meshOnly
+	val playing = previewState.animationEnabled && !previewState.meshOnly
+	var searchOpen by remember { mutableStateOf(query.isNotEmpty()) }
+	val searchFocus = remember { FocusRequester() }
+	var newMenuOpen by remember { mutableStateOf(false) }
+	fun closeSearch() {
+		onQuery("")
+		searchOpen = false
+	}
 	Column(
-		modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(colors.windowBackground)
-			.border(BorderStroke(1.dp, if (on) colors.accent.copy(alpha = 0.45f) else colors.divider), RoundedCornerShape(4.dp))
-			.padding(8.dp),
-		verticalArrangement = Arrangement.spacedBy(6.dp),
+		Modifier.fillMaxWidth().background(colors.panelElevated).padding(horizontal = 4.dp, vertical = 3.dp),
+		verticalArrangement = Arrangement.spacedBy(3.dp),
 	) {
-		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
+			val labels = listOf(
+				tr(if (playing) "animation.idle.stop" else "animation.idle.start"),
+				tr("animation.mouseTracking"),
+				tr("physics.new"),
+			)
+			val labelsShown = shownToolLabels(labels, if (state.previewLive) 7 else 8, maxWidth)
+			Row(
+				modifier = Modifier.fillMaxSize(),
+				verticalAlignment = Alignment.CenterVertically,
+				horizontalArrangement = Arrangement.spacedBy(3.dp),
+			) {
+				if (searchOpen) {
+					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+					CompactTextField(
+						value = query,
+						onValueChange = onQuery,
+						placeholder = tr("physics.search"),
+						leadingIcon = { IconSearch(tint = colors.textMuted) },
+						trailingIcon = {
+							CompactIconButton(onClick = { closeSearch() }, tooltip = tr("parameters.clearSearch"), size = 16.dp) {
+								IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
+							}
+						},
+						modifier = Modifier
+							.weight(1f)
+							.focusRequester(searchFocus)
+							.onPreviewKeyEvent { event ->
+								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+									closeSearch()
+									true
+								} else false
+							},
+						height = 22.dp,
+					)
+					return@Row
+				}
+				CompactIconButton(onClick = { searchOpen = true }, size = 22.dp, tooltip = tr("physics.search")) {
+					IconSearch(tint = colors.textMuted)
+				}
+				PanelToolButton(
+					label = labels[0],
+					showLabel = labelsShown > 0,
+					onClick = { viewModel.setAnimationEnabled(!previewState.animationEnabled) },
+					enabled = true,
+					active = playing,
+					tooltip = labels[0],
+				) {
+					if (playing) IconPause(modifier = Modifier.size(11.dp), tint = colors.accent)
+					else IconPlay(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+				}
+				PanelToolButton(
+					label = labels[1],
+					showLabel = labelsShown > 1,
+					onClick = { viewModel.setMouseTrackingEnabled(!previewState.mouseTrackingEnabled) },
+					enabled = true,
+					active = previewState.mouseTrackingEnabled,
+					tooltip = labels[1],
+				) {
+					IconMouse(
+						active = previewState.mouseTrackingEnabled,
+						modifier = Modifier.size(12.dp),
+						tint = if (previewState.mouseTrackingEnabled) colors.accent else colors.textMuted,
+					)
+				}
+				PanelToolbarSeparator()
+				Box {
+					PanelToolButton(
+						label = labels[2],
+						showLabel = labelsShown > 2,
+						onClick = { newMenuOpen = true },
+						enabled = state.previewModel != null,
+						tooltip = tr("physics.new"),
+					) {
+						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+					}
+					NewPhysicsMenu(viewModel, selected, newMenuOpen, { newMenuOpen = false }, onCreated)
+				}
+				Spacer(Modifier.weight(1f))
+				// Cubism runs groups top to bottom; a later group reads an earlier one's outputs.
+				val index = groups.indexOfFirst { it.id == selected?.id }
+				CompactIconButton(
+					onClick = { selected?.let { viewModel.movePhysicsGroup(it.id, -1) } },
+					enabled = index > 0,
+					size = 22.dp,
+					tooltip = tr("physics.moveUp"),
+				) { IconArrowVertical(up = true, tint = colors.textMuted) }
+				CompactIconButton(
+					onClick = { selected?.let { viewModel.movePhysicsGroup(it.id, 1) } },
+					enabled = index in 0 until groups.size - 1,
+					size = 22.dp,
+					tooltip = tr("physics.moveDown"),
+				) { IconArrowVertical(up = false, tint = colors.textMuted) }
+				if (!state.previewLive) {
+					CompactIconButton(onClick = { viewModel.ensurePreviewCanvas(focus = true) }, size = 22.dp, tooltip = tr("window.showPreview")) {
+						IconEye(visible = true, modifier = Modifier.size(12.dp), tint = colors.textMuted)
+					}
+				}
+				CompactIconButton(
+					onClick = { viewModel.resetPreviewParameters() },
+					enabled = state.previewModel != null,
+					size = 22.dp,
+					tooltip = tr("animation.resetPose"),
+				) { IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary) }
+			}
+		}
+		Row(
+			Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(6.dp),
+		) {
+			Box(Modifier.size(6.dp).clip(CircleShape).background(if (on) colors.accent else colors.textDisabled))
 			Text(
-				tr(if (on) "physics.status.on" else "physics.status.off", fpsText(state.rigEdits.physicsFps)),
-				style = typography.caption.copy(fontSize = 9.5.sp),
+				tr(if (on) "physics.status.on" else "physics.status.off", fpsText(previewState.rigEdits.physicsFps)),
+				style = typography.caption.copy(fontSize = 10.sp),
 				color = if (on) colors.textPrimary else colors.textMuted,
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
 				modifier = Modifier.weight(1f),
 			)
 			Text(
 				tr("physics.activeCount", groups.count { it.active }, groups.size),
-				style = typography.caption.copy(fontSize = 9.5.sp),
+				style = typography.caption.copy(fontSize = 10.sp),
 				color = if (on) colors.accent else colors.textMuted,
+				maxLines = 1,
 			)
 		}
-		if (state.meshOnly) Text(tr("physics.meshOnly"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.warning)
-		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-			CompactButton(
-				text = tr(if (playing) "animation.idle.stop" else "animation.idle.start"),
-				onClick = { viewModel.setAnimationEnabled(!state.animationEnabled) },
-				leadingIcon = {
-					if (playing) IconPause(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-					else IconPlay(modifier = Modifier.size(10.dp), tint = colors.accent)
-				},
-				height = 22.dp,
-			)
-			CompactCheckbox(state.mouseTrackingEnabled, viewModel::setMouseTrackingEnabled, label = tr("animation.mouseTracking"),
-				modifier = Modifier.weight(1f))
+		if (previewState.meshOnly) {
+			Text(tr("physics.meshOnly"), style = typography.caption.copy(fontSize = 10.sp), color = colors.warning, modifier = Modifier.padding(horizontal = 4.dp))
 		}
 	}
 }
@@ -157,86 +307,168 @@ internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveStat
 @Composable
 private fun fpsText(fps: Int): String = if (fps > 0) "$fps FPS" else tr("preview.fps.unlimited")
 
+/** Blank pendulum, a copy of the selected group, an imported physics3.json, or a swing on the selection. */
 @Composable
-private fun OrderButton(text: String, tooltip: String, enabled: Boolean, onClick: () -> Unit) {
-	CompactIconButton(onClick = onClick, size = 18.dp, enabled = enabled, tooltip = tooltip) {
-		Text(text, style = LocalToolTypography.current.caption.copy(fontSize = 11.sp), color = LocalToolColors.current.textPrimary)
+private fun NewPhysicsMenu(
+	viewModel: PSD2LiveViewModel,
+	selected: PhysicsGroup?,
+	open: Boolean,
+	onDismiss: () -> Unit,
+	onCreated: (String) -> Unit,
+) {
+	TreeContextMenu(expanded = open, onDismissRequest = onDismiss) {
+		CompactMenuItem(text = tr("physics.newBlank"), onClick = {
+			onDismiss()
+			viewModel.createPhysicsGroup()?.let(onCreated)
+		})
+		CompactMenuItem(text = tr("physics.duplicate"), enabled = selected != null, onClick = {
+			onDismiss()
+			selected?.let { viewModel.createPhysicsGroup(it.setting)?.let(onCreated) }
+		})
+		CompactMenuItem(text = tr("physics.import"), onClick = {
+			onDismiss()
+			NativeFilePicker.choosePhysicsFile()?.let { path -> viewModel.importPhysics(path)?.let(onCreated) }
+		})
+		CompactMenuDivider()
+		val targets = viewModel.canvasEditor.swingTargets()
+		CompactMenuItem(text = tr("physics.newSwing"), enabled = targets.isNotEmpty(), onClick = {
+			onDismiss()
+			viewModel.beginSwing(targets)
+		})
 	}
 }
 
+/** What can be done to one group, shared by its row's right-click menu and the editor's title. */
 @Composable
-internal fun NewPhysicsButton(viewModel: PSD2LiveViewModel, selected: PhysicsGroup?, onCreated: (String) -> Unit) {
-	var open by remember { mutableStateOf(false) }
-	Box {
-		CompactButton(text = "+ ${tr("physics.new")}", onClick = { open = true }, height = 18.dp)
-		TreeContextMenu(expanded = open, onDismissRequest = { open = false }) {
-			CompactMenuItem(text = tr("physics.newBlank"), onClick = {
-				open = false
-				viewModel.createPhysicsGroup()?.let(onCreated)
-			})
-			CompactMenuItem(text = tr("physics.duplicate"), enabled = selected != null, onClick = {
-				open = false
-				selected?.let { viewModel.createPhysicsGroup(it.setting)?.let(onCreated) }
-			})
-			CompactMenuItem(text = tr("physics.import"), onClick = {
-				open = false
-				NativeFilePicker.choosePhysicsFile()?.let { path -> viewModel.importPhysics(path)?.let(onCreated) }
-			})
-			CompactMenuDivider()
-			val targets = viewModel.canvasEditor.swingTargets()
-			CompactMenuItem(text = tr("physics.newSwing"), enabled = targets.isNotEmpty(), onClick = {
-				open = false
-				viewModel.beginSwing(targets)
-			})
-		}
-	}
-}
-
-@Composable
-internal fun PhysicsGroupList(
+internal fun ColumnScope.PhysicsGroupMenuItems(
+	viewModel: PSD2LiveViewModel,
+	state: PSD2LiveState,
+	group: PhysicsGroup,
 	groups: List<PhysicsGroup>,
+	onSelect: (String) -> Unit,
+	onRename: (() -> Unit)?,
+	dismiss: () -> Unit,
+) {
+	val swing = if (group.origin == PhysicsOrigin.SWING) PhysicsGenerator.swingOf(group.id, state.rigEdits.swingEdits) else null
+	val index = groups.indexOfFirst { it.id == group.id }
+	if (onRename != null) CompactMenuItem(tr("physics.rename"), { dismiss(); onRename() })
+	CompactMenuItem(tr("physics.duplicate"), { dismiss(); viewModel.createPhysicsGroup(group.setting)?.let(onSelect) })
+	if (swing != null) CompactMenuItem(tr("physics.openSwing"), { dismiss(); viewModel.beginSwing(swing.targets) })
+	CompactMenuDivider()
+	CompactMenuItem(tr("physics.moveUp"), { dismiss(); viewModel.movePhysicsGroup(group.id, -1) }, enabled = index > 0)
+	CompactMenuItem(tr("physics.moveDown"), { dismiss(); viewModel.movePhysicsGroup(group.id, 1) }, enabled = index in 0 until groups.size - 1)
+	CompactMenuDivider()
+	CompactMenuItem(tr("physics.resetDefaults"), { dismiss(); viewModel.removePhysicsGroup(group.id) }, enabled = group.overridden)
+	CompactMenuItem(tr("physics.delete"), { dismiss(); viewModel.removePhysicsGroup(group.id) },
+		enabled = group.origin == PhysicsOrigin.CUSTOM, danger = true)
+}
+
+@Composable
+private fun PhysicsGroupList(
+	viewModel: PSD2LiveViewModel,
+	state: PSD2LiveState,
+	groups: List<PhysicsGroup>,
+	shown: List<PhysicsGroup>,
 	selectedId: String?,
 	globalOn: Boolean,
+	empty: String,
 	onSelect: (String) -> Unit,
-	onEnabled: (String, Boolean) -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	if (groups.isEmpty()) {
-		Text(tr("physics.empty"), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted, modifier = Modifier.padding(4.dp))
+	if (shown.isEmpty()) {
+		Text(
+			empty,
+			style = typography.caption.copy(fontSize = 10.5.sp),
+			color = colors.textMuted,
+			modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+		)
+		PhysicsRowDivider()
 		return
 	}
-	Column(
-		modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(colors.windowBackground)
-			.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp)).padding(vertical = 2.dp),
-	) {
-		groups.forEachIndexed { index, group ->
-			val isSelected = group.id == selectedId
-			Row(
-				modifier = Modifier.fillMaxWidth().height(24.dp)
-					.background(if (isSelected) colors.selection.copy(alpha = 0.55f) else Color.Transparent)
-					.clickable { onSelect(group.id) }
-					.padding(horizontal = 6.dp),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(6.dp),
-			) {
-				CompactCheckbox(group.enabled, { onEnabled(group.id, it) })
-				Text("${index + 1}", style = typography.monoSmall, color = colors.textMuted, modifier = Modifier.width(14.dp))
-				Text(
-					group.setting.name,
-					style = typography.body.copy(fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal),
-					color = if (group.active && globalOn) colors.textPrimary else colors.textMuted,
-					maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+	for (group in shown) {
+		PhysicsGroupRow(viewModel, state, group, groups, groups.indexOf(group), group.id == selectedId, globalOn, onSelect)
+		PhysicsRowDivider()
+	}
+}
+
+/** One group in evaluation order; the selected one is marked like a related parameter. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun PhysicsGroupRow(
+	viewModel: PSD2LiveViewModel,
+	state: PSD2LiveState,
+	group: PhysicsGroup,
+	groups: List<PhysicsGroup>,
+	index: Int,
+	selected: Boolean,
+	globalOn: Boolean,
+	onSelect: (String) -> Unit,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	var menuOpen by remember { mutableStateOf(false) }
+	var menuOffset by remember { mutableStateOf(Offset.Zero) }
+	Box {
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.height(24.dp)
+				.background(
+					when {
+						selected -> colors.selection.copy(alpha = 0.35f)
+						hovered -> colors.controlHover.copy(alpha = 0.35f)
+						else -> Color.Transparent
+					},
 				)
-				when {
-					group.issue != null -> StatusDot(colors.warning, tr("physics.issue.short"))
-					group.shadowedBy != null -> StatusDot(colors.textDisabled, tr("physics.replaced.short"))
-					group.overridden -> StatusDot(colors.accent, tr("physics.modified"))
+				.drawWithContent {
+					drawContent()
+					if (selected) drawRect(colors.accent, size = Size(2.dp.toPx(), size.height))
 				}
-				OriginBadge(group.origin)
+				.hoverable(interaction)
+				.onPointerEvent(PointerEventType.Press) { event ->
+					if (event.button == PointerButton.Secondary) {
+						menuOffset = event.changes.firstOrNull()?.position ?: Offset.Zero
+						menuOpen = true
+						onSelect(group.id)
+						event.changes.firstOrNull()?.consume()
+					}
+				}
+				.clickable(interactionSource = interaction, indication = null) { onSelect(group.id) }
+				.padding(start = 6.dp, end = 6.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(6.dp),
+		) {
+			CompactCheckbox(group.enabled, { viewModel.setPhysicsGroupEnabled(group.id, it) })
+			Text("${index + 1}", style = typography.monoSmall, color = colors.textMuted, modifier = Modifier.width(14.dp))
+			Text(
+				group.setting.name,
+				style = typography.body.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
+				color = when {
+					!(group.active && globalOn) -> colors.textMuted
+					selected -> colors.accent
+					else -> colors.textPrimary
+				},
+				maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+			)
+			when {
+				group.issue != null -> StatusDot(colors.warning, tr("physics.issue.short"))
+				group.shadowedBy != null -> StatusDot(colors.textDisabled, tr("physics.replaced.short"))
+				group.overridden -> StatusDot(colors.accent, tr("physics.modified"))
 			}
+			OriginBadge(group.origin)
+		}
+		TreeContextMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, clickOffset = menuOffset, minWidth = 160.dp) {
+			PhysicsGroupMenuItems(viewModel, state, group, groups, onSelect, onRename = null) { menuOpen = false }
 		}
 	}
+}
+
+@Composable
+internal fun PhysicsRowDivider() {
+	Divider(color = LocalToolColors.current.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
 }
 
 @Composable
@@ -251,9 +483,9 @@ internal fun StatusDot(color: Color, label: String) {
 internal fun OriginBadge(origin: PhysicsOrigin) {
 	val colors = LocalToolColors.current
 	Box(
-		Modifier.clip(RoundedCornerShape(3.dp)).background(colors.controlBackground).padding(horizontal = 4.dp, vertical = 1.dp),
+		Modifier.clip(RoundedCornerShape(2.dp)).background(colors.controlHover).padding(horizontal = 4.dp, vertical = 1.dp),
 	) {
-		Text(tr("physics.origin.${origin.name.lowercase()}"), style = LocalToolTypography.current.caption.copy(fontSize = 9.sp), color = colors.textMuted)
+		Text(tr("physics.origin.${origin.name.lowercase()}"), style = LocalToolTypography.current.caption.copy(fontSize = 9.sp), color = colors.textMuted, maxLines = 1)
 	}
 }
 

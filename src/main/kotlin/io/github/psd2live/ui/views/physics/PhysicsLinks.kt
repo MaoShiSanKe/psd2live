@@ -18,10 +18,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,6 +36,7 @@ import io.github.psd2live.core.PhysicsSourceType
 import io.github.psd2live.core.RigPhysicsEdit
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
+import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
@@ -63,7 +64,8 @@ internal fun AddParameterButton(
 ) {
 	var open by remember { mutableStateOf(false) }
 	Box {
-		CompactButton(text = "+ $text", onClick = { open = true }, height = 18.dp)
+		CompactButton(text = text, onClick = { open = true }, height = 18.dp,
+			leadingIcon = { IconAdd(modifier = Modifier.size(9.dp), tint = LocalToolColors.current.textPrimary) })
 		TreeContextMenu(expanded = open, onDismissRequest = { open = false }, maxWidth = 320.dp) {
 			for ((name, apply) in presets) CompactMenuItem(name, { open = false; apply() })
 			if (presets.isNotEmpty()) CompactMenuDivider()

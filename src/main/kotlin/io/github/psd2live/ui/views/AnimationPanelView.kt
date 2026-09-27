@@ -35,12 +35,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Divider
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -64,9 +64,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,7 +85,6 @@ import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconCollapseAll
 import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconEye
-import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconMouse
 import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
@@ -182,19 +179,7 @@ internal fun AnimationPanelView(
 				tr("animation.mouseTracking"),
 				tr("animation.new"),
 			)
-			val labelStyle = typography.caption.copy(fontSize = 10.5.sp)
-			val labelMeasurer = rememberTextMeasurer()
-			val density = LocalDensity.current
-			val labelWidths = labels.map { with(density) { labelMeasurer.measure(it, labelStyle).size.width.toDp() } + PanelToolLabelGap }
-			val iconCount = if (state.previewLive) 7 else 8
-			val iconsWidth = 22.dp * iconCount + 3.dp * (iconCount + 1) + 5.dp + 8.dp
-			var labelsShown = 0
-			var used = iconsWidth
-			for (width in labelWidths) {
-				if (used + width > maxWidth) break
-				used += width
-				labelsShown++
-			}
+			val labelsShown = shownToolLabels(labels, if (state.previewLive) 7 else 8, maxWidth)
 			Row(
 				modifier = Modifier.fillMaxSize(),
 				verticalAlignment = Alignment.CenterVertically,
@@ -327,7 +312,7 @@ internal fun AnimationPanelView(
 				fun LazyListScope.section(id: String, title: String, entries: List<MotionEntry>, empty: String?) {
 					val open = needle.isNotEmpty() || openSections[id] != false
 					item(key = "s:$id") {
-						MotionSectionRow(title, entries.size, open) { openSections[id] = !open }
+						PanelSectionRow(title, open, { openSections[id] = !open }, count = entries.size)
 						Divider(color = colors.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
 					}
 					if (!open) return
@@ -471,39 +456,6 @@ private fun summaryOf(clip: MotionClip) = MotionSummary(
 	fadeOut = clip.fadeOut,
 	curves = clip.curves.map { curve -> curve.parameterId to (curve.keys.minOf { it.value } to curve.keys.maxOf { it.value }) },
 )
-
-/** Folder-style header for the generated and the user's motions, like a parameter folder. */
-@Composable
-private fun MotionSectionRow(title: String, count: Int, open: Boolean, onToggle: () -> Unit) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val interaction = remember { MutableInteractionSource() }
-	val hovered by interaction.collectIsHoveredAsState()
-	Row(
-		modifier = Modifier
-			.fillMaxWidth()
-			.background(if (hovered) colors.controlHover.copy(alpha = 0.55f) else colors.panelElevated.copy(alpha = 0.55f))
-			.hoverable(interaction)
-			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-			.clickable(interactionSource = interaction, indication = null, onClick = onToggle)
-			.padding(start = 4.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
-		verticalAlignment = Alignment.CenterVertically,
-	) {
-		IconChevron(expanded = open, tint = colors.textMuted, modifier = Modifier.size(10.dp))
-		Spacer(Modifier.width(4.dp))
-		IconFolder(tint = colors.accent, modifier = Modifier.size(12.dp))
-		Spacer(Modifier.width(4.dp))
-		Text(
-			text = title,
-			style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-			color = colors.textPrimary,
-			maxLines = 1,
-			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.weight(1f),
-		)
-		Text(text = "$count", style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
-	}
-}
 
 /**
  * One motion: enable, play and open in the editor on the row, its settings folded underneath and the rest in

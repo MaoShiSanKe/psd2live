@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -17,9 +16,11 @@ import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactToggleChip
+import io.github.psd2live.ui.components.IconAdd
+import io.github.psd2live.ui.components.IconClose
+import io.github.psd2live.ui.views.IconArrowVertical
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
-import io.github.psd2live.ui.theme.LocalToolTypography
 
 /**
  * Which pendulum the sliders edit (all or one), and the pendulum list itself: add one below the selected
@@ -34,11 +35,10 @@ internal fun SegmentBar(
 	onRemove: () -> Unit,
 	onMove: (Int) -> Unit,
 ) {
+	val colors = LocalToolColors.current
 	@Composable
-	fun Action(text: String, tooltip: String, enabled: Boolean, onClick: () -> Unit) =
-		CompactIconButton(onClick = onClick, size = 20.dp, enabled = enabled, tooltip = tooltip) {
-			Text(text, style = LocalToolTypography.current.body, color = LocalToolColors.current.textPrimary)
-		}
+	fun Action(tooltip: String, enabled: Boolean, onClick: () -> Unit, icon: @Composable () -> Unit) =
+		CompactIconButton(onClick = onClick, size = 20.dp, enabled = enabled, tooltip = tooltip, content = icon)
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
 		FieldLabel(tr("physics.segments"), width = 76, tooltip = tr("physics.segments.tip"))
 		CompactToggleChip(tr("physics.segments.all"), selected == null, { onSelect(null) }, showCheckWhenSelected = false, height = 20.dp)
@@ -51,10 +51,10 @@ internal fun SegmentBar(
 				modifier = Modifier.width(48.dp), height = 20.dp)
 		}
 		Spacer(Modifier.weight(1f))
-		Action("↑", tr("physics.moveSegmentUp"), selected != null && selected > 0) { onMove(-1) }
-		Action("↓", tr("physics.moveSegmentDown"), selected != null && selected < count - 1) { onMove(1) }
-		Action("+", tr("physics.addSegment"), count < RigPhysicsEdit.MAX_SEGMENTS, onAdd)
-		Action("−", tr("physics.removeSegment"), count > 1, onRemove)
+		Action(tr("physics.moveSegmentUp"), selected != null && selected > 0, { onMove(-1) }) { IconArrowVertical(up = true, tint = colors.textMuted) }
+		Action(tr("physics.moveSegmentDown"), selected != null && selected < count - 1, { onMove(1) }) { IconArrowVertical(up = false, tint = colors.textMuted) }
+		Action(tr("physics.addSegment"), count < RigPhysicsEdit.MAX_SEGMENTS, onAdd) { IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary) }
+		Action(tr("physics.removeSegment"), count > 1, onRemove) { IconClose(modifier = Modifier.size(9.dp), tint = colors.textMuted) }
 	}
 }
 
