@@ -140,7 +140,7 @@ fun SettingsDialog(
 		modifier = Modifier
 			.fillMaxSize()
 			.background(colors.scrim)
-			.clickable(onClick = onDismiss),
+			.scrimDismiss(onDismiss = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {
 		// Follow the main window rather than a fixed size. The bounds matter at the extremes: in a

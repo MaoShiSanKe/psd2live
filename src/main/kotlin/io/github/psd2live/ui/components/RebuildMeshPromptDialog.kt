@@ -33,7 +33,7 @@ fun RebuildMeshPromptDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.scrim)
-            .clickable(onClick = onDismiss),
+            .scrimDismiss(onDismiss = onDismiss),
         contentAlignment = Alignment.Center,
     ) {
         Column(

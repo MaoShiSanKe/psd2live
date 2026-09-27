@@ -72,7 +72,7 @@ fun TextureUpscaleDialog(
 		modifier = Modifier
 			.fillMaxSize()
 			.background(colors.scrim)
-			.clickable(enabled = !isUpscaling && !isDownloading) { onDismiss() },
+			.scrimDismiss(enabled = !isUpscaling && !isDownloading) { onDismiss() },
 		contentAlignment = Alignment.Center,
 	) {
 		Column(

@@ -73,7 +73,7 @@ fun ExportDialog(
 		modifier = Modifier
 			.fillMaxSize()
 			.background(colors.scrim)
-			.clickable(enabled = !isBusy) { onDismiss() },
+			.scrimDismiss(enabled = !isBusy) { onDismiss() },
 		contentAlignment = Alignment.Center,
 	) {
 		Column(

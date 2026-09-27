@@ -70,7 +70,7 @@ fun ExportPsdDialog(
 		modifier = Modifier
 			.fillMaxSize()
 			.background(colors.scrim)
-			.clickable(enabled = !isExporting) { viewModel.closeExportPsdDialog() },
+			.scrimDismiss(enabled = !isExporting) { viewModel.closeExportPsdDialog() },
 		contentAlignment = Alignment.Center,
 	) {
 		Column(

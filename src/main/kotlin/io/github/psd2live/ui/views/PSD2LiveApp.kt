@@ -98,6 +98,7 @@ import io.github.psd2live.ui.tutorial.tutorialTarget
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material.DropdownMenu
 import io.github.psd2live.ui.components.SettingsDialog
+import io.github.psd2live.ui.components.scrimDismiss
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.utils.DesktopUtils
 import io.github.psd2live.ui.utils.DesktopDropTarget
@@ -894,7 +895,7 @@ private fun ModalDialog(
 		modifier = Modifier
 			.fillMaxSize()
 			.background(colors.scrim)
-			.clickable(onClick = onDismiss),
+			.scrimDismiss(onDismiss = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {
 		Column(

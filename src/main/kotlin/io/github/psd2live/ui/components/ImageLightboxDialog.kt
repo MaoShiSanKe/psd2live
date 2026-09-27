@@ -64,7 +64,7 @@ fun ImageLightboxDialog(
 		modifier = Modifier
 			.fillMaxSize()
 			.background(Color(0xCC000000))
-			.clickable(onClick = onDismiss),
+			.scrimDismiss(onDismiss = onDismiss),
 		contentAlignment = Alignment.Center,
 	) {
 		Column(

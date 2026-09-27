@@ -116,6 +116,14 @@ import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.theme.frostedGlass
 import java.awt.Cursor
 
+/**
+ * Click-to-dismiss for a full-window dialog scrim. Without a MaterialTheme the default indication
+ * tints a hovered clickable 10% black, and the scrim is hovered whenever the pointer is in the
+ * window, so the whole window brightened each time a dropdown popup took the pointer away.
+ */
+fun Modifier.scrimDismiss(enabled: Boolean = true, onDismiss: () -> Unit): Modifier =
+	clickable(interactionSource = null, indication = null, enabled = enabled, onClick = onDismiss)
+
 /** Vector Eye Icon (Visible or Hidden/Crossed-out) */
 @Composable
 fun IconEye(

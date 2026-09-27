@@ -71,7 +71,7 @@ internal fun MeshSplitDialog(
     val valid = generated.all { it.isNotBlank() } && generated.distinct().size == count
 
     Box(
-        Modifier.fillMaxSize().background(colors.scrim).clickable(onClick = onDismiss),
+        Modifier.fillMaxSize().background(colors.scrim).scrimDismiss(onDismiss = onDismiss),
         contentAlignment = Alignment.Center,
     ) {
         Column(
