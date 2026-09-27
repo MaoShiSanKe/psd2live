@@ -102,34 +102,4 @@ data class RigWarpEdit(val id: String, val name: String, val parentId: String,
     }
 }
 
-/** Independently named, adjustable two-particle pendulum, driving an explicit Cubism parameter. */
-data class RigPhysicsEdit(val id: String, val name: String, val inputParameter: String,
-    val outputParameter: String, val length: Float = 10f, val mobility: Float = 0.8f,
-    val delay: Float = 0.8f, val acceleration: Float = 1f, val outputScale: Float = 1f) {
-    init {
-        require(listOf(id, name, inputParameter, outputParameter).all { it.isNotBlank() && it.none(Char::isISOControl) })
-        require(inputParameter != outputParameter) { "Physics input and output must differ" }
-        require(length.isFinite() && mobility.isFinite())
-        require(delay.isFinite() && acceleration.isFinite() && outputScale.isFinite())
-    }
-    internal fun rule() = PhysicsGenerator.PhysicsRule(id, name, outputParameter, outputScale, 1,
-        listOf(PhysicsGenerator.InputRule(inputParameter, 100f, PhysicsGenerator.InputType.ANGLE)),
-        listOf(PhysicsGenerator.VertexRule(0f, 1f, 1f, 1f, 0f),
-            PhysicsGenerator.VertexRule(length.coerceAtLeast(0.01f), mobility.coerceIn(0f, 1f), delay.coerceAtLeast(0.01f), acceleration.coerceAtLeast(0f), length.coerceAtLeast(0.01f))),
-        -10f, 0f, 10f, -30f, 0f, 30f)
-    fun validate(parameterIds: Set<String>) {
-        require(inputParameter in parameterIds && outputParameter in parameterIds) { "Physics input/output parameter does not exist" }
-    }
-    fun toJson() = buildJsonObject {
-        put("id", id); put("name", name); put("input_parameter", inputParameter); put("output_parameter", outputParameter)
-        put("length", length); put("mobility", mobility); put("delay", delay); put("acceleration", acceleration); put("output_scale", outputScale)
-    }
-    companion object {
-        fun fromJson(o: JsonObject) = RigPhysicsEdit(o.text("id"), o.text("name"), o.text("input_parameter"),
-            o.text("output_parameter"), o.number("length", 10f), o.number("mobility", .8f),
-            o.number("delay", .8f), o.number("acceleration", 1f), o.number("output_scale", 1f))
-    }
-}
-
 private fun JsonObject.text(key: String) = requireNotNull(get(key)?.jsonPrimitive?.contentOrNull) { "$key is required" }
-private fun JsonObject.number(key: String, fallback: Float) = get(key)?.jsonPrimitive?.float ?: fallback

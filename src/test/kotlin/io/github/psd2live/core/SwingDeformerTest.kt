@@ -319,19 +319,24 @@ class SwingDeformerTest {
 		assertEquals(listOf("ParamAngleX", "ParamAngleZ"), lateral.inputs.map { it.parameter })
 		val vertical = PhysicsGenerator.swingRules(listOf(swing(SwingKind.VERTICAL, listOf("ParamSwingA", "ParamSwingB"))), available).single()
 		assertEquals(listOf("ParamAngleY", "ParamBodyAngleY", "ParamAngleZ"), vertical.inputs.map { it.parameter })
-		assertEquals(PhysicsGenerator.InputType.X, vertical.inputs.first().type)
-		assertEquals(listOf(1, 2), vertical.outputs.map { it.vertexIndex })
-		assertEquals(3, vertical.vertices.size)
+		assertEquals(PhysicsSourceType.X, vertical.inputs.first().type)
+		assertEquals(listOf(1, 2), vertical.outputs.map { it.vertex })
+		assertEquals(2, vertical.segments.size)
 
-		val json = Json.parseToJsonElement(PhysicsGenerator.generate(false, false, false, available,
-			swings = listOf(swing(SwingKind.VERTICAL, listOf("ParamSwingA", "ParamSwingB"))))!!).jsonObject
+		val overlay = RigEditOverlay(swingEdits = listOf(swing(SwingKind.VERTICAL, listOf("ParamSwingA", "ParamSwingB"))))
+		val none = PhysicsGenerator.Presets(false, false, false)
+		val json = Json.parseToJsonElement(PhysicsGenerator.json(
+			PhysicsGenerator.catalog(none, none, overlay, available).filter { it.active }.map { it.setting })!!).jsonObject
 		assertEquals(2, json.getValue("Meta").jsonObject.getValue("TotalOutputCount").jsonPrimitive.int)
+		assertEquals(3, json.getValue("Meta").jsonObject.getValue("VertexCount").jsonPrimitive.int)
 		val outputs = json.getValue("PhysicsSettings").jsonArray.single().jsonObject.getValue("Output").jsonArray
 		assertEquals(listOf(1, 2), outputs.map { it.jsonObject.getValue("VertexIndex").jsonPrimitive.int })
 
 		// A custom group on one of the outputs replaces the whole swing pendulum.
-		val custom = RigPhysicsEdit("Mine", "Mine", "ParamAngleX", "ParamSwingB")
-		assertEquals(listOf("Mine"), PhysicsGenerator.mergeCustomRules(listOf(vertical), listOf(custom), available).map { it.id })
+		val custom = RigPhysicsEdit("Mine", "Mine", listOf(PhysicsInput("ParamAngleX")), listOf(PhysicsOutput("ParamSwingB")))
+		val groups = PhysicsGenerator.catalog(none, none, overlay.copy(physicsEdits = listOf(custom)), available)
+		assertEquals(listOf("Mine"), groups.filter { it.active }.map { it.id })
+		assertEquals("Mine", groups.single { it.origin == PhysicsOrigin.SWING }.shadowedBy)
 	}
 
 	/** A body Warp over a 500px canvas with one hanging strip mesh under it. */

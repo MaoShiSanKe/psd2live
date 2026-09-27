@@ -309,9 +309,6 @@ class PSD2LivePipeline {
 		// the authored PSD layer artwork and atlas UV coordinates, avoiding singular affine transforms in CMO3.
 		val exportPuppet = restMeshesToCanvasSpace(rig.puppet, mapOf(StandardParameters.MOUTH_OPEN to 1.0f))
 		val outputRoot = outputDirectory.toAbsolutePath().normalize()
-		val hasFrontHair = analysis.layers.any { it.semantic.tag == SemanticTag.FRONT_HAIR && it.opaquePixels > 0 }
-		val hasBackHair = analysis.layers.any { it.semantic.tag == SemanticTag.BACK_HAIR && it.opaquePixels > 0 }
-		val hasEyeJelly = analysis.layers.any { it.semantic.tag == SemanticTag.IRIDES && it.opaquePixels > 0 }
 		Files.createDirectories(outputRoot)
 		val files = mutableListOf<ExportedFile>()
 		val warnings = (analysis.warnings + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
@@ -345,17 +342,8 @@ class PSD2LivePipeline {
 				obfuscateKey = 0x42,
 				tileRasters = { tileId -> tileRasters[tileId] },
 			)
-			val useFrontHairPhysics = hasFrontHair && config.generatePhysics && config.physicsFrontHair && !config.meshOnly
-			val useBackHairPhysics = hasBackHair && config.generatePhysics && config.physicsBackHair && !config.meshOnly
-			val useEyeJellyPhysics = hasEyeJelly && config.generatePhysics && config.physicsEyeJelly && !config.meshOnly
-			val skeletonPhysics = PhysicsGenerator.skeletonRules(config.rigEdits.skeleton,
-				rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }).isNotEmpty() ||
-				PhysicsGenerator.swingRules(config.rigEdits.swingEdits, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }).isNotEmpty()
-			if (useFrontHairPhysics || useBackHairPhysics || useEyeJellyPhysics ||
-				(config.generatePhysics && !config.meshOnly && (config.rigEdits.physicsEdits.isNotEmpty() || skeletonPhysics))) {
-				Cmo3PhysicsInjector.inject(converted.model.root as CModelSource, useFrontHairPhysics, useBackHairPhysics,
-					useEyeJellyPhysics, config.rigEdits.physicsEdits, config.rigEdits.skeleton, config.rigEdits.swingEdits)
-			}
+			val physics = PhysicsGenerator.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
+			if (physics.isNotEmpty()) Cmo3PhysicsInjector.inject(converted.model.root as CModelSource, physics)
 			BezierWarp.configureEditor(converted.model.root as CModelSource)
 			val bytes = Cmo3.write(converted.model)
 			files += writeContained(outputRoot, "$baseName.cmo3", bytes)
@@ -393,19 +381,8 @@ class PSD2LivePipeline {
 		val pages = atlas.pages.mapIndexed { index, page ->
 			Moc3Sidecars.AtlasPage("$textureFolder/texture_${index.toString().padStart(2, '0')}.png", page.png)
 		}
-		val hasFrontHair = analysis.layers.any { it.semantic.tag == SemanticTag.FRONT_HAIR && it.opaquePixels > 0 }
-		val hasBackHair = analysis.layers.any { it.semantic.tag == SemanticTag.BACK_HAIR && it.opaquePixels > 0 }
-		val hasEyeJelly = analysis.layers.any { it.semantic.tag == SemanticTag.IRIDES && it.opaquePixels > 0 }
-		val useFrontHairPhysics = hasFrontHair && config.generatePhysics && config.physicsFrontHair && !config.meshOnly
-		val useBackHairPhysics = hasBackHair && config.generatePhysics && config.physicsBackHair && !config.meshOnly
-		val useEyeJellyPhysics = hasEyeJelly && config.generatePhysics && config.physicsEyeJelly && !config.meshOnly
-		val skeletonPhysics = PhysicsGenerator.skeletonRules(config.rigEdits.skeleton, parameterIds).isNotEmpty() ||
-			PhysicsGenerator.swingRules(config.rigEdits.swingEdits, parameterIds).isNotEmpty()
-		val physics = if (useFrontHairPhysics || useBackHairPhysics || useEyeJellyPhysics ||
-			(config.generatePhysics && !config.meshOnly && (config.rigEdits.physicsEdits.isNotEmpty() || skeletonPhysics))) {
-			PhysicsGenerator.generate(useFrontHairPhysics, useBackHairPhysics, useEyeJellyPhysics, parameterIds,
-				config.rigEdits.physicsEdits, config.rigEdits.skeleton, config.rigEdits.swingEdits)?.let(CubismJson::normalize)
-		} else null
+		val physicsGroups = PhysicsGenerator.active(analysis, config, parameterIds)
+		val physics = PhysicsGenerator.json(physicsGroups)?.let(CubismJson::normalize)
 
 		val motions = buildList<Pair<String, Pair<String, String>>> {
 			if (config.exportMotions && !config.meshOnly) {
@@ -422,8 +399,8 @@ class PSD2LivePipeline {
 						if (override != null) MotionGenerator.clip(override, parameterIds) else generated())
 				}
 				if (config.motionIdle) {
-					val physicsDriven = if (physics != null && config.exportIncludePhysics) {
-						PhysicsGenerator.skeletonRules(config.rigEdits.skeleton, parameterIds).mapTo(HashSet()) { it.outputParameter }
+					val physicsDriven = if (config.exportIncludePhysics) {
+						physicsGroups.flatMapTo(HashSet()) { it.outputParameters }
 					} else emptySet()
 					builtin("Idle", "Idle") { MotionGenerator.idle(parameterIds, config.rigEdits.skeleton, physicsDriven) }
 				}
@@ -572,12 +549,10 @@ class PSD2LivePipeline {
 		val layers = analysis.layers.joinToString(",\n") { layer ->
 			"    {\"source\":${quote(layer.source.name)},\"type\":${quote(layer.semantic.type.name.lowercase())},\"tag\":${quote(layer.semantic.tag.canonicalName)},\"side\":${quote(layer.semantic.side.name)},\"parameter\":${quote(layer.semantic.parameter)},\"switchId\":${layer.semantic.switchId},\"drawable\":${quote(rig.puppet.drawables.firstOrNull { it.name == layer.source.name }?.id?.raw ?: "")}}"
 		}
-		val hasFrontHair = analysis.layers.any { it.semantic.tag == SemanticTag.FRONT_HAIR && it.opaquePixels > 0 }
-		val hasBackHair = analysis.layers.any { it.semantic.tag == SemanticTag.BACK_HAIR && it.opaquePixels > 0 }
-		val hasEyeJelly = analysis.layers.any { it.semantic.tag == SemanticTag.IRIDES && it.opaquePixels > 0 }
-		val useFrontHair = hasFrontHair && config.generatePhysics && config.physicsFrontHair && !config.meshOnly
-		val useBackHair = hasBackHair && config.generatePhysics && config.physicsBackHair && !config.meshOnly
-		val useEyeJelly = hasEyeJelly && config.generatePhysics && config.physicsEyeJelly && !config.meshOnly
+		val physicsIds = PhysicsGenerator.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }).map { it.id }
+		val useFrontHair = PhysicsGenerator.FRONT_HAIR_ID in physicsIds
+		val useBackHair = PhysicsGenerator.BACK_HAIR_ID in physicsIds
+		val useEyeJelly = PhysicsGenerator.EYE_JELLY_ID in physicsIds
 		return """
 		{
 		  "version": 1,
@@ -591,7 +566,7 @@ class PSD2LivePipeline {
 		  "config": {"atlasSize":${config.atlasSize},"meshSpacing":${config.meshSpacing},"headTurnStrength":${config.headTurnStrength},"bodyStrength":${config.bodyStrength},"meshOnly":${config.meshOnly},"generateDeformers":${config.generateDeformers},"exportMotions":${config.exportMotions}},
 		  "faceRig": {"algorithm":"perspective-parallelogram-nine-pose-v2","angleX":[-45,0,45],"angleY":[-30,0,30],"initialAngleZ":${rig.initialHeadAngleZ},"centerX":${rig.faceCenterX},"centerY":${rig.faceCenterY},"radiusX":${rig.faceRadiusX},"radiusY":${rig.faceRadiusY}},
 		  "deformerHierarchy": {"head":"DeformHeadContainer","face":"DeformFaceNinePose","frontHair":["DeformHairFrontFollow","DeformHairFrontPhysics"],"backHair":["DeformHairBackFollow","DeformHairBackPhysics"]},
-		  "physics": {"enabled":${config.generatePhysics && !config.meshOnly},"frontHair":$useFrontHair,"backHair":$useBackHair,"eyeJelly":$useEyeJelly,"preset":"hair-and-eye-pendulum"},
+		  "physics": {"enabled":${config.generatePhysics && !config.meshOnly},"frontHair":$useFrontHair,"backHair":$useBackHair,"eyeJelly":$useEyeJelly,"groups":[${physicsIds.joinToString(",") { quote(it) }}]},
 		  "summary": {"layers":${analysis.layers.size},"drawables":${rig.puppet.drawables.size},"deformers":${rig.puppet.deformers.size},"parameters":${rig.puppet.parameters.size},"atlasPages":${atlas.pages.size}},
 		  "layers": [
 		$layers

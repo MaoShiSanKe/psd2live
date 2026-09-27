@@ -739,7 +739,7 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
     server.addTool(
         name = "warp_create",
         description = "Create an independent identity Warp for one or more existing meshes under their common Warp parent. Preserves mesh pixels, keyforms, masks and inherited motion. The new lattice uses parent-normalized 0..1 coordinates across the parent frame; requested rows/columns are minima, rounded up together to align parent knots and preserve inherited motion. Inspect actual dimensions with object_get. Use rig_list_objects and object_get first; animate with keyform_set. No special hair-split API is required.",
-        inputSchema = rigObjectCreateSchema(false), toolAnnotations = MUTATING,
+        inputSchema = rigObjectCreateSchema(), toolAnnotations = MUTATING,
     ) { request -> mutationResult {
         workspace.createWarp(io.github.psd2live.core.RigWarpEdit.fromJson(request.arguments ?: error("Missing arguments")),
             request.requiredString("expected_history_head_node_id"), request.optionalString("task_id")).toJson()
@@ -747,22 +747,26 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
 
     server.addTool(
         name = "physics_list",
-        description = "List explicitly authored independent physics groups. Built-in front/back hair presets are generated separately. Physics drives parameters, not Warp IDs; bind each output to its Warp with keyform_set.",
+        description = "List every physics group the model exports or could: hair/eye presets, skeleton follow-through, swing pendulums and user groups, each with origin, enabled/active, what replaces it, and why an inactive one does not export.",
         inputSchema = ToolSchema(properties = buildJsonObject {}), toolAnnotations = READ_ONLY,
     ) { mutationResult { buildJsonObject { putJsonArray("groups") { workspace.listPhysics().forEach { add(it.toJson()) } } } } }
 
     server.addTool(
         name = "physics_put",
-        description = "Create or replace an independent two-particle Angle-input physics group by ID. Input/output parameters must already exist; each group needs a distinct output parameter and corresponding Warp keyforms. A matching built-in preset ID or output is replaced by this custom group. Adjustable length, mobility, delay, acceleration and output_scale. Enables physics in the same history commit and exports to physics3.json and editable CMO3 outside mesh-only mode.",
-        inputSchema = rigObjectCreateSchema(true), toolAnnotations = MUTATING,
+        description = "Create or change a physics group by ID; only given fields change. An existing ID (generated or user) is the base, a new ID starts as a 10-unit hair pendulum fed by head/body X and Z. " +
+            "inputs/outputs/segments replace their lists; length/mobility/delay/acceleration set every segment (length is the whole strand) and output_scale every output. " +
+            "A pendulum has 1..16 segments; output vertex k reads the tip of segment k as an angle relative to segment k-1 (vertex 1: to gravity). " +
+            "Editing a generated group replaces it until physics_delete; a user group on a generated group's output replaces that group. enabled=false turns any group off. " +
+            "Parameters must exist and the outputs need authored forms; physics drives parameters, not Warps. Enables physics in the same commit unless only turning a group off.",
+        inputSchema = physicsPutSchema(), toolAnnotations = MUTATING,
     ) { request -> mutationResult {
-        workspace.putPhysics(io.github.psd2live.core.RigPhysicsEdit.fromJson(request.arguments ?: error("Missing arguments")),
-            request.requiredString("expected_history_head_node_id"), request.optionalString("task_id")).toJson()
+        val arguments = request.arguments ?: error("Missing arguments")
+        workspace.putPhysics(arguments, request.requiredString("expected_history_head_node_id"), request.optionalString("task_id")).toJson()
     } }
 
     server.addTool(
         name = "physics_delete",
-        description = "Delete a custom physics group by ID. A built-in preset replaced by this group becomes active again when enabled.",
+        description = "Delete a user physics group, or return a replaced generated group to its generated values. Generated groups themselves are turned off with physics_put enabled=false.",
         inputSchema = ToolSchema(properties = buildJsonObject {
             putJsonObject("id") { put("type", "string") }
             putJsonObject("expected_history_head_node_id") { put("type", "string") }
@@ -770,6 +774,19 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
     ) { request -> mutationResult {
         workspace.deletePhysics(request.requiredString("id"), request.requiredString("expected_history_head_node_id")).toJson()
     } }
+
+    server.addTool(
+        name = "physics_simulate",
+        description = "Run the exported physics (Cubism's evaluation, 60 fps) from rest: inputs jump to their values at t=0, hold for hold seconds, then return to defaults. Per output: start/peak/final and settle time while held and after release, plus sampled [t, value]. Read-only; checks swing size, overshoot and settling that static poses cannot.",
+        inputSchema = ToolSchema(properties = buildJsonObject {
+            putJsonObject("inputs") { put("type", "object"); put("additionalProperties", buildJsonObject { put("type", "number") })
+                put("description", "Parameter values to step to, e.g. {\"ParamAngleX\": 30}") }
+            putJsonObject("ids") { put("type", "array"); putJsonObject("items") { put("type", "string") }; put("description", "Groups to run; default every active group") }
+            putJsonObject("hold") { put("type", "number"); put("minimum", 0); put("maximum", 20) }
+            putJsonObject("duration") { put("type", "number"); put("minimum", 0.1); put("maximum", 20) }
+            putJsonObject("samples") { put("type", "integer"); put("minimum", 2); put("maximum", 60) }
+        }, required = listOf("inputs")), toolAnnotations = READ_ONLY,
+    ) { request -> mutationResult { workspace.simulatePhysics(request.arguments ?: error("Missing arguments")) } }
 
     server.addTool(
         name = "swing_list",
@@ -1075,19 +1092,56 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
 	return server
 }
 
-private fun rigObjectCreateSchema(physics: Boolean): ToolSchema = ToolSchema(
+private fun rigObjectCreateSchema(): ToolSchema = ToolSchema(
     properties = buildJsonObject {
         listOf("id", "name", "expected_history_head_node_id", "task_id").forEach { key -> putJsonObject(key) { put("type", "string") } }
-        if (physics) {
-            listOf("input_parameter", "output_parameter").forEach { key -> putJsonObject(key) { put("type", "string") } }
-            listOf("length", "mobility", "delay", "acceleration", "output_scale").forEach { key -> putJsonObject(key) { put("type", "number") } }
-        } else {
-            putJsonObject("parent_id") { put("type", "string"); put("description", "Existing common Warp parent from object_get") }
-            putJsonObject("mesh_ids") { put("type", "array"); put("minItems", 1); putJsonObject("items") { put("type", "string") } }
-            listOf("rows", "columns").forEach { key -> putJsonObject(key) { put("type", "integer"); put("minimum", 1); put("maximum", 32) } }
-        }
+        putJsonObject("parent_id") { put("type", "string"); put("description", "Existing common Warp parent from object_get") }
+        putJsonObject("mesh_ids") { put("type", "array"); put("minItems", 1); putJsonObject("items") { put("type", "string") } }
+        listOf("rows", "columns").forEach { key -> putJsonObject(key) { put("type", "integer"); put("minimum", 1); put("maximum", 32) } }
     },
-    required = listOf("id", "name", "expected_history_head_node_id") + if (physics) listOf("input_parameter", "output_parameter") else listOf("parent_id", "mesh_ids"),
+    required = listOf("id", "name", "expected_history_head_node_id", "parent_id", "mesh_ids"),
+)
+
+private fun physicsPutSchema(): ToolSchema = ToolSchema(
+    properties = buildJsonObject {
+        listOf("id", "name", "expected_history_head_node_id", "task_id").forEach { key -> putJsonObject(key) { put("type", "string") } }
+        putJsonObject("enabled") { put("type", "boolean") }
+        fun JsonObjectBuilder.type() = putJsonObject("type") { put("type", "string"); putJsonArray("enum") { add("x"); add("angle") }
+            put("description", "x: sideways travel; angle: tilt") }
+        putJsonObject("inputs") { put("type", "array"); put("maxItems", 16)
+            put("description", "What moves the root. Weight is % of the normalized range")
+            putJsonObject("items") { put("type", "object"); putJsonObject("properties") {
+                putJsonObject("parameter") { put("type", "string") }
+                putJsonObject("weight") { put("type", "number"); put("minimum", 0); put("maximum", 100) }
+                type(); putJsonObject("reflect") { put("type", "boolean") }
+            }; putJsonArray("required") { add("parameter") } } }
+        putJsonObject("outputs") { put("type", "array"); put("maxItems", 16)
+            putJsonObject("items") { put("type", "object"); putJsonObject("properties") {
+                putJsonObject("parameter") { put("type", "string") }
+                putJsonObject("vertex") { put("type", "integer"); put("minimum", 1); put("maximum", 16) }
+                putJsonObject("scale") { put("type", "number"); put("description", "Parameter units per radian of the segment's swing") }
+                putJsonObject("weight") { put("type", "number"); put("minimum", 0); put("maximum", 100) }
+                putJsonObject("reflect") { put("type", "boolean") }
+            }; putJsonArray("required") { add("parameter") } } }
+        putJsonObject("segments") { put("type", "array"); put("minItems", 1); put("maxItems", 16)
+            put("description", "Root to tip; omitted fields keep the current segment's")
+            putJsonObject("items") { put("type", "object"); putJsonObject("properties") {
+                putJsonObject("length") { put("type", "number"); put("exclusiveMinimum", 0) }
+                putJsonObject("mobility") { put("type", "number"); put("minimum", 0); put("maximum", 1); put("description", "Shakiness") }
+                putJsonObject("delay") { put("type", "number"); put("exclusiveMinimum", 0); put("description", "Reaction speed; higher reacts faster") }
+                putJsonObject("acceleration") { put("type", "number"); put("minimum", 0); put("description", "Settling speed") }
+            } } }
+        putJsonObject("segment_count") { put("type", "integer"); put("minimum", 1); put("maximum", 16); put("description", "Resize the strand, copying the last segment") }
+        putJsonObject("length") { put("type", "number"); put("exclusiveMinimum", 0) }
+        putJsonObject("mobility") { put("type", "number"); put("minimum", 0); put("maximum", 1) }
+        putJsonObject("delay") { put("type", "number"); put("exclusiveMinimum", 0) }
+        putJsonObject("acceleration") { put("type", "number"); put("minimum", 0) }
+        putJsonObject("output_scale") { put("type", "number") }
+        putJsonObject("normalization") { put("type", "object"); put("description", "Span a full-range input maps to")
+            putJsonObject("properties") { listOf("position", "angle").forEach { key -> putJsonObject(key) { put("type", "object")
+                putJsonObject("properties") { listOf("min", "default", "max").forEach { putJsonObject(it) { put("type", "number") } } } } } } }
+    },
+    required = listOf("id", "expected_history_head_node_id"),
 )
 
 private fun swingSchema(): ToolSchema = ToolSchema(

@@ -457,9 +457,14 @@ interface AgentWorkspace {
 
     suspend fun inspectAsset(assetId: String): AgentAssetPreview = throw UnsupportedOperationException("Asset inspection is unavailable")
     fun listRigObjects(): List<AgentKeyformTargetRef> = throw UnsupportedOperationException("Rig discovery is unavailable")
-    fun listPhysics(): List<io.github.psd2live.core.RigPhysicsEdit> = emptyList()
+    /** Every physics group, generated and authored, as export resolves them. */
+    fun listPhysics(): List<io.github.psd2live.core.PhysicsGroup> = emptyList()
+    /** Runs the exported physics on scripted inputs; read-only. */
+    fun simulatePhysics(arguments: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject =
+        throw UnsupportedOperationException("Physics simulation is unavailable")
     suspend fun createWarp(edit: io.github.psd2live.core.RigWarpEdit, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult = throw UnsupportedOperationException("Warp creation is unavailable")
-    suspend fun putPhysics(edit: io.github.psd2live.core.RigPhysicsEdit, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult = throw UnsupportedOperationException("Physics editing is unavailable")
+    /** [arguments] are a `physics_put` request, laid over the group with that ID. */
+    suspend fun putPhysics(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult = throw UnsupportedOperationException("Physics editing is unavailable")
     suspend fun deletePhysics(id: String, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Physics deletion is unavailable")
     fun listSwings(): List<io.github.psd2live.core.RigSwingEdit> = emptyList()

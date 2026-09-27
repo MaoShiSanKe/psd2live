@@ -163,6 +163,11 @@ internal fun SwingSessionPanel(
             PhysicsRow(tr("physics.outputScale"), physics.outputScale, 0.1f..5f) { v -> set { it.copy(outputScale = v) } }
             Text(tr(if (kind == SwingKind.LATERAL) "swing.physics.inputs.lateral" else "swing.physics.inputs.vertical"),
                 style = typography.caption.copy(fontSize = 9.sp), color = colors.textMuted)
+            // A version edited in the physics panel replaces this pendulum until it is reset there.
+            val groupId = io.github.psd2live.core.PhysicsGenerator.swingPhysicsId(draft, kind)
+            if (viewModel.state.value.rigEdits.physicsEdits.any { it.id == groupId }) {
+                Text(tr("swing.physics.overridden"), style = typography.caption.copy(fontSize = 9.sp), color = colors.warning)
+            }
         }
         if (draft.baked) Text(tr("swing.bakedNote"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
         session.error?.let { Text(it, style = typography.caption.copy(fontSize = 9.5.sp), color = colors.error) }

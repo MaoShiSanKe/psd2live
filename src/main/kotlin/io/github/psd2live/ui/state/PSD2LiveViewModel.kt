@@ -19,7 +19,6 @@ import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigStructureEdits
 import io.github.psd2live.core.CubismSdkFrame
 import io.github.psd2live.core.CubismSdkPreviewSession
-import io.github.psd2live.core.EyeJellyDynamics
 import io.github.psd2live.core.HierarchyImportTarget
 import io.github.psd2live.core.LayerClassificationOverride
 import io.github.psd2live.core.layerSelectionRange
@@ -31,6 +30,10 @@ import io.github.psd2live.core.ProgressListener
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.core.RigPhysicsEdit
+import io.github.psd2live.core.PhysicsAuthoring
+import io.github.psd2live.core.PhysicsEngine
+import io.github.psd2live.core.PhysicsGenerator
+import io.github.psd2live.core.PhysicsGroup
 import io.github.psd2live.core.RigAuthoringJournal
 import io.github.psd2live.core.RigGeometryTools
 import io.github.psd2live.core.RigSwingEdit
@@ -1389,12 +1392,8 @@ class PSD2LiveViewModel : AutoCloseable {
 	private var pointerY = 0f
 	private var followX = 0f
 	private var followY = 0f
-	private var previousFollowX = 0f
-	private var frontHair = 0f
-	private var frontHairVelocity = 0f
-	private var backHair = 0f
-	private var backHairVelocity = 0f
-	private val eyeJellyDynamics = EyeJellyDynamics()
+	/** The exported physics, run on the software preview so it moves as Cubism would before the SDK is up. */
+	private val softwarePhysics = SoftwarePhysics()
 	private var elapsed = 0.0
 	private var lastTick = System.nanoTime()
 	private var lastSdkParameterPublishNanos = 0L
@@ -1797,14 +1796,9 @@ class PSD2LiveViewModel : AutoCloseable {
 			} else updated
 		}
 		if (enabled) {
-			frontHair = 0f
-			frontHairVelocity = 0f
-			backHair = 0f
-			backHairVelocity = 0f
-			eyeJellyDynamics.reset()
+			softwarePhysics.reset()
 			followX = 0f
 			followY = 0f
-			previousFollowX = 0f
 			motionPlayer.stop()
 		}
 		schedulePreviewRebuild()
@@ -1851,7 +1845,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (!enabled) {
 			followX = 0f
 			followY = 0f
-			previousFollowX = 0f
 		}
 		scheduleRuntimeBundleUpdate()
 	    editorChanged()
@@ -1923,108 +1916,130 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun setGeneratePhysics(enabled: Boolean) {
 		updateState { current ->
 			val updated = current.copy(generatePhysics = enabled)
-			if (!enabled) {
-				val physReset = mapOf(
-					StandardParameters.HAIR_FRONT to 0f,
-					StandardParameters.HAIR_BACK to 0f,
-					StandardParameters.EYE_BALL_FORM to 0f,
-				).filterKeys { key -> key !in updated.lockedParameters }
-				updated.copy(parameterValues = updated.parameterValues + physReset)
-			} else updated
+			if (!enabled) updated.copy(parameterValues = updated.parameterValues + physicsRestValues(current, current.rigEdits)) else updated
 		}
-		if (!enabled) {
-			frontHair = 0f
-			frontHairVelocity = 0f
-			backHair = 0f
-			backHairVelocity = 0f
-			eyeJellyDynamics.reset()
-		}
+		if (!enabled) softwarePhysics.reset()
 		scheduleRuntimeBundleUpdate()
 	    editorChanged()
 	}
 
-	fun setPhysicsFrontHair(enabled: Boolean) {
-		updateState { current ->
-			val next = current.copy(physicsFrontHair = enabled)
-			val updated = next.copy(generatePhysics = next.physicsFrontHair || next.physicsBackHair || next.physicsEyeJelly)
-			if (!enabled) {
-				val hairReset = mapOf(
-					StandardParameters.HAIR_FRONT to 0f,
-				).filterKeys { key -> key !in updated.lockedParameters }
-				updated.copy(parameterValues = updated.parameterValues + hairReset)
-			} else updated
-		}
-		if (!enabled) {
-			frontHair = 0f
-			frontHairVelocity = 0f
-		}
-		scheduleRuntimeBundleUpdate()
-	    editorChanged()
-	}
+	fun setPhysicsFrontHair(enabled: Boolean) = setPresetPhysics(PhysicsGenerator.FRONT_HAIR_ID, enabled)
+	fun setPhysicsBackHair(enabled: Boolean) = setPresetPhysics(PhysicsGenerator.BACK_HAIR_ID, enabled)
+	fun setPhysicsEyeJelly(enabled: Boolean) = setPresetPhysics(PhysicsGenerator.EYE_JELLY_ID, enabled)
 
-	fun setPhysicsBackHair(enabled: Boolean) {
+	private fun setPresetPhysics(id: String, enabled: Boolean) {
 		updateState { current ->
-			val next = current.copy(physicsBackHair = enabled)
-			val updated = next.copy(generatePhysics = next.physicsFrontHair || next.physicsBackHair || next.physicsEyeJelly)
-			if (!enabled) {
-				val hairReset = mapOf(
-					StandardParameters.HAIR_BACK to 0f,
-				).filterKeys { key -> key !in updated.lockedParameters }
-				updated.copy(parameterValues = updated.parameterValues + hairReset)
-			} else updated
-		}
-		if (!enabled) {
-			backHair = 0f
-			backHairVelocity = 0f
-		}
-		scheduleRuntimeBundleUpdate()
-	    editorChanged()
-	}
-
-	fun setPhysicsEyeJelly(enabled: Boolean) {
-		updateState { current ->
-			val next = current.copy(physicsEyeJelly = enabled)
-			val updated = next.copy(generatePhysics = next.physicsFrontHair || next.physicsBackHair || next.physicsEyeJelly)
-			if (!enabled) {
-				val jellyReset = mapOf(
-					StandardParameters.EYE_BALL_FORM to 0f,
-				).filterKeys { key -> key !in updated.lockedParameters }
-				updated.copy(parameterValues = updated.parameterValues + jellyReset)
-			} else updated
-		}
-		if (!enabled) {
-			eyeJellyDynamics.reset()
-		}
-		scheduleRuntimeBundleUpdate()
-	    editorChanged()
-	}
-
-	fun upsertPhysicsEdit(edit: RigPhysicsEdit) {
-		updateState { current ->
-			val existing = current.rigEdits.physicsEdits
-			val index = existing.indexOfFirst { it.id == edit.id || it.outputParameter == edit.outputParameter }
-			val nextList = if (index >= 0) {
-				existing.toMutableList().also { it[index] = edit }
-			} else {
-				existing + edit
+			val next = when (id) {
+				PhysicsGenerator.FRONT_HAIR_ID -> current.copy(physicsFrontHair = enabled)
+				PhysicsGenerator.BACK_HAIR_ID -> current.copy(physicsBackHair = enabled)
+				else -> current.copy(physicsEyeJelly = enabled)
 			}
-			current.copy(
-				rigEdits = current.rigEdits.copy(physicsEdits = nextList),
-				generatePhysics = true,
-			)
+			if (enabled) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
 		}
 		scheduleRuntimeBundleUpdate()
 		editorChanged()
 	}
 
-	fun removePhysicsEdit(id: String) {
+	// region Physics groups
+
+	private var physicsCatalogCache: Pair<List<Any?>, List<PhysicsGroup>>? = null
+
+	/** Every physics group of the current model, as export sees it; see [PhysicsGenerator.catalog]. */
+	fun physicsGroups(state: PSD2LiveState = _state.value): List<PhysicsGroup> {
+		val model = state.previewModel ?: return emptyList()
+		val key = listOf(model.analysis, model.rig.puppet.parameters, state.rigEdits.physicsEdits, state.rigEdits.disabledPhysicsIds,
+			state.rigEdits.skeleton, state.rigEdits.swingEdits, state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly)
+		physicsCatalogCache?.let { (k, groups) -> if (k == key) return groups }
+		val groups = PhysicsGenerator.catalog(PhysicsGenerator.Presets.present(model.analysis),
+			PhysicsGenerator.Presets(state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly),
+			state.rigEdits, model.rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
+		physicsCatalogCache = key to groups
+		return groups
+	}
+
+	/** Makes [edit] the version of its group; a slider drag inside a gesture commits once. */
+	fun putPhysicsGroup(edit: RigPhysicsEdit) {
+		val generated = physicsGroups().firstOrNull { it.id == edit.id }?.generated
+		val overlay = runCatching { PhysicsAuthoring.put(_state.value.rigEdits, edit, generated) }
+			.getOrElse { failure -> addLog(failure.message ?: "Physics edit failed", level = LogLevel.WARNING, tag = "Physics"); return }
+		updateState { it.copy(rigEdits = overlay) }
+		scheduleRuntimeBundleUpdate()
+		editorChanged()
+	}
+
+	fun setPhysicsGroupEnabled(id: String, enabled: Boolean) {
+		if (id in PhysicsGenerator.presetIds) return setPresetPhysics(id, enabled)
 		updateState { current ->
-			val nextList = current.rigEdits.physicsEdits.filterNot { it.id == id || it.outputParameter == id }
-			current.copy(rigEdits = current.rigEdits.copy(physicsEdits = nextList))
+			val next = current.copy(rigEdits = PhysicsAuthoring.setEnabled(current.rigEdits, id, enabled))
+			if (enabled) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
 		}
 		scheduleRuntimeBundleUpdate()
 		editorChanged()
 	}
+
+	/** Deletes a user group, or returns a replaced generated one to its generated values. */
+	fun removePhysicsGroup(id: String) {
+		val group = physicsGroups().firstOrNull { it.id == id } ?: return
+		if (_state.value.rigEdits.physicsEdits.none { it.id == id }) return
+		updateState { current ->
+			val next = current.copy(rigEdits = PhysicsAuthoring.remove(current.rigEdits, id, group.generated != null))
+			if (group.generated != null) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
+		}
+		scheduleRuntimeBundleUpdate()
+		editorChanged()
+	}
+
+	/** Adds a new pendulum, a copy of [from] without its outputs when given, and returns its ID. */
+	fun createPhysicsGroup(from: RigPhysicsEdit? = null): String? {
+		val state = _state.value
+		val puppet = state.previewModel?.rig?.puppet ?: return null
+		val groups = physicsGroups(state)
+		val id = PhysicsAuthoring.freshId(groups, state.rigEdits)
+		val names = groups.mapTo(HashSet()) { it.setting.name }
+		fun unique(base: String) = generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base $it" }.first { it !in names }
+		val edit = from?.copy(id = id, name = unique(tr("physics.copyName", from.name)), outputs = emptyList())
+			?: PhysicsAuthoring.template(id, unique(tr("physics.newName")), puppet.parameters.mapTo(HashSet()) { it.id.raw })
+		updateState { it.copy(rigEdits = it.rigEdits.copy(physicsEdits = it.rigEdits.physicsEdits + edit)) }
+		scheduleRuntimeBundleUpdate()
+		editorChanged()
+		return id
+	}
+
+	/** Rest values for the outputs of [ids] (every group when null) so a switched-off group lets go. */
+	private fun physicsRestValues(state: PSD2LiveState, overlay: RigEditOverlay, ids: Set<String>? = null): Map<ParameterId, Float> {
+		val parameters = state.previewModel?.rig?.puppet?.parameters?.associateBy { it.id.raw } ?: return emptyMap()
+		return physicsGroups(state.copy(rigEdits = overlay)).filter { ids == null || it.id in ids }
+			.flatMap { it.setting.outputParameters }.mapNotNull { parameters[it] }
+			.filter { it.id !in state.lockedParameters }.associate { it.id to it.default }
+	}
+
+	/** The software preview's physics: rebuilt when the exported groups change, reset when motion stops. */
+	private inner class SoftwarePhysics {
+		private var key: List<Any?>? = null
+		private var engine: PhysicsEngine? = null
+		private var released: Map<String, Float> = emptyMap()
+
+		fun reset() { engine?.reset() }
+
+		fun step(state: PSD2LiveState, model: RigPreviewModel, inputs: Map<ParameterId, Float>, dt: Float): Map<ParameterId, Float> {
+			val groups = if (!state.generatePhysics || state.meshOnly) emptyList() else physicsGroups(state).filter { it.active }.map { it.setting }
+			val parameters = model.rig.puppet.parameters
+			val nextKey = listOf(groups, parameters)
+			if (nextKey != key) {
+				val before = engine?.strands.orEmpty().flatMap { it.setting.outputParameters }.toSet()
+				key = nextKey
+				engine = PhysicsEngine(groups, PhysicsEngine.ranges(parameters)).also { it.carryOver(engine) }
+				val now = groups.flatMap { it.outputParameters }.toSet()
+				released = parameters.filter { it.id.raw in before - now }.associate { it.id.raw to it.default }
+			}
+			val values = inputs.mapKeys { it.key.raw }
+			val out = released + engine!!.step(values, dt)
+			released = emptyMap()
+			return out.mapKeys { ParameterId(it.key) }
+		}
+	}
+
+	// endregion
 
 	// region Authored motions
 
@@ -3927,12 +3942,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		pointerY = 0f
 		followX = 0f
 		followY = 0f
-		previousFollowX = 0f
-		frontHair = 0f
-		backHair = 0f
-		frontHairVelocity = 0f
-		backHairVelocity = 0f
-		eyeJellyDynamics.reset()
+		softwarePhysics.reset()
 		elapsed = 0.0
 		motionPlayer.stop()
 		lastTick = System.nanoTime()
@@ -4642,56 +4652,18 @@ class PSD2LiveViewModel : AutoCloseable {
 			motion[StandardParameters.EYE_R_OPEN] ?: 1f,
 		)
 
-		// 3. Eye Jelly Dynamics
-		val hasEyeJelly = anim && current.generatePhysics && current.physicsEyeJelly
-		eyeJellyDynamics.advance(blink, dt, hasEyeJelly)
-
-		// 4. Idle Motion (Head & Body Sway, Mouse Tracking)
+		// 3. Idle Motion (Head & Body Sway, Mouse Tracking)
 		val hasIdle = anim && current.motionIdle
 		val idleX = if (hasIdle) (sin(elapsed * 0.47) * 0.12).toFloat() else 0f
 		val idleY = if (hasIdle) (sin(elapsed * 0.31 + 1.1) * 0.08).toFloat() else 0f
 		val targetX = if (pointerActive && tracking) pointerX else idleX
 		val targetY = if (pointerActive && tracking) pointerY else idleY
 		val response = (dt * 7.5f).coerceAtMost(1f)
-		previousFollowX = followX
 		followX += (targetX - followX) * response
 		followY += (targetY - followY) * response
 
 		if (!pointerActive && kotlin.math.abs(followX - targetX) < 0.001f) followX = targetX
 		if (!pointerActive && kotlin.math.abs(followY - targetY) < 0.001f) followY = targetY
-
-		// 5. Hair Physics Simulation
-		val hasFrontHair = anim && current.generatePhysics && current.physicsFrontHair
-		val hasBackHair = anim && current.generatePhysics && current.physicsBackHair
-		if (anim && (hasFrontHair || hasBackHair)) {
-			val headVelocity = ((followX - previousFollowX) / dt).coerceIn(-5f, 5f)
-			val hairTarget = (-followX * 0.42f - headVelocity * 0.085f).coerceIn(-1f, 1f)
-			if (hasFrontHair) {
-				val frontEdit = current.rigEdits.physicsEdits.find { it.id == "PhysicsHairFront" || it.outputParameter == "ParamHairFront" }
-				val stiffness = if (frontEdit != null) 22f * (frontEdit.mobility / 0.77f).coerceIn(0.2f, 3f) else 22f
-				val damp = if (frontEdit != null) 7.2f * (frontEdit.delay / 1.45f).coerceIn(0.2f, 3f) else 7.2f
-				frontHairVelocity += ((hairTarget - frontHair) * stiffness - frontHairVelocity * damp) * dt
-				frontHair += frontHairVelocity * dt
-			} else {
-				frontHair = 0f
-				frontHairVelocity = 0f
-			}
-			if (hasBackHair) {
-				val backEdit = current.rigEdits.physicsEdits.find { it.id == "PhysicsHairBack" || it.outputParameter == "ParamHairBack" }
-				val stiffness = if (backEdit != null) 10f * (backEdit.mobility / 0.95f).coerceIn(0.2f, 3f) else 10f
-				val damp = if (backEdit != null) 4.2f * (backEdit.delay / 0.8f).coerceIn(0.2f, 3f) else 4.2f
-				backHairVelocity += ((hairTarget - backHair) * stiffness - backHairVelocity * damp) * dt
-				backHair += backHairVelocity * dt
-			} else {
-				backHair = 0f
-				backHairVelocity = 0f
-			}
-		} else {
-			frontHair = 0f
-			frontHairVelocity = 0f
-			backHair = 0f
-			backHairVelocity = 0f
-		}
 
 		val model = current.previewModel
 		if (model != null && inPreview && (anim || tracking)) {
@@ -4702,7 +4674,10 @@ class PSD2LiveViewModel : AutoCloseable {
 				current = current,
 				blink = blink,
 				motion = motion,
-			)
+			).let { inputs ->
+				// 4. Physics reads the posed inputs and writes its outputs over them, as Cubism evaluates it.
+				if (anim) inputs + softwarePhysics.step(current, model, inputs, dt) else inputs.also { softwarePhysics.reset() }
+			}
 			latestLiveParameters = liveParams
 			if (current.sdkStatus != "ready") {
 				updateState { latest ->
@@ -4728,9 +4703,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 
 		val hasIdle = current.animationEnabled && current.motionIdle
-		val hasFrontHair = current.animationEnabled && current.generatePhysics && current.physicsFrontHair
-		val hasBackHair = current.animationEnabled && current.generatePhysics && current.physicsBackHair
-		val hasEyeJelly = current.animationEnabled && current.generatePhysics && current.physicsEyeJelly
 
 		val mouthPhase = elapsed % 5.8
 		val mouthOpen = if (mouthPhase in 1.25..2.45 && current.animationEnabled && hasIdle) {
@@ -4766,14 +4738,11 @@ class PSD2LiveViewModel : AutoCloseable {
 			StandardParameters.BODY_Z to idleOf(StandardParameters.BODY_Z),
 			StandardParameters.EYE_BALL_X to eyeBallX,
 			StandardParameters.EYE_BALL_Y to eyeBallY,
-			StandardParameters.EYE_BALL_FORM to if (hasEyeJelly) eyeJellyDynamics.value else 0f,
 			StandardParameters.EYE_L_OPEN to minOf(blink, idle[StandardParameters.EYE_L_OPEN] ?: 1f),
 			StandardParameters.EYE_R_OPEN to minOf(blink, idle[StandardParameters.EYE_R_OPEN] ?: 1f),
 			StandardParameters.MOUTH_FORM to if (current.animationEnabled && hasIdle) sin(elapsed * 0.41).toFloat() * 0.18f else 0f,
 			StandardParameters.MOUTH_OPEN to mouthOpen,
 			StandardParameters.BREATH to idleOf(StandardParameters.BREATH),
-			StandardParameters.HAIR_FRONT to if (hasFrontHair) frontHair.coerceIn(-1f, 1f) else 0f,
-			StandardParameters.HAIR_BACK to if (hasBackHair) backHair.coerceIn(-1f, 1f) else 0f,
 		)
 		val available = model.rig.puppet.parameters.mapTo(HashSet()) { it.id }
 		return base + idle.filterKeys { it !in base && it in available } + motion.filterKeys { it !in base && it in available }
@@ -4940,22 +4909,13 @@ internal fun parameterValuesForPreview(
 		}
 	}
 
-	// 3. Physics disabled or specific chains disabled:
+	// 3. A switched-off preset holds its parameter at rest, unless one of the user's groups drives it.
 	val physicsActive = state.generatePhysics && !state.meshOnly
-	if (!physicsActive || !state.physicsFrontHair) {
-		if (StandardParameters.HAIR_FRONT !in lockedParameters) {
-			overrides[StandardParameters.HAIR_FRONT] = 0f
-		}
-	}
-	if (!physicsActive || !state.physicsBackHair) {
-		if (StandardParameters.HAIR_BACK !in lockedParameters) {
-			overrides[StandardParameters.HAIR_BACK] = 0f
-		}
-	}
-	if (!physicsActive || !state.physicsEyeJelly) {
-		if (StandardParameters.EYE_BALL_FORM !in lockedParameters) {
-			overrides[StandardParameters.EYE_BALL_FORM] = 0f
-		}
+	val userDriven = if (physicsActive) state.rigEdits.physicsEdits.filter { it.id !in state.rigEdits.disabledPhysicsIds }
+		.flatMapTo(HashSet()) { it.outputParameters } else emptySet()
+	for ((on, id) in listOf(state.physicsFrontHair to StandardParameters.HAIR_FRONT, state.physicsBackHair to StandardParameters.HAIR_BACK,
+		state.physicsEyeJelly to StandardParameters.EYE_BALL_FORM)) {
+		if ((!physicsActive || !on) && id.raw !in userDriven && id !in lockedParameters) overrides[id] = 0f
 	}
 
 	return overrides

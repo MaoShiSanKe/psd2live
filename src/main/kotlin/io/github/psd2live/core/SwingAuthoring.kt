@@ -21,8 +21,14 @@ internal object SwingAuthoring {
         require(issues.isEmpty()) { issues.joinToString("; ") }
         val index = overlay.swingEdits.indexOfFirst { it.id == edit.id }
         val swings = if (index < 0) overlay.swingEdits + next else overlay.swingEdits.toMutableList().also { it[index] = next }
-        return overlay.copy(authoringJournal = overlay.authoringJournal + commands, swingEdits = swings)
+        // A pendulum renamed by a change of directions leaves its old ID's edits behind.
+        val stale = overlay.swingEdits.getOrNull(index)?.let(::physicsIds).orEmpty() - physicsIds(next)
+        return PhysicsAuthoring.forget(overlay.copy(authoringJournal = overlay.authoringJournal + commands, swingEdits = swings), stale)
     }
+
+    /** The physics group IDs [swing] generates. */
+    fun physicsIds(swing: RigSwingEdit): Set<String> = swing.motions.filter { it.physics != null }
+        .mapTo(HashSet()) { PhysicsGenerator.swingPhysicsId(swing, it.kind) }
 
     /** [edit] moving in [kinds]: a kept direction keeps its settings, a new one starts from the preset. */
     fun withKinds(model: PuppetModel, overlay: RigEditOverlay, edit: RigSwingEdit, kinds: List<SwingKind>): RigSwingEdit {
@@ -164,8 +170,8 @@ internal object SwingAuthoring {
 
     /** Removes [id]; an unbaked swing takes its generated axes and parameters with it. */
     fun remove(overlay: RigEditOverlay, id: String): RigEditOverlay {
-        require(overlay.swingEdits.any { it.id == id }) { "Swing not found: $id" }
-        return overlay.copy(swingEdits = overlay.swingEdits.filterNot { it.id == id })
+        val swing = requireNotNull(overlay.swingEdits.firstOrNull { it.id == id }) { "Swing not found: $id" }
+        return PhysicsAuthoring.forget(overlay.copy(swingEdits = overlay.swingEdits.filterNot { it.id == id }), physicsIds(swing))
     }
 
     /** A fresh swing ID and parameter IDs that collide with nothing in [model] or [overlay]. */

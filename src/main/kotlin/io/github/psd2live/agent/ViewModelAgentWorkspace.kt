@@ -339,12 +339,20 @@ class ViewModelAgentWorkspace(
 
     override suspend fun deletePhysics(id: String, expectedHead: String): AgentWorkspaceMutationResult {
         require(id.isNotBlank()) { "Physics group ID is required" }
-        return mutateRigKeyform(expectedHead, null, "Deleted physics group $id", id) { document, _ ->
-            require(document.rigEdits.physicsEdits.any { it.id == id }) { "Custom physics group not found: $id" }
-            document.copy(rigEdits = document.rigEdits.copy(
-                physicsEdits = document.rigEdits.physicsEdits.filterNot { it.id == id },
-            ))
+        return mutateRigKeyform(expectedHead, null, "Deleted physics group $id", id) { document, puppet ->
+            val group = physicsCatalog(document, puppet).firstOrNull { it.id == id } ?: throw IllegalArgumentException("Physics group not found: $id")
+            require(document.rigEdits.physicsEdits.any { it.id == id }) {
+                "$id is generated; physics_put enabled=false turns it off, or edit its source (swing, skeleton, preset setting)"
+            }
+            document.copy(rigEdits = io.github.psd2live.core.PhysicsAuthoring.remove(document.rigEdits, id, group.generated != null))
         }.copy(affectedObjectIds = emptyList())
+    }
+
+    /** The physics catalog of [document], resolved against [puppet]'s parameters. */
+    private fun physicsCatalog(document: AgentWorkspaceDocument, puppet: PuppetModel): List<io.github.psd2live.core.PhysicsGroup> {
+        val state = viewModel.state.value
+        return io.github.psd2live.core.PhysicsGenerator.catalog(state.previewModel?.analysis, document.toConfig(state),
+            puppet.parameters.mapTo(HashSet()) { it.id.raw })
     }
 	private val editMutex = Mutex()
 	private val historyLock = Any()
@@ -1258,7 +1266,7 @@ class ViewModelAgentWorkspace(
         return result
     }
 
-    override fun listPhysics() = viewModel.state.value.rigEdits.physicsEdits
+    override fun listPhysics() = viewModel.physicsGroups()
 
     override fun listSwings() = viewModel.state.value.rigEdits.swingEdits
 
@@ -1285,14 +1293,33 @@ class ViewModelAgentWorkspace(
                     ("action" to kotlinx.serialization.json.JsonPrimitive("create_warp")))))
         }
 
-    override suspend fun putPhysics(edit: io.github.psd2live.core.RigPhysicsEdit, expectedHead: String, taskId: String?) =
-        mutateRigKeyform(expectedHead, taskId, "Set physics ${edit.id}", edit.id) { document, puppet ->
-            edit.validate(puppet.parameters.map { it.id.raw }.toSet())
-            val next = document.rigEdits.physicsEdits.filterNot { it.id == edit.id } + edit
-            require(next.map { it.outputParameter }.distinct().size == next.size) { "Independent physics groups require distinct output parameters" }
-            document.copy(rigEdits = document.rigEdits.copy(physicsEdits = next),
-                settings = kotlinx.serialization.json.JsonObject(document.settings + ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
-        }
+    override suspend fun putPhysics(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult {
+        val id = arguments["id"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("id is required")
+        return mutateRigKeyform(expectedHead, taskId, "Set physics $id", id) { document, puppet ->
+            val available = puppet.parameters.mapTo(HashSet()) { it.id.raw }
+            val request = io.github.psd2live.core.PhysicsAuthoring.request(physicsCatalog(document, puppet), arguments, available)
+            var overlay = document.rigEdits
+            var settings = document.settings.toMutableMap()
+            request.edit?.let { overlay = io.github.psd2live.core.PhysicsAuthoring.put(overlay, it, request.generated) }
+            request.enabled?.let { enabled ->
+                val flag = mapOf(io.github.psd2live.core.PhysicsGenerator.FRONT_HAIR_ID to "physicsFrontHair",
+                    io.github.psd2live.core.PhysicsGenerator.BACK_HAIR_ID to "physicsBackHair",
+                    io.github.psd2live.core.PhysicsGenerator.EYE_JELLY_ID to "physicsEyeJelly")[id]
+                if (flag != null) settings[flag] = kotlinx.serialization.json.JsonPrimitive(enabled)
+                else overlay = io.github.psd2live.core.PhysicsAuthoring.setEnabled(overlay, id, enabled)
+            }
+            // An authored or re-enabled group is meant to move; a switched-off one leaves the global switch alone.
+            if (request.edit != null || request.enabled == true) settings["generatePhysics"] = kotlinx.serialization.json.JsonPrimitive(true)
+            document.copy(rigEdits = overlay, settings = kotlinx.serialization.json.JsonObject(settings))
+        }.copy(affectedObjectIds = emptyList())
+    }
+
+    override fun simulatePhysics(arguments: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+        val state = viewModel.state.value
+        val model = state.previewModel ?: throw IllegalStateException("No rig preview is available")
+        val groups = listPhysics()
+        return io.github.psd2live.core.PhysicsSimulation.run(groups, model.rig.puppet.parameters, arguments, state.generatePhysics && !state.meshOnly)
+    }
 
 	override fun getObject(target: AgentKeyformTargetRef): AgentObjectSnapshot {
 		val state = viewModel.state.value

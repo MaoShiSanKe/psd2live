@@ -18,9 +18,7 @@ import java.util.UUID
 
 /** Writes editable Cubism physics settings into a fresh CMO3 graph. */
 internal object Cmo3PhysicsInjector {
-	fun inject(root: CModelSource, hasFrontHair: Boolean, hasBackHair: Boolean, hasEyeJelly: Boolean = false,
-		custom: List<RigPhysicsEdit> = emptyList(), skeleton: SkeletonSpec? = null,
-		swings: List<RigSwingEdit> = emptyList()): Int {
+	fun inject(root: CModelSource, rules: List<RigPhysicsEdit>): Int {
 		val physicsSet = root.physicsSettingsSourceSet as? CPhysicsSettingsSourceSet
 			?: error(tr("error.cmo3MissingPhysicsSet"))
 		// The pipeline only injects into its own fresh graph, so replace the known empty collection
@@ -30,10 +28,6 @@ internal object Cmo3PhysicsInjector {
 			?: error(tr("error.cmo3MissingParameterSet"))
 		val parameters = elements(parameterSet._sources).filterIsInstance<CParameterSource>()
 		val parameterById = parameters.associateBy { ((it.id as? Id)?.idstr).orEmpty() }
-		val presets = PhysicsGenerator.validRules(hasFrontHair, hasBackHair, hasEyeJelly, parameterById.keys) +
-			PhysicsGenerator.skeletonRules(skeleton, parameterById.keys) +
-			PhysicsGenerator.swingRules(swings, parameterById.keys)
-		val rules = PhysicsGenerator.mergeCustomRules(presets, custom, parameterById.keys)
 		if (rules.isEmpty()) return 0
 		for (rule in rules) {
 			val setting = CPhysicsSettingsSource().apply {
@@ -50,36 +44,39 @@ internal object Cmo3PhysicsInjector {
 						CPhysicsOutput().apply {
 							guid = guid("CPhysicsDataGuid", "out_${rule.id}_${outputRule.parameter}")
 							destination = output.guid
-							vertexIndex = outputRule.vertexIndex
-							translationScale = vector(0f, 0f)
-							angleScale = outputRule.scale
-							weight = 100f
-							type = CPhysicsSourceType.SRC_TO_G_ANGLE
-							isReverse = false
+							vertexIndex = outputRule.vertex
+							val x = outputRule.type == PhysicsSourceType.X
+							translationScale = vector(if (x) outputRule.scale else 0f, 0f)
+							angleScale = if (x) 0f else outputRule.scale
+							weight = outputRule.weight
+							type = if (x) CPhysicsSourceType.SRC_TO_X else CPhysicsSourceType.SRC_TO_G_ANGLE
+							isReverse = outputRule.reflect
 						}
 					},
 				)
+				val ys = PhysicsGenerator.vertexY(rule)
 				vertices = CArrayList<Any?>(
-					rule.vertices.mapIndexed { index, vertex -> vertex(rule, index, vertex) },
+					(listOf(null) + rule.segments).mapIndexed { index, segment -> vertex(rule, index, ys[index], segment) },
 				)
-				normalizedPositionValueMax = rule.positionMaximum
-				normalizedPositionValueMin = rule.positionMinimum
-				normalizedPositionDefaultValue = rule.positionDefault
-				normalizedAngleValueMax = rule.angleMaximum
-				normalizedAngleValueMin = rule.angleMinimum
-				normalizedAngleDefaultValue = rule.angleDefault
+				val n = rule.normalization
+				normalizedPositionValueMax = n.positionMax
+				normalizedPositionValueMin = n.positionMin
+				normalizedPositionDefaultValue = n.positionDefault
+				normalizedAngleValueMax = n.angleMax
+				normalizedAngleValueMin = n.angleMin
+				normalizedAngleDefaultValue = n.angleDefault
 			}
 			sources.add(setting)
 		}
 		physicsSet.selectedCubismPhysics = guid("CPhysicsSettingsGuid", "physics-selection")
-		physicsSet.settingFPS = 120
+		physicsSet.settingFPS = PhysicsGenerator.FPS.toInt()
 		return rules.size
 	}
 
 	private fun input(
-		rule: PhysicsGenerator.PhysicsRule,
+		rule: RigPhysicsEdit,
 		parameterById: Map<String, CParameterSource>,
-		input: PhysicsGenerator.InputRule,
+		input: PhysicsInput,
 	): CPhysicsInput {
 		val parameter = parameterById[input.parameter] ?: error(tr("error.cmo3MissingPhysicsInput", input.parameter))
 		return CPhysicsInput().apply {
@@ -89,21 +86,22 @@ internal object Cmo3PhysicsInjector {
 			translationScale = vector(0f, 0f)
 			weight = input.weight
 			type = when (input.type) {
-				PhysicsGenerator.InputType.X -> CPhysicsSourceType.SRC_TO_X
-				PhysicsGenerator.InputType.ANGLE -> CPhysicsSourceType.SRC_TO_G_ANGLE
+				PhysicsSourceType.X -> CPhysicsSourceType.SRC_TO_X
+				PhysicsSourceType.ANGLE -> CPhysicsSourceType.SRC_TO_G_ANGLE
 			}
 			isReverse = input.reflect
 		}
 	}
 
-	private fun vertex(rule: PhysicsGenerator.PhysicsRule, index: Int, vertex: PhysicsGenerator.VertexRule): CPhysicsVertex =
+	/** [segment] is null for the root particle. */
+	private fun vertex(rule: RigPhysicsEdit, index: Int, y: Float, segment: PhysicsSegment?): CPhysicsVertex =
 		CPhysicsVertex().apply {
 			guid = guid("CPhysicsDataGuid", "v${index}_${rule.id}")
-			position = vector(0f, vertex.y)
-			mobility = vertex.mobility
-			delay = vertex.delay
-			acceleration = vertex.acceleration
-			radius = vertex.radius
+			position = vector(0f, y)
+			mobility = segment?.mobility ?: 1f
+			delay = segment?.delay ?: 1f
+			acceleration = segment?.acceleration ?: 1f
+			radius = segment?.length ?: 0f
 		}
 
 	private fun vector(x: Float, y: Float): GVector2 = GVector2().apply {

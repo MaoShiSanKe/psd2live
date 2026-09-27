@@ -396,6 +396,7 @@ internal class AgentWorkspaceStore(
             put("authoringJournal", JsonArray(document.rigEdits.authoringJournal))
             putJsonArray("warps") { document.rigEdits.warpEdits.forEach { add(it.toJson()) } }
             putJsonArray("physics") { document.rigEdits.physicsEdits.forEach { add(it.toJson()) } }
+            if (document.rigEdits.disabledPhysicsIds.isNotEmpty()) putJsonArray("physicsDisabled") { document.rigEdits.disabledPhysicsIds.sorted().forEach { add(JsonPrimitive(it)) } }
             putJsonArray("swings") { document.rigEdits.swingEdits.forEach { add(it.toJson()) } }
             putJsonArray("motions") { document.rigEdits.motionClips.forEach { add(io.github.psd2live.core.MotionClips.toJson(it)) } }
 			putJsonArray("parameters") {
@@ -562,6 +563,7 @@ internal class AgentWorkspaceStore(
             authoringJournal = rigEditObject.optionalArray("authoringJournal").map { it.jsonObject },
             warpEdits = rigEditObject.optionalArray("warps").map { io.github.psd2live.core.RigWarpEdit.fromJson(it.jsonObject) },
             physicsEdits = rigEditObject.optionalArray("physics").map { io.github.psd2live.core.RigPhysicsEdit.fromJson(it.jsonObject) },
+            disabledPhysicsIds = rigEditObject.optionalArray("physicsDisabled").map { it.jsonPrimitive.content }.toSet(),
             swingEdits = rigEditObject.optionalArray("swings").map { io.github.psd2live.core.RigSwingEdit.fromJson(it.jsonObject) },
             motionClips = rigEditObject.optionalArray("motions").map { io.github.psd2live.core.MotionClips.fromJson(it.jsonObject) },
 			parameterEdits = rigEditObject.optionalArray("parameters").map { element ->

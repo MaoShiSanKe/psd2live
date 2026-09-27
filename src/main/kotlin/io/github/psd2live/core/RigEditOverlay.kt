@@ -206,7 +206,10 @@ data class RigEditOverlay(
 	val keyformDeleteEdits: List<RigKeyformDeleteEdit> = emptyList(),
 	val keyformCopyEdits: List<RigKeyformCopyEdit> = emptyList(),
     val warpEdits: List<RigWarpEdit> = emptyList(),
+    /** The user's physics groups; one with a generated group's ID replaces it. */
     val physicsEdits: List<RigPhysicsEdit> = emptyList(),
+    /** Generated and user physics groups turned off; the hair and eye presets use their own settings. */
+    val disabledPhysicsIds: Set<String> = emptySet(),
     /** Regenerating sways; replayed after the journal so a changed setting rebuilds their forms. */
     val swingEdits: List<RigSwingEdit> = emptyList(),
     val assetLayers: Map<String, kotlinx.serialization.json.JsonObject> = emptyMap(),
@@ -224,7 +227,6 @@ data class RigEditOverlay(
         require(motionClips.mapNotNull { it.builtin?.lowercase() }.let { it.distinct().size == it.size }) { "A generated motion has one override" }
 		require(warpEdits.map { it.id }.distinct().size == warpEdits.size) { "Duplicate Warp IDs" }
         require(physicsEdits.map { it.id }.distinct().size == physicsEdits.size) { "Duplicate physics IDs" }
-        require(physicsEdits.map { it.outputParameter }.distinct().size == physicsEdits.size) { "Independent physics must have distinct output parameters" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
@@ -252,7 +254,6 @@ data class RigEditOverlay(
 		val journalWarpIds = structureEdits.filter { it["action"]?.jsonPrimitive?.contentOrNull == "create_warp" }.map { it.getValue("id").jsonPrimitive.content }.toSet()
         for (warp in warpEdits) if(warp.id !in journalWarpIds) model = warp.applyTo(model)
         model = RigStructureEdits.apply(model, structureEdits)
-		physicsEdits.forEach { it.validate(model.parameters.map { p -> p.id.raw }.toSet()) }
 		// 3. Apply keyform sets
 		for (set in keyformSetEdits) {
 			model = applyKeyformSet(model, set)
