@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -56,6 +57,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -97,6 +100,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -508,6 +512,8 @@ internal fun ParametersListView(
 		}
 	}
 
+	val nameWidth = remember { mutableStateOf(ParamRowNameWidth) }
+	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth) {
 	Column(modifier = Modifier.fillMaxSize()) {
 		Column(
 			modifier = Modifier
@@ -910,6 +916,7 @@ internal fun ParametersListView(
 				}
 			}
 		}
+	}
 	}
 }
 
@@ -1371,9 +1378,9 @@ private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (
 
 private val ParamRowLinkWidth = 12.dp
 private val ParamRowLinkSpacer = 1.dp
-private val ParamRowLockWidth = 14.dp
-private val ParamRowLockSpacer = 3.dp
-private val ParamRowNameWidth = 80.dp
+private val ParamRowNameWidth = 40.dp
+private val ParamRowNameWidthRange = 24.dp..240.dp
+private val ParamRowDividerWidth = 7.dp
 private val ParamRowInputWidth = 44.dp
 private val ParamRowInputSpacer = 2.dp
 private val ParamRowResetWidth = 14.dp
@@ -1582,7 +1589,6 @@ private fun ParameterLinkSlot(
 	tall: Boolean = false,
 ) {
 	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
 	val interaction = remember { MutableInteractionSource() }
 	val hovered by interaction.collectIsHoveredAsState()
 	val content = @Composable {
@@ -1609,23 +1615,68 @@ private fun ParameterLinkSlot(
 		}
 	}
 	TooltipArea(
-		tooltip = {
-			Surface(
-				color = colors.panelElevated,
-				shape = RoundedCornerShape(3.dp),
-				border = BorderStroke(1.dp, colors.border),
-				elevation = 4.dp,
-			) {
-				Text(
-					text = tooltip,
-					style = typography.caption.copy(fontSize = 10.sp),
-					color = colors.textPrimary,
-					modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-				)
-			}
-		},
+		tooltip = { ParameterTooltip(tooltip) },
 		delayMillis = 400,
 	) { content() }
+}
+
+@Composable
+private fun ParameterTooltip(text: String) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	Surface(
+		color = colors.panelElevated,
+		shape = RoundedCornerShape(3.dp),
+		border = BorderStroke(1.dp, colors.border),
+		elevation = 4.dp,
+	) {
+		Text(
+			text = text,
+			style = typography.caption.copy(fontSize = 10.sp),
+			color = colors.textPrimary,
+			modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+		)
+	}
+}
+
+/** Width of the name column, shared by every row so one divider drag moves them all. */
+private val LocalParameterNameWidth = compositionLocalOf<MutableState<Dp>> { mutableStateOf(ParamRowNameWidth) }
+
+/** Thin line between the names and the tracks; drag it to trade width between the two. */
+@Composable
+private fun ParameterNameDivider() {
+	val colors = LocalToolColors.current
+	val density = LocalDensity.current
+	val nameWidth = LocalParameterNameWidth.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	var dragging by remember { mutableStateOf(false) }
+	Box(
+		modifier = Modifier
+			.width(ParamRowDividerWidth)
+			.fillMaxHeight()
+			.hoverable(interaction)
+			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
+			.pointerInput(nameWidth, density) {
+				detectHorizontalDragGestures(
+					onDragStart = { dragging = true },
+					onDragEnd = { dragging = false },
+					onDragCancel = { dragging = false },
+				) { change, dx ->
+					change.consume()
+					val next = nameWidth.value + with(density) { dx.toDp() }
+					nameWidth.value = next.coerceIn(ParamRowNameWidthRange.start, ParamRowNameWidthRange.endInclusive)
+				}
+			},
+		contentAlignment = Alignment.Center,
+	) {
+		Box(
+			Modifier
+				.width(if (hovered || dragging) 1.5.dp else 0.5.dp)
+				.fillMaxHeight(0.7f)
+				.background(if (hovered || dragging) colors.accent else colors.divider),
+		)
+	}
 }
 
 @Composable
@@ -1667,19 +1718,8 @@ private fun ParameterRowItem(
 			modifier = Modifier.width(ParamRowLinkWidth),
 		)
 		Spacer(Modifier.width(ParamRowLinkSpacer))
-		CompactIconButton(
-			onClick = { viewModel.toggleParameterLock(param.id, currentValue) },
-			size = ParamRowLockWidth,
-			tooltip = if (isLocked) tr("parameters.unlockTooltip") else tr("parameters.lockTooltip"),
-		) {
-			IconLock(
-				locked = isLocked,
-				modifier = Modifier.size(9.dp),
-				tint = if (isLocked) colors.accent else colors.textMuted,
-			)
-		}
-		Spacer(Modifier.width(ParamRowLockSpacer))
-		EditableParameterName(param, isLocked, state, viewModel, related)
+		EditableParameterName(param, isLocked, currentValue, state, viewModel, related)
+		ParameterNameDivider()
 		ParameterTrack(
 			value = currentValue.coerceIn(param.min, param.max),
 			onValueChange = { viewModel.setParameterValue(param.id, it) },
@@ -1745,41 +1785,11 @@ private fun LinkedParameterPad(
 			modifier = Modifier.width(ParamRowLinkWidth),
 		)
 		Spacer(Modifier.width(ParamRowLinkSpacer))
-		Column(
-			modifier = Modifier.width(ParamRowLockWidth + ParamRowLockSpacer + ParamRowNameWidth),
-			verticalArrangement = Arrangement.spacedBy(8.dp),
-		) {
-			Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-				CompactIconButton(
-					onClick = { viewModel.toggleParameterLock(horizontal.id, xValue) },
-					size = ParamRowLockWidth,
-					tooltip = if (xLocked) tr("parameters.unlockTooltip") else tr("parameters.lockTooltip"),
-				) {
-					IconLock(
-						locked = xLocked,
-						modifier = Modifier.size(9.dp),
-						tint = if (xLocked) colors.accent else colors.textMuted,
-					)
-				}
-				Spacer(Modifier.width(ParamRowLockSpacer))
-				EditableParameterName(horizontal, xLocked, state, viewModel, horizontal.id in relatedIds)
-			}
-			Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-				CompactIconButton(
-					onClick = { viewModel.toggleParameterLock(vertical.id, yValue) },
-					size = ParamRowLockWidth,
-					tooltip = if (yLocked) tr("parameters.unlockTooltip") else tr("parameters.lockTooltip"),
-				) {
-					IconLock(
-						locked = yLocked,
-						modifier = Modifier.size(9.dp),
-						tint = if (yLocked) colors.accent else colors.textMuted,
-					)
-				}
-				Spacer(Modifier.width(ParamRowLockSpacer))
-				EditableParameterName(vertical, yLocked, state, viewModel, vertical.id in relatedIds)
-			}
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			EditableParameterName(horizontal, xLocked, xValue, state, viewModel, horizontal.id in relatedIds)
+			EditableParameterName(vertical, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
 		}
+		ParameterNameDivider()
 		ParameterPad2D(
 			horizontal = horizontal,
 			vertical = vertical,
@@ -1884,7 +1894,8 @@ private fun ParameterPad2D(
 	var padCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 	val labelMeasurer = rememberTextMeasurer()
 
-	val insetHorizontalDp = 16.dp
+	// Same horizontal inset as ParameterTrack so the pad's x range lines up with the sliders above and below.
+	val insetHorizontalDp = ParamTrackInsetHorizontal
 	val insetVerticalDp = 14.dp
 	val keyRadiusDp = ParamKeyRadius
 	val thumbRadiusDp = ParamThumbRadius
@@ -2010,7 +2021,7 @@ private fun ParameterPad2D(
 		for (ky in yKeyList) {
 			val label = formatAxisValue(ky)
 			val layout = labelMeasurer.measure(label, labelStyle)
-			drawText(labelMeasurer, label, topLeft = Offset(1.dp.toPx(), yPx(ky) - layout.size.height / 2f), style = labelStyle)
+			drawText(labelMeasurer, label, topLeft = Offset(insetX + ParamKeyRadius.toPx() + 2.dp.toPx(), yPx(ky) - layout.size.height / 2f), style = labelStyle)
 		}
 
 		val hx = xPx(xValue)
@@ -2078,16 +2089,28 @@ private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2Liv
 private fun formatParamValue(value: Float): String =
 	if (abs(value) >= 10f) "%.1f".format(value) else "%.2f".format(value)
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun EditableParameterName(param: Parameter, locked: Boolean, state: PSD2LiveState, viewModel: PSD2LiveViewModel, related: Boolean) {
+private fun EditableParameterName(
+    param: Parameter,
+    locked: Boolean,
+    value: Float,
+    state: PSD2LiveState,
+    viewModel: PSD2LiveViewModel,
+    related: Boolean,
+) {
     var editing by remember(param.id) { mutableStateOf(false) }
     val editable = state.historySnapshot != null && !state.canvasEditBusy
+    TooltipArea(
+        tooltip = { ParameterTooltip(param.name) },
+        modifier = Modifier.width(LocalParameterNameWidth.current.value),
+        delayMillis = 400,
+    ) {
     ParameterName(
         param,
         locked = locked,
         modifier = Modifier
-            .width(ParamRowNameWidth)
+            .fillMaxWidth()
             .semantics {
                 contentDescription = param.name + " — " + tr("parameters.properties") +
                     if (related) " — " + tr("parameters.related") else ""
@@ -2100,7 +2123,8 @@ private fun EditableParameterName(param: Parameter, locked: Boolean, state: PSD2
                 }
             },
     )
-    if (editing) ParameterDefinitionDialog(param, state, viewModel) { editing = false }
+    }
+    if (editing) ParameterDefinitionDialog(param, state, viewModel, lockValue = value) { editing = false }
 }
 
 private fun ParameterNode.Group.containsParameter(ids: Set<ParameterId>): Boolean = children.any {

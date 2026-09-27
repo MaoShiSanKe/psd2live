@@ -17,6 +17,7 @@ import androidx.compose.ui.window.Dialog
 import io.github.psd2live.core.ParameterKeyEdits
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
+import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.InlineEditorRegions
 import io.github.psd2live.ui.components.LocalInlineEditorRegions
@@ -41,6 +42,7 @@ internal fun ParameterDefinitionDialog(
     state: PSD2LiveState,
     viewModel: PSD2LiveViewModel,
     parentGroupId: String? = null,
+    lockValue: Float? = null,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalToolColors.current
@@ -147,6 +149,14 @@ internal fun ParameterDefinitionDialog(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             DefinitionField("ID", id, creating && !busy) { id = it }
                             DefinitionField(tr("parameters.fieldName"), name, !busy) { name = it }
+                        }
+                        if (parameter != null && !copying) {
+                            // Locking pins the preview value only; it is not part of the definition.
+                            CompactCheckbox(
+                                checked = parameter.id in state.lockedParameters,
+                                onCheckedChange = { viewModel.toggleParameterLock(parameter.id, lockValue) },
+                                label = tr("parameters.lock"),
+                            )
                         }
                         if (creating) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
