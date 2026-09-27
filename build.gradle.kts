@@ -26,6 +26,12 @@ val includeCubism: Boolean =
 
 kotlin {
 	jvmToolchain(21)
+	// Kotlin's redundant-null-check bytecode pass can spend minutes in FastAnalyzer on the large
+	// Compose/editor methods in this project, especially on a fresh Windows build. HotSpot still
+	// optimizes the resulting bytecode at runtime; skipping this compiler pass keeps clean builds usable.
+	compilerOptions {
+		freeCompilerArgs.add("-Xno-optimize")
+	}
 }
 
 dependencies {
