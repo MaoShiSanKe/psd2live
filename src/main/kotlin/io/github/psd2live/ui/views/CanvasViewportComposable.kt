@@ -86,6 +86,8 @@ import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.visibleCanvasGuideIds
 import io.github.psd2live.ui.state.forCanvas
 import io.github.psd2live.ui.state.FramePacer
+import io.github.psd2live.ui.state.previewPanelState
+import kotlinx.coroutines.delay
 import io.github.psd2live.ui.state.frameIntervalNanos
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PRIMARY_CANVAS_ID
@@ -112,6 +114,8 @@ import kotlin.math.pow
 private const val PAUSED_TRACKING_SETTLE_NANOS = 750_000_000L
 /** A restarted paused-physics pump renders at least this long before it may sleep on a settled model. */
 private const val PAUSED_PHYSICS_WARMUP_NANOS = 400_000_000L
+/** How often a paused-physics pump at rest looks for a new pose or a swing. */
+private const val PAUSED_PHYSICS_POLL_MILLIS = 16L
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -394,13 +398,17 @@ fun CanvasViewportComposable(
 	// parameters are rendered next without building latency in a callback queue.
     // Animated previews read the latest camera each frame. Restarting their pump for
     // every pointer move stalls rendering and makes panning visibly trail the cursor.
-    val pausedCameraKey = if (canvasState.animationEnabled) Unit else Triple(zoom, panX, panY)
+    val physicsLive = canvasState.generatePhysics && !canvasState.meshOnly
+    // A continuous pump (playing, or paused physics) reads the latest camera and pose each frame. Restarting
+    // it for every pan step or slider sample re-requests a frame out of pace and makes a drag stutter.
+    val continuousPump = canvasState.animationEnabled || physicsLive
+    val pausedCameraKey = if (continuousPump) Unit else Triple(zoom, panX, panY)
+    val pausedPoseKey = if (continuousPump) Unit else canvasState.parameterValues
 	// The project's frame rate paces the pump; unlimited follows the display. Native Cubism renders every
 	// preview on one GL thread, so several visible previews never go past 30 FPS each.
 	val projectFps = canvasState.rigEdits.physicsFps
 	val pumpInterval = maxOf(frameIntervalNanos(projectFps), if (simultaneousPreviews > 1) 33_333_333L else 0L)
-	val physicsLive = canvasState.generatePhysics && !canvasState.meshOnly
-	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, canvasState.parameterValues, pumpInterval, physicsLive) {
+	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, pausedPoseKey, pumpInterval, physicsLive) {
 		if (previewModel != null && viewSize.width > 0 && viewSize.height > 0) {
 			if (mode == CanvasMode.PREVIEW) {
 				fun requestFrame(deltaTime: Float, frameNanos: Long) {
@@ -438,15 +446,18 @@ fun CanvasViewportComposable(
 						requestFrame(deltaTime, frameNanos)
 					}
 				} else if (physicsLive) {
-					// Paused with physics on: the pose the user sets swings it, so render until it comes to
-					// rest, then sleep until the pointer moves (a slider edit restarts this effect).
+					// Paused with physics on: the pose the user sets swings it, so render until it comes to rest.
+					// At rest the motion clock keeps stepping physics without frames; a slider edit or the pointer
+					// moves it again, and this wakes on that without rendering in between.
 					val started = System.nanoTime()
 					val pacer = FramePacer(pumpInterval)
+					var lastPose = viewModel.state.value.previewPanelState().parameterValues
 					while (isActive) {
-						val now = System.nanoTime()
-						if (now - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.pausedPhysicsSettled &&
-							now - lastPointerActivityNanos.get() > PAUSED_TRACKING_SETTLE_NANOS) {
-							pointerActivity.receive()
+						while (isActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.pausedPhysicsSettled &&
+							System.nanoTime() - lastPointerActivityNanos.get() > PAUSED_TRACKING_SETTLE_NANOS) {
+							val pose = viewModel.state.value.previewPanelState().parameterValues
+							if (pose != lastPose) { lastPose = pose; break }
+							delay(PAUSED_PHYSICS_POLL_MILLIS)
 						}
 						val frameNanos = withFrameNanos { it }
 						if (!pacer.due(frameNanos)) continue

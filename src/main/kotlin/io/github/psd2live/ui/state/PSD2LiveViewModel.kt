@@ -1468,8 +1468,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		val swinging = pausedPhysics
 		_livePose.value = when {
 			frame.animationEnabled -> panel.parameterValues + frame.parameters
-			tracked || swinging.isNotEmpty() -> mergeUnlockedParameterValues(panel.parameterValues,
-				frame.parameters.filterKeys { (tracked && it in POINTER_POSE_PARAMETERS) || it in swinging }, panel.lockedParameters)
+			tracked || swinging.isNotEmpty() -> frame.parameters.filterKeys {
+				it !in panel.lockedParameters && ((tracked && it in POINTER_POSE_PARAMETERS) || it in swinging)
+			}
 			else -> emptyMap()
 		}
 	}
@@ -4684,8 +4685,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	private val _livePose = MutableStateFlow<Map<ParameterId, Float>>(emptyMap())
 	/**
 	 * The pose the preview shows now, one update per rendered frame at the project rate: what the parameters
-	 * list and the physics panel read, so neither runs a clock of its own. Empty while the preview holds the
-	 * edit pose (paused, pointer away); readers then show the document's values.
+	 * list and the physics panel read, so neither runs a clock of its own. Playing, it is the whole pose; paused,
+	 * only what the pointer's look and physics move, so a slider being dragged reads the document at once
+	 * instead of the frame before. Readers lay it over the document's values.
 	 */
 	val livePose: StateFlow<Map<ParameterId, Float>> = _livePose.asStateFlow()
 	/** When the preview's frame pump last advanced the motion clock; the fallback loop stays out while it runs. */
@@ -4798,7 +4800,11 @@ class PSD2LiveViewModel : AutoCloseable {
 					if (!latest.previewLive) latest
 					else {
 						val mergedValues = parameterValuesAfterSoftwareFrame(latest, liveParams, pointerActive)
-						_livePose.value = if (anim || pointerActive) mergedValues else emptyMap()
+						_livePose.value = when {
+							anim -> mergedValues
+							pointerActive -> mergedValues.filterKeys { it in POINTER_POSE_PARAMETERS }
+							else -> emptyMap()
+						}
 						if (mergedValues === latest.previewParameterValues) latest
 						else latest.copy(previewParameterValues = mergedValues)
 					}
@@ -4855,7 +4861,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		pausedPhysics = out
 		if (current.sdkStatus != "ready") {
 			val shown = pose + out
-			_livePose.value = shown
+			_livePose.value = (if (pointer != null) pose.filterKeys { it in POINTER_POSE_PARAMETERS } else emptyMap()) + out
 			updateState { latest -> if (!latest.previewLive || latest.previewParameterValues == shown) latest else latest.copy(previewParameterValues = shown) }
 		}
 	}

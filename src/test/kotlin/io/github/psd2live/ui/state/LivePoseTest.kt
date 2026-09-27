@@ -38,12 +38,12 @@ class LivePoseTest {
 			assertEquals(0.2f, vm.livePose.value[hair])
 			assertEquals(0.1f, vm.state.value.previewParameterValues[hair])
 
-			// Paused, the pointer turns the head; the rest is the edit pose, whatever the frame says.
+			// Paused, the pointer turns the head; the rest is the edit pose, read from the document, not the frame.
 			vm.updateCanvasPresentation(vm.state.value.activeWorkspace.id, id, CanvasMode.PREVIEW) { it.copy(animationEnabled = false) }
 			vm.updatePointer(0.5f, 0f, key)
 			vm.acceptSdkFrame(frame(false, hair to 0.9f, angle to 15f))
 			assertEquals(15f, vm.livePose.value[angle])
-			assertEquals(0.3f, vm.livePose.value[hair])
+			assertNull(vm.livePose.value[hair])
 
 			// With the pointer gone the preview holds the edit pose, and the panels show the document again.
 			vm.clearPointer(key)

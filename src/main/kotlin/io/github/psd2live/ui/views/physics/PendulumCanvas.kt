@@ -170,7 +170,7 @@ internal fun PendulumEditor(
 	val previewState = state.previewPanelState()
 	val staticValues = previewState.parameterValues
 	val inputs by rememberUpdatedState {
-		val base = viewModel.livePose.value.ifEmpty { staticValues }.mapKeys { it.key.raw }
+		val base = (staticValues + viewModel.livePose.value).mapKeys { it.key.raw }
 		val s = runtime.setting
 		if (s == null) base else runtime.drag.apply(base, s.inputs.map { it.parameter }, ranges)
 	}
