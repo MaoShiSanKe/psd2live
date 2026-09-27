@@ -94,16 +94,12 @@ distributions {
 	main {
 		contents {
 			from("README.md")
-			from("README_en.md")
-			from("README_ja.md")
-			from("ROADMAP.md")
-			from("STATUS.md")
 			from("LICENSE")
 			from("THIRD_PARTY_NOTICES.md")
 			from("licenses") { into("licenses") }
 			from("docs") {
 				into("docs")
-				exclude("imgs/**")
+				exclude("imgs/**", "local/**")
 			}
 			if (includeCubism) {
 				from("src/main/resources/cubism") { into("cubism") }

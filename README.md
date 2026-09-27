@@ -1,6 +1,6 @@
 # PSD2Live
 
-[English](README_en.md) · [日本語](README_ja.md) · [下载发行版](https://github.com/tsunehimatoi/psd2live/releases/latest) · [文档](docs/README.md)
+[English](docs/en/README.md) · [日本語](docs/ja/README.md) · [下载发行版](https://github.com/tsunehimatoi/psd2live/releases/latest) · [文档](docs/README.md)
 
 **从分层 PSD 生成 Live2D 模型，再在同一个工作区里编辑、预览和导出。**
 
@@ -54,7 +54,7 @@ Windows 10/11 x64 用户可下载便携 ZIP，解压后运行；也可使用 EXE
 
 当前公开 21 个工具，包含模型观察、形状与路径编辑、素材、参数、摇摆、物理、导出和历史操作。接入步骤与可调用示例见 [MCP 使用与接口](docs/zh/agent/MCP_AUTHORING.md)。涉及生成新图片的任务需要宿主提供图像生成能力。
 
-工具可调用不等于复杂建模任务已经可靠。[实测记录](STATUS.md)保留成功与失败样本，[路线图](ROADMAP.md)记录后续工作。
+工具可调用不等于复杂建模任务已经可靠。[实测记录](docs/zh/STATUS.md)保留成功与失败样本，[路线图](docs/zh/ROADMAP.md)记录后续工作。
 
 ## 从源码运行
 

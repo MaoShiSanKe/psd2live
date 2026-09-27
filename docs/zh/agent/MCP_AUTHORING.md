@@ -1,6 +1,6 @@
 # MCP 使用与接口
 
-[文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../../../STATUS.md)
+[文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../STATUS.md)
 
 本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **21 个工具**。旧文档中的 `project_get_state`、`rig_transform`、`asset_import_png` 等是内部适配名称，不能直接当作当前公开工具调用。
 
@@ -153,4 +153,4 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 - [路径工具](../../../src/main/kotlin/io/github/psd2live/agent/AgentPathTools.kt)
 - [工程存储](../../../src/main/kotlin/io/github/psd2live/agent/AgentWorkspaceStore.kt)
 
-本页记录接口，不据此升级[能力实测](../../../STATUS.md)的评价。完整效果仍需实际模型、宿主与任务样本验证。
+本页记录接口，不据此升级[能力实测](../STATUS.md)的评价。完整效果仍需实际模型、宿主与任务样本验证。

@@ -1,6 +1,6 @@
 # Agent 能力实测
 
-[首页](README.md) · [路线图](ROADMAP.md) · [MCP 接口](docs/zh/agent/MCP_AUTHORING.md)
+[首页](../../README.md) · [路线图](ROADMAP.md) · [MCP 接口](agent/MCP_AUTHORING.md)
 
 本页保留已有人工实测记录。文档重构未重跑这些任务，也未把源码中存在接口视为端到端成功。缺失项保留为“未记录”，不得补猜。
 

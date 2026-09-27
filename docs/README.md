@@ -1,6 +1,6 @@
 # 文档导航 · Documentation · ドキュメント
 
-[中文首页](../README.md) · [English](../README_en.md) · [日本語](../README_ja.md)
+[中文首页](../README.md) · [English](en/README.md) · [日本語](ja/README.md)
 
 **学习操作请先用程序内「帮助 → 教程…」。** 教程目录有两条路线、18 个主题；文字版按零基础路线的 17 课提供速查。技术参考只讲数据、接口与限制，不再重复整套界面教程。
 
@@ -38,8 +38,8 @@ For hands-on learning, open **Help → Tutorials**. The catalog has two paths an
 
 - [MCP 使用与接口](zh/agent/MCP_AUTHORING.md)：11 个公开工具、请求结构、空间映射与历史。
 - [Agent 设计与验收](zh/agent/AGENT_DESIGN.md)：设计依据、任务验收和成本控制。
-- [能力实测](../STATUS.md)：保留真实样本与证据缺口，不以接口存在推定效果。
-- [路线图](../ROADMAP.md)：后续工作，不承诺排期。
+- [能力实测](zh/STATUS.md)：保留真实样本与证据缺口，不以接口存在推定效果。
+- [路线图](zh/ROADMAP.md)：后续工作，不承诺排期。
 - [原生桥接构建](../native/live2d_renderer/README.md)、[示例说明](../examples/readme.md)、[第三方表记](../THIRD_PARTY_NOTICES.md)。
 - [历史调研：2026-09-13](zh/agent/archive/AGENT_RESEARCH_2026-09-13.md)：归档背景，不作为当前产品契约。
 

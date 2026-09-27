@@ -1,6 +1,6 @@
 # 路线图
 
-[项目首页](README.md) · [实测记录](STATUS.md) · [架构边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
+[项目首页](../../README.md) · [实测记录](STATUS.md) · [架构边界](spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
 本页只记录后续方向，不承诺排期。代码已有入口、完整工作流可用和效果通过验收分别判断。
 
