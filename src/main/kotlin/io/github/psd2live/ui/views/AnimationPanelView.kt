@@ -85,8 +85,6 @@ import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconCollapseAll
 import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconEye
-import io.github.psd2live.ui.components.IconMouse
-import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconSearch
@@ -143,7 +141,6 @@ internal fun AnimationPanelView(
 	val typography = LocalToolTypography.current
 	val previewState = state.previewPanelState()
 	val skeleton = state.rigEdits.skeleton
-	val isPlaying = previewState.animationEnabled && !previewState.meshOnly
 	var searchOpen by remember { mutableStateOf(false) }
 	var query by remember { mutableStateOf("") }
 	val searchFocus = remember { FocusRequester() }
@@ -174,12 +171,8 @@ internal fun AnimationPanelView(
 				.height(22.dp),
 		) {
 			// Labels appear in this order as the panel widens, each only once everything before it fits.
-			val labels = listOf(
-				tr(if (isPlaying) "animation.idle.stop" else "animation.idle.start"),
-				tr("animation.mouseTracking"),
-				tr("animation.new"),
-			)
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 7 else 8, maxWidth)
+			val labels = listOf(tr("animation.new"))
+			val labelsShown = shownToolLabels(labels, if (state.previewLive) 5 else 6, maxWidth)
 			Row(
 				modifier = Modifier.fillMaxSize(),
 				verticalAlignment = Alignment.CenterVertically,
@@ -213,36 +206,10 @@ internal fun AnimationPanelView(
 					CompactIconButton(onClick = { searchOpen = true }, size = 22.dp, tooltip = tr("animation.search")) {
 						IconSearch(tint = colors.textMuted)
 					}
-					PanelToolButton(
-						label = labels[0],
-						showLabel = labelsShown > 0,
-						onClick = { viewModel.setAnimationEnabled(!previewState.animationEnabled) },
-						enabled = true,
-						active = isPlaying,
-						tooltip = labels[0],
-					) {
-						if (isPlaying) IconPause(modifier = Modifier.size(11.dp), tint = colors.accent)
-						else IconPlay(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-					}
-					PanelToolButton(
-						label = labels[1],
-						showLabel = labelsShown > 1,
-						onClick = { viewModel.setMouseTrackingEnabled(!previewState.mouseTrackingEnabled) },
-						enabled = true,
-						active = previewState.mouseTrackingEnabled,
-						tooltip = labels[1],
-					) {
-						IconMouse(
-							active = previewState.mouseTrackingEnabled,
-							modifier = Modifier.size(12.dp),
-							tint = if (previewState.mouseTrackingEnabled) colors.accent else colors.textMuted,
-						)
-					}
-					PanelToolbarSeparator()
 					Box {
 						PanelToolButton(
-							label = labels[2],
-							showLabel = labelsShown > 2,
+							label = labels[0],
+							showLabel = labelsShown > 0,
 							onClick = { newMenuOpen = true },
 							enabled = state.previewModel != null,
 							tooltip = tr("animation.new"),

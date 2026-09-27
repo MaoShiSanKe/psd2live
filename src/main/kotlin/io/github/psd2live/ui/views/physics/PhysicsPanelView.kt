@@ -68,9 +68,6 @@ import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconEye
-import io.github.psd2live.ui.components.IconMouse
-import io.github.psd2live.ui.components.IconPause
-import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.TreeContextMenu
@@ -83,7 +80,6 @@ import io.github.psd2live.ui.utils.NativeFilePicker
 import io.github.psd2live.ui.views.IconArrowVertical
 import io.github.psd2live.ui.views.PanelSectionRow
 import io.github.psd2live.ui.views.PanelToolButton
-import io.github.psd2live.ui.views.PanelToolbarSeparator
 import io.github.psd2live.ui.views.shownToolLabels
 
 /**
@@ -142,8 +138,8 @@ internal fun PhysicsPanelView(
 }
 
 /**
- * Search, the preview's play and tracking so inputs can be tried, new group and evaluation order, with a
- * status line under it. The physics switch and frame rate stay on the preview toolbar, next to the model.
+ * Search, new group and evaluation order, with a status line under it. Playback, tracking, the physics
+ * switch and the frame rate stay on the preview canvas, next to the model they act on.
  */
 @Composable
 private fun PhysicsToolbar(
@@ -159,7 +155,6 @@ private fun PhysicsToolbar(
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val on = previewState.generatePhysics && !previewState.meshOnly
-	val playing = previewState.animationEnabled && !previewState.meshOnly
 	var searchOpen by remember { mutableStateOf(query.isNotEmpty()) }
 	val searchFocus = remember { FocusRequester() }
 	var newMenuOpen by remember { mutableStateOf(false) }
@@ -172,12 +167,8 @@ private fun PhysicsToolbar(
 		verticalArrangement = Arrangement.spacedBy(3.dp),
 	) {
 		BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
-			val labels = listOf(
-				tr(if (playing) "animation.idle.stop" else "animation.idle.start"),
-				tr("animation.mouseTracking"),
-				tr("physics.new"),
-			)
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 7 else 8, maxWidth)
+			val labels = listOf(tr("physics.new"))
+			val labelsShown = shownToolLabels(labels, if (state.previewLive) 5 else 6, maxWidth)
 			Row(
 				modifier = Modifier.fillMaxSize(),
 				verticalAlignment = Alignment.CenterVertically,
@@ -211,36 +202,10 @@ private fun PhysicsToolbar(
 				CompactIconButton(onClick = { searchOpen = true }, size = 22.dp, tooltip = tr("physics.search")) {
 					IconSearch(tint = colors.textMuted)
 				}
-				PanelToolButton(
-					label = labels[0],
-					showLabel = labelsShown > 0,
-					onClick = { viewModel.setAnimationEnabled(!previewState.animationEnabled) },
-					enabled = true,
-					active = playing,
-					tooltip = labels[0],
-				) {
-					if (playing) IconPause(modifier = Modifier.size(11.dp), tint = colors.accent)
-					else IconPlay(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-				}
-				PanelToolButton(
-					label = labels[1],
-					showLabel = labelsShown > 1,
-					onClick = { viewModel.setMouseTrackingEnabled(!previewState.mouseTrackingEnabled) },
-					enabled = true,
-					active = previewState.mouseTrackingEnabled,
-					tooltip = labels[1],
-				) {
-					IconMouse(
-						active = previewState.mouseTrackingEnabled,
-						modifier = Modifier.size(12.dp),
-						tint = if (previewState.mouseTrackingEnabled) colors.accent else colors.textMuted,
-					)
-				}
-				PanelToolbarSeparator()
 				Box {
 					PanelToolButton(
-						label = labels[2],
-						showLabel = labelsShown > 2,
+						label = labels[0],
+						showLabel = labelsShown > 0,
 						onClick = { newMenuOpen = true },
 						enabled = state.previewModel != null,
 						tooltip = tr("physics.new"),
