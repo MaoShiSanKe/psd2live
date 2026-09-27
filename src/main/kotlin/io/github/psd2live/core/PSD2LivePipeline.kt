@@ -342,8 +342,8 @@ class PSD2LivePipeline {
 				obfuscateKey = 0x42,
 				tileRasters = { tileId -> tileRasters[tileId] },
 			)
-			val physics = PhysicsGenerator.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
-			if (physics.isNotEmpty()) Cmo3PhysicsInjector.inject(converted.model.root as CModelSource, physics)
+			val physics = PhysicsCatalog.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
+			if (physics.isNotEmpty()) Cmo3PhysicsInjector.inject(converted.model.root as CModelSource, physics, config.rigEdits.physicsFps)
 			BezierWarp.configureEditor(converted.model.root as CModelSource)
 			val bytes = Cmo3.write(converted.model)
 			files += writeContained(outputRoot, "$baseName.cmo3", bytes)
@@ -381,8 +381,8 @@ class PSD2LivePipeline {
 		val pages = atlas.pages.mapIndexed { index, page ->
 			Moc3Sidecars.AtlasPage("$textureFolder/texture_${index.toString().padStart(2, '0')}.png", page.png)
 		}
-		val physicsGroups = PhysicsGenerator.active(analysis, config, parameterIds)
-		val physics = PhysicsGenerator.json(physicsGroups)?.let(CubismJson::normalize)
+		val physicsGroups = PhysicsCatalog.active(analysis, config, parameterIds)
+		val physics = Physics3Json.write(physicsGroups, config.rigEdits.physicsFps)?.let(CubismJson::normalize)
 
 		val motions = buildList<Pair<String, Pair<String, String>>> {
 			if (config.exportMotions && !config.meshOnly) {
@@ -549,7 +549,7 @@ class PSD2LivePipeline {
 		val layers = analysis.layers.joinToString(",\n") { layer ->
 			"    {\"source\":${quote(layer.source.name)},\"type\":${quote(layer.semantic.type.name.lowercase())},\"tag\":${quote(layer.semantic.tag.canonicalName)},\"side\":${quote(layer.semantic.side.name)},\"parameter\":${quote(layer.semantic.parameter)},\"switchId\":${layer.semantic.switchId},\"drawable\":${quote(rig.puppet.drawables.firstOrNull { it.name == layer.source.name }?.id?.raw ?: "")}}"
 		}
-		val physicsIds = PhysicsGenerator.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }).map { it.id }
+		val physicsIds = PhysicsCatalog.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }).map { it.id }
 		val useFrontHair = PhysicsGenerator.FRONT_HAIR_ID in physicsIds
 		val useBackHair = PhysicsGenerator.BACK_HAIR_ID in physicsIds
 		val useEyeJelly = PhysicsGenerator.EYE_JELLY_ID in physicsIds

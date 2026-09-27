@@ -85,6 +85,37 @@ object NativeFilePicker {
 		}
 	}
 
+	/** Opens the native OS file picker for a Cubism physics3.json to import. */
+	fun choosePhysicsFile(window: Window? = null): String? {
+		if (!isPicking.compareAndSet(false, true)) return null
+		try {
+			val title = tr("dialog.choosePhysics")
+			try {
+				val dialog = createFileDialog(window, title, FileDialog.LOAD).apply {
+					setFilenameFilter { _, name -> name.endsWith(".json", ignoreCase = true) }
+					file = "*.physics3.json"
+					isVisible = true
+				}
+				val dir = dialog.directory
+				val selectedFile = dialog.file
+				return if (!dir.isNullOrBlank() && !selectedFile.isNullOrBlank()) File(dir, selectedFile).toPath().toAbsolutePath().normalize().toString() else null
+			} catch (_: Throwable) {}
+			try {
+				UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
+				val chooser = JFileChooser().apply {
+					dialogTitle = title
+					fileFilter = javax.swing.filechooser.FileNameExtensionFilter(tr("dialog.physicsFilter"), "json")
+				}
+				if (chooser.showOpenDialog(window) == JFileChooser.APPROVE_OPTION) {
+					return chooser.selectedFile.toPath().toAbsolutePath().normalize().toString()
+				}
+			} catch (_: Throwable) {}
+			return null
+		} finally {
+			isPicking.set(false)
+		}
+	}
+
 	/**
 	 * Opens the native OS file picker for selecting an existing .psd2live project file.
 	 */

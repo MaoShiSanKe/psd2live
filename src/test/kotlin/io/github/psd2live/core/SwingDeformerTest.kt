@@ -325,8 +325,8 @@ class SwingDeformerTest {
 
 		val overlay = RigEditOverlay(swingEdits = listOf(swing(SwingKind.VERTICAL, listOf("ParamSwingA", "ParamSwingB"))))
 		val none = PhysicsGenerator.Presets(false, false, false)
-		val json = Json.parseToJsonElement(PhysicsGenerator.json(
-			PhysicsGenerator.catalog(none, none, overlay, available).filter { it.active }.map { it.setting })!!).jsonObject
+		val json = Json.parseToJsonElement(Physics3Json.write(
+			PhysicsCatalog.groups(none, none, overlay, available).filter { it.active }.map { it.setting }, 60)!!).jsonObject
 		assertEquals(2, json.getValue("Meta").jsonObject.getValue("TotalOutputCount").jsonPrimitive.int)
 		assertEquals(3, json.getValue("Meta").jsonObject.getValue("VertexCount").jsonPrimitive.int)
 		val outputs = json.getValue("PhysicsSettings").jsonArray.single().jsonObject.getValue("Output").jsonArray
@@ -334,7 +334,7 @@ class SwingDeformerTest {
 
 		// A custom group on one of the outputs replaces the whole swing pendulum.
 		val custom = RigPhysicsEdit("Mine", "Mine", listOf(PhysicsInput("ParamAngleX")), listOf(PhysicsOutput("ParamSwingB")))
-		val groups = PhysicsGenerator.catalog(none, none, overlay.copy(physicsEdits = listOf(custom)), available)
+		val groups = PhysicsCatalog.groups(none, none, overlay.copy(physicsEdits = listOf(custom)), available)
 		assertEquals(listOf("Mine"), groups.filter { it.active }.map { it.id })
 		assertEquals("Mine", groups.single { it.origin == PhysicsOrigin.SWING }.shadowedBy)
 	}

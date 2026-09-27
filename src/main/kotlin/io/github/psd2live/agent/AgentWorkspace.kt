@@ -467,6 +467,17 @@ interface AgentWorkspace {
     suspend fun putPhysics(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult = throw UnsupportedOperationException("Physics editing is unavailable")
     suspend fun deletePhysics(id: String, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Physics deletion is unavailable")
+    /** The physics rate the model declares. */
+    fun physicsFps(): Int = io.github.psd2live.core.RigEditOverlay.DEFAULT_PHYSICS_FPS
+    /** Sets the evaluation [order] (group IDs first, the rest after) and/or the physics [fps]. */
+    suspend fun configurePhysics(order: List<String>?, fps: Int?, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Physics configuration is unavailable")
+    /** Imports a physics3.json at [path] as user groups; the result lists what it did. */
+    suspend fun importPhysics(path: String, expectedHead: String): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
+        throw UnsupportedOperationException("Physics import is unavailable")
+    /** Scales group [id]'s outputs so a standard head sway swings each to [target] of its parameter's end. */
+    suspend fun fitPhysics(id: String, target: Float, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Physics scale fitting is unavailable")
     fun listSwings(): List<io.github.psd2live.core.RigSwingEdit> = emptyList()
     /** [estimatePhysics] sizes the pendulum from the first target instead of taking the edit's. */
     suspend fun putSwing(edit: io.github.psd2live.core.RigSwingEdit, estimatePhysics: Boolean, expectedHead: String, taskId: String?,

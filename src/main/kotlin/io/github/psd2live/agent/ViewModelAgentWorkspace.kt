@@ -351,7 +351,7 @@ class ViewModelAgentWorkspace(
     /** The physics catalog of [document], resolved against [puppet]'s parameters. */
     private fun physicsCatalog(document: AgentWorkspaceDocument, puppet: PuppetModel): List<io.github.psd2live.core.PhysicsGroup> {
         val state = viewModel.state.value
-        return io.github.psd2live.core.PhysicsGenerator.catalog(state.previewModel?.analysis, document.toConfig(state),
+        return io.github.psd2live.core.PhysicsCatalog.groups(state.previewModel?.analysis, document.toConfig(state),
             puppet.parameters.mapTo(HashSet()) { it.id.raw })
     }
 	private val editMutex = Mutex()
@@ -1318,8 +1318,53 @@ class ViewModelAgentWorkspace(
         val state = viewModel.state.value
         val model = state.previewModel ?: throw IllegalStateException("No rig preview is available")
         val groups = listPhysics()
-        return io.github.psd2live.core.PhysicsSimulation.run(groups, model.rig.puppet.parameters, arguments, state.generatePhysics && !state.meshOnly)
+        return io.github.psd2live.core.PhysicsSimulation.run(groups, model.rig.puppet.parameters, arguments, state.generatePhysics && !state.meshOnly,
+            state.rigEdits.physicsFps)
     }
+
+    override fun physicsFps() = viewModel.state.value.rigEdits.physicsFps
+
+    override suspend fun configurePhysics(order: List<String>?, fps: Int?, expectedHead: String): AgentWorkspaceMutationResult {
+        require(order != null || fps != null) { "Give order or fps" }
+        return mutateRigKeyform(expectedHead, null, "Configured physics", "physics") { document, puppet ->
+            var overlay = document.rigEdits
+            order?.let { overlay = io.github.psd2live.core.PhysicsAuthoring.order(overlay, physicsCatalog(document, puppet), it) }
+            fps?.let { overlay = io.github.psd2live.core.PhysicsAuthoring.setFps(overlay, it) }
+            document.copy(rigEdits = overlay)
+        }.copy(affectedObjectIds = emptyList())
+    }
+
+    override suspend fun importPhysics(path: String, expectedHead: String): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> {
+        val file = java.io.File(path)
+        require(file.isAbsolute && file.isFile) { "path must be an existing absolute physics3.json" }
+        val text = file.readText()
+        var report: io.github.psd2live.core.PhysicsAuthoring.Imported? = null
+        val result = mutateRigKeyform(expectedHead, null, "Imported physics ${file.name}", "physics") { document, puppet ->
+            val imported = io.github.psd2live.core.PhysicsAuthoring.import(document.rigEdits, physicsCatalog(document, puppet), text,
+                puppet.parameters.mapTo(HashSet()) { it.id.raw })
+            report = imported
+            document.copy(rigEdits = imported.overlay, settings = kotlinx.serialization.json.JsonObject(document.settings +
+                ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
+        }.copy(affectedObjectIds = emptyList())
+        val imported = report!!
+        return result to kotlinx.serialization.json.buildJsonObject {
+            put("imported", kotlinx.serialization.json.JsonArray(imported.ids.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            if (imported.disabled.isNotEmpty()) put("disabled", kotlinx.serialization.json.JsonArray(imported.disabled.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            if (imported.missing.isNotEmpty()) put("missing_parameters", kotlinx.serialization.json.JsonObject(imported.missing.mapValues { (_, v) ->
+                kotlinx.serialization.json.JsonArray(v.map { kotlinx.serialization.json.JsonPrimitive(it) }) }))
+            imported.fps?.let { put("fps", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }
+    }
+
+    override suspend fun fitPhysics(id: String, target: Float, expectedHead: String): AgentWorkspaceMutationResult =
+        mutateRigKeyform(expectedHead, null, "Fitted physics scales $id", id) { document, puppet ->
+            val group = physicsCatalog(document, puppet).firstOrNull { it.id == id } ?: throw IllegalArgumentException("Physics group not found: $id")
+            val ranges = io.github.psd2live.core.PhysicsEngine.ranges(puppet.parameters)
+            val trace = io.github.psd2live.core.PhysicsResponse.trace(group.setting, ranges, document.rigEdits.physicsFps)
+            val fitted = io.github.psd2live.core.PhysicsAuthoring.fitScales(group.setting, trace.reach, target)
+            require(fitted != group.setting) { "No output of $id swings under a head sway; check its inputs" }
+            document.copy(rigEdits = io.github.psd2live.core.PhysicsAuthoring.put(document.rigEdits, fitted, group.generated))
+        }.copy(affectedObjectIds = emptyList())
 
 	override fun getObject(target: AgentKeyformTargetRef): AgentObjectSnapshot {
 		val state = viewModel.state.value

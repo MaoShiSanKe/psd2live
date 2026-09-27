@@ -789,6 +789,45 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
     ) { request -> mutationResult { workspace.simulatePhysics(request.arguments ?: error("Missing arguments")) } }
 
     server.addTool(
+        name = "physics_config",
+        description = "Set the physics evaluation order and/or rate. Cubism runs groups in order and a later group reads an earlier group's outputs in the same step; order lists group IDs to run first, the rest follow in their current order. fps is the rate physics3.json and the CMO3 declare (default 60).",
+        inputSchema = ToolSchema(properties = buildJsonObject {
+            putJsonObject("order") { put("type", "array"); putJsonObject("items") { put("type", "string") } }
+            putJsonObject("fps") { put("type", "integer"); put("minimum", 1); put("maximum", 240) }
+            putJsonObject("expected_history_head_node_id") { put("type", "string") }
+        }, required = listOf("expected_history_head_node_id")), toolAnnotations = MUTATING,
+    ) { request -> mutationResult {
+        val arguments = request.arguments ?: error("Missing arguments")
+        workspace.configurePhysics(arguments["order"]?.jsonArray?.map { it.jsonPrimitive.content }, arguments["fps"]?.jsonPrimitive?.intOrNull,
+            request.requiredString("expected_history_head_node_id")).toJson()
+    } }
+
+    server.addTool(
+        name = "physics_import",
+        description = "Import a Cubism physics3.json (absolute path) as user groups: an existing ID is replaced (a generated group until physics_delete), imported groups run after the current ones in file order, other user groups on the same outputs are turned off, and the file's Fps becomes the project's. Reports missing parameters; create them or edit the groups.",
+        inputSchema = ToolSchema(properties = buildJsonObject {
+            putJsonObject("path") { put("type", "string") }
+            putJsonObject("expected_history_head_node_id") { put("type", "string") }
+        }, required = listOf("path", "expected_history_head_node_id")), toolAnnotations = MUTATING,
+    ) { request -> mutationResult {
+        val (result, report) = workspace.importPhysics(request.requiredString("path"), request.requiredString("expected_history_head_node_id"))
+        kotlinx.serialization.json.JsonObject(result.toJson() + report)
+    } }
+
+    server.addTool(
+        name = "physics_fit",
+        description = "Scale a group's outputs so a standard head sway (the panel's response curve: pulled fully right for 1 s, then let go) swings each output to target percent of its parameter's end (default 100). Outputs that do not move keep their scale.",
+        inputSchema = ToolSchema(properties = buildJsonObject {
+            putJsonObject("id") { put("type", "string") }
+            putJsonObject("target") { put("type", "number"); put("minimum", 10); put("maximum", 300) }
+            putJsonObject("expected_history_head_node_id") { put("type", "string") }
+        }, required = listOf("id", "expected_history_head_node_id")), toolAnnotations = MUTATING,
+    ) { request -> mutationResult {
+        val target = (request.arguments?.get("target")?.jsonPrimitive?.floatOrNull ?: 100f) / 100f
+        workspace.fitPhysics(request.requiredString("id"), target, request.requiredString("expected_history_head_node_id")).toJson()
+    } }
+
+    server.addTool(
         name = "swing_list",
         description = "List regenerating swings: target Warps and, per direction, the driven parameters, shape and pendulum.",
         inputSchema = ToolSchema(properties = buildJsonObject {}), toolAnnotations = READ_ONLY,

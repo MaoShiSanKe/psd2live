@@ -93,7 +93,7 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                     put("layers", snapshot.layers.count { !it.deleted }); put("parameters", snapshot.parameters.size)
                     snapshot.persistenceError?.let { put("persistenceError", it) }
                 }
-                "physics" -> put("groups", JsonArray(workspace.listPhysics().map { it.toJson() }))
+                "physics" -> { put("fps", workspace.physicsFps()); put("groups", JsonArray(workspace.listPhysics().map { it.toJson() })) }
                 "swings" -> put("swings", JsonArray(workspace.listSwings().map { it.toJson() }))
                 "settings" -> put("settings", workspace.projectSettings())
                 "preview" -> put("preview", workspace.previewSession())
@@ -329,8 +329,9 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         mapOf("psd" to "asset_import_psd", "create" to "asset_create_artwork", "split" to "asset_split_artwork", "reference" to "asset_prepare_reference", "import" to "asset_import_png", "register" to "asset_register", "preview" to "asset_preview_composite", "add" to "layer_add_from_asset", "place" to "layer_set_placement", "finalize" to "layer_finalize_placement", "inspect" to "asset_inspect", "reprocess" to "asset_reprocess", "remove" to "layer_soft_delete"), true)
     adapted("swing", "Generate regenerating sway on Warps or meshes (wrapped in a tight Warp): kind=lateral swings the tip left/right, kind=vertical up/down (or motions=[...] for both), each on -1/0/1 keys per segment parameter, with a matching pendulum unless physics_enabled=false. parallel keeps the tip edge level so hair with several strands in one Warp sways side by side. Changing a swing recomputes its forms; delete with bake=true to keep them as ordinary keys. Verify with view poses at the parameter endpoints.",
         mapOf("put" to "swing_put", "delete" to "swing_delete"), true)
-    adapted("physics", "Author Cubism pendulums: put creates or patches a group by ID (inputs, outputs on segment vertices, 1..16 segments, normalization; enabled=false turns any group off, generated ones included), delete removes a user group or reverts a replaced generated one, simulate steps inputs and reports each output's peak, final value and settling. inspect scope=physics lists every group with origin and status. Author the output parameters' forms first; static view poses do not show settling.",
-        mapOf("put" to "physics_put", "delete" to "physics_delete", "simulate" to "physics_simulate"), true)
+    adapted("physics", "Author Cubism pendulums: put creates or patches a group by ID (inputs, outputs on pendulum vertices, 1..16 pendulums, normalization; enabled=false turns any group off, generated ones included), delete removes a user group or reverts a replaced generated one, simulate steps inputs and reports each output's peak, final value and settling, fit scales outputs to a standard sway, config sets evaluation order and fps, import reads a physics3.json. inspect scope=physics lists every group in evaluation order with origin and status. Author the output parameters' forms first; static view poses do not show settling.",
+        mapOf("put" to "physics_put", "delete" to "physics_delete", "simulate" to "physics_simulate", "fit" to "physics_fit",
+            "config" to "physics_config", "import" to "physics_import"), true)
     tool("appearance", "Rename, show/hide or reorganize objects in one ordered edit. For an animated switch use form opacity keys instead of static visibility. Local reparenting changes inherited motion.",
         buildJsonObject { put("state", string()); put("edits", legacy.getValue("object_edit").tool.inputSchema.properties!!.getValue("edits")) }, listOf("state", "edits"), true) { a ->
         workspace.authorRig(a.text("state"), buildJsonArray { add(buildJsonObject { put("op", "structure"); put("edits", a.getValue("edits")) }) }, MutationAuthor.AGENT).compact()

@@ -36,7 +36,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `parameter` | `request.mode` | `create/update/delete`；删除时在旧默认值处折叠关键形轴 |
 | `asset` | `request.mode` | `psd/create/split/reference/import/register/preview/add/place/finalize/inspect/reprocess/remove`；`psd` 从本地绝对路径导入空工作区 |
 | `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
-| `physics` | `request.mode` | `put/delete/simulate`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、按阶跃输入模拟并返回峰值与稳定时间，见[物理](../guide/PHYSICS.md) |
+| `physics` | `request.mode` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、按阶跃输入模拟并返回峰值与稳定时间、按标准晃动调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
 | `path` | `request.mode` | `get/list/preview/put/delete/deform` |
 | `revision` | `request.mode` | `save/checkpoint/list/restore` |
 
@@ -116,10 +116,13 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 
 `path` 点使用 Mesh 局部坐标，支持只读查询、预览、绑定和烘焙关键形。路径是编辑辅助，兼容性见[变形路径](../guide/DEFORM_PATHS.md)。
 
-物理组是 Cubism 摆锤：`inputs`（`parameter`、`weight` 0–100、`type` 为 `x` 位移或 `angle` 倾斜重力、`reflect`）推动 1–16 节 `segments`（`length`、`mobility`、`delay`、`acceleration`），`outputs`（`parameter`、`vertex`、`scale`、`weight`、`reflect`）读取第 `vertex` 节末端相对上一节的角度，`scale` 是每弧度对应的参数值（Cubism 原生运行时不读取位移类型输出的倍率，这类输出恒为 0，因此只提供角度输出）。导出的 physics3.json 声明 `Fps: 60`。`normalization.position/angle` 的 `min/default/max` 是输入范围映射的目标。
+物理组是 Cubism 摆锤：`inputs`（`parameter`、`weight` 0–100、`type` 为 `x` 位置X或 `angle` 倾斜重力、`reflect`）推动 1–16 节 `segments`（`length`、`mobility`、`delay`、`acceleration`），`outputs`（`parameter`、`vertex`、`scale`、`weight`、`reflect`）读取第 `vertex` 节末端相对上一节的角度，`scale` 是每弧度对应的参数值（Cubism 原生运行时不读取位移类型输出的倍率，这类输出恒为 0，因此只提供角度输出）。导出的 physics3.json 和 CMO3 声明工程的计算 FPS（默认 60）。`normalization.position/angle` 的 `min/default/max` 是输入范围映射的目标。
 
 - `physics.put` 只修改给出的字段：已有 ID（含生成组）以当前组为基础，新 ID 以「头部与身体输入、一节长 10、无输出」为基础。列表字段整体替换；`length` 为整串总长并按比例缩放各节，`mobility/delay/acceleration` 与 `output_scale` 作用于全部节段 / 输出，`segment_count` 调整节数。只给 `enabled` 时只开关该组；生成组修改后替换生成版本，直到 `physics.delete`。旧版 `input_parameter` / `output_parameter` 仍按单输入单输出读取。
-- 同一参数只能被一个生效组驱动；自定义组驱动生成组的输出时，生成组让位。`inspect scope=physics` 返回 `origin`、`enabled`、`active`、`overridden`、`replaced_by` 与 `issue`。
+- 同一参数只能被一个生效组驱动；自定义组驱动生成组的输出时，生成组让位。`inspect scope=physics` 返回 `fps` 和按计算顺序排列的组，每组带 `origin`、`enabled`、`active`、`overridden`、`replaced_by` 与 `issue`。
+- `physics.config`：`order` 列出要先计算的组 ID，其余组按原顺序排在后面；Cubism 按顺序计算，后面的组在同一步里读到前面组的输出。`fps` 为 1–240 的整数。
+- `physics.import`：`path` 为 physics3.json 的绝对路径。文件中的组成为自定义组（同 ID 替换已有组，生成组在 `physics.delete` 前保持被替换），按文件顺序排在现有组之后；驱动相同输出的其他自定义组被关闭；文件的 `Fps` 成为工程的计算 FPS。返回导入的 ID、被关闭的组和缺失参数。
+- `physics.fit`：用面板响应曲线的标准晃动（向右牵动 1 秒后松开）运行该组，把每个输出的倍率调整到峰值恰好达到参数端点的 `target`%（默认 100）；不动的输出保持原倍率。
 - 先为输出参数制作运动端点，再接物理。静态姿态拼图不包含时间推进；用 `physics.simulate` 以阶跃输入检查幅度、过冲与稳定时间，整体动作用 `view.motion`（其原生采样环境需可用）。
 
 ## View 与空间映射

@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.ui.views.physics.PhysicsPanelView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

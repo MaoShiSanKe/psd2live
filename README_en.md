@@ -30,7 +30,7 @@ The same release page offers a Linux amd64 Deb with Cubism Native preview. It re
 | Skeleton and swing | Inferred skeletons for limbs, tails and wings, baked into deformers and corrective keyforms that run in Cubism; lateral / vertical sway for hair and similar parts with matching pendulums |
 | Artwork | Transparent image placement, toggle and exclusive variants, texture painting, optional 2× / 4× upscaling |
 | Animation and preview | Parameters and XY controls, idle / blink / nod / shake motions, an animation editor with timeline, keyframes and curves, gaze tracking and multi-segment physics edited on its pendulum |
-| Projects | Portable project archive, branching history, undo/redo, tabs, configurable panels with Edit / Mesh / Rigging / Animation / Preview workspace presets, themes and keymaps |
+| Projects | Portable project archive, branching history, undo/redo, tabs, configurable panels with Edit / Mesh / Rigging / Animation / Preview / Physics workspace presets, themes and keymaps |
 | Agents | Authenticated local MCP for observation, artwork, forms, parameters, paths, swing, physics and history |
 
 ![Layer, tool, inspector, parameter, animation and physics panels](docs/imgs/tools.png)

@@ -178,6 +178,25 @@ data class RigPhysicsEdit(
         return copy(segments = segments.filterIndexed { i, _ -> i != index }, outputs = moved)
     }
 
+    /**
+     * A copy of segment [after] (0-based) inserted below it. Outputs keep reading the same segment: those
+     * deeper than [after] move down by one.
+     */
+    fun withSegmentInserted(after: Int): RigPhysicsEdit {
+        require(segments.size < MAX_SEGMENTS && after in segments.indices) { "A pendulum has 1..$MAX_SEGMENTS segments" }
+        val next = segments.toMutableList().also { it.add(after + 1, segments[after]) }
+        return copy(segments = next, outputs = outputs.map { if (it.vertex > after + 1) it.copy(vertex = it.vertex + 1) else it })
+    }
+
+    /** Segment [from] moved to [to] (0-based); each output follows the segment it reads. */
+    fun withSegmentMoved(from: Int, to: Int): RigPhysicsEdit {
+        require(from in segments.indices && to in segments.indices) { "No segment ${from + 1} or ${to + 1}" }
+        if (from == to) return this
+        val order = segments.indices.toMutableList().also { it.add(to, it.removeAt(from)) }
+        val placeOf = order.withIndex().associate { (place, old) -> old to place }
+        return copy(segments = order.map { segments[it] }, outputs = outputs.map { it.copy(vertex = placeOf.getValue(it.vertex - 1) + 1) })
+    }
+
     /** Stretches every segment so the strand is [total] long. */
     fun withTotalLength(total: Float): RigPhysicsEdit {
         require(total.isFinite() && total > 0f) { "Physics length must be positive" }

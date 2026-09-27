@@ -11,7 +11,8 @@ import kotlin.math.abs
 object PhysicsSimulation {
     private const val FPS = 60
 
-    fun run(groups: List<PhysicsGroup>, parameters: List<Parameter>, arguments: JsonObject, physicsEnabled: Boolean): JsonObject {
+    fun run(groups: List<PhysicsGroup>, parameters: List<Parameter>, arguments: JsonObject, physicsEnabled: Boolean,
+        physicsFps: Int = RigEditOverlay.DEFAULT_PHYSICS_FPS): JsonObject {
         val ids = arguments["ids"]?.jsonArray?.map { it.jsonPrimitive.content }
         val chosen = groups.filter { if (ids == null) it.active else it.id in ids }
         ids?.firstOrNull { id -> groups.none { it.id == id } }?.let { throw IllegalArgumentException("Physics group not found: $it") }
@@ -26,7 +27,7 @@ object PhysicsSimulation {
         val hold = (arguments["hold"]?.jsonPrimitive?.floatOrNull ?: 1f).coerceIn(0f, duration)
         val samples = (arguments["samples"]?.jsonPrimitive?.intOrNull ?: 12).coerceIn(2, 60)
 
-        val engine = PhysicsEngine(chosen.map { it.setting }, ranges)
+        val engine = PhysicsEngine(chosen.map { it.setting }, ranges, physicsFps.toFloat())
         val rest = parameters.associate { it.id.raw to it.default }
         val frames = (duration * FPS).toInt()
         val traces = LinkedHashMap<String, FloatArray>()
@@ -39,7 +40,7 @@ object PhysicsSimulation {
         }
         return buildJsonObject {
             if (!physicsEnabled) put("note", "Physics is switched off in settings; the model exports none of these groups")
-            put("hold", hold); put("duration", duration)
+            put("fps", physicsFps); put("hold", hold); put("duration", duration)
             putJsonArray("outputs") {
                 for ((parameter, trace) in traces) add(buildJsonObject {
                     put("parameter", parameter)
@@ -86,6 +87,8 @@ object PhysicsResponse {
         val drag: FloatArray,
         val outputs: Map<String, FloatArray>,
         val hold: Float,
+        /** Per output index, how far its unclamped swing reached toward the parameter's end (1 = exactly). */
+        val reach: Map<Int, Float> = emptyMap(),
     ) {
         /** When [parameter] last left 5% of its half range around its final value, in seconds. */
         fun settleTime(parameter: String): Float {
@@ -97,16 +100,18 @@ object PhysicsResponse {
         fun peak(parameter: String): Float = outputs[parameter]?.maxOfOrNull { abs(it) } ?: 0f
     }
 
-    fun trace(setting: RigPhysicsEdit, ranges: Map<String, PhysicsEngine.Range>, hold: Float = 1f, duration: Float = 3.5f): Trace {
+    fun trace(setting: RigPhysicsEdit, ranges: Map<String, PhysicsEngine.Range>, physicsFps: Int = RigEditOverlay.DEFAULT_PHYSICS_FPS,
+        hold: Float = 1f, duration: Float = 3.5f): Trace {
         val fps = 60
         val frames = (duration * fps).toInt()
-        val engine = PhysicsEngine(listOf(setting), ranges)
+        val engine = PhysicsEngine(listOf(setting), ranges, physicsFps.toFloat())
         val drag = PhysicsDrag()
         val inputs = setting.inputs.map { it.parameter }
         val outputs = setting.outputs.map { it.parameter }.filter { it in ranges }.associateWith { FloatArray(frames) }
         val times = FloatArray(frames)
         val dragTrace = FloatArray(frames)
         engine.settle(emptyMap())
+        engine.strands.forEach { it.resetPeaks() }
         for (f in 0 until frames) {
             val t = f.toFloat() / fps
             if (t < hold) drag.target(1f, 0f) else drag.release()
@@ -120,6 +125,9 @@ object PhysicsResponse {
                 trace[f] = ((out[p] ?: r.default) - r.default) / half
             }
         }
-        return Trace(times, dragTrace, outputs, hold)
+        val strand = engine.strands.single()
+        val reach = setting.outputs.indices.filter { setting.outputs[it].parameter in ranges }
+            .associateWith { strand.peakFraction(it, ranges.getValue(setting.outputs[it].parameter)) }
+        return Trace(times, dragTrace, outputs, hold, reach)
     }
 }

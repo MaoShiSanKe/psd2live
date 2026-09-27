@@ -11,7 +11,7 @@ import kotlin.math.sqrt
  * simulations move the way the exported model does in a Cubism runtime. [fps] is the file's `Fps`: steps
  * of that length with inputs interpolated between frames, or one step per frame when null.
  */
-class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, val fps: Float? = PhysicsGenerator.FPS) {
+class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, val fps: Float? = RigEditOverlay.DEFAULT_PHYSICS_FPS.toFloat()) {
 	/** A parameter's span; inputs normalize against its midpoint and outputs clamp to it. */
 	data class Range(val min: Float, val max: Float, val default: Float)
 
@@ -29,6 +29,9 @@ class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, 
 		/** Raw output values (radians for Angle) of the latest step and the one before. */
 		internal val current = FloatArray(setting.outputs.size)
 		internal val previous = FloatArray(setting.outputs.size)
+		/** The most each output's raw value reached either way since the last [resetPeaks], for sizing its scale. */
+		internal val highest = FloatArray(setting.outputs.size)
+		internal val lowest = FloatArray(setting.outputs.size)
 		val size: Int get() = n
 
 		init { reset() }
@@ -43,6 +46,23 @@ class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, 
 				gravityX[i] = 0f; gravityY[i] = 1f
 			}
 			current.fill(0f); previous.fill(0f)
+			resetPeaks()
+		}
+
+		fun resetPeaks() { highest.fill(0f); lowest.fill(0f) }
+
+		/**
+		 * How far output [k] has swung toward its clamp as a fraction (1 = just reaching the parameter's
+		 * end, above 1 = clamped), at its current scale; 0 before it has moved.
+		 */
+		fun peakFraction(k: Int, range: Range): Float {
+			val o = setting.outputs.getOrNull(k) ?: return 0f
+			val scale = scaleOf(o)
+			val hi = maxOf(highest[k] * scale, lowest[k] * scale)
+			val lo = minOf(highest[k] * scale, lowest[k] * scale)
+			val up = if (range.max > 0f && hi > 0f) hi / range.max else 0f
+			val down = if (range.min < 0f && lo < 0f) lo / range.min else 0f
+			return maxOf(up, down)
 		}
 
 		/** The angle, in radians, vertex [vertex] makes against the segment above it (or gravity for 1). */
@@ -81,7 +101,10 @@ class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, 
 				strand.vx to old.vx, strand.vy to old.vy, strand.gravityX to old.gravityX, strand.gravityY to old.gravityY)) {
 				from.copyInto(to)
 			}
-			if (old.current.size == strand.current.size) { old.current.copyInto(strand.current); old.previous.copyInto(strand.previous) }
+			if (old.setting.outputParameters == strand.setting.outputParameters) {
+				old.current.copyInto(strand.current); old.previous.copyInto(strand.previous)
+				old.highest.copyInto(strand.highest); old.lowest.copyInto(strand.lowest)
+			}
 		}
 		inputCaches.putAll(previous.inputCaches)
 		remain = previous.remain
@@ -115,6 +138,8 @@ class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, 
 					if (o.vertex !in 1 until s.size) return@forEachIndexed
 					val raw = output(s, o)
 					s.current[k] = raw
+					if (raw > s.highest[k]) s.highest[k] = raw
+					if (raw < s.lowest[k]) s.lowest[k] = raw
 					caches[o.parameter]?.let { caches[o.parameter] = blend(it, raw, o) }
 				}
 			}

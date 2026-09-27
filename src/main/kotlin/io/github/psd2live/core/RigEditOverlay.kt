@@ -210,6 +210,13 @@ data class RigEditOverlay(
     val physicsEdits: List<RigPhysicsEdit> = emptyList(),
     /** Generated and user physics groups turned off; the hair and eye presets use their own settings. */
     val disabledPhysicsIds: Set<String> = emptySet(),
+    /**
+     * Evaluation order of physics groups by ID; Cubism runs groups in order and a later group reads an
+     * earlier one's outputs within a step. Groups not listed keep their catalog place after the listed ones.
+     */
+    val physicsOrder: List<String> = emptyList(),
+    /** The physics rate the model declares (physics3.json `Fps`, CMO3 physics FPS). */
+    val physicsFps: Int = DEFAULT_PHYSICS_FPS,
     /** Regenerating sways; replayed after the journal so a changed setting rebuilds their forms. */
     val swingEdits: List<RigSwingEdit> = emptyList(),
     val assetLayers: Map<String, kotlinx.serialization.json.JsonObject> = emptyMap(),
@@ -227,6 +234,7 @@ data class RigEditOverlay(
         require(motionClips.mapNotNull { it.builtin?.lowercase() }.let { it.distinct().size == it.size }) { "A generated motion has one override" }
 		require(warpEdits.map { it.id }.distinct().size == warpEdits.size) { "Duplicate Warp IDs" }
         require(physicsEdits.map { it.id }.distinct().size == physicsEdits.size) { "Duplicate physics IDs" }
+        require(physicsFps in PHYSICS_FPS_RANGE) { "Physics FPS must be within ${PHYSICS_FPS_RANGE}" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
@@ -307,6 +315,10 @@ data class RigEditOverlay(
 	fun copyKeyform(edit: RigKeyformCopyEdit): RigEditOverlay = copy(keyformCopyEdits = keyformCopyEdits + edit)
 
 	companion object {
+		/** Cubism Editor's default physics rate. */
+		const val DEFAULT_PHYSICS_FPS = 60
+		// Before [Empty], which checks against it while the companion initializes.
+		val PHYSICS_FPS_RANGE = 1..240
 		val Empty = RigEditOverlay()
 	}
 }

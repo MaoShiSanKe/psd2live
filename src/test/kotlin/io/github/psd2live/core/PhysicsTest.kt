@@ -106,7 +106,7 @@ class PhysicsTest {
 	@Test
 	fun theCatalogResolvesPresetsOverridesAndSwitches() {
 		val overlay = RigEditOverlay()
-		val groups = PhysicsGenerator.catalog(all, all, overlay, available)
+		val groups = PhysicsCatalog.groups(all, all, overlay, available)
 		assertEquals(listOf(PhysicsGenerator.BACK_HAIR_ID, PhysicsGenerator.FRONT_HAIR_ID, PhysicsGenerator.EYE_JELLY_ID), groups.map { it.id })
 		// The eye preset has neither its inputs nor its output here.
 		assertEquals(PhysicsIssue.Code.MISSING_PARAMETER, groups.last().issue?.code)
@@ -115,16 +115,16 @@ class PhysicsTest {
 		val back = groups.first()
 		val edited = back.setting.withSegmentCount(3)
 		val replaced = PhysicsAuthoring.put(overlay, edited, back.generated)
-		val row = PhysicsGenerator.catalog(all, all, replaced, available).first()
+		val row = PhysicsCatalog.groups(all, all, replaced, available).first()
 		assertTrue(row.overridden)
 		assertEquals(3, row.setting.segments.size)
 		// Editing back to the generated values drops the replacement.
 		assertTrue(PhysicsAuthoring.put(replaced, back.generated!!, back.generated).physicsEdits.isEmpty())
 
-		val off = PhysicsGenerator.catalog(all, PhysicsGenerator.Presets(true, false, true), overlay, available)
+		val off = PhysicsCatalog.groups(all, PhysicsGenerator.Presets(true, false, true), overlay, available)
 		assertFalse(off.first().active)
 		val custom = PhysicsAuthoring.put(overlay, tail())
-		assertFalse(PhysicsGenerator.catalog(all, all, PhysicsAuthoring.setEnabled(custom, "Tail", false), available).last().active)
+		assertFalse(PhysicsCatalog.groups(all, all, PhysicsAuthoring.setEnabled(custom, "Tail", false), available).last().active)
 		assertFailsWith<IllegalArgumentException> { PhysicsAuthoring.setEnabled(overlay, PhysicsGenerator.BACK_HAIR_ID, false) }
 		// Two user groups may not drive the same parameter.
 		assertFailsWith<IllegalArgumentException> { PhysicsAuthoring.put(custom, tail().copy(id = "Other")) }
@@ -132,7 +132,7 @@ class PhysicsTest {
 
 	@Test
 	fun agentRequestsPatchTheExistingGroup() {
-		val groups = PhysicsGenerator.catalog(all, all, RigEditOverlay(), available)
+		val groups = PhysicsCatalog.groups(all, all, RigEditOverlay(), available)
 		val request = PhysicsAuthoring.request(groups, buildJsonObject {
 			put("id", PhysicsGenerator.BACK_HAIR_ID); put("segment_count", 2)
 		}, available)
@@ -153,7 +153,7 @@ class PhysicsTest {
 
 	@Test
 	fun exportWritesEverySegmentAndReadsBack() {
-		val text = PhysicsGenerator.json(listOf(tail(3)))!!
+		val text = Physics3Json.write(listOf(tail(3)), 60)!!
 		val physics = Moc3.readPhysics3(text)
 		val setting = physics.physicsSettings.single()
 		assertEquals(4, setting.vertices.size)
@@ -164,7 +164,7 @@ class PhysicsTest {
 
 	@Test
 	fun simulationReportsPeakAndSettling() {
-		val groups = PhysicsGenerator.catalog(all, all, PhysicsAuthoring.put(RigEditOverlay(), tail()), available)
+		val groups = PhysicsCatalog.groups(all, all, PhysicsAuthoring.put(RigEditOverlay(), tail()), available)
 		val result = PhysicsSimulation.run(groups, parameters, buildJsonObject {
 			putJsonObject("inputs") { put("ParamAngleX", 30) }
 			put("ids", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("Tail"))))
@@ -225,7 +225,7 @@ class PhysicsReferenceTest {
 	private fun resource(name: String) = requireNotNull(javaClass.getResource("/physics-reference/$name")) { name }.readText()
 
 	private fun check(variant: String) {
-		val (settings, fps) = PhysicsGenerator.fromPhysics3(resource("$variant.physics3.json"))
+		val (settings, fps) = Physics3Json.read(resource("$variant.physics3.json"))
 		val expectedLines = resource("$variant.expected.csv").lines().filter { it.isNotBlank() }
 		val ranges = expectedLines.filter { it.startsWith("# range,") }.associate { line ->
 			val c = line.removePrefix("# range,").split(",")

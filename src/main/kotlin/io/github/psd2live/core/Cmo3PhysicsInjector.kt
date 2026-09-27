@@ -18,7 +18,7 @@ import java.util.UUID
 
 /** Writes editable Cubism physics settings into a fresh CMO3 graph. */
 internal object Cmo3PhysicsInjector {
-	fun inject(root: CModelSource, rules: List<RigPhysicsEdit>): Int {
+	fun inject(root: CModelSource, rules: List<RigPhysicsEdit>, fps: Int = RigEditOverlay.DEFAULT_PHYSICS_FPS): Int {
 		val physicsSet = root.physicsSettingsSourceSet as? CPhysicsSettingsSourceSet
 			?: error(tr("error.cmo3MissingPhysicsSet"))
 		// The pipeline only injects into its own fresh graph, so replace the known empty collection
@@ -54,7 +54,7 @@ internal object Cmo3PhysicsInjector {
 						}
 					},
 				)
-				val ys = PhysicsGenerator.vertexY(rule)
+				val ys = Physics3Json.vertexY(rule)
 				vertices = CArrayList<Any?>(
 					(listOf(null) + rule.segments).mapIndexed { index, segment -> vertex(rule, index, ys[index], segment) },
 				)
@@ -69,7 +69,7 @@ internal object Cmo3PhysicsInjector {
 			sources.add(setting)
 		}
 		physicsSet.selectedCubismPhysics = guid("CPhysicsSettingsGuid", "physics-selection")
-		physicsSet.settingFPS = PhysicsGenerator.FPS.toInt()
+		physicsSet.settingFPS = fps
 		return rules.size
 	}
 

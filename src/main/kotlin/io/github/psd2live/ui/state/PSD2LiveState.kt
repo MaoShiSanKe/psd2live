@@ -192,6 +192,12 @@ enum class WorkspacePreset(
 		listOf(CanvasMode.PREVIEW),
 		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector"),
 	),
+
+	/** Tuning physics: the preview and parameters beside a wide physics panel, to shake the model while editing. */
+	PHYSICS(
+		listOf(CanvasMode.PREVIEW),
+		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "animation"),
+	),
 	;
 
 	fun title(): String = tr("workspace.preset.${name.lowercase()}")

@@ -40,7 +40,7 @@
 | 20 | 静态属性 / 遮罩：`RigStructureEdits` | 属性面板与层级菜单 | `structure.static` | 与动画关键形通道分开验证 |
 | 21 | Glue：`CanvasEdits` | 画布 Glue 工具 | `canvas.glue` | 两侧 Mesh 和权重需匹配 |
 | 22 | 变形路径：路径编辑命令 | 画布路径工具 | `path` | 点位为 Mesh 局部坐标，区分预览与烘焙 |
-| 23 | 物理：预设、骨骼、摆动与自定义组（`PhysicsGenerator.catalog`、`PhysicsAuthoring`） | 物理面板 | `settings`、`physics.put/delete/simulate`、`inspect scope=physics` | 静态姿态无法证明摆锤动态正确；`simulate` 与面板共用 Cubism 求值 |
+| 23 | 物理：预设、骨骼、摆动与自定义组，计算顺序、计算 FPS、导入与倍率调整（`PhysicsCatalog`、`PhysicsAuthoring`） | 物理面板 | `settings`、`physics.put/delete/simulate/fit/config/import`、`inspect scope=physics` | 静态姿态无法证明摆锤动态正确；`simulate` 与面板共用 Cubism 求值 |
 | 24 | 动作：导出设置与运行时采样 | 动作配置 / 预览 | `settings`、`view.motion`、`export` | 动作输出和时间序列预览分别验收 |
 | 25 | 观察：模型渲染 / 覆盖检查 | 画布、预览、历史界面 | `view.model/layer/context/poses/coverage/compare/motion` | 比较时保持同一画布矩形与参数姿态 |
 | 26 | 历史：`WorkspaceHistoryTree` | 历史树撤回 / 切换 | `revision.checkpoint/list/restore` | 从旧节点继续编辑保留分支，UI 套索拆分记为 user |

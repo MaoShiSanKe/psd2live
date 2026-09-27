@@ -31,6 +31,7 @@ import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.core.RigPhysicsEdit
 import io.github.psd2live.core.PhysicsAuthoring
+import io.github.psd2live.core.PhysicsCatalog
 import io.github.psd2live.core.PhysicsEngine
 import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.PhysicsGroup
@@ -1944,13 +1945,13 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	private var physicsCatalogCache: Pair<List<Any?>, List<PhysicsGroup>>? = null
 
-	/** Every physics group of the current model, as export sees it; see [PhysicsGenerator.catalog]. */
+	/** Every physics group of the current model, as export sees it; see [PhysicsCatalog.groups]. */
 	fun physicsGroups(state: PSD2LiveState = _state.value): List<PhysicsGroup> {
 		val model = state.previewModel ?: return emptyList()
-		val key = listOf(model.analysis, model.rig.puppet.parameters, state.rigEdits.physicsEdits, state.rigEdits.disabledPhysicsIds,
+		val key = listOf(model.analysis, model.rig.puppet.parameters, state.rigEdits.physicsEdits, state.rigEdits.disabledPhysicsIds, state.rigEdits.physicsOrder,
 			state.rigEdits.skeleton, state.rigEdits.swingEdits, state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly)
 		physicsCatalogCache?.let { (k, groups) -> if (k == key) return groups }
-		val groups = PhysicsGenerator.catalog(PhysicsGenerator.Presets.present(model.analysis),
+		val groups = PhysicsCatalog.groups(PhysicsGenerator.Presets.present(model.analysis),
 			PhysicsGenerator.Presets(state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly),
 			state.rigEdits, model.rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
 		physicsCatalogCache = key to groups
@@ -2005,6 +2006,54 @@ class PSD2LiveViewModel : AutoCloseable {
 		return id
 	}
 
+	/** Moves [id] [by] places in the evaluation order. */
+	fun movePhysicsGroup(id: String, by: Int) = changePhysicsOverlay { PhysicsAuthoring.move(it, physicsGroups(), id, by) }
+
+	fun setPhysicsFps(fps: Int) = changePhysicsOverlay { PhysicsAuthoring.setFps(it, fps) }
+
+	/** Sets each output's scale so the swing measured in [peaks] just reaches its parameter's end. */
+	fun fitPhysicsScales(id: String, peaks: Map<Int, Float>) {
+		val setting = physicsGroups().firstOrNull { it.id == id }?.setting ?: return
+		putPhysicsGroup(PhysicsAuthoring.fitScales(setting, peaks))
+	}
+
+	fun applyPhysicsPreset(id: String, preset: io.github.psd2live.core.PhysicsPresets.Preset) {
+		val state = _state.value
+		val setting = physicsGroups(state).firstOrNull { it.id == id }?.setting ?: return
+		val available = state.previewModel?.rig?.puppet?.parameters?.mapTo(HashSet()) { it.id.raw } ?: return
+		putPhysicsGroup(io.github.psd2live.core.PhysicsPresets.apply(preset, setting, available))
+	}
+
+	/** Imports a physics3.json's groups as user groups and returns the first one's ID. */
+	fun importPhysics(path: String): String? {
+		val state = _state.value
+		val available = state.previewModel?.rig?.puppet?.parameters?.mapTo(HashSet()) { it.id.raw } ?: return null
+		val imported = runCatching {
+			PhysicsAuthoring.import(state.rigEdits, physicsGroups(state), java.io.File(path).readText(), available)
+		}.getOrElse { failure ->
+			addLog(tr("physics.import.failed", failure.message ?: failure.javaClass.simpleName), level = LogLevel.ERROR, tag = "Physics")
+			return null
+		}
+		updateState { it.copy(rigEdits = imported.overlay, generatePhysics = true) }
+		scheduleRuntimeBundleUpdate()
+		editorChanged()
+		addLog(tr("physics.import.done", imported.ids.size, java.io.File(path).name), tag = "Physics")
+		if (imported.disabled.isNotEmpty()) addLog(tr("physics.import.disabled", imported.disabled.joinToString()), level = LogLevel.WARNING, tag = "Physics")
+		for ((group, missing) in imported.missing) {
+			addLog(tr("physics.import.missing", group, missing.joinToString()), level = LogLevel.WARNING, tag = "Physics")
+		}
+		return imported.ids.firstOrNull()
+	}
+
+	private fun changePhysicsOverlay(change: (RigEditOverlay) -> RigEditOverlay) {
+		val next = runCatching { change(_state.value.rigEdits) }
+			.getOrElse { failure -> addLog(failure.message ?: "Physics edit failed", level = LogLevel.WARNING, tag = "Physics"); return }
+		if (next == _state.value.rigEdits) return
+		updateState { it.copy(rigEdits = next) }
+		scheduleRuntimeBundleUpdate()
+		editorChanged()
+	}
+
 	/** Rest values for the outputs of [ids] (every group when null) so a switched-off group lets go. */
 	private fun physicsRestValues(state: PSD2LiveState, overlay: RigEditOverlay, ids: Set<String>? = null): Map<ParameterId, Float> {
 		val parameters = state.previewModel?.rig?.puppet?.parameters?.associateBy { it.id.raw } ?: return emptyMap()
@@ -2024,11 +2073,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		fun step(state: PSD2LiveState, model: RigPreviewModel, inputs: Map<ParameterId, Float>, dt: Float): Map<ParameterId, Float> {
 			val groups = if (!state.generatePhysics || state.meshOnly) emptyList() else physicsGroups(state).filter { it.active }.map { it.setting }
 			val parameters = model.rig.puppet.parameters
-			val nextKey = listOf(groups, parameters)
+			val fps = state.rigEdits.physicsFps
+			val nextKey = listOf(groups, parameters, fps)
 			if (nextKey != key) {
 				val before = engine?.strands.orEmpty().flatMap { it.setting.outputParameters }.toSet()
 				key = nextKey
-				engine = PhysicsEngine(groups, PhysicsEngine.ranges(parameters)).also { it.carryOver(engine) }
+				engine = PhysicsEngine(groups, PhysicsEngine.ranges(parameters), fps.toFloat()).also { it.carryOver(engine) }
 				val now = groups.flatMap { it.outputParameters }.toSet()
 				released = parameters.filter { it.id.raw in before - now }.associate { it.id.raw to it.default }
 			}
