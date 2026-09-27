@@ -140,7 +140,7 @@ internal fun PhysicsHeaderCard(viewModel: PSD2LiveViewModel, state: PSD2LiveStat
 		if (state.meshOnly) Text(tr("physics.meshOnly"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.warning)
 		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 			CompactButton(
-				text = tr(if (playing) "animation.pause" else "animation.play"),
+				text = tr(if (playing) "animation.idle.stop" else "animation.idle.start"),
 				onClick = { viewModel.setAnimationEnabled(!state.animationEnabled) },
 				leadingIcon = {
 					if (playing) IconPause(modifier = Modifier.size(10.dp), tint = colors.textPrimary)

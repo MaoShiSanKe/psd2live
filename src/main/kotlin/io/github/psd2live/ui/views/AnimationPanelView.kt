@@ -138,7 +138,7 @@ private fun MasterPlaybackCard(
 					horizontalArrangement = Arrangement.spacedBy(6.dp),
 				) {
 					CompactButton(
-						text = if (isPlaying) tr("animation.pause") else tr("animation.play"),
+						text = if (isPlaying) tr("animation.idle.stop") else tr("animation.idle.start"),
 						onClick = { viewModel.setAnimationEnabled(!state.animationEnabled) },
 						leadingIcon = {
 							if (isPlaying) IconPause(modifier = Modifier.size(11.dp), tint = colors.textPrimary)

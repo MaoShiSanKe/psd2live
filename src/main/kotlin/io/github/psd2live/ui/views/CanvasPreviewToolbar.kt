@@ -105,9 +105,9 @@ internal fun BoxScope.CanvasPreviewToolbar(
 
 	val isExpanded = animatedWidth > 42.dp
 	val animationLabel = if (animationEnabled) {
-		tr("preview.animation.pause")
+		tr("preview.idle.on")
 	} else {
-		tr("preview.animation.play")
+		tr("preview.idle.off")
 	}
 	val trackingLabel = if (mouseTrackingEnabled) {
 		tr("preview.mouseTracking.on")
