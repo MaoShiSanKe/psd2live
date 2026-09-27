@@ -27,10 +27,11 @@ The same release page offers a Linux amd64 Deb with Cubism Native preview. It re
 | --- | --- |
 | Automatic rigging | Multilingual layer classification, paired-part splitting, adaptive meshes, head/body motion, eyes, mouth and gaze |
 | Canvas | Select / Deform / Edit / Paint modes; deformation brushes, mesh cuts and subdivision, Warp / Rotation, Glue and experimental deform paths |
+| Skeleton and swing | Inferred skeletons for limbs, tails and wings, baked into deformers and corrective keyforms that run in Cubism; lateral / vertical sway for hair and similar parts with matching pendulums |
 | Artwork | Transparent image placement, toggle and exclusive variants, texture painting, optional 2× / 4× upscaling |
-| Preview | Parameters and XY controls, idle / blink / nod / shake motions, gaze tracking and physics |
-| Projects | Portable project archive, branching history, undo/redo, tabs, configurable panels, themes and keymaps |
-| Agents | Authenticated local MCP for observation, artwork, forms, parameters, paths, physics and history |
+| Animation and preview | Parameters and XY controls, idle / blink / nod / shake motions, an animation editor with timeline, keyframes and curves, gaze tracking and physics |
+| Projects | Portable project archive, branching history, undo/redo, tabs, configurable panels with Edit / Mesh / Rigging / Animation / Preview workspace presets, themes and keymaps |
+| Agents | Authenticated local MCP for observation, artwork, forms, parameters, paths, swing, physics and history |
 
 ![Layer, tool, inspector, parameter, animation and physics panels](docs/imgs/tools.png)
 
@@ -49,7 +50,7 @@ The built-in renderer works without the official SDK. [Native SDK preview](docs/
 
 Open **Tools → MCP → MCP connection and installation**, copy the configuration for your host and keep the app running. Use Streamable HTTP where supported; `mcp_proxy.py` provides a Stdio bridge.
 
-The public API has 11 tools. See the [MCP contract](docs/zh/agent/MCP_AUTHORING.md) (Chinese) for requests and limits. New generated artwork requires image generation in the host. [Recorded evaluations](STATUS.md) and the [roadmap](ROADMAP.md) distinguish observed results from future work.
+The public API has 21 tools. See the [MCP contract](docs/zh/agent/MCP_AUTHORING.md) (Chinese) for requests and limits. New generated artwork requires image generation in the host. [Recorded evaluations](STATUS.md) and the [roadmap](ROADMAP.md) distinguish observed results from future work.
 
 ## Build and contribute
 
