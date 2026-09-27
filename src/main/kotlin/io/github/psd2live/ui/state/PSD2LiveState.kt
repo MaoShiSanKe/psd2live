@@ -44,11 +44,10 @@ fun isCanvasModule(id: String): Boolean = id == PRIMARY_CANVAS_ID || id.startsWi
 
 /**
  * View options a fresh canvas of this mode starts with (and what "reset view options" restores).
- * An edit canvas opens with the warp guides enabled (rotation guides stay off until toggled); they fade while nothing is selected.
+ * A canvas opens in object mode without deformer guides; Deform mode's preset turns the warp guides on.
  */
 fun CanvasMode.defaultViewOptions(): TabViewOptions = when (this) {
-	CanvasMode.EDIT -> TabViewOptions.Default.copy(showWarp = true)
-	CanvasMode.PREVIEW -> TabViewOptions.Default
+	CanvasMode.EDIT, CanvasMode.PREVIEW -> TabViewOptions.Default
 }
 
 /**

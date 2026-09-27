@@ -167,12 +167,12 @@ class MultiCanvasIsolationTest {
             val secondId = vm.addCanvas(CanvasMode.EDIT)
             vm.selectLayer("second")
             vm.updateCanvasPresentation(workspace, firstId) { it.copy(hoveredLayerId = "first") }
-            vm.switchHierarchyModeView(io.github.psd2live.ui.EditHierarchyMode.PAINT, firstId, workspace)
+            vm.switchHierarchyModeView(io.github.psd2live.ui.EditHierarchyMode.DEFORM, firstId, workspace)
             assertEquals(secondId, vm.state.value.activeCanvas.id)
             assertNull(vm.state.value.hoveredLayerId)
             assertEquals("first", vm.canvasEditorFor(firstId).state.hoveredLayerId)
-            assertFalse(vm.canvasEditorFor(firstId).state.showWarp)
-            assertTrue(vm.state.value.showWarp)
+            assertTrue(vm.canvasEditorFor(firstId).state.showWarp)
+            assertFalse(vm.state.value.showWarp)
         }
     }
 
