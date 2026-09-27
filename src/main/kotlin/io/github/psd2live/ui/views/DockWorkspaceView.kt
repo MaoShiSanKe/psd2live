@@ -28,6 +28,7 @@ import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.style.TextOverflow
+import io.github.psd2live.ui.components.CanvasBackgroundMenuItems
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.TreeContextMenu
 import androidx.compose.ui.geometry.Offset
@@ -365,10 +366,12 @@ internal fun DockWorkspaceView(
             )
         }
     }
+    // Transparency is fixed at window creation, so a floating canvas is rebuilt when it toggles.
+    val transparent = state.canvasBackground.windowTransparent
     session.floating.toMap().forEach { (id, windowState) ->
-        key(workspace.id, id) {
+        key(workspace.id, id, transparent) {
             Window(onCloseRequest = { session.returnToDock(id) }, state = windowState,
-                title = floatingTitle(id, state, viewModel), undecorated = true,
+                title = floatingTitle(id, state, viewModel), undecorated = true, transparent = transparent,
                 visible = id !in hiddenModules) {
                 DisposableEffect(window) {
                     session.floatingWindows[id] = window
@@ -769,6 +772,7 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
     val hovered by interaction.collectIsHoveredAsState()
     var menu by remember { mutableStateOf(false) }
     var viewMenu by remember { mutableStateOf(false) }
+    var backgroundMenu by remember { mutableStateOf(false) }
     val workspace = state.activeWorkspace
     val canvas = workspace.canvases.firstOrNull { it.id == id }
     val title = canvas?.let { canvasHeaderTitle(it, workspace) } ?: moduleTitle(id)
@@ -882,6 +886,17 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                             viewModel.resetCanvasViewOptions(canvas.id, canvas.mode)
                         },
                     )
+                }
+            }
+            Box {
+                CanvasModeChip(
+                    label = "${tr("canvas.background.short")} \u25BE",
+                    active = state.canvasBackground != CanvasBackground(),
+                    modifier = Modifier,
+                    onClick = { backgroundMenu = true },
+                )
+                TabStripDropdown(expanded = backgroundMenu, onDismissRequest = { backgroundMenu = false }) {
+                    CanvasBackgroundMenuItems(state.canvasBackground, viewModel::setCanvasBackground)
                 }
             }
         }

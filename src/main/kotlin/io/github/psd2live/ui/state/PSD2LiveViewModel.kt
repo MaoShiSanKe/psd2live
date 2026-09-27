@@ -2471,6 +2471,11 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(themeId = id, toolColors = colors) }
 	}
 
+	fun setCanvasBackground(background: CanvasBackground) {
+		AppSettings.canvasBackground = background
+		updateState { it.copy(canvasBackground = background) }
+	}
+
 	/** Flips between the dark and the light theme used last, so a custom theme survives the round trip. */
 	fun toggleDarkTheme() {
 		val state = _state.value

@@ -133,6 +133,38 @@ object AppSettings {
 		}
 	}
 
+	private const val KEY_CANVAS_BG_KIND = "canvas_bg_kind"
+	private const val KEY_CANVAS_BG_SOLID = "canvas_bg_solid"
+	private const val KEY_CANVAS_BG_CHECKER_LIGHT = "canvas_bg_checker_light"
+	private const val KEY_CANVAS_BG_CHECKER_DARK = "canvas_bg_checker_dark"
+	private const val KEY_CANVAS_BG_CHECKER_SIZE = "canvas_bg_checker_size"
+
+	/**
+	 * Colours are stored as 0xRRGGBB, with -1 for "follow the theme". The setter does not flush: the
+	 * colour picker writes on every drag move, and Preferences syncs on its own and at exit.
+	 */
+	var canvasBackground: CanvasBackground
+		get() = runCatching {
+			fun color(key: String) = preferences.getInt(key, -1).takeIf { it in 0..0xFFFFFF }
+			CanvasBackground(
+				kind = CanvasBackgroundKind.fromId(preferences.get(KEY_CANVAS_BG_KIND, null)),
+				solidColor = color(KEY_CANVAS_BG_SOLID),
+				checkerLight = color(KEY_CANVAS_BG_CHECKER_LIGHT),
+				checkerDark = color(KEY_CANVAS_BG_CHECKER_DARK),
+				checkerSize = preferences.getInt(KEY_CANVAS_BG_CHECKER_SIZE, CanvasBackground.DEFAULT_CHECKER_SIZE)
+					.coerceIn(4, 128),
+			)
+		}.getOrDefault(CanvasBackground())
+		set(value) {
+			runCatching {
+				preferences.put(KEY_CANVAS_BG_KIND, value.kind.id)
+				preferences.putInt(KEY_CANVAS_BG_SOLID, value.solidColor ?: -1)
+				preferences.putInt(KEY_CANVAS_BG_CHECKER_LIGHT, value.checkerLight ?: -1)
+				preferences.putInt(KEY_CANVAS_BG_CHECKER_DARK, value.checkerDark ?: -1)
+				preferences.putInt(KEY_CANVAS_BG_CHECKER_SIZE, value.checkerSize)
+			}
+		}
+
 	private const val KEY_CLICK_TO_SELECT_LAYER = "click_to_select_layer"
 	private const val KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT = "auto_detect_mesh_splits_on_import"
 	private const val KEY_RECENT_FILES = "recent_files"

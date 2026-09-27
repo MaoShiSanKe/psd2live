@@ -488,6 +488,8 @@ data class PSD2LiveState(
 	val customThemes: List<CustomTheme> = AppSettings.customThemes(),
 	/** The palette [themeId] resolves to, kept here so the tree reads one resolved value. */
 	val toolColors: ToolColors = ThemeCatalog.resolve(themeId, customThemes),
+	/** Shared by every canvas; an application preference, absent from WorkspaceStateCodec. */
+	val canvasBackground: CanvasBackground = AppSettings.canvasBackground,
 	val showSettingsDialog: Boolean = false,
 	/** App-level texture upscale prompt; must not be mounted inside a Column (scrim is fillMaxSize). */
 	val showTextureUpscaleDialog: Boolean = false,

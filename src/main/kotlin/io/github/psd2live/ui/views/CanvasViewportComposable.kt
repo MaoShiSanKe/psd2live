@@ -30,6 +30,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -89,6 +90,7 @@ import io.github.psd2live.ui.state.FramePacer
 import io.github.psd2live.ui.state.previewPanelState
 import kotlinx.coroutines.delay
 import io.github.psd2live.ui.state.frameIntervalNanos
+import io.github.psd2live.ui.state.CanvasBackgroundKind
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PRIMARY_CANVAS_ID
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -285,9 +287,13 @@ fun CanvasViewportComposable(
 	val guideCache = remember { CanvasGuideImageCache() }
 	val sdkFrame by frameFlow.collectAsState()
 	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toComposeImageBitmap() }
-	val checkerboardBrush = remember(colors.checkerLight, colors.checkerDark) {
-		createCheckerboardBrush(colors.checkerLight, colors.checkerDark)
+	val background = canvasState.canvasBackground
+	val checkerLight = background.checkerLight?.let(::opaqueColor) ?: colors.checkerLight
+	val checkerDark = background.checkerDark?.let(::opaqueColor) ?: colors.checkerDark
+	val checkerboardBrush = remember(checkerLight, checkerDark, background.checkerSize) {
+		createCheckerboardBrush(checkerLight, checkerDark, background.checkerSize)
 	}
+	val solidBackground = background.solidColor?.let(::opaqueColor) ?: colors.checkerDark
 	// One pose for the whole tab: artwork, diagnostic geometry and hit-testing. A paused preview
 	// is still live here, because the follow keeps moving the pose after the motion stops.
 	val informationPose = informationPreviewPose(
@@ -911,8 +917,15 @@ fun CanvasViewportComposable(
 				return@Canvas
 			}
 
-			// One cached texture fill replaces thousands of per-frame checkerboard draw calls.
-			drawRect(brush = checkerboardBrush)
+			when (background.kind) {
+				// One cached texture fill replaces thousands of per-frame checkerboard draw calls.
+				CanvasBackgroundKind.CHECKER -> drawRect(brush = checkerboardBrush)
+				CanvasBackgroundKind.SOLID -> drawRect(color = solidBackground)
+				// Src overwrites the chrome already painted underneath, so the transparent window shows
+				// the desktop here. Not quite zero alpha: Windows passes clicks on fully clear pixels
+				// through to whatever is behind the window, which would take pan and zoom with them.
+				CanvasBackgroundKind.TRANSPARENT -> drawRect(color = TransparentCanvasFill, blendMode = BlendMode.Src)
+			}
 
 			val viewport = computeViewport(model, w, h)
 
@@ -1453,6 +1466,10 @@ private class ActualFpsCounter {
 		frames = 0
 	}
 }
+
+private val TransparentCanvasFill = Color(0f, 0f, 0f, 1f / 255f)
+
+private fun opaqueColor(rgb: Int): Color = Color(0xFF000000L or (rgb.toLong() and 0xFFFFFF))
 
 private fun createCheckerboardBrush(light: Color, dark: Color, cellSize: Int = 14): Brush {
 	val tileSize = cellSize * 2

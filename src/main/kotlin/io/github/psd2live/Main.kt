@@ -1,5 +1,9 @@
 package io.github.psd2live
 
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -119,21 +123,29 @@ private fun runGui() {
 					exitApplication()
 				}
 			}
-			Window(
-				onCloseRequest = closeApp,
-				title = tr("app.title"),
-				icon = painterResource("icons/psd2live.png"),
-				state = windowState,
-				undecorated = true,
-			) {
-				PSD2LiveApp(
-					viewModel = viewModel,
-					window = window,
-					windowState = windowState,
+			val transparent by remember {
+				derivedStateOf { viewModel.uiState.value.canvasBackground.windowTransparent }
+			}
+			// A window's transparency cannot change once it is shown, so switching the canvas
+			// background to or from transparent replaces the window; windowState keeps its bounds.
+			key(transparent) {
+				Window(
 					onCloseRequest = closeApp,
-					agentConnectionInfo = agentMcpStartup.getOrNull(),
-					agentStartupError = agentMcpStartup.exceptionOrNull()?.message,
-				)
+					title = tr("app.title"),
+					icon = painterResource("icons/psd2live.png"),
+					state = windowState,
+					undecorated = true,
+					transparent = transparent,
+				) {
+					PSD2LiveApp(
+						viewModel = viewModel,
+						window = window,
+						windowState = windowState,
+						onCloseRequest = closeApp,
+						agentConnectionInfo = agentMcpStartup.getOrNull(),
+						agentStartupError = agentMcpStartup.exceptionOrNull()?.message,
+					)
+				}
 			}
 		}
 	} catch (failure: Throwable) {
