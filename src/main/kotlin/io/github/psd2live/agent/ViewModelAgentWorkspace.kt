@@ -454,6 +454,10 @@ class ViewModelAgentWorkspace(
                 tree.commit(head.node.id, head.snapshot, revision, revision, summary, actor)
             } else head
             if (created) scheduleHistoryPersistence(id, tree)
+            // Save can create a history node without an editor command. Publish that head before
+            // ProjectSession compares the saved capture with the live state; otherwise a completed
+            // save still looks dirty and a save-on-close never resumes the close action.
+            viewModel.updateHistorySnapshot(history())
             ProjectCapture(id, tree.state(), state, taskManagerFor(id).list(), workspaceStore, spatialByViewId.toMap(), created)
         }
     }
