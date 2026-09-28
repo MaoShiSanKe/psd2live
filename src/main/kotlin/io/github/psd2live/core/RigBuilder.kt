@@ -246,7 +246,7 @@ object RigBuilder {
 	 * Call it once per rig build and keep the result: two contexts derived from different analyses
 	 * describe the same deformers' frames only while every layer bound that feeds them is unchanged.
 	 */
-	internal fun rigContext(inputAnalysis: PipelineAnalysis, config: PipelineConfig): RigContext {
+	internal fun rigContext(inputAnalysis: PipelineAnalysis, config: PipelineConfig, meshCache: PreviewMeshCache? = null): RigContext {
 		val splitBaselineIds = config.rigEdits.splitBaselineLayerIds
 		if (splitBaselineIds.isNotEmpty()) {
 			val neededIds = splitBaselineIds + config.rigEdits.calibrationLayerIds
@@ -263,10 +263,16 @@ object RigBuilder {
 					rigEdits = config.rigEdits.copy(splitBaselineLayerIds = emptySet()),
 				)
 				val baselineAnalysis = CharacterAnalyzer.analyze(baselineSource, baselineConfig)
-				return rigContext(baselineAnalysis, baselineConfig).withArtwork(inputAnalysis)
+				return rigContext(baselineAnalysis, baselineConfig, meshCache).withArtwork(
+					meshFramedAnalysis(inputAnalysis.copy(
+						layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
+					), config, meshCache),
+				)
 			}
 		}
-		val analysis = inputAnalysis.copy(layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer })
+		val analysis = meshFramedAnalysis(inputAnalysis.copy(
+			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
+		), config, meshCache)
 		val character = analysis.anchors.character
 		val layout = analysis.calibration ?: analysis
 		val faceRig = NinePoseFaceRig.from(layout)
@@ -355,6 +361,83 @@ object RigBuilder {
 			deformersEnabled,
 			deformerResult.deformers,
 		)
+	}
+
+	/** Use the same generated triangles that will render the texture to place automatic deformers. */
+	private fun meshFramedAnalysis(
+		analysis: PipelineAnalysis,
+		config: PipelineConfig,
+		meshCache: PreviewMeshCache?,
+	): PipelineAnalysis {
+		val layers = analysis.layers.map { layer ->
+			val footprint = meshFootprint(layer, config, meshCache) ?: return@map layer
+			layer.copy(
+				bounds = footprint.bounds,
+				centroidX = footprint.centerX,
+				centroidY = footprint.centerY,
+			)
+		}
+		val calibration = analysis.calibration?.let { meshFramedAnalysis(it, config, meshCache) }
+		return analysis.copy(
+			layers = layers,
+			anchors = calibration?.anchors ?: CharacterAnalyzer.anchorsFor(layers),
+			calibration = calibration,
+		)
+	}
+
+	private data class MeshFootprint(val bounds: Bounds, val centerX: Float, val centerY: Float)
+
+	private fun meshFootprint(layer: ClassifiedLayer, config: PipelineConfig, meshCache: PreviewMeshCache?): MeshFootprint? {
+		if (layer.opaquePixels <= 0) return null
+		val source = layer.source
+		val width = source.raster.width
+		val height = source.raster.height
+		if (width <= 0 || height <= 0) return null
+		fun rectangle(): MeshFootprint {
+			val bounds = Bounds(source.bounds.left.toFloat(), source.bounds.top.toFloat(),
+				(source.bounds.left + width).toFloat(), (source.bounds.top + height).toFloat())
+			return MeshFootprint(bounds, bounds.centerX, bounds.centerY)
+		}
+		// Tooth art deliberately uses a rectangular mesh so its mouth mask can reveal every tooth.
+		if (layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) {
+			return rectangle()
+		}
+		val (settings, _) = meshSettings(layer, config)
+		val adaptive = if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings)
+			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings)
+		// The renderer falls back to a rectangular mesh when adaptive triangulation fails.
+		if (adaptive == null) return rectangle()
+		if (adaptive.indices.isEmpty()) return null
+		var left = Float.POSITIVE_INFINITY
+		var top = Float.POSITIVE_INFINITY
+		var right = Float.NEGATIVE_INFINITY
+		var bottom = Float.NEGATIVE_INFINITY
+		for (vertex in adaptive.indices) {
+			val x = adaptive.positions[vertex * 2] + source.bounds.left
+			val y = adaptive.positions[vertex * 2 + 1] + source.bounds.top
+			left = minOf(left, x); top = minOf(top, y)
+			right = maxOf(right, x); bottom = maxOf(bottom, y)
+		}
+		val bounds = Bounds(left, top, right, bottom)
+		var area = 0.0
+		var weightedX = 0.0
+		var weightedY = 0.0
+		for (offset in adaptive.indices.indices step 3) {
+			val a = adaptive.indices[offset] * 2
+			val b = adaptive.indices[offset + 1] * 2
+			val c = adaptive.indices[offset + 2] * 2
+			val ax = adaptive.positions[a].toDouble(); val ay = adaptive.positions[a + 1].toDouble()
+			val bx = adaptive.positions[b].toDouble(); val by = adaptive.positions[b + 1].toDouble()
+			val cx = adaptive.positions[c].toDouble(); val cy = adaptive.positions[c + 1].toDouble()
+			val triangleArea = kotlin.math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+			area += triangleArea
+			weightedX += triangleArea * (ax + bx + cx) / 3.0
+			weightedY += triangleArea * (ay + by + cy) / 3.0
+		}
+		return if (area > 1e-10) MeshFootprint(bounds,
+			(source.bounds.left + weightedX / area).toFloat(),
+			(source.bounds.top + weightedY / area).toFloat())
+		else MeshFootprint(bounds, bounds.centerX, bounds.centerY)
 	}
 
 	private fun ClassifiedLayer.riggedIn(anchors: RigAnchors, headSpace: HeadCoordinateSpace): ClassifiedLayer =
@@ -462,7 +545,7 @@ object RigBuilder {
 	)
 
 	fun build(inputAnalysis: PipelineAnalysis, atlas: PackedAtlas, config: PipelineConfig, meshCache: PreviewMeshCache? = null): BuiltRig =
-		buildWithContext(inputAnalysis, atlas, config, meshCache, rigContext(inputAnalysis, config), splitStableDrawableIds(inputAnalysis, config))
+		buildWithContext(inputAnalysis, atlas, config, meshCache, rigContext(inputAnalysis, config, meshCache), splitStableDrawableIds(inputAnalysis, config))
 
 	/**
 	 * The drawable ids a document split with the layer splitter has to keep.
@@ -518,7 +601,9 @@ object RigBuilder {
 		stableDrawableIds: Map<String, DrawableId>,
 	): BuiltRig = buildWithContext(
 		inputAnalysis, atlas, config, meshCache,
-		rigContext(previousAnalysis, previousConfig).withArtwork(inputAnalysis), stableDrawableIds,
+		rigContext(previousAnalysis, previousConfig, meshCache).withArtwork(meshFramedAnalysis(inputAnalysis.copy(
+			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
+		), config, meshCache)), stableDrawableIds,
 	)
 
 	private fun buildWithContext(
@@ -1625,38 +1710,13 @@ object RigBuilder {
 	): MeshData {
 		val width = max(1, layer.source.raster.width)
 		val height = max(1, layer.source.raster.height)
-		val semanticDensity = when (layer.semantic.tag) {
-			SemanticTag.FACE, SemanticTag.FRONT_HAIR, SemanticTag.BACK_HAIR, SemanticTag.TOPWEAR -> 0.65f
-			SemanticTag.IRIDES, SemanticTag.EYELASH, SemanticTag.EYEWHITE, SemanticTag.EYEBROW,
-			SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN, SemanticTag.MOUTH_CLOSE,
-			SemanticTag.TOOTH_T, SemanticTag.TOOTH_B, SemanticTag.TONGUE -> 0.45f
-			else -> 1f
-		}
-		val override = config.meshOverrides[layer.source.id.raw]
-		val outerMargin = if (config.mouthOutlineEnabled && !config.meshOnly &&
-            layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)) 0f
-            else override?.outerMargin ?: config.meshOuterMargin
-		// Face defaults to a dual edge band (legacy inner-margin envelope); other parts use the global mode.
-		val edgeMode = override?.edgeMode
-			?: if (layer.semantic.tag == SemanticTag.FACE) MeshEdgeMode.DOUBLE else config.meshEdgeMode
-		val edgeWidth = override?.edgeWidth ?: config.meshEdgeWidth
-		val effectiveSpacing = if (config.mouthOutlineEnabled && !config.meshOnly &&
-            layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)) {
-            override?.maxEdgeDistance ?: max(6f, config.meshMaxEdgeDistance * semanticDensity)
-        } else {
-            override?.maxEdgeDistance ?: max(12f, config.meshMaxEdgeDistance * semanticDensity)
-        }
-		val effectiveInteriorDensity = override?.interiorDensity ?: max(12f, config.meshInteriorDensity * semanticDensity)
+		val (settings, effectiveSpacing) = meshSettings(layer, config)
 
 		// Authored tooth layers may contain several disconnected teeth. Keep their complete texture;
 		// the mouth clipping id supplies the visible boundary.
 		if (layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) {
 			return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
 		}
-		val settings = MeshSettings(outerMargin, edgeMode, edgeWidth, effectiveSpacing,
-			effectiveInteriorDensity, override?.fillAlgorithm ?: config.meshFillAlgorithm,
-			override?.suppressBoundaryDiagonals ?: config.meshSuppressBoundaryDiagonals,
-			override?.fillParameters ?: config.meshFillParameters)
 		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings)
 		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings)
 		if (adaptive != null) {
@@ -1680,6 +1740,37 @@ object RigBuilder {
 			return MeshData(DrawableMesh(positions, uvs, adaptive.indices), canvas)
 		}
 		return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
+	}
+
+	private fun meshSettings(layer: ClassifiedLayer, config: PipelineConfig): Pair<MeshSettings, Float> {
+		val semanticDensity = when (layer.semantic.tag) {
+			SemanticTag.FACE, SemanticTag.FRONT_HAIR, SemanticTag.BACK_HAIR, SemanticTag.TOPWEAR -> 0.65f
+			SemanticTag.IRIDES, SemanticTag.EYELASH, SemanticTag.EYEWHITE, SemanticTag.EYEBROW,
+			SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN, SemanticTag.MOUTH_CLOSE,
+			SemanticTag.TOOTH_T, SemanticTag.TOOTH_B, SemanticTag.TONGUE -> 0.45f
+			else -> 1f
+		}
+		val override = config.meshOverrides[layer.source.id.raw]
+		val outerMargin = if (config.mouthOutlineEnabled && !config.meshOnly &&
+            layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)) 0f
+            else override?.outerMargin ?: config.meshOuterMargin
+		// Face defaults to a dual edge band (legacy inner-margin envelope); other parts use the global mode.
+		val edgeMode = override?.edgeMode
+			?: if (layer.semantic.tag == SemanticTag.FACE) MeshEdgeMode.DOUBLE else config.meshEdgeMode
+		val edgeWidth = override?.edgeWidth ?: config.meshEdgeWidth
+		val effectiveSpacing = if (config.mouthOutlineEnabled && !config.meshOnly &&
+            layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)) {
+            override?.maxEdgeDistance ?: max(6f, config.meshMaxEdgeDistance * semanticDensity)
+        } else {
+            override?.maxEdgeDistance ?: max(12f, config.meshMaxEdgeDistance * semanticDensity)
+        }
+		val effectiveInteriorDensity = override?.interiorDensity ?: max(12f, config.meshInteriorDensity * semanticDensity)
+
+		val settings = MeshSettings(outerMargin, edgeMode, edgeWidth, effectiveSpacing,
+			effectiveInteriorDensity, override?.fillAlgorithm ?: config.meshFillAlgorithm,
+			override?.suppressBoundaryDiagonals ?: config.meshSuppressBoundaryDiagonals,
+			override?.fillParameters ?: config.meshFillParameters)
+		return settings to effectiveSpacing
 	}
 
 	/** Conservative fallback for pathological alpha masks or degenerate one-pixel slivers. */

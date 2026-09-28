@@ -27,39 +27,11 @@ object CharacterAnalyzer {
 		val nonEmpty = layers.filter { it.opaquePixels > 0 }
 		require(nonEmpty.isNotEmpty()) { tr("error.psdNoVisibleLayers") }
 
-		val character = union(nonEmpty.map { it.bounds })
-		val explicitFace = nonEmpty.filter { it.semantic.tag == SemanticTag.FACE }
-		val headLayers = nonEmpty.filter { it.semantic.tag.group == LayerGroup.HEAD }
-		val face = when {
-			explicitFace.isNotEmpty() -> union(explicitFace.map { it.bounds })
-			headLayers.isNotEmpty() -> union(headLayers.map { it.bounds }).let { guessed ->
-				Bounds(guessed.left, guessed.top, guessed.right, minOf(guessed.bottom, character.top + character.height * 0.52f))
-			}
-			else -> Bounds(character.left, character.top, character.right, character.top + character.height * 0.42f)
-		}
-		val bodyLayers = nonEmpty.filter { it.semantic.tag.group == LayerGroup.BODY }
-		val body = if (bodyLayers.isNotEmpty()) {
-			union(bodyLayers.map { it.bounds })
-		} else {
-			Bounds(character.left, max(face.bottom, character.top + character.height * 0.35f), character.right, character.bottom)
-		}
-		val topwear = nonEmpty.filter { it.semantic.tag == SemanticTag.TOPWEAR }.map { it.bounds }.takeIf { it.isNotEmpty() }?.let(::union)
-		val bottomwear = nonEmpty.filter { it.semantic.tag == SemanticTag.BOTTOMWEAR }.map { it.bounds }.takeIf { it.isNotEmpty() }?.let(::union)
-		val anchors = RigAnchors(
-			character = character.expanded(0.015f),
-			face = face.expanded(0.04f),
-			body = body.expanded(0.025f),
-			faceCenterX = explicitFace.firstOrNull()?.centroidX ?: face.centerX,
-			faceCenterY = explicitFace.firstOrNull()?.centroidY ?: face.centerY,
-			chinX = explicitFace.firstOrNull()?.centroidX ?: face.centerX,
-			chinY = explicitFace.maxOfOrNull { it.bounds.bottom } ?: face.bottom,
-			shoulderY = topwear?.let { it.top + it.height * 0.12f } ?: max(face.bottom, body.top),
-			hipY = bottomwear?.let { it.top + it.height * 0.2f } ?: body.top + body.height * 0.62f,
-		)
+		val anchors = anchorsFor(nonEmpty)
 
 		val recognized = layers.count { it.semantic.tag != SemanticTag.UNKNOWN }
 		if (recognized < 4) warnings += tr("warning.fewSemanticLayers", recognized)
-		if (explicitFace.isEmpty()) warnings += tr("warning.missingFace")
+		if (nonEmpty.none { it.semantic.tag == SemanticTag.FACE }) warnings += tr("warning.missingFace")
 		if (layers.none { it.semantic.tag in EYE_TAGS }) warnings += tr("warning.missingEyes")
 		if (layers.none { it.semantic.tag in MOUTH_BASE_TAGS }) warnings += tr("warning.missingMouth")
 		val duplicateBaseNames = layers.groupBy { it.semantic.normalizedName }.filterValues { it.size > 1 }.keys
@@ -78,6 +50,42 @@ object CharacterAnalyzer {
             analyze(baseline, config.copy(deletedLayerIds = emptySet(), rigEdits = config.rigEdits.copy(calibrationLayerIds = emptySet())))
         }
         return PipelineAnalysis(source, layers, calibration?.anchors ?: anchors, warnings, PreviewRenderer.composite(source), calibration)
+	}
+
+	/** Refit rig anchors after the actual renderable mesh footprints replace pixel alpha boxes. */
+	internal fun anchorsFor(layers: List<ClassifiedLayer>): RigAnchors {
+		val nonEmpty = layers.filter { it.opaquePixels > 0 }
+		require(nonEmpty.isNotEmpty())
+		val character = union(nonEmpty.map { it.bounds })
+		val explicitFace = nonEmpty.filter { it.semantic.tag == SemanticTag.FACE }
+		val headLayers = nonEmpty.filter { it.semantic.tag.group == LayerGroup.HEAD }
+		val face = when {
+			explicitFace.isNotEmpty() -> union(explicitFace.map { it.bounds })
+			headLayers.isNotEmpty() -> union(headLayers.map { it.bounds }).let { guessed ->
+				Bounds(guessed.left, guessed.top, guessed.right, minOf(guessed.bottom, character.top + character.height * 0.52f))
+			}
+			else -> Bounds(character.left, character.top, character.right, character.top + character.height * 0.42f)
+		}
+		val bodyLayers = nonEmpty.filter { it.semantic.tag.group == LayerGroup.BODY }
+		val body = if (bodyLayers.isNotEmpty()) {
+			union(bodyLayers.map { it.bounds })
+		} else {
+			Bounds(character.left, max(face.bottom, character.top + character.height * 0.35f), character.right, character.bottom)
+		}
+		val topwear = nonEmpty.filter { it.semantic.tag == SemanticTag.TOPWEAR }.map { it.bounds }.takeIf { it.isNotEmpty() }?.let(::union)
+		val bottomwear = nonEmpty.filter { it.semantic.tag == SemanticTag.BOTTOMWEAR }.map { it.bounds }.takeIf { it.isNotEmpty() }?.let(::union)
+		return RigAnchors(
+			character = character.expanded(0.015f),
+			face = face.expanded(0.04f),
+			body = body.expanded(0.025f),
+			faceCenterX = explicitFace.firstOrNull()?.centroidX ?: face.centerX,
+			faceCenterY = explicitFace.firstOrNull()?.centroidY ?: face.centerY,
+			chinX = explicitFace.firstOrNull()?.centroidX ?: face.centerX,
+			chinY = explicitFace.maxOfOrNull { it.bounds.bottom } ?: face.bottom,
+			shoulderY = topwear?.let { it.top + it.height * 0.12f } ?: max(face.bottom, body.top),
+			hipY = bottomwear?.let { it.top + it.height * 0.2f } ?: body.top + body.height * 0.62f,
+		)
+
 	}
 
 	private fun union(bounds: List<Bounds>): Bounds = bounds.reduce(Bounds::union)
