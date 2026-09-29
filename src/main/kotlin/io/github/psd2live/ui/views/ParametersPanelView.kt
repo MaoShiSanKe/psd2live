@@ -123,7 +123,6 @@ import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
-import io.github.psd2live.ui.components.IconAutoKey
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconCollapseAll
@@ -624,20 +623,6 @@ internal fun ParametersListView(
 						tooltip = tr("parameters.newFolder"),
 					) {
 						IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-					}
-					if (viewModel.editingMotionClip() != null) {
-						PanelToolbarSeparator()
-						CompactIconButton(
-							onClick = { viewModel.toggleMotionAutoKey() },
-							size = 22.dp,
-							tooltip = tr("animation.editor.autoKeyTooltip"),
-						) {
-							IconAutoKey(
-								modifier = Modifier.size(11.dp),
-								active = viewModel.motionEditor.autoKey,
-								tint = if (viewModel.motionEditor.autoKey) Color(0xFFE05252) else colors.textMuted,
-							)
-						}
 					}
 					Spacer(Modifier.weight(1f))
 					CompactIconButton(

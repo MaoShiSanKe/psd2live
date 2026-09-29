@@ -30,7 +30,7 @@ internal class MotionEditorState {
 	var playing: Boolean by mutableStateOf(false)
 	var view: MotionEditorView by mutableStateOf(MotionEditorView.DOPESHEET)
 	var snapToFrames: Boolean by mutableStateOf(true)
-	var autoKey: Boolean by mutableStateOf(AppSettings.autoKey)
+	var autoKey: Boolean by mutableStateOf(false)
 	/** Copied keys, times relative to the earliest. */
 	var clipboard: List<Pair<String, MotionKey>> = emptyList()
 

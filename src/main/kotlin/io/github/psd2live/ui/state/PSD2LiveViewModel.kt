@@ -2182,6 +2182,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun openMotionInEditor(id: String) {
 		if (motionEditor.clipId != id) {
+			motionEditor.autoKey = false
 			motionEditor.playing = false
 			motionEditor.selection = emptySet()
 			motionEditor.focusedCurve = null
@@ -2197,6 +2198,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun closeMotionEditorClip() {
+		motionEditor.autoKey = false
 		motionEditor.playing = false
 		motionEditor.clipId = null
 		motionEditor.selection = emptySet()
@@ -2209,14 +2211,11 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun toggleMotionAutoKey() {
-		val next = !motionEditor.autoKey
-		motionEditor.autoKey = next
-		AppSettings.autoKey = next
+		if (editingMotionClip() != null) motionEditor.autoKey = !motionEditor.autoKey
 	}
 
 	fun setMotionAutoKey(enabled: Boolean) {
-		motionEditor.autoKey = enabled
-		AppSettings.autoKey = enabled
+		motionEditor.autoKey = enabled && editingMotionClip() != null
 	}
 
 	internal fun recordAutoKey(
