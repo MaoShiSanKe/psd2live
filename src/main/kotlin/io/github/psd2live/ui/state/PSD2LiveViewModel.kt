@@ -1482,10 +1482,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		},
 	)
 
-	init {
-		startMotionLoop()
-	}
-
 	fun setInputPath(path: String) {
 		val normalized = path.trim()
 		if (classifyRecentPath(normalized) == RecentFileKind.PSD) {
@@ -5045,6 +5041,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	private val isClosed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+	// After every field the motion loop reads: an earlier init would race property initializers
+	// that sit lower in this class (pausedPhysics, live pose, etc.).
+	init {
+		startMotionLoop()
+	}
 
 	override fun close() {
 		if (!isClosed.compareAndSet(false, true)) return
