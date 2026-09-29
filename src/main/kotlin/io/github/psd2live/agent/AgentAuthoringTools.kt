@@ -5,6 +5,7 @@ import io.github.psd2live.core.LayerClassificationOverride
 import io.github.psd2live.core.LayerType
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.Side
+import io.github.psd2live.core.MotionClips
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.serialization.json.*
@@ -551,6 +552,104 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
             }
         } catch (e: IllegalArgumentException) { authoringError(e, workspace) }
           catch (e: IllegalStateException) { authoringError(e, workspace) }
+    }
+
+    val boneFields = buildJsonObject {
+        put("id", string()); put("name", string()); put("parent", string())
+        put("role", choices(*io.github.psd2live.core.BoneRole.entries.map { it.name }.toTypedArray()))
+        put("side", choices(*Side.entries.map { it.name }.toTypedArray()))
+        put("head", vector(2)); put("tail", vector(2))
+        put("drawables", arraySchema(string(), 0, 256)); put("chainIndex", integer(0))
+        put("direction", number()); put("minAngle", number()); put("maxAngle", number())
+        put("blendWidth", number())
+    }
+    val skeletonBranches = listOf(
+        variant("mode", "get", buildJsonObject {}, emptyList()),
+        variant("mode", "propose", buildJsonObject {}, emptyList()),
+        variant("mode", "auto", buildJsonObject { put("state", string()) }, listOf("state")),
+        variant("mode", "put", buildJsonObject {
+            put("state", string()); put("spec", objectSchema(buildJsonObject {
+                put("version", integer(1, 3)); put("enabled", boolean()); put("bones", arraySchema(objectSchema(boneFields,
+                    listOf("id", "role", "head", "tail")), 0, 128))
+            }, listOf("enabled", "bones")))
+        }, listOf("state", "spec")),
+        variant("mode", "enable", buildJsonObject { put("state", string()); put("enabled", boolean()) }, listOf("state", "enabled")),
+        variant("mode", "bone", buildJsonObject { put("state", string()); put("bone", objectSchema(boneFields, listOf("id"))) }, listOf("state", "bone")),
+        variant("mode", "move", buildJsonObject { put("state", string()); put("bone_id", string()); put("end", choices("head", "tail")); put("point", vector(2)) },
+            listOf("state", "bone_id", "end", "point")),
+        variant("mode", "bind", buildJsonObject { put("state", string()); put("drawable_id", string()); put("bone_id", string()) }, listOf("state", "drawable_id")),
+        variant("mode", "remove", buildJsonObject { put("state", string()); put("bone_id", string()) }, listOf("state", "bone_id")),
+        variant("mode", "pose", buildJsonObject { put("bone_id", string()); put("target", vector(2)); put("ik", boolean()) }, listOf("bone_id", "target")),
+    )
+    tool("skeleton", "Read, infer and edit the authored skeleton before it is baked to Cubism. put replaces the complete armature; bone upserts one bone (existing fields are retained); move keeps connected joints together; bind assigns a drawable to one bone or unbinds when bone_id is omitted; pose solves FK/IK into parameter values without changing history. Apply returned pose values with preview or use them as motion keys.",
+        buildJsonObject { put("request", oneOf(skeletonBranches)) }, listOf("request"), true) { a ->
+        val input = a.getValue("request").jsonObject
+        validateAuthoringSchema(input, oneOf(skeletonBranches))
+        when (input.text("mode")) {
+            "get" -> buildJsonObject { put("state", workspace.snapshot().historyHeadNodeId ?: ""); workspace.skeletonSpec()?.let { put("spec", it.toJson()) } }
+            "propose" -> buildJsonObject { put("state", workspace.snapshot().historyHeadNodeId ?: ""); put("spec", workspace.proposeSkeleton().toJson()) }
+            "pose" -> workspace.solveSkeletonPose(input)
+            else -> workspace.editSkeleton(input.text("state"), input).compact()
+        }
+    }
+
+    val motionHandle = vector(2)
+    val motionKey = objectSchema(buildJsonObject {
+        put("time", number()); put("value", number())
+        put("interpolation", choices(*io.github.psd2live.core.MotionInterpolation.entries.map { it.name }.toTypedArray()))
+        put("out", motionHandle); put("in", motionHandle)
+    }, listOf("time", "value"))
+    val motionClip = objectSchema(buildJsonObject {
+        put("id", string()); put("name", string()); put("builtin", string())
+        put("loop", boolean()); put("duration", number()); put("fps", number())
+        put("fade_in", number()); put("fade_out", number()); put("enabled", boolean())
+        put("curves", arraySchema(objectSchema(buildJsonObject {
+            put("parameter", string()); put("keys", arraySchema(motionKey, 1, 4096))
+        }, listOf("parameter", "keys")), 0, 256))
+    }, listOf("id", "name"))
+    val motionBranches = listOf(
+        variant("mode", "list", buildJsonObject {}, emptyList()),
+        variant("mode", "get", buildJsonObject { put("id", string()) }, listOf("id")),
+        variant("mode", "sample", buildJsonObject { put("id", string()); put("time", number()); put("loop", boolean()) }, listOf("id", "time")),
+        variant("mode", "put", buildJsonObject { put("state", string()); put("clip", motionClip) }, listOf("state", "clip")),
+        variant("mode", "delete", buildJsonObject { put("state", string()); put("id", string()) }, listOf("state", "id")),
+        variant("mode", "seed_builtin", buildJsonObject { put("state", string()); put("builtin", choices(*MotionClips.BUILTIN_NAMES.toTypedArray())); put("id", string()) }, listOf("state", "builtin")),
+        variant("mode", "set_key", buildJsonObject { put("state", string()); put("id", string()); put("parameter", string()); put("key", motionKey) }, listOf("state", "id", "parameter", "key")),
+        variant("mode", "delete_key", buildJsonObject { put("state", string()); put("id", string()); put("parameter", string()); put("time", number()) }, listOf("state", "id", "parameter", "time")),
+        variant("mode", "remove_curve", buildJsonObject { put("state", string()); put("id", string()); put("parameter", string()) }, listOf("state", "id", "parameter")),
+    )
+    tool("motion", "Read and edit persistent motion clips and parameter timelines. sample returns exact interpolated parameter values at a time; seed_builtin copies a generated action into an editable override; put creates or replaces a complete clip, including duration, fades, curves and interpolation. set_key/delete_key edit one timeline key. Use skeleton.pose for FK/IK angle values, then key those parameters. Export writes these clips to motion3.json.",
+        buildJsonObject { put("request", oneOf(motionBranches)) }, listOf("request"), true) { a ->
+        val input = a.getValue("request").jsonObject
+        validateAuthoringSchema(input, oneOf(motionBranches))
+        when (input.text("mode")) {
+            "list" -> buildJsonObject {
+                put("state", workspace.snapshot().historyHeadNodeId ?: "")
+                putJsonArray("clips") { workspace.motionClips().forEach { add(buildJsonObject {
+                    put("id", it.id); put("name", it.name); it.builtin?.let { builtin -> put("builtin", builtin) }
+                    put("duration", it.duration); put("enabled", it.enabled); put("curves", it.curves.size)
+                }) } }
+                putJsonArray("builtins") { MotionClips.BUILTIN_NAMES.forEach { add(JsonPrimitive(it)) } }
+            }
+            "get" -> buildJsonObject {
+                put("state", workspace.snapshot().historyHeadNodeId ?: "")
+                val id = input.text("id")
+                val clip = workspace.motionClips().firstOrNull { it.id == id } ?: throw IllegalArgumentException("Motion not found: $id")
+                put("clip", MotionClips.toJson(clip))
+            }
+            "sample" -> buildJsonObject {
+                put("state", workspace.snapshot().historyHeadNodeId ?: "")
+                val id = input.text("id")
+                val clip = workspace.motionClips().firstOrNull { it.id == id } ?: throw IllegalArgumentException("Motion not found: $id")
+                val time = input.getValue("time").jsonPrimitive.double
+                put("id", id); put("time", time)
+                putJsonObject("values") {
+                    MotionClips.sampleAll(clip, time, input["loop"]?.jsonPrimitive?.booleanOrNull ?: clip.loop)
+                        .forEach { (parameter, value) -> put(parameter.raw, value) }
+                }
+            }
+            else -> workspace.editMotion(input.text("state"), input).compact()
+        }
     }
 
     adapted("revision", "Save, checkpoint, inspect history or restore a chosen snapshot. Every mutation returns a new state; chain it. Restore is a write, not preview. Keep your own task plan; checkpoints preserve useful progress.",

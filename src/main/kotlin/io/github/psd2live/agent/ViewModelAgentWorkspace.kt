@@ -17,6 +17,9 @@ import io.github.psd2live.core.RigParameterEdit
 import io.github.psd2live.core.RigTargetKind
 import io.github.psd2live.core.RigTargetRef
 import io.github.psd2live.core.findDrawable
+import io.github.psd2live.core.SkeletonAutoBuilder
+import io.github.psd2live.ui.BoneHit
+import io.github.psd2live.ui.SkeletonPoseTool
 import io.github.psd2live.history.StaleWorkspaceHeadException
 import io.github.psd2live.history.WorkspaceHistoryTree
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -306,6 +309,49 @@ class ViewModelAgentWorkspace(
         }
     }
     override fun projectSettings(): kotlinx.serialization.json.JsonObject = WorkspaceStateCodec.settings(viewModel.state.value)
+
+    override fun skeletonSpec(): io.github.psd2live.core.SkeletonSpec? = viewModel.state.value.rigEdits.skeleton
+
+    override fun proposeSkeleton(): io.github.psd2live.core.SkeletonSpec {
+        val preview = requireNotNull(viewModel.state.value.previewModel) { "No model is loaded" }
+        return SkeletonAutoBuilder.build(preview.analysis, preview.rig)
+    }
+
+    override suspend fun editSkeleton(state: String, request: kotlinx.serialization.json.JsonObject): AgentWorkspaceMutationResult =
+        mutateRigKeyform(state, null, "Edited skeleton", "skeleton") { document, puppet ->
+            val spec = AgentSkeletonMotionEdits.skeleton(document.rigEdits.skeleton, request, ::proposeSkeleton)
+            val drawables = puppet.drawables.mapTo(HashSet()) { it.id.raw }
+            require(spec.bones.flatMap { it.drawableIds }.all { it in drawables }) { "Skeleton binding references an unknown drawable" }
+            document.copy(rigEdits = document.rigEdits.copy(skeleton = spec))
+        }
+
+    override fun solveSkeletonPose(request: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+        val state = viewModel.state.value
+        val preview = requireNotNull(state.previewModel) { "No model is loaded" }
+        val spec = requireNotNull(state.rigEdits.skeleton?.takeIf { it.enabled }) { "No enabled skeleton is available" }
+        val id = request.getValue("bone_id").jsonPrimitive.content
+        val bones = SkeletonPoseTool.posed(preview.rig.puppet, spec, state.parameterValues)
+        require(bones.any { it.bone.id == id }) { "Poseable bone not found: $id" }
+        val target = request.getValue("target").jsonArray
+        val x = target[0].jsonPrimitive.float
+        val y = target[1].jsonPrimitive.float
+        require(x.isFinite() && y.isFinite()) { "Pose target must be finite" }
+        val ik = request["ik"]?.jsonPrimitive?.booleanOrNull ?: false
+        val values = SkeletonPoseTool.drag(spec, bones, BoneHit(id, tip = ik), x, y, state.parameterValues, ik)
+        return kotlinx.serialization.json.buildJsonObject {
+            put("state", snapshot().historyHeadNodeId ?: "")
+            putJsonObject("values") { values.forEach { (parameter, value) -> put(parameter.raw, value) } }
+        }
+    }
+
+    override fun motionClips(): List<io.github.psd2live.core.MotionClip> = viewModel.state.value.rigEdits.motionClips
+
+    override suspend fun editMotion(state: String, request: kotlinx.serialization.json.JsonObject): AgentWorkspaceMutationResult =
+        mutateRigKeyform(state, null, "Edited motion", request["id"]?.jsonPrimitive?.contentOrNull ?: "motion") { document, puppet ->
+            val ranges = puppet.parameters.associate { it.id.raw to (it.min..it.max) }
+            val clips = AgentSkeletonMotionEdits.motion(document.rigEdits.motionClips, request, ranges, document.rigEdits.skeleton)
+            document.copy(rigEdits = document.rigEdits.copy(motionClips = clips))
+        }
 
     override suspend fun updateProjectSettings(
         state: String,

@@ -2,7 +2,7 @@
 
 [文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../STATUS.md)
 
-本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **21 个工具**。`project_get_state`、`rig_transform`、`asset_import_png` 等名称属于内部适配层，不是公开工具，不能直接调用。
+本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **23 个工具**。`project_get_state`、`rig_transform`、`asset_import_png` 等名称属于内部适配层，不是公开工具，不能直接调用。
 
 ## 接入
 
@@ -37,6 +37,8 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `asset` | `request.mode` | `psd/create/split/reference/import/register/preview/add/place/finalize/inspect/reprocess/remove`；`psd` 从本地绝对路径导入空工作区 |
 | `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics` | `request.mode` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、按阶跃输入模拟并返回峰值与稳定时间、按标准晃动调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
+| `skeleton` | `request.mode` | `get/propose/auto/put/enable/bone/move/bind/remove/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定；`pose` 求 FK/IK 参数值，不写历史 |
+| `motion` | `request.mode` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧 |
 | `path` | `request.mode` | `get/list/preview/put/delete/deform` |
 | `revision` | `request.mode` | `save/checkpoint/list/restore` |
 
@@ -109,6 +111,32 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 - 多工具跨调用事务、结构化 `history_diff` 和 `task_*` 执行控制未作为当前公开接口提供。
 
 ## 形状、路径与物理
+
+### 骨骼与动作
+
+先调用 `skeleton.propose` 检查按当前图层推断出的骨架；`skeleton.auto` 才将它写入工程。`skeleton.get` 返回完整 `spec`，包含骨骼坐标、层级、画元绑定、关节角度范围和关节带宽。`skeleton.put` 可用返回的 `spec` 整体替换；`bone` 合并单根骨骼的字段，`move` 同时移动相连关节，`bind` 把画元绑定到指定骨骼（省略 `bone_id` 则解绑），`remove` 删除非身体骨骼。画元 ID 从 `inspect.objects` 取得。写入使用最新 `state`，成功后重建并提交历史；无效骨架或不存在的画元会拒绝写入。
+
+```json
+{"request":{"mode":"propose"}}
+```
+
+```json
+{"request":{"mode":"move","state":"current-history-head","bone_id":"actualBoneId","end":"tail","point":[420,610]}}
+```
+
+`skeleton.pose` 用画布像素坐标求骨骼朝向；`ik: true` 求末端及最多两级父骨骼的角度。返回的 `values` 是计算结果，可交给 `preview.set` 检查姿态，或写入 `motion` 的参数轨道；它不改骨架、关键形或历史。骨骼形状已烘焙为参数、变形器和网格关键形，形状修正仍用 `form` / `deform`，物理用 `physics`。
+
+```json
+{"request":{"mode":"pose","bone_id":"actualBoneId","target":[560,440],"ik":true}}
+```
+
+`motion.list/get` 读取持久的 `MotionClip`，`sample` 返回指定时刻按片段插值后的参数值。`seed_builtin` 将生成动作变为可编辑的同名覆盖片段；`put` 创建或整体替换片段，使用 `get` 返回的 JSON 可以往返编辑。片段可设置时长、循环、FPS、淡入淡出和参数曲线；键支持 `LINEAR`、`BEZIER`、`STEPPED`、`INVERSE_STEPPED` 及 `in` / `out` 控制柄。`set_key` 在指定时间写入或替换键，`delete_key` 和 `remove_curve` 删除键或整条轨道。参数必须存在，键值和时间必须落在参数与片段范围内。导出动作须启用 `settings.exportMotions`；生成的骨骼预设还须启用 `settings.motionSkeleton`。
+
+```json
+{"request":{"mode":"put","state":"current-history-head","clip":{"id":"wave_custom","name":"WaveCustom","duration":2,"curves":[{"parameter":"ParamArmRA","keys":[{"time":0,"value":0},{"time":1,"value":45},{"time":2,"value":0}]}]}}}
+```
+
+### 通用形状与物理
 
 `deform` 操作包括 `translate`、`scale`、`rotate`、`arc`、`curve`、`landmarks`。坐标使用固定输入边界中的归一化约定，X 向右、Y 向下，角度以度表示。选区与衰减可限制作用范围；不接收任意网格逐点数组。
 

@@ -415,6 +415,19 @@ enum class MutationAuthor(val historyActor: String, val logSource: io.github.psd
 }
 
 interface AgentWorkspace {
+    /** The authored armature, before its Cubism deformer/keyform bake. */
+    fun skeletonSpec(): io.github.psd2live.core.SkeletonSpec? = null
+    /** The same proposal the canvas editor creates from the current tagged artwork. */
+    fun proposeSkeleton(): io.github.psd2live.core.SkeletonSpec =
+        throw UnsupportedOperationException("Skeleton inference is unavailable")
+    suspend fun editSkeleton(state: String, request: kotlinx.serialization.json.JsonObject): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Skeleton editing is unavailable")
+    /** Solve an FK/IK drag into parameter values without changing the model or preview. */
+    fun solveSkeletonPose(request: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject =
+        throw UnsupportedOperationException("Skeleton posing is unavailable")
+    fun motionClips(): List<io.github.psd2live.core.MotionClip> = emptyList()
+    suspend fun editMotion(state: String, request: kotlinx.serialization.json.JsonObject): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Motion editing is unavailable")
     fun previewSession(): kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())
     suspend fun setPreviewSession(arguments: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject =
         throw UnsupportedOperationException("Preview session is unavailable")

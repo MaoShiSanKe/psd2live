@@ -13,6 +13,8 @@
 | 生成配置 | 项目设置、单层网格设置 | `settings`、`layer_mesh` | 同一 `PipelineConfig`；网格覆盖写回 UI 状态与历史 |
 | 参数 / 预览 | 参数面板、值和锁定 | `parameter`、`preview` | 定义编辑进历史；预览会话只改当前姿态 |
 | Rig 结构 / 形变 | 层级树、画布工具、关键形、路径、物理 | `structure/appearance/canvas/form/deform/rig/path/physics` | 复用持久化编辑命令或同一 Rig 模型 |
+| 骨架与姿态 | 骨骼标签页、姿态工具 | `skeleton`、`preview` | 同一 `SkeletonSpec`；FK/IK 求值不写历史，骨架编辑写历史并重建 |
+| 动作时间线 | 动画面板、动作编辑器 | `motion`、`view.motion` | 同一 `MotionClip`；片段编辑写历史，动态采样另行验收 |
 | 检查 / 历史 | 画布预览、撤销树 | `inspect/view/revision` | `view` 可固定镜头批量采样；UI 适合交互查看 |
 | 保存 / 导出 | 工程保存、模型导出、PSD 导出 | `revision.save`、`export`、`export_psd` | 使用项目编码、管线导出和 PSD 写入器 |
 
@@ -43,15 +45,16 @@
 | 21 | Glue：`CanvasEdits` | 画布 Glue 工具 | `canvas.glue` | 两侧 Mesh 和权重需匹配 |
 | 22 | 变形路径：路径编辑命令 | 画布路径工具 | `path` | 点位为 Mesh 局部坐标，区分预览与烘焙 |
 | 23 | 物理：预设、骨骼、摆动与自定义组，计算顺序、计算 FPS、导入与倍率调整（`PhysicsCatalog`、`PhysicsAuthoring`） | 物理面板 | `settings`、`physics.put/delete/simulate/fit/config/import`、`inspect scope=physics` | 静态姿态无法证明摆锤动态正确；`simulate` 与面板共用 Cubism 求值 |
-| 24 | 动作：导出设置与运行时采样 | 动作配置 / 预览 | `settings`、`view.motion`、`export` | 动作输出和时间序列预览分别验收 |
+| 24 | 动作：片段、轨道、关键帧、导出设置与运行时采样 | 动作编辑器 / 预览 | `motion`、`settings`、`view.motion`、`export` | 片段保存重开与导出，动态采样分别验收 |
 | 25 | 观察：模型渲染 / 覆盖检查 | 画布、预览、历史界面 | `view.model/layer/context/poses/coverage/compare/motion` | 比较时保持同一画布矩形与参数姿态 |
 | 26 | 历史：`WorkspaceHistoryTree` | 历史树撤回 / 切换 | `revision.checkpoint/list/restore` | 从旧节点继续编辑保留分支，UI 套索拆分记为 user |
 | 27 | 工程保存：工程状态编码 | 保存工程 | `revision.save` | 保存位置由当前 UI 工程决定 |
 | 28 | 输出：`pipeline.run` / `PsdWriter.write` | 模型导出、PSD 导出 | `export`、`export_psd` | 返回实际文件；导出不推进编辑历史 |
+| 29 | 骨架与 FK/IK：`SkeletonSpec` / `SkeletonPoseTool` | 骨骼标签页、姿态工具 | `skeleton.get/propose/auto/put/bone/move/bind/remove/enable/pose` | 骨骼编辑写历史并重建，姿态求值只返回参数；检查绑定、参数端点和导出 |
 
 ## 共用规则和测试
 
 - 写模型的 MCP 请求带当前历史 `state`；若 UI 同时改动导致过期，客户端应重读 `inspect`。预览参数不写模型历史。
 - 源图绘画和拆分会改变网格拓扑。拆分在已有运动绑定、Glue 时拒绝；MCP 绘画在目标已有关键形、Warp 或 Glue 时拒绝。UI 绘画另有交互式网格迁移流程。
 - `LayerClassificationIntegrationTest` 覆盖 Issue #13 分类字段、绘画像素和历史回退、单层网格、预览锁定、模型与 PSD 导出、PSD 再导入、套索对应的拆分算法及 user 历史归属。
-- `AuthoringParityTest` 检查 21 个公开 MCP 工具的注册与分类字段合并。全量验证命令：`./gradlew test --offline`。
+- `AuthoringParityTest` 检查 23 个公开 MCP 工具的注册与分类字段合并。全量验证命令：`./gradlew test --offline`。

@@ -44,7 +44,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 
 | 文档 | 内容 |
 | --- | --- |
-| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、21 个公开工具、调用示例、状态与历史 |
+| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、23 个公开工具、调用示例、状态与历史 |
 | [Agent 设计与验收](zh/agent/AGENT_DESIGN.md) | 分工边界、工具设计原则、任务验收步骤 |
 | [UI / MCP 能力对照](zh/agent/UI_MCP_PARITY_ISSUE_13.md) | 每项能力在界面与 MCP 中的入口 |
 | [能力实测](zh/STATUS.md) | 真实任务的实测记录与记录格式 |
