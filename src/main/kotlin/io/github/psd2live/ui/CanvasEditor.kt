@@ -454,6 +454,12 @@ internal class CanvasEditor(
 			val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return
 			viewModel.setSkeleton(spec.copy(enabled = true))
 		}
+		if (viewBeforeSkeletonEdit == null) {
+			viewBeforeSkeletonEdit = state.activeTabView
+		}
+		if (modeBeforeSkeletonEdit == null) {
+			modeBeforeSkeletonEdit = hierarchyMode.takeIf { it != EditHierarchyMode.EDIT } ?: EditHierarchyMode.SELECT
+		}
 		selectSkeleton()
 		setHierarchyMode(EditHierarchyMode.EDIT)
 	}
@@ -465,10 +471,16 @@ internal class CanvasEditor(
 		// Without a skeleton there is nothing to pose, and Deform mode would fall on the selected drawable.
 		if (!skeletonSelected || committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
 		setHierarchyMode(EditHierarchyMode.DEFORM)
+		if (state.showWarp || state.showRotation || state.showMesh) {
+			viewModel.updateEditViewOptions(canvasId, workspaceId) {
+				it.copy(showWarp = false, showRotation = false, showMesh = false)
+			}
+		}
 	}
 
 	/** Edit mode's display toggles from before the skeleton edit, put back when it closes. */
 	private var viewBeforeSkeletonEdit: TabViewOptions? = null
+	private var modeBeforeSkeletonEdit: EditHierarchyMode? = null
 
 	/**
 	 * Bones are placed on the rest pose, so the parameters go back to their defaults. The display drops
@@ -479,22 +491,27 @@ internal class CanvasEditor(
 		skeletonDraft = spec
 		if (selectedBoneId == null || spec.bone(selectedBoneId!!) == null) selectedBoneId = spec.bones.firstOrNull { !it.role.anchor }?.id
 		viewModel.resetAllParameters()
-		viewBeforeSkeletonEdit = viewModel.updateEditViewOptions(canvasId, workspaceId) {
+		val before = viewModel.updateEditViewOptions(canvasId, workspaceId) {
 			it.copy(showMesh = false, showWarp = false, showRotation = false, warpShowIndices = false)
+		}
+		if (viewBeforeSkeletonEdit == null) {
+			viewBeforeSkeletonEdit = before
 		}
 	}
 
 	/** Ends the edit, handing Edit mode back the display it had before. */
-	private fun closeSkeletonDraft() {
+	private fun closeSkeletonDraft(restoreView: Boolean = true) {
 		skeletonDraft = null
-		viewBeforeSkeletonEdit?.let { before -> viewModel.updateEditViewOptions(canvasId, workspaceId) { before } }
-		viewBeforeSkeletonEdit = null
+		if (restoreView) {
+			viewBeforeSkeletonEdit?.let { before -> viewModel.updateEditViewOptions(canvasId, workspaceId) { before } }
+			viewBeforeSkeletonEdit = null
+		}
 	}
 
 	/** Writes the draft back when it changed. Keeps whether the skeleton is enabled. */
-	fun commitSkeletonDraft() {
+	fun commitSkeletonDraft(restoreView: Boolean = true) {
 		val draft = skeletonDraft ?: return
-		closeSkeletonDraft()
+		closeSkeletonDraft(restoreView)
 		val committed = state.rigEdits.skeleton
 		val next = draft.copy(enabled = committed?.enabled ?: true)
 		if (next != committed) viewModel.setSkeleton(next)
@@ -509,13 +526,18 @@ internal class CanvasEditor(
 	/** Leaves Edit mode on the skeleton and throws the edit away. The skeleton stays selected. */
 	fun cancelSkeletonEdit() {
 		if (skeletonDraft == null) return
-		closeSkeletonDraft()
-		setHierarchyMode(skeletonExitMode())
+		val targetMode = modeBeforeSkeletonEdit ?: EditHierarchyMode.SELECT
+		modeBeforeSkeletonEdit = null
+		skeletonDraft = null
+		setHierarchyMode(targetMode)
 	}
 
 	/** Where leaving skeleton Edit mode lands: posing when there is an enabled skeleton to pose. */
-	private fun skeletonExitMode() =
-		if (committedSkeleton?.enabled == true) EditHierarchyMode.DEFORM else EditHierarchyMode.SELECT
+	private fun skeletonExitMode(): EditHierarchyMode {
+		val mode = if (committedSkeleton?.enabled == true) EditHierarchyMode.DEFORM else (modeBeforeSkeletonEdit ?: EditHierarchyMode.SELECT)
+		modeBeforeSkeletonEdit = null
+		return mode
+	}
 
 	/** Turns the skeleton off or back on. The bones are kept either way, so turning it back on loses nothing. */
 	fun setSkeletonEnabled(enabled: Boolean) {
@@ -3014,6 +3036,13 @@ internal class CanvasEditor(
         if (busy) return
         if (!hasPartFor(hierarchyMode)) { enterMode(EditHierarchyMode.SELECT); return }
         if (hierarchyMode == EditHierarchyMode.EDIT && skeletonSelected && skeletonDraft == null) openSkeletonDraft()
+        if (hierarchyMode == EditHierarchyMode.DEFORM && skeletonSelected) {
+            if (state.showWarp || state.showRotation || state.showMesh) {
+                viewModel.updateEditViewOptions(canvasId, workspaceId) {
+                    it.copy(showWarp = false, showRotation = false, showMesh = false)
+                }
+            }
+        }
         if (tool !in palette()) {
             cancel()
             tool = palette().first()
@@ -3105,10 +3134,23 @@ internal class CanvasEditor(
         createSessionReturnMode = null
         cancel()
         val prev = hierarchyMode
+        val savedBeforeEdit = if (next != EditHierarchyMode.EDIT || !skeletonSelected) viewBeforeSkeletonEdit else null
         // Leaving skeleton Edit mode keeps the edit; entering it opens a working copy of the armature.
         // The draft opens after the mode's own display toggles are swapped in, so its display switch sticks.
-        if (next != EditHierarchyMode.EDIT || !skeletonSelected) commitSkeletonDraft()
+        if (next != EditHierarchyMode.EDIT || !skeletonSelected) commitSkeletonDraft(restoreView = false)
         hierarchyMode = next
+        if (savedBeforeEdit != null) {
+            viewModel.updateEditViewOptions(canvasId, workspaceId) {
+                savedBeforeEdit.copy(showWarp = false, showRotation = false, showMesh = false)
+            }
+            viewBeforeSkeletonEdit = null
+        } else if (skeletonSelected && next == EditHierarchyMode.DEFORM) {
+            if (state.showWarp || state.showRotation || state.showMesh) {
+                viewModel.updateEditViewOptions(canvasId, workspaceId) {
+                    it.copy(showWarp = false, showRotation = false, showMesh = false)
+                }
+            }
+        }
         if (next == EditHierarchyMode.EDIT && skeletonSelected && skeletonDraft == null) openSkeletonDraft()
         // Only Edit edits several meshes; any other mode keeps the primary's slice alone.
         if (next != EditHierarchyMode.EDIT) selection = target()?.id?.let { id -> selection.filterKeys { it == id } }.orEmpty()
@@ -3333,6 +3375,7 @@ internal class CanvasEditor(
      * in a tab without the option stays as clean as it was.
      */
     fun activeWarpIds(): Set<String> {
+        if (skeletonSelected) return emptySet()
         val preview = drawnPreview ?: return emptySet()
         return visibleCanvasGuideIds(preview, state, warp = true)
     }
@@ -3342,6 +3385,7 @@ internal class CanvasEditor(
      * [TabViewOptions.showRotation] owns the channel — hierarchy mode only seeds presets, never forces.
      */
     fun activeRotationIds(): Set<String> {
+        if (skeletonSelected) return emptySet()
         val preview = drawnPreview ?: return emptySet()
         return visibleCanvasGuideIds(preview, state, warp = false)
     }
