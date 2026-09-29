@@ -58,6 +58,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1220,9 +1221,9 @@ class PSD2LiveViewModel : AutoCloseable {
     /** Closes every open field session so a save or a window close sees the value just typed. */
     fun flushEditorFields() = editorSessions.flush()
 
-    private fun editorChanged() {
+    private fun editorChanged(summary: String? = null) {
         if (editorSessions.anyOpen) { markWorkspaceChanged(); return }
-        commitEditorChange()
+        commitEditorChange(summary)
     }
 
     private fun commitEditorChange(summary: String? = null) {
@@ -2039,7 +2040,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * One change to the authored motions. [commit] records a history node and refreshes the runtime bundle;
 	 * a drag passes false for its samples and commits once on release.
 	 */
-	private fun updateMotionClips(commit: Boolean = true, transform: (List<MotionClip>) -> List<MotionClip>) {
+	private fun updateMotionClips(commit: Boolean = true, summary: String? = null, transform: (List<MotionClip>) -> List<MotionClip>) {
 		updateState { current ->
 			val next = transform(current.rigEdits.motionClips)
 			if (next == current.rigEdits.motionClips) current
@@ -2047,7 +2048,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		if (commit) {
 			scheduleRuntimeBundleUpdate()
-			editorChanged()
+			editorChanged(summary)
 		} else markWorkspaceChanged()
 	}
 
@@ -2336,6 +2337,222 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	// endregion
 
+	// region Skeleton bake
+
+	/** The bake dialog's inputs and preview; view state, so it never enters the history. */
+	internal val skeletonBake = SkeletonBakeState()
+	private var bakePreviewJob: Job? = null
+
+	val posePresets: List<io.github.psd2live.core.PosePreset> get() = _state.value.rigEdits.posePresets
+
+	/** The bones a pose captures: every bone that has a parameter of its own. */
+	private fun bakeBones(spec: io.github.psd2live.core.SkeletonSpec?) =
+		spec?.takeIf { it.enabled }?.bones?.filterNot { it.role.anchor }.orEmpty()
+
+	fun openSkeletonBake() {
+		val state = _state.value
+		if (state.previewModel == null || bakeBones(state.rigEdits.skeleton).isEmpty()) return
+		val bake = skeletonBake
+		val clip = editingMotionClip(state)
+		bake.targetClipId = clip?.id
+		bake.fps = clip?.fps ?: bake.fps
+		bake.previewTime = 0f
+		bake.previewPlaying = false
+		bake.open = true
+		refreshBakePreview()
+	}
+
+	fun closeSkeletonBake() {
+		bakePreviewJob?.cancel()
+		skeletonBake.previewPlaying = false
+		skeletonBake.computing = false
+		skeletonBake.open = false
+		updateState { it.copy(focusCanvasRequest = it.focusCanvasRequest + 1) }
+	}
+
+	/** Every parameter's value where the preview holds it now. */
+	private fun currentParameterValues(): Map<ParameterId, Float> =
+		_state.value.previewModel?.rig?.puppet?.parameters.orEmpty().associate { it.id to currentMotionParameterValue(it.id.raw) }
+
+	/** The bone parameters of the pose the preview shows now. */
+	fun capturePoseValues(): Map<String, Float> {
+		val values = currentParameterValues()
+		return bakeBones(_state.value.rigEdits.skeleton).associate { it.parameterId to (values[ParameterId(it.parameterId)] ?: 0f) }
+	}
+
+	/** Where [boneId]'s tip is in the pose the preview shows now, in canvas pixels. */
+	private fun currentTip(boneId: String): Pair<Float, Float>? {
+		val state = _state.value
+		val puppet = state.previewModel?.rig?.puppet ?: return null
+		val posed = io.github.psd2live.core.SkeletonPoseSolver.posed(puppet, state.rigEdits.skeleton, currentParameterValues())
+		return posed.firstOrNull { it.bone.id == boneId }?.let { it.tailX to it.tailY }
+	}
+
+	/** The bones a tip can be pulled: limb bones, not the body halves that bend warps. */
+	fun bakeIkBones(): List<io.github.psd2live.core.SkeletonBone> =
+		_state.value.rigEdits.skeleton?.takeIf { it.enabled }?.let { io.github.psd2live.core.SkeletonRig.limbBones(it) }.orEmpty()
+
+	private fun setBakeRows(rows: List<BakePoseRow>) {
+		skeletonBake.rows = rows.sortedBy { it.time }
+		refreshBakePreview()
+	}
+
+	/** Appends the pose the preview shows now, half a second past the last one. */
+	fun captureBakeRow(time: Float? = null, values: Map<String, Float> = capturePoseValues()) {
+		val bake = skeletonBake
+		val at = time ?: bake.rows.maxOfOrNull { it.time }?.plus(0.5f) ?: 0f
+		val row = BakePoseRow(bake.nextRowId++, at.coerceAtLeast(0f), values)
+		setBakeRows(bake.rows + row)
+	}
+
+	internal fun updateBakeRow(id: Int, transform: (BakePoseRow) -> BakePoseRow) =
+		setBakeRows(skeletonBake.rows.map { if (it.id == id) transform(it) else it })
+
+	fun removeBakeRow(id: Int) = setBakeRows(skeletonBake.rows.filterNot { it.id == id })
+
+	/** Replaces row [id]'s pose (and its IK target, if it has one) with the pose the preview shows now. */
+	fun recaptureBakeRow(id: Int) {
+		val values = capturePoseValues()
+		updateBakeRow(id) { row ->
+			val tip = row.ikBoneId?.let(::currentTip)
+			row.copy(values = values, ikX = tip?.first ?: row.ikX, ikY = tip?.second ?: row.ikY)
+		}
+	}
+
+	/** Makes row [id] pull [boneId]'s tip to where it is in the preview now, or turns IK off with null. */
+	fun setBakeRowIk(id: Int, boneId: String?) {
+		val tip = boneId?.let(::currentTip)
+		updateBakeRow(id) { row ->
+			if (boneId == null || tip == null) row.copy(ikBoneId = null) else row.copy(ikBoneId = boneId, ikX = tip.first, ikY = tip.second)
+		}
+	}
+
+	fun insertPosePresetAsBakeRow(presetId: String) {
+		val preset = posePresets.firstOrNull { it.id == presetId } ?: return
+		val bones = bakeBones(_state.value.rigEdits.skeleton).map { it.parameterId }.toSet()
+		captureBakeRow(values = preset.values.filterKeys { it in bones })
+	}
+
+	fun resetSkeletonBake() {
+		val bake = skeletonBake
+		bake.rows = emptyList()
+		bake.boneIds = null
+		bake.start = null
+		bake.end = null
+		bake.preview = null
+		refreshBakePreview()
+	}
+
+	/** Any input of the bake changed: solve again a moment after the last change. */
+	fun refreshBakePreview() {
+		bakePreviewJob?.cancel()
+		val bake = skeletonBake
+		val state = _state.value
+		val model = state.previewModel?.rig?.puppet
+		val spec = state.rigEdits.skeleton?.takeIf { it.enabled }
+		if (model == null || spec == null || bake.rows.isEmpty()) {
+			bake.preview = null
+			bake.computing = false
+			return
+		}
+		val selected = bake.boneIds
+		val parameters = selected?.let { ids -> spec.bones.filter { it.id in ids }.mapTo(HashSet()) { it.parameterId } }
+		val keys = bake.rows.map { row ->
+			io.github.psd2live.core.PoseKey(
+				time = row.time,
+				values = if (parameters == null) row.values else row.values.filterKeys { it in parameters },
+				ik = listOfNotNull(row.ikBoneId?.let { io.github.psd2live.core.IkTarget(it, row.ikX, row.ikY) }),
+				ease = row.ease,
+			)
+		}
+		val options = try {
+			io.github.psd2live.core.BakeOptions(
+				fps = bake.fps, tolerance = bake.tolerance, shape = bake.shape,
+				parameterIds = parameters, start = bake.start, end = bake.end,
+			)
+		} catch (e: IllegalArgumentException) {
+			bake.preview = BakePreview(null, e.message)
+			bake.computing = false
+			return
+		}
+		bake.computing = true
+		bakePreviewJob = scope.launch {
+			delay(200)
+			val outcome = try {
+				withContext(Dispatchers.Default) {
+					BakePreview(io.github.psd2live.core.SkeletonBake.bake(model, spec, keys, options) { ensureActive() }, null)
+				}
+			} catch (e: kotlinx.coroutines.CancellationException) {
+				throw e
+			} catch (e: IllegalArgumentException) {
+				BakePreview(null, e.message)
+			}
+			bake.preview = outcome
+			bake.computing = false
+			bake.previewTime = bake.previewTime.coerceIn(0f, outcome.result?.end ?: 0f)
+		}
+	}
+
+	/** Poses the canvas with the previewed bake at [time], without writing anything to the project. */
+	fun previewBakeAt(time: Float) {
+		val result = skeletonBake.preview?.result ?: return
+		skeletonBake.previewTime = time.coerceIn(result.start, result.end)
+		val clip = MotionClip(id = "bake_preview", name = "bake_preview", duration = maxOf(result.end, 0.001f), curves = result.curves)
+		poseMotionPreview(clip, skeletonBake.previewTime)
+	}
+
+	/** Writes the previewed bake into the chosen clip, or a new one, as one undoable change. */
+	fun commitSkeletonBake() {
+		val bake = skeletonBake
+		val result = bake.preview?.result?.takeIf { !bake.computing } ?: return
+		val clips = motionClips
+		val existing = bake.targetClipId?.let { id -> clips.firstOrNull { it.id == id } }
+		val base = existing ?: MotionClip(
+			id = MotionClips.newId(clips),
+			name = MotionClips.uniqueName(clips, bake.newName.trim().ifEmpty { tr("animation.bake.defaultName") }),
+			duration = maxOf(result.end, 1f / bake.fps),
+			fps = bake.fps,
+		)
+		val written = io.github.psd2live.core.SkeletonBake.applyTo(base, result, bake.write)
+		updateMotionClips(summary = "Baked skeleton motion") { list ->
+			if (existing != null) list.map { if (it.id == written.id) written else it } else list + written
+		}
+		openMotionInEditor(written.id)
+		closeSkeletonBake()
+	}
+
+	private fun updatePosePresets(transform: (List<io.github.psd2live.core.PosePreset>) -> List<io.github.psd2live.core.PosePreset>) {
+		updateState { current ->
+			val next = transform(current.rigEdits.posePresets)
+			if (next == current.rigEdits.posePresets) current
+			else current.copy(rigEdits = current.rigEdits.copy(posePresets = next))
+		}
+		editorChanged()
+	}
+
+	/** Stores [values] as a new named pose snapshot. */
+	fun savePosePreset(name: String, values: Map<String, Float>) {
+		if (values.isEmpty() || values.size > io.github.psd2live.core.PosePreset.MAX_VALUES) return
+		val presets = posePresets
+		if (presets.size >= io.github.psd2live.core.PosePreset.MAX_POSES) return
+		val label = name.trim().takeIf { it.isNotEmpty() && it.none(Char::isISOControl) } ?: tr("animation.bake.poseName", presets.size + 1)
+		val preset = io.github.psd2live.core.PosePreset(
+			id = io.github.psd2live.core.PosePreset.newId(presets),
+			name = io.github.psd2live.core.PosePreset.uniqueName(presets, label),
+			values = values,
+		)
+		updatePosePresets { it + preset }
+	}
+
+	fun deletePosePreset(id: String) = updatePosePresets { list -> list.filterNot { it.id == id } }
+
+	/** Sets the snapshot's parameters in the preview, the way posing a bone on the canvas does. */
+	fun applyPosePreset(id: String) {
+		val preset = posePresets.firstOrNull { it.id == id } ?: return
+		setParameterValues(preset.values.mapKeys { ParameterId(it.key) })
+	}
+
+	// endregion
 
 	/** Commit an edited armature as one undoable project change and rebuild its derived rig. */
 	fun setSkeleton(spec: io.github.psd2live.core.SkeletonSpec) {

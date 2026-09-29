@@ -95,6 +95,7 @@ import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconAdd
+import io.github.psd2live.ui.components.IconBone
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
@@ -216,6 +217,7 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 		CompactIconButton(onClick = { viewModel.createMotionClip() }, tooltip = tr("animation.new"), size = 22.dp) {
 			IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 		}
+		BakeSkeletonButton(state, viewModel)
 		PanelToolbarSeparator()
 		val enabled = clip != null
 		CompactIconButton(
@@ -308,6 +310,21 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 			height = 22.dp,
 		)
 	}
+}
+
+/** Opens the bake dialog; the skeleton has to be enabled, because its parameters are what a pose is made of. */
+@Composable
+private fun BakeSkeletonButton(state: PSD2LiveState, viewModel: PSD2LiveViewModel) {
+	val colors = LocalToolColors.current
+	val skeleton = state.rigEdits.skeleton
+	val ready = state.previewModel != null && skeleton?.enabled == true && skeleton.bones.any { !it.role.anchor }
+	CompactButton(
+		text = tr("animation.editor.bake"),
+		onClick = { viewModel.openSkeletonBake() },
+		enabled = ready,
+		leadingIcon = { IconBone(modifier = Modifier.size(10.dp), tint = if (ready) colors.textPrimary else colors.textDisabled) },
+		height = 22.dp,
+	)
 }
 
 @Composable

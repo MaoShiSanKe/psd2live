@@ -1,7 +1,11 @@
 package io.github.psd2live.agent
 
+import io.github.psd2live.core.BakeShape
+import io.github.psd2live.core.BakeWrite
 import io.github.psd2live.core.BoneRole
 import io.github.psd2live.core.MotionClips
+import io.github.psd2live.core.PoseEase
+import io.github.psd2live.core.PosePreset
 import io.github.psd2live.core.SkeletonBone
 import io.github.psd2live.core.SkeletonSpec
 import kotlinx.serialization.json.*
@@ -62,5 +66,66 @@ class AgentSkeletonMotionEditsTest {
                 put("key", buildJsonObject { put("time", 1); put("value", 1) })
             }, ranges, skeleton)
         }
+    }
+
+    private fun bakeRequest(block: JsonObjectBuilder.() -> Unit) = buildJsonObject {
+        putJsonArray("keys") {
+            add(buildJsonObject { put("time", 0); put("values", buildJsonObject { put("ParamArmLA", 0) }); put("ease", "LINEAR") })
+            add(buildJsonObject {
+                put("time", 1)
+                put("ik", buildJsonArray { add(buildJsonObject { put("bone_id", "arm"); put("target", buildJsonArray { add(30); add(70) }) }) })
+            })
+        }
+        block()
+    }
+
+    @Test fun bakeRequestParsesKeysOptionsAndDefaults() {
+        val parsed = AgentSkeletonBake.parse(bakeRequest {
+            put("fps", 60); put("tolerance", 0.25); put("curve", "bezier"); put("write", "merge")
+            putJsonArray("parameters") { add("ParamArmLA") }; put("start", 0.5)
+        })
+        assertEquals(listOf(0f, 1f), parsed.keys.map { it.time })
+        assertEquals(PoseEase.LINEAR, parsed.keys[0].ease)
+        assertEquals(PoseEase.SMOOTH, parsed.keys[1].ease)
+        assertEquals("arm", parsed.keys[1].ik.single().boneId)
+        assertEquals(60f, parsed.options.fps)
+        assertEquals(0.25f, parsed.options.tolerance)
+        assertEquals(BakeShape.BEZIER, parsed.options.shape)
+        assertEquals(setOf("ParamArmLA"), parsed.options.parameterIds)
+        assertEquals(0.5f, parsed.options.start)
+        assertEquals(BakeWrite.MERGE, parsed.write)
+        val plain = AgentSkeletonBake.parse(bakeRequest {}, defaultFps = 24f)
+        assertEquals(24f, plain.options.fps)
+        assertEquals(0.5f, plain.options.tolerance)
+        assertEquals(BakeShape.LINEAR, plain.options.shape)
+        assertEquals(BakeWrite.REPLACE, plain.write)
+        assertFailsWith<IllegalArgumentException> { AgentSkeletonBake.parse(buildJsonObject { putJsonArray("keys") {} }) }
+    }
+
+    @Test fun poseSnapshotsPutReplaceAndDeleteWithinTheParameterRanges() {
+        val ranges = mapOf("ParamArmLA" to (-90f..150f))
+        fun put(id: String, name: String?, value: Float) = buildJsonObject {
+            put("mode", "pose_put")
+            put("pose", buildJsonObject {
+                put("id", id); if (name != null) put("name", name)
+                put("values", buildJsonObject { put("ParamArmLA", value) })
+            })
+        }
+        val one = AgentSkeletonBake.poses(emptyList(), put("wave", "Wave", 40f), ranges)
+        assertEquals(40f, one.single().values.getValue("ParamArmLA"))
+        // Same ID replaces it and keeps the name when none is given.
+        val replaced = AgentSkeletonBake.poses(one, put("wave", null, 55f), ranges)
+        assertEquals(listOf("Wave"), replaced.map { it.name })
+        assertEquals(55f, replaced.single().values.getValue("ParamArmLA"))
+        assertFailsWith<IllegalArgumentException> { AgentSkeletonBake.poses(one, put("other", "wave", 1f), ranges) }
+        assertFailsWith<IllegalArgumentException> { AgentSkeletonBake.poses(one, put("high", "High", 500f), ranges) }
+        assertFailsWith<IllegalArgumentException> {
+            AgentSkeletonBake.poses(one, buildJsonObject {
+                put("mode", "pose_put"); put("pose", buildJsonObject { put("id", "x"); put("values", buildJsonObject { put("Nope", 1) }) })
+            }, ranges)
+        }
+        assertFailsWith<IllegalArgumentException> { AgentSkeletonBake.poses(one, buildJsonObject { put("mode", "pose_delete"); put("id", "gone") }, ranges) }
+        assertTrue(AgentSkeletonBake.poses(one, buildJsonObject { put("mode", "pose_delete"); put("id", "wave") }, ranges).isEmpty())
+        assertFailsWith<IllegalArgumentException> { PosePreset("1bad", "Bad", mapOf("ParamArmLA" to 1f)) }
     }
 }

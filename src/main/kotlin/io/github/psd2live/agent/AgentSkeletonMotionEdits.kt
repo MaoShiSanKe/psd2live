@@ -118,6 +118,11 @@ internal object AgentSkeletonMotionEdits {
             }
             else -> error("Unknown motion mode: $mode")
         }
+        return validated(next, ranges)
+    }
+
+    /** [next] once every clip is known to fit the model's parameters and the limits a request may not pass. */
+    fun validated(next: List<MotionClip>, ranges: Map<String, ClosedFloatingPointRange<Float>>): List<MotionClip> {
         require(next.map { it.id }.distinct().size == next.size) { "Duplicate motion IDs" }
         require(next.mapNotNull { it.builtin }.distinct().size == next.count { it.builtin != null }) { "Duplicate built-in override" }
         require(next.map { it.name.lowercase() }.distinct().size == next.size) { "Duplicate motion names" }

@@ -425,6 +425,10 @@ interface AgentWorkspace {
     /** Solve an FK/IK drag into parameter values without changing the model or preview. */
     fun solveSkeletonPose(request: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject =
         throw UnsupportedOperationException("Skeleton posing is unavailable")
+    /** Bake pose keys into curves against the current rig without changing history: the numbers `motion bake` would write. */
+    fun bakeSkeletonMotion(request: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject =
+        throw UnsupportedOperationException("Skeleton baking is unavailable")
+    fun posePresets(): List<io.github.psd2live.core.PosePreset> = emptyList()
     fun motionClips(): List<io.github.psd2live.core.MotionClip> = emptyList()
     suspend fun editMotion(state: String, request: kotlinx.serialization.json.JsonObject): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Motion editing is unavailable")

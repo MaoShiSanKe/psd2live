@@ -293,6 +293,7 @@ fun FrameWindowScope.PSD2LiveApp(
 		val modalOpen = helpDialogTab != null ||
 			showAgentDialog ||
 			state.showTextureUpscaleDialog ||
+			viewModel.skeletonBake.open ||
 			state.lightboxImage != null ||
 			state.showProjectLocationDialog ||
 			state.showExportDialog ||
@@ -623,6 +624,10 @@ fun FrameWindowScope.PSD2LiveApp(
 				startupError = agentStartupError,
 				onDismiss = { showAgentDialog = false },
 			)
+		}
+
+		if (viewModel.skeletonBake.open) {
+			io.github.psd2live.ui.components.SkeletonBakeDialog(state, viewModel)
 		}
 
 		if (state.showTextureUpscaleDialog) {
