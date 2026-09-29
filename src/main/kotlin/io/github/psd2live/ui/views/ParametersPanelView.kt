@@ -124,6 +124,7 @@ import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
+import io.github.psd2live.ui.components.IconAutoKey
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconCollapseAll
@@ -624,6 +625,20 @@ internal fun ParametersListView(
 						tooltip = tr("parameters.newFolder"),
 					) {
 						IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+					}
+					if (viewModel.editingMotionClip() != null) {
+						PanelToolbarSeparator()
+						CompactIconButton(
+							onClick = { viewModel.toggleMotionAutoKey() },
+							size = 22.dp,
+							tooltip = tr("animation.editor.autoKeyTooltip"),
+						) {
+							IconAutoKey(
+								modifier = Modifier.size(11.dp),
+								active = viewModel.motionEditor.autoKey,
+								tint = if (viewModel.motionEditor.autoKey) Color(0xFFE05252) else colors.textMuted,
+							)
+						}
 					}
 					Spacer(Modifier.weight(1f))
 					CompactIconButton(
@@ -1434,6 +1449,8 @@ private fun ParameterTrack(
 	enabled: Boolean = true,
 	thumbShape: SliderKeyShape = SliderKeyShape.Circle,
 	onHoverKey: ((key: Float?, trackCoords: LayoutCoordinates?, localY: Float) -> Unit)? = null,
+	onGestureStart: () -> Unit = {},
+	onGestureEnd: () -> Unit = {},
 ) {
 	val colors = LocalToolColors.current
 	val labelMeasurer = rememberTextMeasurer()
@@ -1517,12 +1534,17 @@ private fun ParameterTrack(
 						} while (event.changes.any { it.pressed })
 						return@awaitEachGesture
 					}
-                    val clickedKey = hitKey(down.position.x, size.width.toFloat(), inset, 7.dp.toPx())
-                    changeValue(clickedKey ?: valueOf(down.position.x, size.width.toFloat(), inset))
-					down.consume()
-					drag(down.id) { change ->
-						change.consume()
-						changeValue(valueOf(change.position.x, size.width.toFloat(), inset))
+					try {
+						onGestureStart()
+						val clickedKey = hitKey(down.position.x, size.width.toFloat(), inset, 7.dp.toPx())
+						changeValue(clickedKey ?: valueOf(down.position.x, size.width.toFloat(), inset))
+						down.consume()
+						drag(down.id) { change ->
+							change.consume()
+							changeValue(valueOf(change.position.x, size.width.toFloat(), inset))
+						}
+					} finally {
+						onGestureEnd()
 					}
 				}
 			},
@@ -1833,6 +1855,8 @@ private fun ParameterRowItem(
 			modifier = Modifier.weight(1f),
 			thumbShape = if (param.kind == ParameterKind.BLEND_SHAPE) SliderKeyShape.Square else SliderKeyShape.Circle,
 			onHoverKey = onKeyHover,
+			onGestureStart = viewModel::beginEditorGesture,
+			onGestureEnd = viewModel::endEditorGesture,
 		)
 		ParameterValueInput(param, currentValue, { viewModel.setParameterValue(param.id, it) })
 		Spacer(Modifier.width(ParamRowInputSpacer))
@@ -1911,6 +1935,8 @@ private fun LinkedParameterPad(
 				if (!yLocked) viewModel.setParameterValue(vertical.id, y)
 			},
 			onHoverKey = onKeyHover,
+			onGestureStart = viewModel::beginEditorGesture,
+			onGestureEnd = viewModel::endEditorGesture,
 		)
 		Column(
 			modifier = Modifier.width(ParamRowInputWidth),
@@ -1966,6 +1992,8 @@ private fun ParameterPad2D(
 	modifier: Modifier,
 	onChange: (Float, Float) -> Unit,
 	onHoverKey: ((xKey: Float?, yKey: Float?, trackCoords: LayoutCoordinates?, localY: Float) -> Unit)? = null,
+	onGestureStart: () -> Unit = {},
+	onGestureEnd: () -> Unit = {},
 ) {
 	val colors = LocalToolColors.current
 	val xKeyList = remember(horizontal, horizontalKeys) {
@@ -2072,11 +2100,16 @@ private fun ParameterPad2D(
 							if (!yLockedState) vMax - ny * (vMax - vMin) else yValueState,
 						)
 					}
-					freeAt(down.position)
-					down.consume()
-					drag(down.id) { change ->
-						change.consume()
-						freeAt(change.position)
+					try {
+						onGestureStart()
+						freeAt(down.position)
+						down.consume()
+						drag(down.id) { change ->
+							change.consume()
+							freeAt(change.position)
+						}
+					} finally {
+						onGestureEnd()
 					}
 				}
 			},

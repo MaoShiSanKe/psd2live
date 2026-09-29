@@ -269,6 +269,33 @@ fun IconRedo(
 	}
 }
 
+/** Blender-style Auto-Keying / Record Dot Icon */
+@Composable
+fun IconAutoKey(
+	modifier: Modifier = Modifier.size(12.dp),
+	active: Boolean = false,
+	tint: Color = LocalToolColors.current.textPrimary,
+) {
+	Canvas(modifier = modifier) {
+		val stroke = Stroke(width = 1.3f)
+		val center = Offset(size.width / 2f, size.height / 2f)
+		val radius = size.minDimension * 0.42f
+		drawCircle(
+			color = tint,
+			radius = radius,
+			center = center,
+			style = stroke,
+		)
+		val innerRadius = if (active) radius * 0.58f else radius * 0.32f
+		drawCircle(
+			color = tint,
+			radius = innerRadius,
+			center = center,
+			style = Fill,
+		)
+	}
+}
+
 /** Vector Lock / Unlock Icon */
 @Composable
 fun IconLock(
@@ -1718,7 +1745,7 @@ fun CompactCheckbox(
 	}
 }
 
-/** Compact Toggle Chip / Button matching desktop tool aesthetic */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CompactToggleChip(
 	text: String,
@@ -1729,6 +1756,7 @@ fun CompactToggleChip(
 	leadingIcon: (@Composable () -> Unit)? = null,
 	showCheckWhenSelected: Boolean = true,
 	height: Dp = 22.dp,
+	tooltip: String? = null,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -1758,39 +1786,67 @@ fun CompactToggleChip(
 		else -> colors.textMuted
 	}
 
-	Box(
-		modifier = modifier
-			.height(height)
-			.background(bgColor, RoundedCornerShape(2.dp))
-			.border(BorderStroke(1.dp, borderColor), RoundedCornerShape(2.dp))
-			.hoverable(interactionSource)
-			.clickable(enabled = enabled, interactionSource = interactionSource, indication = null) { onToggle() }
-			.pointerHoverIcon(if (enabled) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
-			.padding(horizontal = 4.dp),
-		contentAlignment = Alignment.Center,
-	) {
-		Row(
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.Center,
+	val chipBox = @Composable {
+		Box(
+			modifier = (if (tooltip.isNullOrBlank()) modifier else Modifier)
+				.height(height)
+				.background(bgColor, RoundedCornerShape(2.dp))
+				.border(BorderStroke(1.dp, borderColor), RoundedCornerShape(2.dp))
+				.hoverable(interactionSource)
+				.clickable(enabled = enabled, interactionSource = interactionSource, indication = null) { onToggle() }
+				.pointerHoverIcon(if (enabled) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
+				.padding(horizontal = 4.dp),
+			contentAlignment = Alignment.Center,
 		) {
-			if (leadingIcon != null) {
-				leadingIcon()
-				Spacer(Modifier.width(3.dp))
-			} else if (selected && showCheckWhenSelected) {
-				IconCheck(modifier = Modifier.size(9.dp), tint = contentColor)
-				Spacer(Modifier.width(3.dp))
+			Row(
+				verticalAlignment = Alignment.CenterVertically,
+				horizontalArrangement = Arrangement.Center,
+			) {
+				if (leadingIcon != null) {
+					leadingIcon()
+					Spacer(Modifier.width(3.dp))
+				} else if (selected && showCheckWhenSelected) {
+					IconCheck(modifier = Modifier.size(9.dp), tint = contentColor)
+					Spacer(Modifier.width(3.dp))
+				}
+				Text(
+					text = text,
+					style = typography.body.copy(
+						fontSize = 10.5.sp,
+						fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+					),
+					color = contentColor,
+					maxLines = 1,
+					overflow = TextOverflow.Ellipsis,
+				)
 			}
-			Text(
-				text = text,
-				style = typography.body.copy(
-					fontSize = 10.5.sp,
-					fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-				),
-				color = contentColor,
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-			)
 		}
+	}
+
+	if (!tooltip.isNullOrBlank()) {
+		TooltipArea(
+			tooltip = {
+				Surface(
+					color = colors.panelElevated,
+					shape = RoundedCornerShape(2.dp),
+					border = BorderStroke(1.dp, colors.border),
+					elevation = 4.dp,
+				) {
+					Text(
+						text = tooltip,
+						style = typography.caption.copy(fontSize = 10.sp),
+						color = colors.textPrimary,
+						modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+					)
+				}
+			},
+			delayMillis = 400,
+			modifier = modifier,
+		) {
+			chipBox()
+		}
+	} else {
+		chipBox()
 	}
 }
 

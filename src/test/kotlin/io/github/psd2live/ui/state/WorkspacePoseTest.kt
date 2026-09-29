@@ -22,7 +22,10 @@ class WorkspacePoseTest {
         val preview = PSD2LivePipeline().buildPreview(WorkspaceSourceArt(8, 8, listOf(layer), emptyList()),
             PipelineConfig(meshOnly = true, atlasSize = 256))
         return preview.copy(rig = preview.rig.copy(puppet = preview.rig.puppet.copy(
-            parameters = listOf(Parameter(parameter, "Pose", -1f, 1f, 0f)))))
+            parameters = listOf(
+                Parameter(parameter, "Pose", -1f, 1f, 0f),
+                Parameter(ParameterId("untracked"), "Untracked", -10f, 10f, 2f),
+            ))))
     }
 
     @Test fun scrubbingWithoutPreviewCanvasUpdatesEditPoseAndKeyingUsesTheLatestEdit() {
@@ -140,6 +143,85 @@ class WorkspacePoseTest {
             assertEquals(before.canvases.map { it.id to it.mode }, after.canvases.map { it.id to it.mode })
             assertEquals(before.hiddenModules, after.hiddenModules)
             assertEquals(before.activeCanvasId, after.activeCanvasId)
+        }
+    }
+
+    @Test fun autoKeyingWhenEnabledAutomaticallyInsertsKeyframe() {
+        PSD2LiveViewModel().use { vm ->
+            val preview = preview()
+            val clip = MotionClip("clip", "Clip", curves = listOf(MotionCurve(parameter.raw,
+                listOf(MotionKey(0f, -1f), MotionKey(1f, 1f)))))
+            vm.setStateForTest(vm.state.value.copy(previewModel = preview,
+                rigEdits = vm.state.value.rigEdits.copy(motionClips = listOf(clip))))
+            vm.openMotionInEditor(clip.id)
+            vm.setMotionAutoKey(true)
+            vm.setMotionPlayhead(0.5f)
+
+            vm.setParameterValue(parameter, 0.4f)
+
+            val updatedCurve = vm.editingMotionClip()!!.curve(parameter.raw)!!
+            val key = updatedCurve.keys.firstOrNull { it.time == 0.5f }
+            assertNotNull(key)
+            assertEquals(0.4f, key.value)
+        }
+    }
+
+    @Test fun parameterChangeWithoutAutoKeyDoesNotAlterClip() {
+        PSD2LiveViewModel().use { vm ->
+            val preview = preview()
+            val clip = MotionClip("clip", "Clip", curves = listOf(MotionCurve(parameter.raw,
+                listOf(MotionKey(0f, -1f), MotionKey(1f, 1f)))))
+            vm.setStateForTest(vm.state.value.copy(previewModel = preview,
+                rigEdits = vm.state.value.rigEdits.copy(motionClips = listOf(clip))))
+            vm.openMotionInEditor(clip.id)
+            vm.setMotionAutoKey(false)
+            vm.setMotionPlayhead(0.5f)
+
+            val keysBefore = vm.editingMotionClip()!!.curve(parameter.raw)!!.keys
+            vm.setParameterValue(parameter, 0.9f)
+            val keysAfter = vm.editingMotionClip()!!.curve(parameter.raw)!!.keys
+
+            assertEquals(keysBefore, keysAfter)
+        }
+    }
+
+    @Test fun autoKeyingUntrackedParameterArchivesInitialStateAtZero() {
+        PSD2LiveViewModel().use { vm ->
+            val preview = preview()
+            val clip = MotionClip("clip", "Clip", curves = listOf(MotionCurve(parameter.raw,
+                listOf(MotionKey(0f, 0f)))))
+            vm.setStateForTest(vm.state.value.copy(previewModel = preview,
+                rigEdits = vm.state.value.rigEdits.copy(motionClips = listOf(clip))))
+            vm.openMotionInEditor(clip.id)
+            vm.setMotionAutoKey(true)
+            vm.setMotionPlayhead(0.8f)
+
+            val untrackedId = ParameterId("untracked")
+            vm.setParameterValue(untrackedId, 6f)
+
+            val curve = vm.editingMotionClip()!!.curve("untracked")
+            assertNotNull(curve)
+            assertEquals(listOf(0f, 0.8f), curve.keys.map { it.time })
+            assertEquals(listOf(2f, 6f), curve.keys.map { it.value })
+        }
+    }
+
+    @Test fun resetParameterWithAutoKeyRecordsDefaultValue() {
+        PSD2LiveViewModel().use { vm ->
+            val preview = preview()
+            val clip = MotionClip("clip", "Clip", curves = listOf(MotionCurve(parameter.raw,
+                listOf(MotionKey(0f, -1f), MotionKey(1f, 1f)))))
+            vm.setStateForTest(vm.state.value.copy(previewModel = preview,
+                rigEdits = vm.state.value.rigEdits.copy(motionClips = listOf(clip))))
+            vm.openMotionInEditor(clip.id)
+            vm.setMotionAutoKey(true)
+            vm.setMotionPlayhead(0.2f)
+
+            vm.setParameterValue(parameter, 0.8f)
+            assertEquals(0.8f, vm.editingMotionClip()!!.curve(parameter.raw)!!.keys.first { it.time == 0.2f }.value)
+
+            vm.resetParameter(parameter)
+            assertEquals(0f, vm.editingMotionClip()!!.curve(parameter.raw)!!.keys.first { it.time == 0.2f }.value)
         }
     }
 }

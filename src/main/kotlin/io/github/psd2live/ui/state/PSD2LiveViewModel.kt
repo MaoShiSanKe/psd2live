@@ -69,6 +69,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlin.math.abs
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
 import org.umamo.edit.freshParameterGroupId
@@ -2051,8 +2052,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		} else markWorkspaceChanged()
 	}
 
-	private fun updateMotionClip(id: String, commit: Boolean = true, transform: (MotionClip) -> MotionClip) =
-		updateMotionClips(commit) { clips -> clips.map { if (it.id == id) transform(it) else it } }
+	private fun updateMotionClip(id: String, commit: Boolean = true, summary: String? = null, transform: (MotionClip) -> MotionClip) =
+		updateMotionClips(commit, summary) { clips -> clips.map { if (it.id == id) transform(it) else it } }
 
 	/** A new clip, blank or a copy of a generated motion's tracks, opened in the editor. */
 	fun createMotionClip(fromBuiltin: String? = null): String {
@@ -2153,9 +2154,35 @@ class PSD2LiveViewModel : AutoCloseable {
 		motionEditor.focusedCurve = null
 	}
 
-	private fun updateEditingClip(commit: Boolean = true, transform: (MotionClip) -> MotionClip) {
+	private fun updateEditingClip(commit: Boolean = true, summary: String? = null, transform: (MotionClip) -> MotionClip) {
 		val id = editingMotionClip()?.id ?: return
-		updateMotionClip(id, commit, transform)
+		updateMotionClip(id, commit, summary, transform)
+	}
+
+	fun toggleMotionAutoKey() {
+		val next = !motionEditor.autoKey
+		motionEditor.autoKey = next
+		AppSettings.autoKey = next
+	}
+
+	fun setMotionAutoKey(enabled: Boolean) {
+		motionEditor.autoKey = enabled
+		AppSettings.autoKey = enabled
+	}
+
+	internal fun recordAutoKey(
+		changes: Map<String, Float>,
+		initialValues: Map<String, Float>,
+	) {
+		val clip = editingMotionClip() ?: return
+		val playhead = motionEditor.playhead.coerceIn(0f, clip.duration)
+		val keyTime = if (motionEditor.snapToFrames) MotionKeyEdits.snap(playhead, clip.fps).coerceIn(0f, clip.duration) else playhead
+		val (nextClip, keyRefs) = MotionKeyEdits.autoKeyMultiple(clip, changes, initialValues, keyTime)
+		if (nextClip != clip) {
+			updateEditingClip(summary = tr("history.motion.autoKey")) { nextClip }
+			motionEditor.selection = keyRefs
+			changes.keys.lastOrNull()?.let { motionEditor.focusedCurve = it }
+		}
 	}
 
 	/** A curve for [parameterId], keyed at the playhead with the pose the preview shows. */
@@ -3861,15 +3888,23 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun setParameterValue(id: ParameterId, value: Float) {
         motionEditor.playing = false
         motionPlayer.stop()
+		val model = _state.value.previewModel
+		val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
+		val clamped = if (param != null) value.coerceIn(param.min, param.max) else value
+		val previous = _state.value.parameterValues[id] ?: param?.default ?: 0f
+		val changed = abs(previous - clamped) >= 1e-5f
+
 		updateState { current ->
-			val model = current.previewModel
-			val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
-			val clamped = if (param != null) value.coerceIn(param.min, param.max) else value
 			current.copy(
 				animationEnabled = false,
 				parameterValues = current.parameterValues + (id to clamped),
 			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
 		}
+
+		if (changed && motionEditor.autoKey && editingMotionClip() != null) {
+			recordAutoKey(mapOf(id.raw to clamped), mapOf(id.raw to (param?.default ?: 0f)))
+		}
+
 	    markWorkspaceChanged()
 	}
 
@@ -3878,11 +3913,32 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (values.isEmpty()) return
         motionEditor.playing = false
         motionPlayer.stop()
-		updateState { current ->
-			val parameters = current.previewModel?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
-			val clamped = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
-			current.copy(parameterValues = current.parameterValues + clamped).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
+		val model = _state.value.previewModel
+		val parameters = model?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
+		val clampedMap = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
+
+		val changed = mutableMapOf<String, Float>()
+		val initial = mutableMapOf<String, Float>()
+		for ((id, clamped) in clampedMap) {
+			val param = parameters[id]
+			val previous = _state.value.parameterValues[id] ?: param?.default ?: 0f
+			if (abs(previous - clamped) >= 1e-5f) {
+				changed[id.raw] = clamped
+				initial[id.raw] = param?.default ?: 0f
+			}
 		}
+
+		updateState { current ->
+			current.copy(
+				animationEnabled = false,
+				parameterValues = current.parameterValues + clampedMap,
+			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
+		}
+
+		if (changed.isNotEmpty() && motionEditor.autoKey && editingMotionClip() != null) {
+			recordAutoKey(changed, initial)
+		}
+
 		markWorkspaceChanged()
 	}
 
@@ -3956,14 +4012,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun resetParameter(id: ParameterId) {
-		updateState { current ->
-			val model = current.previewModel
-			val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
-			val defaultVal = param?.default ?: 0f
-			current.copy(
-				parameterValues = current.parameterValues + (id to defaultVal),
-			).authoringPose()
-		}
+		val model = _state.value.previewModel
+		val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
+		val defaultVal = param?.default ?: 0f
+		setParameterValue(id, defaultVal)
 		if (id == StandardParameters.ANGLE_X || id == StandardParameters.EYE_BALL_X || id == StandardParameters.BODY_X) {
 			followX = 0f
 			pointerX = 0f
@@ -3972,7 +4024,6 @@ class PSD2LiveViewModel : AutoCloseable {
 			followY = 0f
 			pointerY = 0f
 		}
-	    markWorkspaceChanged()
 	}
 
 	private fun resetMotionDynamics() {

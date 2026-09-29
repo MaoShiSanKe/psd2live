@@ -30,6 +30,7 @@ internal class MotionEditorState {
 	var playing: Boolean by mutableStateOf(false)
 	var view: MotionEditorView by mutableStateOf(MotionEditorView.DOPESHEET)
 	var snapToFrames: Boolean by mutableStateOf(true)
+	var autoKey: Boolean by mutableStateOf(AppSettings.autoKey)
 	/** Copied keys, times relative to the earliest. */
 	var clipboard: List<Pair<String, MotionKey>> = emptyList()
 
@@ -50,6 +51,74 @@ internal object MotionKeyEdits {
 		val keys = MotionClips.normalized((curve?.keys.orEmpty()) + key)
 		val next = MotionCurve(parameterId, keys)
 		return clip.copy(curves = if (curve == null) clip.curves + next else clip.curves.map { if (it.parameterId == parameterId) next else it })
+	}
+
+	/**
+	 * Automatically records keyframes for [changes] at [time].
+	 * If a parameter does not have a curve in [clip] yet (initial state changed):
+	 * - It adds the curve to the clip.
+	 * - If [time] > TIME_EPSILON, it archives the initial state by creating a keyframe at t=0 with [initialValues],
+	 *   and adds the keyframe at [time] with the changed value.
+	 * - If [time] <= TIME_EPSILON, it creates a keyframe at t=0 with the changed value.
+	 * If the curve already exists:
+	 * - If it has no key at t=0 and [time] > TIME_EPSILON, it also ensures a keyframe at t=0 with [initialValues].
+	 * - It updates the keyframe at [time] if one exists (preserving interpolation and handles),
+	 *   or inserts a new keyframe at [time].
+	 */
+	fun autoKey(
+		clip: MotionClip,
+		parameterId: String,
+		time: Float,
+		value: Float,
+		initialValue: Float,
+	): Pair<MotionClip, Set<MotionKeyRef>> =
+		autoKeyMultiple(clip, mapOf(parameterId to value), mapOf(parameterId to initialValue), time)
+
+	fun autoKeyMultiple(
+		clip: MotionClip,
+		changes: Map<String, Float>,
+		initialValues: Map<String, Float>,
+		time: Float,
+	): Pair<MotionClip, Set<MotionKeyRef>> {
+		if (changes.isEmpty()) return clip to emptySet()
+		val at = time.coerceIn(0f, clip.duration)
+		val keyRefs = mutableSetOf<MotionKeyRef>()
+		val nextCurves = clip.curves.toMutableList()
+
+		for ((paramId, value) in changes) {
+			val existingIndex = nextCurves.indexOfFirst { it.parameterId == paramId }
+			val initialVal = initialValues[paramId] ?: 0f
+
+			if (existingIndex < 0) {
+				val keys = if (at > MotionClips.TIME_EPSILON) {
+					keyRefs += MotionKeyRef(paramId, 0f)
+					keyRefs += MotionKeyRef(paramId, at)
+					listOf(MotionKey(0f, initialVal), MotionKey(at, value))
+				} else {
+					keyRefs += MotionKeyRef(paramId, 0f)
+					listOf(MotionKey(0f, value))
+				}
+				nextCurves += MotionCurve(paramId, keys)
+			} else {
+				val curve = nextCurves[existingIndex]
+				val existingKey = curve.keys.firstOrNull { abs(it.time - at) < MotionClips.TIME_EPSILON }
+				val updatedKey = existingKey?.copy(value = value) ?: MotionKey(at, value)
+				keyRefs += MotionKeyRef(paramId, at)
+
+				val needsInitialKey = at > MotionClips.TIME_EPSILON && curve.keys.none { it.time <= MotionClips.TIME_EPSILON }
+				val baseKeys = if (needsInitialKey) {
+					keyRefs += MotionKeyRef(paramId, 0f)
+					curve.keys + MotionKey(0f, initialVal)
+				} else {
+					curve.keys
+				}
+
+				val nextKeys = MotionClips.normalized(baseKeys + updatedKey)
+				nextCurves[existingIndex] = curve.copy(keys = nextKeys)
+			}
+		}
+
+		return clip.copy(curves = nextCurves) to keyRefs
 	}
 
 	/** Every selected key replaced by [transform]; a curve left without keys is removed. */

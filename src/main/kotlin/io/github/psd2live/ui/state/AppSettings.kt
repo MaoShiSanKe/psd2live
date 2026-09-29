@@ -18,6 +18,7 @@ object AppSettings {
 	private const val KEY_FONT_SCALE = "font_scale"
 	private const val KEY_CUSTOM_SCALE_SET = "has_custom_ui_scale"
 	private const val KEY_DARK_THEME = "dark_theme"
+	private const val KEY_MOTION_AUTO_KEY = "motion_auto_key"
 
 	private val preferences by lazy {
 		Preferences.userRoot().node(PREFS_NODE_NAME)
@@ -65,6 +66,15 @@ object AppSettings {
 			val clamped = value.coerceIn(0.85f, 1.5f)
 			runCatching {
 				preferences.putFloat(KEY_FONT_SCALE, clamped)
+				preferences.flush()
+			}
+		}
+
+	var autoKey: Boolean
+		get() = runCatching { preferences.getBoolean(KEY_MOTION_AUTO_KEY, false) }.getOrDefault(false)
+		set(value) {
+			runCatching {
+				preferences.putBoolean(KEY_MOTION_AUTO_KEY, value)
 				preferences.flush()
 			}
 		}

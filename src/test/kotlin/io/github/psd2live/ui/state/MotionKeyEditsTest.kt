@@ -55,4 +55,52 @@ class MotionKeyEditsTest {
         assertEquals(listOf(0f to 0f, 1f to 5f, 1.5f to 2.5f), next.curve("A")!!.keys.map { it.time to it.value })
         assertEquals(clip.curve("B"), next.curve("B"))
     }
+
+    @Test fun autoKeyAddsUntrackedParameterAtPlayheadAndArchivesInitialStateAtZero() {
+        val (next, refs) = MotionKeyEdits.autoKey(clip, "C", time = 1.2f, value = 10f, initialValue = 2f)
+        val curveC = next.curve("C")
+        kotlin.test.assertNotNull(curveC)
+        assertEquals(listOf(0f, 1.2f), curveC.keys.map { it.time })
+        assertEquals(listOf(2f, 10f), curveC.keys.map { it.value })
+        assertEquals(setOf(MotionKeyRef("C", 0f), MotionKeyRef("C", 1.2f)), refs)
+    }
+
+    @Test fun autoKeyAtZeroDirectlyRecordsInitialStateForUntrackedParameter() {
+        val (next, refs) = MotionKeyEdits.autoKey(clip, "D", time = 0f, value = 5f, initialValue = 0f)
+        val curveD = next.curve("D")
+        kotlin.test.assertNotNull(curveD)
+        assertEquals(listOf(0f), curveD.keys.map { it.time })
+        assertEquals(listOf(5f), curveD.keys.map { it.value })
+        assertEquals(setOf(MotionKeyRef("D", 0f)), refs)
+    }
+
+    @Test fun autoKeyUpdatesExistingKeyAtCurrentTime() {
+        val (next, refs) = MotionKeyEdits.autoKey(clip, "A", time = 1f, value = 8f, initialValue = 0f)
+        val curveA = next.curve("A")!!
+        assertEquals(listOf(0f, 1f, 2f), curveA.keys.map { it.time })
+        assertEquals(listOf(0f, 8f, 0f), curveA.keys.map { it.value })
+        assertEquals(setOf(MotionKeyRef("A", 1f)), refs)
+    }
+
+    @Test fun autoKeyInsertsNewKeyAtUnkeyedTimeOnExistingCurve() {
+        val (next, refs) = MotionKeyEdits.autoKey(clip, "A", time = 0.5f, value = 3f, initialValue = 0f)
+        val curveA = next.curve("A")!!
+        assertEquals(listOf(0f, 0.5f, 1f, 2f), curveA.keys.map { it.time })
+        assertEquals(listOf(0f, 3f, 5f, 0f), curveA.keys.map { it.value })
+        assertEquals(setOf(MotionKeyRef("A", 0.5f)), refs)
+    }
+
+    @Test fun autoKeyMultipleRecordsMultipleParametersSimultaneously() {
+        val (next, refs) = MotionKeyEdits.autoKeyMultiple(
+            clip = clip,
+            changes = mapOf("A" to 9f, "C" to 4f),
+            initialValues = mapOf("A" to 0f, "C" to 1f),
+            time = 1f,
+        )
+        assertEquals(9f, next.curve("A")!!.keys.first { it.time == 1f }.value)
+        val curveC = next.curve("C")!!
+        assertEquals(listOf(0f, 1f), curveC.keys.map { it.time })
+        assertEquals(listOf(1f, 4f), curveC.keys.map { it.value })
+        assertEquals(setOf(MotionKeyRef("A", 1f), MotionKeyRef("C", 0f), MotionKeyRef("C", 1f)), refs)
+    }
 }

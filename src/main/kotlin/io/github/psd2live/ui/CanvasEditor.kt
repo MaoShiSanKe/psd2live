@@ -568,6 +568,7 @@ internal class CanvasEditor(
 
 	fun beginPose(pos: Offset, viewport: CanvasViewport): Boolean {
 		poseDrag = SkeletonPoseTool.hit(posedBones(), pos, viewport)
+		if (poseDrag != null) viewModel.beginEditorGesture()
 		return poseDrag != null
 	}
 
@@ -578,7 +579,12 @@ internal class CanvasEditor(
 		if (values.isNotEmpty()) viewModel.setParameterValues(values)
 	}
 
-	fun endPose() { poseDrag = null }
+	fun endPose() {
+		if (poseDrag != null) {
+			poseDrag = null
+			viewModel.endEditorGesture()
+		}
+	}
 
 	/** The pose tool is armed and has a baked skeleton to drive. */
 	fun posing(): Boolean = tool == CanvasTool.SKELETON_POSE && skeletonSelected &&

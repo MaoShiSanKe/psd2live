@@ -58,8 +58,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -95,6 +97,7 @@ import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconAdd
+import io.github.psd2live.ui.components.IconAutoKey
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
@@ -282,6 +285,21 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 			text = tr("animation.editor.snap"),
 			selected = editor.snapToFrames,
 			onToggle = { editor.snapToFrames = !editor.snapToFrames },
+			height = 22.dp,
+		)
+		CompactToggleChip(
+			text = tr("animation.editor.autoKey"),
+			selected = editor.autoKey,
+			onToggle = { viewModel.toggleMotionAutoKey() },
+			leadingIcon = {
+				IconAutoKey(
+					modifier = Modifier.size(11.dp),
+					active = editor.autoKey,
+					tint = if (editor.autoKey) Color(0xFFE05252) else colors.textMuted,
+				)
+			},
+			showCheckWhenSelected = false,
+			tooltip = tr("animation.editor.autoKeyTooltip"),
 			height = 22.dp,
 		)
 		PanelToolbarSeparator()
@@ -671,6 +689,7 @@ private fun Timeline(
 							true
 						}
 						event.key == Key.Spacebar -> { viewModel.setMotionEditorPlaying(!editor.playing); true }
+						event.key == Key.K && (event.isAltPressed || event.isShiftPressed) -> { viewModel.toggleMotionAutoKey(); true }
 						event.key == Key.K -> { viewModel.keyCurrentPose(); true }
 						event.key == Key.F -> { fitView(); true }
 						event.key == Key.MoveHome -> { viewModel.setMotionPlayhead(0f); true }
