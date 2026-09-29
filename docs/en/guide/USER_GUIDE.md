@@ -45,10 +45,10 @@ The catalog has 18 topics. The beginner path contains the 17 lessons below; the 
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
 | 12 | Tool details | Configure the current tool; canvas context menus also change with mode and tool. |
-| 13 | Skeleton rigging and posing | Build chains, bind ArtMeshes, inspect weights and pose with IK. Export bakes this PSD2Live authoring aid into Cubism parameters, deformers and corrective keyforms. |
-| 14 | Animation editor | Edit parameter tracks and keyframes on the timeline, choose interpolation and preview the motion. |
+| 13 | Skeleton rigging and posing | Build chains, bind ArtMeshes, inspect smoothed weights and IK, and configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
+| 14 | Animation editor | Edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
-| 16 | Project and history | Save the project, restore a history node or branch from it. Hiding a branch does not delete it. |
+| 16 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset. |
 | 17 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
 
 ## Important distinctions

@@ -128,9 +128,57 @@ class InteractiveTutorialCatalogTest {
 	fun newFeatureLessonsUseCanvasAndTheirRealDocks() {
 		assertEquals(TutorialTargetId.SKELETON_DOCK, tutorialDefinition(TutorialId.SKELETON).steps.first().targetId)
 		assertTrue(tutorialDefinition(TutorialId.SKELETON).steps.any { it.targetId == TutorialTargetId.CANVAS_VIEWPORT })
+		assertTrue(tutorialDefinition(TutorialId.SKELETON).steps.any { it.key == "sampling" })
 		assertEquals(TutorialTargetId.ANIMATION_DOCK, tutorialDefinition(TutorialId.ANIMATION).steps.first().targetId)
 		assertTrue(tutorialDefinition(TutorialId.ANIMATION).steps.any { it.targetId == TutorialTargetId.ANIMATION_EDITOR_DOCK })
+		assertTrue(tutorialDefinition(TutorialId.ANIMATION).steps.any { it.key == "autoKey" })
 		assertEquals(TutorialTargetId.PHYSICS_DOCK, tutorialDefinition(TutorialId.PHYSICS).steps.first().targetId)
 		assertTrue(tutorialDefinition(TutorialId.PHYSICS).steps.any { it.targetId == TutorialTargetId.CANVAS_VIEWPORT })
+	}
+
+	@Test
+	fun allTutorialStepsHaveTranslationsAcrossLocales() {
+		val bundles = listOf("Messages", "Messages_zh_CN", "Messages_ja").map { name ->
+			val props = java.util.Properties()
+			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
+			name to props
+		}
+		val missing = mutableListOf<String>()
+		TutorialId.entries.forEach { id ->
+			val def = tutorialDefinition(id)
+			bundles.forEach { (bundleName, props) ->
+				if (props.getProperty(id.titleKey).orEmpty().isBlank()) missing += "$bundleName missing ${id.titleKey}"
+				if (props.getProperty(id.descKey).orEmpty().isBlank()) missing += "$bundleName missing ${id.descKey}"
+				def.steps.forEach { step ->
+					val titleK = step.titleKey(id)
+					val bodyK = step.bodyKey(id)
+					if (props.getProperty(titleK).orEmpty().isBlank()) missing += "$bundleName missing $titleK"
+					if (props.getProperty(bodyK).orEmpty().isBlank()) missing += "$bundleName missing $bodyK"
+					if (step.showAction) {
+						val actionK = step.actionKey(id)
+						if (props.getProperty(actionK).orEmpty().isBlank()) missing += "$bundleName missing $actionK"
+					}
+				}
+			}
+		}
+		assertTrue(missing.isEmpty(), "Missing tutorial translations:\n" + missing.joinToString("\n"))
+	}
+
+	@Test
+	fun startCanvasUpdatesHaveTranslationsAcrossLocales() {
+		val bundles = listOf("Messages", "Messages_zh_CN", "Messages_ja").map { name ->
+			val props = java.util.Properties()
+			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
+			name to props
+		}
+		val keys = listOf("animation", "skeleton", "history", "workspace", "physics")
+		bundles.forEach { (bundleName, props) ->
+			keys.forEach { key ->
+				val title = props.getProperty("canvas.start.update.$key.title")
+				val desc = props.getProperty("canvas.start.update.$key.desc")
+				assertTrue(title.orEmpty().isNotBlank(), "$bundleName missing canvas.start.update.$key.title")
+				assertTrue(desc.orEmpty().isNotBlank(), "$bundleName missing canvas.start.update.$key.desc")
+			}
+		}
 	}
 }

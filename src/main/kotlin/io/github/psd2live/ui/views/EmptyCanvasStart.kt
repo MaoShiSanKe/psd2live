@@ -183,10 +183,10 @@ private fun UpdatesSection(
 			modifier = Modifier.padding(bottom = 1.dp),
 		)
 		listOf(
-			TutorialId.WORKSPACE to "workspace",
-			TutorialId.SKELETON to "skeleton",
 			TutorialId.ANIMATION to "animation",
-			TutorialId.PHYSICS to "physics",
+			TutorialId.SKELETON to "skeleton",
+			TutorialId.PROJECT_HISTORY to "history",
+			TutorialId.WORKSPACE to "workspace",
 		).forEach { (tutorial, key) ->
 			FeatureUpdateRow(
 				title = tr("canvas.start.update.$key.title"),
@@ -231,9 +231,10 @@ private fun FeatureUpdateRow(
 	) {
 		val iconTint = if (enabled) colors.accent else colors.textDisabled
 		when (tutorial) {
-			TutorialId.WORKSPACE -> WorkspacePresetIcon(WorkspacePreset.EDIT, iconTint, Modifier.size(15.dp))
-			TutorialId.SKELETON -> IconSkeleton(modifier = Modifier.size(15.dp), tint = iconTint)
 			TutorialId.ANIMATION -> IconPlay(modifier = Modifier.size(14.dp), tint = iconTint)
+			TutorialId.SKELETON -> IconSkeleton(modifier = Modifier.size(15.dp), tint = iconTint)
+			TutorialId.PROJECT_HISTORY -> WorkspacePresetIcon(WorkspacePreset.HISTORY, iconTint, Modifier.size(15.dp))
+			TutorialId.WORKSPACE -> WorkspacePresetIcon(WorkspacePreset.EDIT, iconTint, Modifier.size(15.dp))
 			TutorialId.PHYSICS -> IconPhysics(active = true, modifier = Modifier.size(15.dp), tint = iconTint)
 			else -> IconRoute(tint = iconTint)
 		}

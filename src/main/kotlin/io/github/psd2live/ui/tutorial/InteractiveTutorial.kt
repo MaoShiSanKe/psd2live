@@ -482,6 +482,7 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			step("bind", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "skeleton", ensureEditTab = true),
 			step("pose", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "skeleton", ensureEditTab = true, showAction = true),
 			step("weights", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true),
+			step("sampling", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true, showAction = true),
 			step("done", isDone = true, preferSideBubble = false),
 		),
 	),
@@ -490,6 +491,7 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 		listOf(
 			step("motions", TutorialTargetId.ANIMATION_DOCK, selectDock = "animation", showAction = true),
 			step("editor", TutorialTargetId.ANIMATION_EDITOR_DOCK, selectDock = "animationEditor"),
+			step("autoKey", TutorialTargetId.ANIMATION_EDITOR_DOCK, selectDock = "animationEditor", showAction = true),
 			step("keys", TutorialTargetId.ANIMATION_EDITOR_DOCK, selectDock = "animationEditor", showAction = true),
 			step("preview", TutorialTargetId.CANVAS_VIEWPORT),
 			step("done", isDone = true, preferSideBubble = false),
