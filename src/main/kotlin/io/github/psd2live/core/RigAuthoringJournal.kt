@@ -5,6 +5,11 @@ import org.umamo.runtime.model.*
 
 /** Materialized edits: no point arrays cross the MCP boundary, but replay never reinterprets a brush. */
 internal object RigAuthoringJournal {
+    fun replay(model: PuppetModel, edit: JsonObject): PuppetModel =
+        if (edit["op"]?.jsonPrimitive?.contentOrNull == "structure")
+            RigStructureEdits.replay(model, edit.getValue("edits").jsonArray.map { it.jsonObject })
+        else apply(model, edit)
+
     fun target(text: String): RigTargetRef {
         val pair = text.split(':', limit = 2)
         require(pair.size == 2 && pair[1].isNotBlank()) { "Use the kind:id reference returned by inspect" }

@@ -42,6 +42,13 @@ import org.umamo.runtime.model.*
 internal object RigStructureEdits {
     fun apply(model: PuppetModel, edits: List<JsonObject>): PuppetModel = edits.fold(model, ::applyOne)
 
+    /** A recorded mesh edit may outlive a temporarily removed source layer. Keep it for later rebuilds. */
+    fun replay(model: PuppetModel, edits: List<JsonObject>): PuppetModel = edits.fold(model) { current, edit ->
+        val missingMesh = edit["kind"]?.jsonPrimitive?.contentOrNull == "mesh" &&
+            edit["id"]?.jsonPrimitive?.contentOrNull?.let { id -> current.drawables.none { it.id.raw == id } } == true
+        if (missingMesh) current else applyOne(current, edit)
+    }
+
     private fun applyOne(model: PuppetModel, edit: JsonObject): PuppetModel {
         val action = edit.string("action")
         if(action == "create_warp") return RigWarpEdit.fromJson(JsonObject(edit - "action")).applyTo(model)

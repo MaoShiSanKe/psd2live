@@ -265,7 +265,7 @@ data class RigEditOverlay(
 		}
 		val journalWarpIds = structureEdits.filter { it["action"]?.jsonPrimitive?.contentOrNull == "create_warp" }.map { it.getValue("id").jsonPrimitive.content }.toSet()
         for (warp in warpEdits) if(warp.id !in journalWarpIds) model = warp.applyTo(model)
-        model = RigStructureEdits.apply(model, structureEdits)
+        model = RigStructureEdits.replay(model, structureEdits)
 		// 3. Apply keyform sets
 		for (set in keyformSetEdits) {
 			model = applyKeyformSet(model, set)
@@ -278,7 +278,7 @@ data class RigEditOverlay(
 		for (delete in keyformDeleteEdits) {
 			model = applyKeyformDelete(model, delete)
 		}
-		return SwingGenerator.apply(authoringJournal.fold(model, RigAuthoringJournal::apply), swingEdits)
+		return SwingGenerator.apply(authoringJournal.fold(model, RigAuthoringJournal::replay), swingEdits)
 	}
 
 	fun upsert(edit: RigParameterEdit): RigEditOverlay {
