@@ -1,9 +1,11 @@
 package io.github.psd2live.ui.state
 
 import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.key
@@ -391,7 +393,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 motionPlayer.stop()
                 latestLiveParameters = emptyMap()
                 pausedPhysics = emptyMap()
-                _livePose.value = emptyMap()
+                setLivePose(emptyMap())
                 physicsClock = PhysicsClock.NONE
                 pointerActive = false
                 followX = 0f
@@ -400,7 +402,7 @@ class PSD2LiveViewModel : AutoCloseable {
             } else if (before.previewModel !== after.previewModel ||
                 (after.activeWorkspace.pose?.authoringPose == true &&
                     (before.parameterValues != after.parameterValues || before.activeWorkspace.pose?.authoringPose != true))) {
-                _livePose.value = emptyMap()
+                setLivePose(emptyMap())
                 pausedPhysics = emptyMap()
                 latestLiveParameters = emptyMap()
             }
@@ -1379,6 +1381,8 @@ class PSD2LiveViewModel : AutoCloseable {
 	private var previewMeshSettingsBaseline: RigPreviewModel? = null
 	private var motionJob: Job? = null
 	private val motionPlayer = PreviewMotionPlayer()
+	/** Shared by the animation panel and the animation editor. Initialized before [startMotionLoop]. */
+	internal val motionEditor = MotionEditorState()
 	private var activeWorkJob: Job? = null
 
 	private val canvasPointers = mutableMapOf<String, Pair<Float, Float>>()
@@ -1461,13 +1465,13 @@ class PSD2LiveViewModel : AutoCloseable {
 		val panel = current.previewPanelState()
 		val tracked = canvasPointers[frame.viewId] != null && panel.mouseTrackingEnabled && !current.meshOnly && current.activeWorkspace.pose?.authoringPose != true
 		val swinging = pausedPhysics
-		_livePose.value = when {
+		setLivePose(when {
 			frame.animationEnabled -> panel.parameterValues + frame.parameters
 			tracked || swinging.isNotEmpty() -> frame.parameters.filterKeys {
 				it !in panel.lockedParameters && ((tracked && it in POINTER_POSE_PARAMETERS) || it in swinging)
 			}
 			else -> emptyMap()
-		}
+		})
 	}
 
 	private val sdkSession = CubismSdkPreviewSession(
@@ -2023,9 +2027,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	// endregion
 
 	// region Authored motions
-
-	/** Shared by the animation panel and the animation editor. */
-	internal val motionEditor = MotionEditorState()
 
 	val motionClips: List<MotionClip> get() = _state.value.rigEdits.motionClips
 
@@ -2616,14 +2617,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	/**
 	 * Restores the interaction preferences that [AppSettings.resetToDefaults] clears on disk.
 	 *
-	 * Deliberately not routed through [setClickToSelectLayer], which marks the project dirty: a
-	 * global UI preference is not part of the project, and "Reset Defaults" must not leave an opened
-	 * project looking unsaved.
+	 * Deliberately not routed through setters that mark the project dirty: a global UI preference
+	 * is not part of the project, and "Reset Defaults" must not leave an opened project looking unsaved.
 	 */
 	fun resetInteractionPrefs() {
-		AppSettings.clickToSelectLayer = true
 		AppSettings.autoDetectMeshSplitsOnImport = true
-		updateState { it.copy(clickToSelectLayer = true, autoDetectMeshSplitsOnImport = true) }
+		updateState { it.copy(autoDetectMeshSplitsOnImport = true) }
 	}
 
 	fun openSettingsDialog() {
@@ -3405,12 +3404,6 @@ class PSD2LiveViewModel : AutoCloseable {
 			)
 		}
 	    markWorkspaceChanged()
-	}
-
-	fun setClickToSelectLayer(enabled: Boolean) {
-		AppSettings.clickToSelectLayer = enabled
-		updateState { it.copy(clickToSelectLayer = enabled) }
-		markWorkspaceChanged()
 	}
 
 	fun setAutoDetectMeshSplitsOnImport(enabled: Boolean) {
@@ -4724,12 +4717,37 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	private val _livePose = MutableStateFlow<Map<ParameterId, Float>>(emptyMap())
 	/**
+	 * Per-parameter mirror of [livePose] for Compose. Reading [livePoseOf] only invalidates the caller when
+	 * that parameter's live value changes, so the parameters list does not recompose every row on every frame.
+	 */
+	private val _livePoseSnapshot: SnapshotStateMap<ParameterId, Float> = mutableStateMapOf()
+	/**
 	 * The pose the preview shows now, one update per rendered frame at the project rate: what the parameters
 	 * list and the physics panel read, so neither runs a clock of its own. Playing, it is the whole pose; paused,
 	 * only what the pointer's look and physics move, so a slider being dragged reads the document at once
 	 * instead of the frame before. Readers lay it over the document's values.
 	 */
 	val livePose: StateFlow<Map<ParameterId, Float>> = _livePose.asStateFlow()
+
+	/** Compose-readable live value for [id]; reading it only invalidates when that entry changes. */
+	fun livePoseOf(id: ParameterId): Float? = _livePoseSnapshot[id]
+
+	/** Publish [next] to both the StateFlow readers and the per-key Compose snapshot. */
+	private fun setLivePose(next: Map<ParameterId, Float>) {
+		if (next == _livePose.value) return
+		_livePose.value = next
+		if (next.isEmpty()) {
+			if (_livePoseSnapshot.isNotEmpty()) _livePoseSnapshot.clear()
+			return
+		}
+		if (_livePoseSnapshot.isNotEmpty()) {
+			val stale = _livePoseSnapshot.keys.filter { it !in next }
+			for (id in stale) _livePoseSnapshot.remove(id)
+		}
+		for ((id, value) in next) {
+			if (_livePoseSnapshot[id] != value) _livePoseSnapshot[id] = value
+		}
+	}
 	/** When the preview's frame pump last advanced the motion clock; the fallback loop stays out while it runs. */
 	private var lastPumpTickNanos = 0L
 	val activeMotionName: String? get() = motionPlayer.activeName
@@ -4841,11 +4859,11 @@ class PSD2LiveViewModel : AutoCloseable {
 					if (!latest.previewLive) latest
 					else {
 						val mergedValues = parameterValuesAfterSoftwareFrame(latest, liveParams, pointerActive)
-						_livePose.value = when {
+						setLivePose(when {
 							anim -> mergedValues
 							pointerActive -> mergedValues.filterKeys { it in POINTER_POSE_PARAMETERS }
 							else -> emptyMap()
-						}
+						})
 						if (mergedValues === latest.previewParameterValues) latest
 						else latest.copy(previewParameterValues = mergedValues)
 					}
@@ -4885,7 +4903,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (physicsClock == PhysicsClock.PAUSED) physicsClock = PhysicsClock.NONE
 			// The software preview let go of the swing: back to the edit pose, unless the pointer holds a look.
 			if (pausedPhysics.isNotEmpty() && current.sdkStatus != "ready" && !pointerActive) {
-				_livePose.value = emptyMap()
+				setLivePose(emptyMap())
 				updateState { latest -> if (latest.previewParameterValues == latest.parameterValues) latest else latest.copy(previewParameterValues = latest.parameterValues) }
 			}
 			pausedPhysics = emptyMap()
@@ -4902,7 +4920,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		pausedPhysics = out
 		if (current.sdkStatus != "ready") {
 			val shown = pose + out
-			_livePose.value = (if (pointer != null) pose.filterKeys { it in POINTER_POSE_PARAMETERS } else emptyMap()) + out
+			setLivePose((if (pointer != null) pose.filterKeys { it in POINTER_POSE_PARAMETERS } else emptyMap()) + out)
 			updateState { latest -> if (!latest.previewLive || latest.previewParameterValues == shown) latest else latest.copy(previewParameterValues = shown) }
 		}
 	}

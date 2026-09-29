@@ -162,9 +162,11 @@ fun CanvasViewportComposable(
 	val showTexture = viewOptions.showTexture
 	val showRotation = viewOptions.showRotation
 	val showDeformPaths = viewOptions.showDeformPaths
-	val showSelectionBounds = viewOptions.showSelectionBounds
-	val dimUnselected = viewOptions.dimUnselected
-	val filterSelectedOnly = viewOptions.filterSelectedOnly
+	// Preview is view-only: selection, hover focus and selection-gated overlays stay on Edit.
+	val allowSelectionChrome = mode == CanvasMode.EDIT
+	val showSelectionBounds = allowSelectionChrome && viewOptions.showSelectionBounds
+	val dimUnselected = allowSelectionChrome && viewOptions.dimUnselected
+	val filterSelectedOnly = allowSelectionChrome && viewOptions.filterSelectedOnly
 	var zoom by remember { mutableStateOf(cameraZoom.toDouble()) }
 	var panX by remember { mutableStateOf(cameraPanX.toDouble()) }
 	var panY by remember { mutableStateOf(cameraPanY.toDouble()) }
@@ -269,10 +271,17 @@ fun CanvasViewportComposable(
 		if (mode == CanvasMode.EDIT && previewModel != null) RigCanvasSupport.evaluate(previewModel, geometryPose)
 		else null
 	}
+	val guideState = if (allowSelectionChrome) canvasState else canvasState.copy(
+		selectedLayerId = null,
+		selectedLayerIds = emptySet(),
+		selectedDeformerId = null,
+		hoveredLayerId = null,
+		hoveredDeformerId = null,
+	)
 	val warpIds = if (previewModel == null) emptySet() else if (mode == CanvasMode.EDIT) editor.activeWarpIds()
-		else visibleCanvasGuideIds(previewModel, canvasState, warp = true)
+		else visibleCanvasGuideIds(previewModel, guideState, warp = true)
 	val rotationIds = if (previewModel == null) emptySet() else if (mode == CanvasMode.EDIT) editor.activeRotationIds()
-		else visibleCanvasGuideIds(previewModel, canvasState, warp = false)
+		else visibleCanvasGuideIds(previewModel, guideState, warp = false)
 	val viewportFor = remember(previewModel, zoom, panX, panY) {
 		val model = previewModel
 		{ drawSize: IntSize ->
@@ -813,28 +822,6 @@ fun CanvasViewportComposable(
                 if (isDragging) {
 					isDragging = false
 					persistCamera()
-					if (mode == CanvasMode.PREVIEW && event.button == PointerButton.Primary && change != null && (change.position - dragStartPos).getDistance() < 6f) {
-						if (canvasState.clickToSelectLayer && previewModel != null) {
-							val viewport = computeViewport(previewModel, viewSize.width, viewSize.height)
-							// Hit the pose that is on screen, not the last animated one: a paused
-							// preview still follows the pointer, so the two drift apart.
-							val geometry = RigCanvasSupport.evaluate(previewModel, informationPose)
-							val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
-							val hit = RigCanvasSupport.hitLayer(
-								model = previewModel,
-								drawableBounds = drawableBounds,
-								canvasX = viewport.canvasX(change.position.x.toInt()),
-								canvasY = viewport.canvasY(change.position.y.toInt()),
-								visibleLayerIds = canvasState.effectiveVisibleLayerIds,
-								currentSelectedLayerId = canvasState.selectedLayerId,
-								geometry = geometry,
-								drawOrderOverrides = canvasState.drawOrderOverrides,
-							)
-							viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) {
-								it.copy(selectedLayerId = hit, selectedDeformerId = if (hit != null) null else it.selectedDeformerId)
-							}
-						}
-					}
 				}
 			}
 			.onPointerEvent(PointerEventType.Exit) {
@@ -946,30 +933,32 @@ fun CanvasViewportComposable(
 			val informationNames = viewOptions.warpShowNames
 			val informationIndices = viewOptions.warpShowIndices
 			val informationSelectedOnly = filterSelectedOnly
+			val selectedLayerId = if (allowSelectionChrome) canvasState.selectedLayerId else null
+			val selectedDeformerId = if (allowSelectionChrome) canvasState.selectedDeformerId else null
 
 			val targetVisibleLayerIds: Set<String> = when {
 				!informationSelectedOnly -> canvasState.effectiveVisibleLayerIds
-				canvasState.selectedLayerId != null -> {
+				selectedLayerId != null -> {
 					val keep = if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.EDIT && editor.objects.size > 1) {
 						editor.objects
 					} else {
-						setOf(canvasState.selectedLayerId)
+						setOf(selectedLayerId)
 					}
 					canvasState.effectiveVisibleLayerIds.filter { it in keep }.toSet()
 				}
-				canvasState.selectedDeformerId != null -> {
-					val desc = descendantLayerIds(model, canvasState.selectedDeformerId, canvasState.parentOverrides)
+				selectedDeformerId != null -> {
+					val desc = descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
 					canvasState.effectiveVisibleLayerIds.filter { it in desc }.toSet()
 				}
 				else -> canvasState.effectiveVisibleLayerIds
 			}
 
-			val hasActiveSelection = canvasState.selectedLayerId != null || canvasState.selectedDeformerId != null
+			val hasActiveSelection = selectedLayerId != null || selectedDeformerId != null
 			val highlightedLayerIds: Set<String>? = when {
                 mode==CanvasMode.EDIT && editor.objectMode && editor.objects.isNotEmpty() -> editor.objects
 				mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.EDIT && editor.objects.size > 1 -> editor.objects
-				canvasState.selectedLayerId != null -> setOf(canvasState.selectedLayerId)
-				canvasState.selectedDeformerId != null -> descendantLayerIds(model, canvasState.selectedDeformerId, canvasState.parentOverrides)
+				selectedLayerId != null -> setOf(selectedLayerId)
+				selectedDeformerId != null -> descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
 				else -> null
 			}
 			val isDimmingActive = dimUnselected && hasActiveSelection
@@ -977,8 +966,8 @@ fun CanvasViewportComposable(
 			// Hover annotation: a wash over the artwork in the component's own colour, not a box around
 			// it. A deformer owns no texture of its own, so previewing one lights up everything it
 			// deforms — which is exactly what the deformer is.
-			val hoveredLayerId = canvasState.hoveredLayerId
-			val hoveredDeformerId = canvasState.hoveredDeformerId
+			val hoveredLayerId = if (allowSelectionChrome) canvasState.hoveredLayerId else null
+			val hoveredDeformerId = if (allowSelectionChrome) canvasState.hoveredDeformerId else null
 			val hoverTintLayerIds = when {
 				hoveredLayerId != null -> setOf(hoveredLayerId)
 				hoveredDeformerId != null -> descendantLayerIds(model, hoveredDeformerId, canvasState.parentOverrides)
@@ -993,7 +982,7 @@ fun CanvasViewportComposable(
                 canvasState.layerVisibility.isEmpty() && canvasState.deformerVisibility.isEmpty() &&
 				warpIds.isEmpty() && rotationIds.isEmpty() && !showMesh && !informationSelectedOnly && showTexture &&
 				!isDimmingActive &&
-				canvasState.hoveredLayerId == null && canvasState.hoveredDeformerId == null &&
+				hoveredLayerId == null && hoveredDeformerId == null &&
 				(!showSelectionBounds || !hasActiveSelection) &&
 				canvasState.drawOrderOverrides.isEmpty() &&
 				nativeFrame != null && sdkBitmap != null &&
@@ -1124,7 +1113,7 @@ fun CanvasViewportComposable(
 							drawEdges(wireColor, strokeWidth)
 						}
 
-						val selectedId = canvasState.selectedLayerId
+						val selectedId = selectedLayerId
 						val meshFocusOnly = mode == CanvasMode.EDIT && !editor.objectMode
 						if (meshFocusOnly) {
 							// Edit mode draws its meshes on the editor overlay - every edited mesh in one style,
@@ -1168,7 +1157,7 @@ fun CanvasViewportComposable(
 					// the interactive needle for the edit target when that toggle is on.
 					val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
 					val deformerBounds = RigCanvasSupport.boundsByDeformer(model, drawableBounds)
-					val deformEditTarget = canvasState.selectedDeformerId?.takeIf {
+					val deformEditTarget = selectedDeformerId?.takeIf {
 						mode == CanvasMode.EDIT && showRotation && (
 							editor.hierarchyMode == EditHierarchyMode.DEFORM ||
 								editor.hierarchyMode == EditHierarchyMode.EDIT
@@ -1185,8 +1174,8 @@ fun CanvasViewportComposable(
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
 							viewport, globalRotationIds,
 							labels = informationNames,
-							selectedDeformerId = canvasState.selectedDeformerId,
-							hoveredDeformerId = canvasState.hoveredDeformerId,
+							selectedDeformerId = selectedDeformerId,
+							hoveredDeformerId = hoveredDeformerId,
 							dimUnselected = dimUnselected,
 						)
 					}
@@ -1199,7 +1188,7 @@ fun CanvasViewportComposable(
 					// dragged. Every other tool leaves this as the only selection feedback.
 					val transformBoxOwnsSelection = mode == CanvasMode.EDIT && editor.drawsTransformBox
 					if (showSelectionBounds && !transformBoxOwnsSelection) {
-						canvasState.selectedLayerId?.let { layerId ->
+						selectedLayerId?.let { layerId ->
 							val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
 							val bounds = drawableId?.let(drawableBounds::get)
 							if (bounds != null) {
@@ -1207,8 +1196,8 @@ fun CanvasViewportComposable(
 								RigCanvasSupport.paintSelectionBounds(g, bounds, viewport, selColor, stroke = 2.0f, isDashed = false)
 							}
 						}
-						if (mode != CanvasMode.EDIT) {
-							canvasState.selectedDeformerId?.let { defId ->
+						if (mode == CanvasMode.EDIT) {
+							selectedDeformerId?.let { defId ->
 								val def = model.rig.puppet.deformers.firstOrNull { it.id.raw == defId }
 								if (def !is org.umamo.runtime.model.Deformer.Warp) {
 									val bounds = deformerBounds[defId]
@@ -1237,8 +1226,8 @@ fun CanvasViewportComposable(
 							viewport, warpIds,
 							labels = informationNames,
 							pointIndices = informationIndices,
-							selectedDeformerId = canvasState.selectedDeformerId,
-							hoveredDeformerId = canvasState.hoveredDeformerId,
+							selectedDeformerId = selectedDeformerId,
+							hoveredDeformerId = hoveredDeformerId,
 							dimUnselected = dimUnselected,
 							pointsById = warpPoints,
 						)
@@ -1248,20 +1237,20 @@ fun CanvasViewportComposable(
 					// deforms, so it is drawn only while that part (or the part's deformer) is
 					// selected -- an edit-time guide, never part of the Preview tab's render.
 					if (mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()) {
-						val selectedLayerDescendants = if (canvasState.selectedDeformerId != null) {
-							descendantLayerIds(model, canvasState.selectedDeformerId, canvasState.parentOverrides)
+						val selectedLayerDescendants = if (selectedDeformerId != null) {
+							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
 						} else {
 							emptySet()
 						}
 						val selectedPathIds = model.rig.puppet.deformPaths.filter { path ->
 							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
-							(canvasState.selectedLayerId != null && layerId == canvasState.selectedLayerId) ||
-								(canvasState.selectedDeformerId != null && layerId != null && layerId in selectedLayerDescendants)
+							(selectedLayerId != null && layerId == selectedLayerId) ||
+								(selectedDeformerId != null && layerId != null && layerId in selectedLayerDescendants)
 						}.map { it.id }.toSet()
 
 						val hoveredPathIds = model.rig.puppet.deformPaths.filter { path ->
 							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
-							canvasState.hoveredLayerId != null && layerId == canvasState.hoveredLayerId
+							hoveredLayerId != null && layerId == hoveredLayerId
 						}.map { it.id }.toSet()
 
 						// Hovering a part in the tree previews its path -- same instant feedback the
@@ -1410,6 +1399,7 @@ fun CanvasViewportComposable(
 				options = viewOptions,
 				onOptionsChange = { viewModel.setCanvasViewOptions(canvasId, it, mode) },
 				showPathGuides = mode == CanvasMode.EDIT,
+				showSelectionFocus = mode == CanvasMode.EDIT,
 				modifier = Modifier
 					.align(Alignment.BottomEnd)
 					.padding(end = 8.dp, bottom = 8.dp),

@@ -420,6 +420,7 @@ fun IconPathHardness(
  *
  * Deform path entries are `showPathGuides`-gated because path guides are an Edit-tab overlay:
  * offering the toggle on a Preview tab would advertise a switch that cannot change anything.
+ * Selection & Focus is likewise Edit-only: Preview is view-only and ignores selection chrome.
  */
 @Composable
 fun ViewOptionsMenuItems(
@@ -428,6 +429,7 @@ fun ViewOptionsMenuItems(
 	onDismiss: () -> Unit,
 	showHeaders: Boolean = true,
 	showPathGuides: Boolean = true,
+	showSelectionFocus: Boolean = true,
 	onHover: (() -> Unit)? = null,
 	onReset: (() -> Unit)? = null,
 ) {
@@ -507,39 +509,41 @@ fun ViewOptionsMenuItems(
 		)
 	}
 
-	AppMenuSeparator()
+	if (showSelectionFocus) {
+		AppMenuSeparator()
 
-	// 2. 选区与聚焦 (Selection & Focus)
-	if (showHeaders) AppMenuHeader(tr("menu.view.category.selection"))
+		// 2. 选区与聚焦 (Selection & Focus)
+		if (showHeaders) AppMenuHeader(tr("menu.view.category.selection"))
 
-	AppMenuItem(
-		text = tr("canvas.information.selectionBounds"),
-		icon = { IconSelectionBounds(tint = it) },
-		isChecked = options.showSelectionBounds,
-		onHover = onHover,
-		onClick = { apply(options.copy(showSelectionBounds = !options.showSelectionBounds)) },
-	)
-	AppMenuItem(
-		text = tr("canvas.information.contextualWarp"),
-		icon = { IconContextualWarp(tint = it) },
-		isChecked = options.contextualWarp,
-		onHover = onHover,
-		onClick = { apply(options.copy(contextualWarp = !options.contextualWarp)) },
-	)
-	AppMenuItem(
-		text = tr("canvas.information.selectedOnly"),
-		icon = { IconSelectedOnly(tint = it) },
-		isChecked = options.filterSelectedOnly,
-		onHover = onHover,
-		onClick = { apply(options.copy(filterSelectedOnly = !options.filterSelectedOnly)) },
-	)
-	AppMenuItem(
-		text = tr("canvas.visibility.dimUnselected"),
-		icon = { IconDimUnselected(tint = it) },
-		isChecked = options.dimUnselected,
-		onHover = onHover,
-		onClick = { apply(options.copy(dimUnselected = !options.dimUnselected)) },
-	)
+		AppMenuItem(
+			text = tr("canvas.information.selectionBounds"),
+			icon = { IconSelectionBounds(tint = it) },
+			isChecked = options.showSelectionBounds,
+			onHover = onHover,
+			onClick = { apply(options.copy(showSelectionBounds = !options.showSelectionBounds)) },
+		)
+		AppMenuItem(
+			text = tr("canvas.information.contextualWarp"),
+			icon = { IconContextualWarp(tint = it) },
+			isChecked = options.contextualWarp,
+			onHover = onHover,
+			onClick = { apply(options.copy(contextualWarp = !options.contextualWarp)) },
+		)
+		AppMenuItem(
+			text = tr("canvas.information.selectedOnly"),
+			icon = { IconSelectedOnly(tint = it) },
+			isChecked = options.filterSelectedOnly,
+			onHover = onHover,
+			onClick = { apply(options.copy(filterSelectedOnly = !options.filterSelectedOnly)) },
+		)
+		AppMenuItem(
+			text = tr("canvas.visibility.dimUnselected"),
+			icon = { IconDimUnselected(tint = it) },
+			isChecked = options.dimUnselected,
+			onHover = onHover,
+			onClick = { apply(options.copy(dimUnselected = !options.dimUnselected)) },
+		)
+	}
 
 	AppMenuSeparator()
 

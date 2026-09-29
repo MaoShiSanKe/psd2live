@@ -53,7 +53,6 @@ import androidx.compose.material.Divider
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -2214,13 +2213,18 @@ private fun ParameterKeyMarks?.toSliderMarks(): List<SliderKeyMark> {
 
 /**
  * What the preview shows for [param]: its frame-by-frame pose while it plays or follows the pointer, so the
- * sliders move with the model at the project rate. Only the rows recompose on a frame, not the whole panel.
+ * sliders move with the model at the project rate. Reads [PSD2LiveViewModel.livePoseOf] so only this row
+ * invalidates when its live value changes — not every parameter row on every frame.
  */
 @Composable
 private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2LiveViewModel): Float {
-	val pose by viewModel.livePose.collectAsState()
-	val live = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW && state.activeWorkspace.pose?.authoringPose != true && state.previewLive && (state.animationEnabled || state.mouseTrackingEnabled || (state.generatePhysics && !state.meshOnly))
-	return (if (live) pose[param.id] else null) ?: state.parameterValues[param.id] ?: param.default
+	val live = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW &&
+		state.activeWorkspace.pose?.authoringPose != true &&
+		state.previewLive &&
+		(state.animationEnabled || state.mouseTrackingEnabled || (state.generatePhysics && !state.meshOnly))
+	val document = state.parameterValues[param.id] ?: param.default
+	if (!live) return document
+	return viewModel.livePoseOf(param.id) ?: document
 }
 
 private fun formatParamValue(value: Float): String =

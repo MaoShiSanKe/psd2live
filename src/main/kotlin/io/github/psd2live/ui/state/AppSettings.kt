@@ -175,18 +175,8 @@ object AppSettings {
 			}
 		}
 
-	private const val KEY_CLICK_TO_SELECT_LAYER = "click_to_select_layer"
 	private const val KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT = "auto_detect_mesh_splits_on_import"
 	private const val KEY_RECENT_FILES = "recent_files"
-
-	var clickToSelectLayer: Boolean
-		get() = runCatching { preferences.getBoolean(KEY_CLICK_TO_SELECT_LAYER, true) }.getOrDefault(true)
-		set(value) {
-			runCatching {
-				preferences.putBoolean(KEY_CLICK_TO_SELECT_LAYER, value)
-				preferences.flush()
-			}
-		}
 
 	var autoDetectMeshSplitsOnImport: Boolean
 		get() = runCatching { preferences.getBoolean(KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT, true) }.getOrDefault(true)
@@ -324,7 +314,6 @@ object AppSettings {
 			preferences.remove(KEY_THEME_ID)
 			preferences.remove(KEY_THEME_LAST_DARK)
 			preferences.remove(KEY_THEME_LAST_LIGHT)
-			preferences.remove(KEY_CLICK_TO_SELECT_LAYER)
 			// Enumerated by prefix so there is no action-name list to keep up to date.
 			preferences.keys().filter { it.startsWith(KEYMAP_PREFIX) }.forEach { preferences.remove(it) }
 			preferences.flush()

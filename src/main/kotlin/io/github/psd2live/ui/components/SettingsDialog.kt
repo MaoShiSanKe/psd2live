@@ -98,7 +98,6 @@ fun SettingsDialog(
 	fontScale: Float,
 	themeId: String = ThemeCatalog.DARK_ID,
 	customThemes: List<CustomTheme> = emptyList(),
-	clickToSelectLayer: Boolean = true,
 	autoDetectMeshSplitsOnImport: Boolean = AppSettings.autoDetectMeshSplitsOnImport,
 	keymap: Keymap = Keymap.DEFAULT,
 	keyPreset: KeymapPreset = KeymapPreset.PHOTOSHOP,
@@ -111,7 +110,6 @@ fun SettingsDialog(
 	onCustomThemeChange: (CustomTheme) -> Unit = {},
 	onCustomThemeDelete: (String) -> Unit = {},
 	onThemeImport: (String) -> Boolean = { false },
-	onClickToSelectLayerChange: (Boolean) -> Unit = {},
 	onAutoDetectMeshSplitsOnImportChange: (Boolean) -> Unit = { AppSettings.autoDetectMeshSplitsOnImport = it },
 	onLanguageChange: (AppLanguage) -> Unit = {},
 	onKeyCapture: (ShortcutAction, Int) -> Unit = { _, _ -> },
@@ -242,8 +240,6 @@ fun SettingsDialog(
 							onLanguageChange = onLanguageChange,
 						)
 						SettingsSection.CANVAS -> SettingsCanvasSection(
-							clickToSelectLayer = clickToSelectLayer,
-							onClickToSelectLayerChange = onClickToSelectLayerChange,
 							autoDetectMeshSplitsOnImport = autoDetectMeshSplitsOnImport,
 							onAutoDetectMeshSplitsOnImportChange = onAutoDetectMeshSplitsOnImportChange,
 						)
@@ -562,8 +558,6 @@ private fun SettingsLanguageSection(
 
 @Composable
 private fun SettingsCanvasSection(
-	clickToSelectLayer: Boolean,
-	onClickToSelectLayerChange: (Boolean) -> Unit,
 	autoDetectMeshSplitsOnImport: Boolean,
 	onAutoDetectMeshSplitsOnImportChange: (Boolean) -> Unit,
 ) {
@@ -580,27 +574,6 @@ private fun SettingsCanvasSection(
 			.padding(10.dp),
 		verticalArrangement = Arrangement.spacedBy(6.dp),
 	) {
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-				.clickable { onClickToSelectLayerChange(!clickToSelectLayer) }
-				.padding(vertical = 2.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(8.dp),
-		) {
-			Text(
-				text = if (clickToSelectLayer) "✓" else " ",
-				style = typography.body.copy(fontWeight = FontWeight.Bold),
-				color = if (clickToSelectLayer) colors.accent else Color.Transparent,
-				modifier = Modifier.width(16.dp),
-			)
-			Text(
-				text = tr("settings.canvas.clickToSelectLayer"),
-				style = typography.body.copy(fontSize = 11.5.sp),
-				color = colors.textPrimary,
-			)
-		}
 		Row(
 			modifier = Modifier
 				.fillMaxWidth()

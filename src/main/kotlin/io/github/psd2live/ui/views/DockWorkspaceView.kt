@@ -881,6 +881,7 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                         onDismiss = { viewMenu = false },
                         showHeaders = true,
                         showPathGuides = canvas.mode == CanvasMode.EDIT,
+                        showSelectionFocus = canvas.mode == CanvasMode.EDIT,
                         onReset = {
                             viewMenu = false
                             viewModel.resetCanvasViewOptions(canvas.id, canvas.mode)

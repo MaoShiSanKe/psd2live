@@ -469,7 +469,6 @@ data class PSD2LiveState(
 	val selectedDeformerId: String? = null,
 	/** Source ArtMesh waiting for the next canvas/layer pick to become its clipping mask. UI-transient. */
 	val clipMaskPickSourceId: String? = null,
-	val clickToSelectLayer: Boolean = AppSettings.clickToSelectLayer,
 	val autoDetectMeshSplitsOnImport: Boolean = AppSettings.autoDetectMeshSplitsOnImport,
 	val hoveredLayerId: String? = null,
 	val hoveredDeformerId: String? = null,

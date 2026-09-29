@@ -61,7 +61,8 @@ import io.github.psd2live.ui.tutorial.tutorialTarget
  * View menu does not have to be opened mid-edit. Icons stay on the trailing edge; hovering expands
  * the rail leftward and reveals labels the same way the left toolbar reveals them rightward.
  *
- * Path guides are Edit-only overlays, so [showPathGuides] hides that row on Preview tabs.
+ * Path guides and selection-focus toggles are Edit-only overlays, so [showPathGuides] /
+ * [showSelectionFocus] hide those rows on Preview tabs.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -69,6 +70,7 @@ internal fun CanvasViewOptionsBar(
 	options: TabViewOptions,
 	onOptionsChange: (TabViewOptions) -> Unit,
 	showPathGuides: Boolean = true,
+	showSelectionFocus: Boolean = true,
 	modifier: Modifier = Modifier,
 ) {
 	val colors = LocalToolColors.current
@@ -202,23 +204,25 @@ internal fun CanvasViewOptionsBar(
 			)
 		}
 
-		Box(
-			modifier = Modifier
-				.fillMaxWidth()
-				.padding(horizontal = 4.dp, vertical = 2.dp)
-				.height(1.dp)
-				.background(colors.border.copy(alpha = 0.35f)),
-		)
+		if (showSelectionFocus) {
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.padding(horizontal = 4.dp, vertical = 2.dp)
+					.height(1.dp)
+					.background(colors.border.copy(alpha = 0.35f)),
+			)
 
-		ViewOptionRow(
-			label = tr("canvas.information.selectedOnly"),
-			isChecked = options.filterSelectedOnly,
-			isToolbarExpanded = isExpanded,
-			textAlpha = textAlpha,
-			textOffset = textOffset,
-			icon = { IconSelectedOnly(tint = it, modifier = Modifier.size(14.dp)) },
-			onClick = { apply(options.copy(filterSelectedOnly = !options.filterSelectedOnly)) },
-		)
+			ViewOptionRow(
+				label = tr("canvas.information.selectedOnly"),
+				isChecked = options.filterSelectedOnly,
+				isToolbarExpanded = isExpanded,
+				textAlpha = textAlpha,
+				textOffset = textOffset,
+				icon = { IconSelectedOnly(tint = it, modifier = Modifier.size(14.dp)) },
+				onClick = { apply(options.copy(filterSelectedOnly = !options.filterSelectedOnly)) },
+			)
+		}
 	}
 }
 
