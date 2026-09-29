@@ -1854,8 +1854,8 @@ private fun ParameterRowItem(
 			modifier = Modifier.weight(1f),
 			thumbShape = if (param.kind == ParameterKind.BLEND_SHAPE) SliderKeyShape.Square else SliderKeyShape.Circle,
 			onHoverKey = onKeyHover,
-			onGestureStart = viewModel::beginEditorGesture,
-			onGestureEnd = viewModel::endEditorGesture,
+			onGestureStart = viewModel::beginParameterScrub,
+			onGestureEnd = viewModel::endParameterScrub,
 		)
 		ParameterValueInput(param, currentValue, { viewModel.setParameterValue(param.id, it) })
 		Spacer(Modifier.width(ParamRowInputSpacer))
@@ -1930,12 +1930,15 @@ private fun LinkedParameterPad(
 			verticalKeys = verticalKeys,
 			modifier = Modifier.weight(1f).fillMaxHeight(),
 			onChange = { x, y ->
-				if (!xLocked) viewModel.setParameterValue(horizontal.id, x)
-				if (!yLocked) viewModel.setParameterValue(vertical.id, y)
+				val values = buildMap {
+					if (!xLocked) put(horizontal.id, x)
+					if (!yLocked) put(vertical.id, y)
+				}
+				viewModel.setParameterValues(values)
 			},
 			onHoverKey = onKeyHover,
-			onGestureStart = viewModel::beginEditorGesture,
-			onGestureEnd = viewModel::endEditorGesture,
+			onGestureStart = viewModel::beginParameterScrub,
+			onGestureEnd = viewModel::endParameterScrub,
 		)
 		Column(
 			modifier = Modifier.width(ParamRowInputWidth),
@@ -2218,6 +2221,7 @@ private fun ParameterKeyMarks?.toSliderMarks(): List<SliderKeyMark> {
  */
 @Composable
 private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2LiveViewModel): Float {
+	viewModel.parameterScrubValueOf(param.id)?.let { return it }
 	val live = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW &&
 		state.activeWorkspace.pose?.authoringPose != true &&
 		state.previewLive &&

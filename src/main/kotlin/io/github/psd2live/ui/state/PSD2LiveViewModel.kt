@@ -1206,6 +1206,55 @@ class PSD2LiveViewModel : AutoCloseable {
     fun beginEditorGesture() = editorSessions.begin(SLIDER_SESSION)
     fun endEditorGesture() = editorSessions.end(SLIDER_SESSION)
 
+	/** Preview scrubs carry only changed values until release, like pointer tracking. */
+	private data class ParameterScrub(
+		val generation: Long,
+		val workspaceId: String,
+		val overrides: Map<ParameterId, Float> = emptyMap(),
+	)
+
+	@Volatile private var parameterScrub: ParameterScrub? = null
+	private val parameterScrubValues = mutableStateMapOf<ParameterId, Float>()
+	var parameterScrubActive by mutableStateOf(false)
+		private set
+
+	fun parameterScrubValueOf(id: ParameterId): Float? = parameterScrubValues[id]
+
+	fun beginParameterScrub() {
+		editorSessions.begin(SLIDER_SESSION)
+		val current = _state.value
+		if (!current.previewLive || current.previewModel == null || current.sdkStatus != "ready") return
+		if (parameterScrub != null) return
+		motionEditor.playing = false
+		motionPlayer.stop()
+		// One state change pauses motion. Slider samples after this never rebuild the edit canvas.
+		val suppressPreviewEffects = current.activeCanvas.mode == CanvasMode.EDIT
+		if (current.animationEnabled || current.previewParameterValues.isNotEmpty() ||
+			current.activeWorkspace.pose?.authoringPose != suppressPreviewEffects) {
+			updateState { it.copy(animationEnabled = false, previewParameterValues = emptyMap())
+				.authoringPose(suppressPreviewEffects) }
+		}
+		val started = _state.value
+		parameterScrub = ParameterScrub(started.projectOpenGeneration, started.activeWorkspace.id)
+		parameterScrubActive = true
+	}
+
+	fun endParameterScrub() {
+		commitParameterScrub()
+		editorSessions.end(SLIDER_SESSION)
+	}
+
+	private fun commitParameterScrub() {
+		val scrub = parameterScrub ?: return
+		parameterScrub = null
+		val current = _state.value
+		if (current.projectOpenGeneration == scrub.generation && current.activeWorkspace.id == scrub.workspaceId && scrub.overrides.isNotEmpty()) {
+			setParameterValues(scrub.overrides)
+		}
+		parameterScrubValues.clear()
+		parameterScrubActive = false
+	}
+
     /** Brackets one text/number field's editing session; [token] has to match the paired `end`. */
     fun beginEditorField(token: String) = editorSessions.begin(token)
 
@@ -1221,7 +1270,10 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     /** Closes every open field session so a save or a window close sees the value just typed. */
-    fun flushEditorFields() = editorSessions.flush()
+    fun flushEditorFields() {
+		commitParameterScrub()
+		editorSessions.flush()
+	}
 
     private fun editorChanged(summary: String? = null) {
         if (editorSessions.anyOpen) { markWorkspaceChanged(); return }
@@ -3875,11 +3927,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setParameterValue(id: ParameterId, value: Float) {
-        motionEditor.playing = false
-        motionPlayer.stop()
 		val model = _state.value.previewModel
 		val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
 		val clamped = if (param != null) value.coerceIn(param.min, param.max) else value
+		if (updateParameterScrub(mapOf(id to clamped))) return
+		motionEditor.playing = false
+		motionPlayer.stop()
 		val previous = _state.value.parameterValues[id] ?: param?.default ?: 0f
 		val changed = abs(previous - clamped) >= 1e-5f
 
@@ -3887,6 +3940,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			current.copy(
 				animationEnabled = false,
 				parameterValues = current.parameterValues + (id to clamped),
+				projectDirty = current.projectDirty || current.analysis != null,
+				projectEditVersion = current.projectEditVersion + if (current.analysis != null) 1 else 0,
 			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
 		}
 
@@ -3894,17 +3949,17 @@ class PSD2LiveViewModel : AutoCloseable {
 			recordAutoKey(mapOf(id.raw to clamped), mapOf(id.raw to (param?.default ?: 0f)))
 		}
 
-	    markWorkspaceChanged()
 	}
 
 	/** Several parameters in one state update, so a gesture that moves a chain redraws once, not per joint. */
 	fun setParameterValues(values: Map<ParameterId, Float>) {
 		if (values.isEmpty()) return
-        motionEditor.playing = false
-        motionPlayer.stop()
 		val model = _state.value.previewModel
 		val parameters = model?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
 		val clampedMap = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
+		if (updateParameterScrub(clampedMap)) return
+		motionEditor.playing = false
+		motionPlayer.stop()
 
 		val changed = mutableMapOf<String, Float>()
 		val initial = mutableMapOf<String, Float>()
@@ -3921,6 +3976,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			current.copy(
 				animationEnabled = false,
 				parameterValues = current.parameterValues + clampedMap,
+				projectDirty = current.projectDirty || current.analysis != null,
+				projectEditVersion = current.projectEditVersion + if (current.analysis != null) 1 else 0,
 			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
 		}
 
@@ -3928,7 +3985,27 @@ class PSD2LiveViewModel : AutoCloseable {
 			recordAutoKey(changed, initial)
 		}
 
-		markWorkspaceChanged()
+	}
+
+	private fun updateParameterScrub(values: Map<ParameterId, Float>): Boolean {
+		val scrub = parameterScrub ?: return false
+		val current = _state.value
+		if (current.projectOpenGeneration != scrub.generation || current.activeWorkspace.id != scrub.workspaceId) return false
+		var overrides = scrub.overrides
+		for ((id, value) in values) {
+			if (overrides[id] == value) continue
+			overrides = overrides + (id to value)
+			parameterScrubValues[id] = value
+		}
+		if (overrides !== scrub.overrides) parameterScrub = scrub.copy(overrides = overrides)
+		return true
+	}
+
+	/** The same authored pose for preview and paused physics, including uncommitted slider values. */
+	internal fun parameterScrubPose(current: PSD2LiveState, values: Map<ParameterId, Float>): Map<ParameterId, Float> {
+		val scrub = parameterScrub ?: return values
+		return if (scrub.generation == current.projectOpenGeneration && scrub.workspaceId == current.activeWorkspace.id && scrub.overrides.isNotEmpty())
+			values + scrub.overrides else values
 	}
 
 	private var parameterSnapJob: Job? = null
@@ -4908,7 +4985,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		val panel = current.previewPanelState()
 		val pointer = if (tracking) canvasPointers[canvasRenderKey(panel.previewControlCanvas().id, CanvasMode.PREVIEW)] else null
-		val pose = pausedPointerPose(panel.parameterValues, pointer?.first ?: 0f, -(pointer?.second ?: 0f))
+		val pose = pausedPointerPose(parameterScrubPose(current, panel.parameterValues), pointer?.first ?: 0f, -(pointer?.second ?: 0f))
 		val out = stepSoftwarePhysics(PhysicsClock.PAUSED, current, model, pose, dt).filterKeys { it !in panel.lockedParameters }
 		val moved = out.any { (id, value) -> kotlin.math.abs(value - (pausedPhysics[id] ?: Float.NaN)) > PAUSED_PHYSICS_REST || pausedPhysics[id] == null }
 		pausedPhysicsStillFor = if (moved) 0f else pausedPhysicsStillFor + dt
@@ -5016,7 +5093,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val tracking = inPreview && presentation.mouseTrackingEnabled && !snapshot.meshOnly && snapshot.activeWorkspace.pose?.authoringPose != true
 		val liveParams = latestLiveParameters
 		val previewValues = parameterValuesForPreview(
-			snapshot, presentation.animationEnabled, presentation.parameterValues,
+			snapshot, presentation.animationEnabled, parameterScrubPose(snapshot, presentation.parameterValues),
 			presentation.lockedParameters, liveParams,
 		).let { if (!isAnim && snapshot.activeWorkspace.pose?.authoringPose != true && pausedPhysics.isNotEmpty()) it + pausedPhysics else it }
 		sdkSession.render(

@@ -28,6 +28,39 @@ class WorkspacePoseTest {
             ))))
     }
 
+    @Test fun previewSliderSamplesStayOutOfDocumentStateUntilRelease() {
+        PSD2LiveViewModel().use { vm ->
+            vm.setStateForTest(vm.state.value.copy(previewModel = preview()))
+            vm.addCanvas(CanvasMode.PREVIEW, focus = false)
+            vm.setStateForTest(vm.state.value.copy(sdkStatus = "ready"))
+            assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
+            vm.beginParameterScrub()
+            val started = vm.state.value
+            vm.setParameterValue(parameter, 0.25f)
+            vm.setParameterValue(parameter, 0.5f)
+            assertSame(started, vm.state.value)
+            assertEquals(0.5f, vm.parameterScrubValueOf(parameter))
+            assertEquals(0.5f, vm.parameterScrubPose(started, started.parameterValues)[parameter])
+            vm.endParameterScrub()
+            assertFalse(vm.parameterScrubActive)
+            assertEquals(0.5f, vm.state.value.parameterValues[parameter])
+        }
+    }
+
+    @Test fun previewSliderFlushCommitsTheLastClampedPair() {
+        PSD2LiveViewModel().use { vm ->
+            vm.setStateForTest(vm.state.value.copy(previewModel = preview(), sdkStatus = "ready"))
+            vm.setCanvasMode(vm.state.value.activeCanvas.id, CanvasMode.PREVIEW)
+            vm.beginParameterScrub()
+            vm.setParameterValues(mapOf(parameter to 0.6f, ParameterId("untracked") to 99f))
+            vm.flushEditorFields()
+            assertEquals(0.6f, vm.state.value.parameterValues[parameter])
+            assertEquals(10f, vm.state.value.parameterValues[ParameterId("untracked")])
+            assertFalse(vm.parameterScrubActive)
+            vm.endParameterScrub()
+        }
+    }
+
     @Test fun scrubbingWithoutPreviewCanvasUpdatesEditPoseAndKeyingUsesTheLatestEdit() {
         PSD2LiveViewModel().use { vm ->
             val preview = preview()

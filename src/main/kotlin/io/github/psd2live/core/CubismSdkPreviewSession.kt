@@ -206,7 +206,9 @@ class CubismSdkPreviewSession(
 		onNativeThread {
 			if (closed || loadedGeneration != generation) return@onNativeThread
 			val native = api ?: return@onNativeThread
-			val handle = canvasHandle(native, viewId).handle
+			val canvas = canvasHandle(native, viewId)
+			canvas.lastPoseRequest = null
+			val handle = canvas.handle
 			val (group, index) = motionSlots[name.lowercase()] ?: (name to 0)
 			native.Live2D_StartMotion(handle, group, index, priority)
 		}
@@ -294,8 +296,9 @@ class CubismSdkPreviewSession(
 			val native = api ?: return
 			val canvas = canvasHandle(native, request.viewId)
             val handle = canvas.handle
-            val reusePose = request.animationEnabled && canvas.lastPoseRequest?.let { previous ->
-                previous.animationEnabled && previous.frameTimeNanos == request.frameTimeNanos &&
+            val reusePose = canvas.lastPoseRequest?.let { previous ->
+                previous.animationEnabled == request.animationEnabled &&
+					(!request.animationEnabled || previous.frameTimeNanos == request.frameTimeNanos) &&
                     previous.pointerX == request.pointerX && previous.pointerY == request.pointerY &&
                     previous.parameterOverrides == request.parameterOverrides
             } == true
@@ -316,7 +319,14 @@ class CubismSdkPreviewSession(
 				// Do not call Update(0): Cubism may still restore the paused motion's old values.
 				canvas.previousFrameWasAnimated = false
 				canvas.lastRenderedFrameTimeNanos = request.frameTimeNanos
-				applyParameterValues(native, handle, request.parameterOverrides)
+				// A slider changes one value in a full pose map. The native model retains the other
+				// values, so avoid a JNA call and Cubism ID lookup for every unchanged parameter.
+				val previous = canvas.lastPoseRequest?.takeUnless { it.animationEnabled }?.parameterOverrides
+				for ((id, value) in request.parameterOverrides) {
+					if (previous == null || previous[id] != value) {
+						native.Live2D_SetParameterValue(handle, id.raw, value)
+					}
+				}
 				// Paused previews cannot advance Cubism's smoothed drag manager. Apply the static
 				// look offsets directly so mouse tracking remains useful while inspecting a pose.
 				applyPausedPointerTracking(

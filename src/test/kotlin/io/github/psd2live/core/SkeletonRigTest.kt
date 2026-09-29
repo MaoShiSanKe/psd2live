@@ -882,4 +882,14 @@ class SkeletonRigTest {
 		assertTrue(SkeletonMotions.idle(spec, exclude = setOf("ParamTail1")).none { it.first == SkeletonPoses.tailSwing.id.raw })
 	}
 
+	@Test fun liveIdleReusesTracksAndInvalidatesWhenSkeletonChanges() {
+		val spec = legs()
+		for (time in listOf(0.75, 2.3, 4.1)) {
+			assertEquals(SkeletonMotions.oneShot(SkeletonMotions.idle(spec), time), SkeletonMotions.liveIdle(spec, time))
+		}
+		val disabled = spec.copy(enabled = false)
+		assertEquals(SkeletonMotions.oneShot(SkeletonMotions.idle(disabled), 2.3), SkeletonMotions.liveIdle(disabled, 2.3))
+		assertEquals(SkeletonMotions.oneShot(SkeletonMotions.idle(spec), 2.3), SkeletonMotions.liveIdle(spec, 2.3))
+	}
+
 }

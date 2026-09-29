@@ -265,12 +265,27 @@ object SkeletonMotions {
 		return tracks.filterNot { (id) -> id in gestures || id in reached } + turned.map { (id, points) -> id to points.toList() }
 	}
 
+	private class PreparedIdle(val spec: SkeletonSpec?, val tracks: List<Pair<ParameterId, List<Pair<Float, Float>>>>)
+
+	@Volatile private var preparedIdle: PreparedIdle? = null
+
 	/**
 	 * The values the idle holds at [elapsed] seconds, body parameters included. The preview evaluates the
 	 * same tracks the export writes.
 	 */
-	fun liveIdle(spec: SkeletonSpec?, elapsed: Double): Map<ParameterId, Float> =
-		idle(spec).associate { (id, points) -> ParameterId(id) to sample(points, elapsed, loop = true) }
+	fun liveIdle(spec: SkeletonSpec?, elapsed: Double): Map<ParameterId, Float> {
+		// Building a skeleton idle expands pose tracks into joint curves. It depends only on the
+		// immutable skeleton, while this sampler runs on every preview frame.
+		val cached = preparedIdle
+		val tracks = if (cached != null && cached.spec === spec) cached.tracks else synchronized(this) {
+			val current = preparedIdle
+			if (current != null && current.spec === spec) current.tracks else
+				idle(spec).map { (id, points) -> ParameterId(id) to points }.also {
+					preparedIdle = PreparedIdle(spec, it)
+				}
+		}
+		return tracks.associate { (id, points) -> id to sample(points, elapsed, loop = true) }
+	}
 
 	/** The values a one-shot motion holds [elapsed] seconds in; null once it has finished. */
 	fun oneShot(tracks: List<MotionTrack>, elapsed: Double): Map<ParameterId, Float>? {

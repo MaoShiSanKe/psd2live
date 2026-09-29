@@ -420,14 +420,15 @@ fun CanvasViewportComposable(
     val physicsLive = canvasState.generatePhysics && !canvasState.meshOnly
     // A continuous pump (playing, or paused physics) reads the latest camera and pose each frame. Restarting
     // it for every pan step or slider sample re-requests a frame out of pace and makes a drag stutter.
-    val continuousPump = canvasState.animationEnabled || physicsLive
+    val parameterScrubActive = viewModel.parameterScrubActive
+    val continuousPump = canvasState.animationEnabled || physicsLive || parameterScrubActive
     val pausedCameraKey = if (continuousPump) Unit else Triple(zoom, panX, panY)
     val pausedPoseKey = if (continuousPump) Unit else canvasState.parameterValues
 	// The project's frame rate paces the pump; unlimited follows the display. Native Cubism renders every
 	// preview on one GL thread, so several visible previews never go past 30 FPS each.
 	val projectFps = canvasState.rigEdits.physicsFps
 	val pumpInterval = maxOf(frameIntervalNanos(projectFps), if (simultaneousPreviews > 1) 33_333_333L else 0L)
-	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, pausedPoseKey, pumpInterval, physicsLive) {
+	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, pausedPoseKey, pumpInterval, physicsLive, parameterScrubActive) {
 		if (previewModel != null && viewSize.width > 0 && viewSize.height > 0) {
 			if (mode == CanvasMode.PREVIEW) {
 				fun requestFrame(deltaTime: Float, frameNanos: Long) {
@@ -450,7 +451,7 @@ fun CanvasViewportComposable(
                         viewId = renderKey,
 					)
 				}
-				if (canvasState.animationEnabled) {
+				if (canvasState.animationEnabled || (parameterScrubActive && !physicsLive)) {
 					var previousFrameNanos = 0L
 					val pacer = FramePacer(pumpInterval)
 					while (isActive) {
@@ -462,7 +463,7 @@ fun CanvasViewportComposable(
 							((frameNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
 						}
 						previousFrameNanos = frameNanos
-						requestFrame(deltaTime, frameNanos)
+						requestFrame(if (canvasState.animationEnabled) deltaTime else 0f, frameNanos)
 					}
 				} else if (physicsLive) {
 					// Paused with physics on: the pose the user sets swings it, so render until it comes to rest.
@@ -472,7 +473,7 @@ fun CanvasViewportComposable(
 					val pacer = FramePacer(pumpInterval)
 					var lastPose = viewModel.state.value.previewPanelState().parameterValues
 					while (isActive) {
-						while (isActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.pausedPhysicsSettled &&
+						while (isActive && !viewModel.parameterScrubActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.pausedPhysicsSettled &&
 							System.nanoTime() - lastPointerActivityNanos.get() > PAUSED_TRACKING_SETTLE_NANOS) {
 							val pose = viewModel.state.value.previewPanelState().parameterValues
 							if (pose != lastPose) { lastPose = pose; break }
