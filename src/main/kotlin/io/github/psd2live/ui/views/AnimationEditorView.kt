@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.ui.parameterKeyMarks
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -469,6 +471,18 @@ private fun TrackRow(
 		horizontalArrangement = Arrangement.spacedBy(5.dp),
 	) {
 		Box(Modifier.size(7.dp).clip(CircleShape).background(motionCurveColor(index)))
+        val currentState by viewModel.uiState
+        val puppet = currentState.previewModel?.rig?.puppet
+        val marks = remember(puppet, curve.parameterId) {
+            puppet?.parameterKeyMarks()?.get(org.umamo.runtime.model.ParameterId(curve.parameterId))?.allKeys.orEmpty()
+        }
+        if (parameter != null && marks.isNotEmpty()) Canvas(Modifier.width(36.dp).height(12.dp)) {
+            drawLine(colors.textMuted, Offset(0f, size.height / 2), Offset(size.width, size.height / 2))
+            for (value in marks) {
+                val x = MotionTimelineGeometry.normalize(value, parameter.min..parameter.max) * size.width
+                drawLine(motionCurveColor(index), Offset(x, 1f), Offset(x, size.height - 1f), 1.5f)
+            }
+        }
 		Text(
 			parameter?.name?.ifBlank { null } ?: curve.parameterId,
 			color = when {
@@ -554,6 +568,9 @@ private fun Timeline(
 	val textMeasurer = rememberTextMeasurer()
 	val focusRequester = remember { FocusRequester() }
 	val ranges = remember(parameters) { parameters.associate { it.id.raw to it.min..it.max } }
+    val currentState by viewModel.uiState
+        val puppet = currentState.previewModel?.rig?.puppet
+    val keyMarks = remember(puppet) { puppet?.parameterKeyMarks().orEmpty() }
 
 	BoxWithConstraints(modifier.background(colors.inputBackground).clip(RoundedCornerShape(0.dp))) {
 		val widthPx = constraints.maxWidth.toFloat()
@@ -823,6 +840,18 @@ private fun Timeline(
 			clipRect(top = rulerPx) {
 				if (curvesMode) drawCurves(clip, visibleCurves, curveIndex, ranges, vp, valueViewport, plotTop, plotHeight, editor.selection, colors.textPrimary, colors.divider)
 				else drawDopesheet(clip, curveIndex, vp, rulerPx, rowPx, trackScroll.value.toFloat(), editor.selection, editor.focusedCurve, colors.textPrimary, colors.textMuted, colors.selection)
+                if (curvesMode) for (curve in visibleCurves) {
+                    val marks = keyMarks[org.umamo.runtime.model.ParameterId(curve.parameterId)]?.allKeys.orEmpty()
+                    val color = motionCurveColor(curveIndex[curve.parameterId] ?: 0)
+                    for (value in marks) {
+                        val y = valueViewport.y(MotionTimelineGeometry.normalize(value, ranges[curve.parameterId]), plotTop, plotHeight)
+                        drawLine(color.copy(alpha = 0.35f), Offset(0f, y), Offset(size.width, y), 1f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 5f)))
+                        val label = textMeasurer.measure("${curve.parameterId}: ${"%.2f".format(value)}",
+                            typography.monoSmall.copy(fontSize = 9.sp, color = color))
+                        drawText(label, topLeft = Offset(4.dp.toPx(), y - label.size.height))
+                    }
+                }
 				if (curvesMode) for ((pair, point) in handlePoints()) {
 					val (ref, _) = pair
 					val curve = clip.curve(ref.parameterId) ?: continue
