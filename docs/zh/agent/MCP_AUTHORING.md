@@ -38,7 +38,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics` | `request.mode` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、按阶跃输入模拟并返回峰值与稳定时间、按标准晃动调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
 | `skeleton` | `request.mode` | `get/propose/auto/put/enable/bone/move/bind/remove/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定；`pose` 求 FK/IK 参数值，不写历史 |
-| `motion` | `request.mode` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve/bake/bake_preview/pose_list/pose_put/pose_delete`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧；`bake` 把骨骼姿势序列烘焙成参数曲线，`pose_*` 管理命名姿势快照 |
+| `motion` | `request.mode` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧 |
 | `path` | `request.mode` | `get/list/preview/put/delete/deform` |
 | `revision` | `request.mode` | `save/checkpoint/list/restore` |
 
@@ -135,27 +135,6 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 ```json
 {"request":{"mode":"put","state":"current-history-head","clip":{"id":"wave_custom","name":"WaveCustom","duration":2,"curves":[{"parameter":"ParamArmRA","keys":[{"time":0,"value":0},{"time":1,"value":45},{"time":2,"value":0}]}]}}}
 ```
-
-#### 烘焙骨骼姿势序列
-
-`bake` 把一串骨骼姿势关键帧逐帧求解成各参数的曲线，再按容差减点，写入片段 `id`（不存在则新建，可用 `name`、`loop` 命名）。`bake_preview` 用同一份求解只返回统计，不写历史。骨骼必须已启用。
-
-- `keys`（1..256 个）：每个键有 `time`（秒，从 0 起）、`values`（骨骼参数 → 值，FK）、`ik`（`[{bone_id, target:[x,y]}]`，目标为画布像素坐标，只能是肢体骨骼，不能是上、下半身）和 `ease`（`LINEAR` / `SMOOTH` 默认 / `STEPPED`，描述走向下一个键的方式）。键里没写的参数不算在这个键上有关键帧，由前后有它的键连起来。某根骨骼只要有一个键给了 IK 目标，其余键上它的末端就取该键 FK 姿势下末端的位置，末端沿这些位置的路径运动。
-- `fps`（默认取目标片段的 FPS，新片段 30）：求解帧率。范围内帧数上限 20000。
-- `tolerance`（默认 0.5）：曲线与逐帧结果允许的最大偏差，单位是参数自身的单位，骨骼参数即“度”。值越大关键帧越少。
-- `curve`：`linear`（默认）或 `bezier`。贝塞尔拟合在平滑运动上关键帧少得多。
-- `parameters`、`start`、`end`：只烘焙指定参数，或只烘焙这段时间。默认是全部参数、第一个到最后一个键的时间。
-- `write`：`replace`（默认，被烘焙参数的整条曲线被替换）或 `merge`（被烘焙参数保留烘焙时间范围之外的原关键帧）。片段时长不够时会自动加长。
-
-结果值会夹在参数范围内，仍受片段的 256 条曲线、每条 4096 个键的上限约束。`bake_preview` 返回 `frames`、`samples`（减点前的总点数）、`keys`、`max_error`（不超过 `tolerance`）、`keys_by_parameter`，`include_curves: true` 时附带曲线。
-
-```json
-{"request":{"mode":"bake","state":"current-history-head","id":"wave_baked","name":"WaveBaked","fps":30,"tolerance":0.3,"curve":"bezier","keys":[{"time":0,"values":{"ParamArmLA":0,"ParamArmLB":0}},{"time":0.8,"ik":[{"bone_id":"actualBoneId","target":[412,230]}]},{"time":1.6,"values":{"ParamArmLA":0,"ParamArmLB":0}}]}}
-```
-
-#### 姿势快照
-
-`pose_put` 保存或按 `id` 覆盖一个命名快照 `pose:{id,name?,values}`（参数 → 值，值必须在参数范围内，同名会拒绝），`pose_delete` 删除，`pose_list` 读取。快照是工程数据，进入历史并随工程保存，但**不改 rig**：肢体关节做成融合变形姿势会把肢体从骨骼上撕开（见 [骨骼与姿态](../guide/SKELETON.md)），所以快照只记参数值。可以用它的 `values` 作为 `bake` 的姿势键，或用 `preview.set` 套到预览。
 
 ### 通用形状与物理
 

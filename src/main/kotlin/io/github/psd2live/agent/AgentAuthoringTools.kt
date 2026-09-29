@@ -607,17 +607,6 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
             put("parameter", string()); put("keys", arraySchema(motionKey, 1, 4096))
         }, listOf("parameter", "keys")), 0, 256))
     }, listOf("id", "name"))
-    val poseValues = buildJsonObject { put("type", "object"); put("minProperties", 1); put("additionalProperties", number()) }
-    val poseKey = objectSchema(buildJsonObject {
-        put("time", number()); put("values", buildJsonObject { put("type", "object"); put("additionalProperties", number()) })
-        put("ik", arraySchema(objectSchema(buildJsonObject { put("bone_id", string()); put("target", vector(2)) }, listOf("bone_id", "target")), 0, 16))
-        put("ease", choices(*io.github.psd2live.core.PoseEase.entries.map { it.name }.toTypedArray()))
-    }, listOf("time"))
-    val bakeFields = buildJsonObject {
-        put("keys", arraySchema(poseKey, 1, 256)); put("fps", number()); put("tolerance", number())
-        put("curve", choices("linear", "bezier")); put("parameters", arraySchema(string(), 1, 512))
-        put("start", number()); put("end", number())
-    }
     val motionBranches = listOf(
         variant("mode", "list", buildJsonObject {}, emptyList()),
         variant("mode", "get", buildJsonObject { put("id", string()) }, listOf("id")),
@@ -628,18 +617,8 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         variant("mode", "set_key", buildJsonObject { put("state", string()); put("id", string()); put("parameter", string()); put("key", motionKey) }, listOf("state", "id", "parameter", "key")),
         variant("mode", "delete_key", buildJsonObject { put("state", string()); put("id", string()); put("parameter", string()); put("time", number()) }, listOf("state", "id", "parameter", "time")),
         variant("mode", "remove_curve", buildJsonObject { put("state", string()); put("id", string()); put("parameter", string()) }, listOf("state", "id", "parameter")),
-        variant("mode", "bake_preview", JsonObject(bakeFields + ("id" to string()) + ("include_curves" to boolean())), listOf("keys")),
-        variant("mode", "bake", JsonObject(bakeFields + buildJsonObject {
-            put("state", string()); put("id", string()); put("name", string()); put("loop", boolean()); put("write", choices("replace", "merge"))
-        }), listOf("state", "id", "keys")),
-        variant("mode", "pose_list", buildJsonObject {}, emptyList()),
-        variant("mode", "pose_put", buildJsonObject {
-            put("state", string())
-            put("pose", objectSchema(buildJsonObject { put("id", string()); put("name", string()); put("values", poseValues) }, listOf("id", "values")))
-        }, listOf("state", "pose")),
-        variant("mode", "pose_delete", buildJsonObject { put("state", string()); put("id", string()) }, listOf("state", "id")),
     )
-    tool("motion", "Read and edit persistent motion clips and parameter timelines. sample returns exact interpolated parameter values at a time; seed_builtin copies a generated action into an editable override; put creates or replaces a complete clip, including duration, fades, curves and interpolation. set_key/delete_key edit one timeline key. Use skeleton.pose for FK/IK angle values, then key those parameters. bake solves a sequence of skeleton pose keys (FK parameter values and/or IK tip targets in canvas pixels, eased) at fps and writes the thinned curves into clip id (created when new): tolerance is the largest allowed deviation in parameter units (degrees for bones), curve linear|bezier, parameters/start/end limit the bake, write replace|merge. bake_preview reports frames/keys/max_error without changing history. pose_put/pose_delete/pose_list manage named parameter snapshots. Export writes these clips to motion3.json.",
+    tool("motion", "Read and edit persistent motion clips and parameter timelines. sample returns exact interpolated parameter values at a time; seed_builtin copies a generated action into an editable override; put creates or replaces a complete clip, including duration, fades, curves and interpolation. set_key/delete_key edit one timeline key. Use skeleton.pose for FK/IK angle values, then key those parameters. Export writes these clips to motion3.json.",
         buildJsonObject { put("request", oneOf(motionBranches)) }, listOf("request"), true) { a ->
         val input = a.getValue("request").jsonObject
         validateAuthoringSchema(input, oneOf(motionBranches))
@@ -668,11 +647,6 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                     MotionClips.sampleAll(clip, time, input["loop"]?.jsonPrimitive?.booleanOrNull ?: clip.loop)
                         .forEach { (parameter, value) -> put(parameter.raw, value) }
                 }
-            }
-            "bake_preview" -> workspace.bakeSkeletonMotion(input)
-            "pose_list" -> buildJsonObject {
-                put("state", workspace.snapshot().historyHeadNodeId ?: "")
-                putJsonArray("poses") { workspace.posePresets().forEach { add(io.github.psd2live.core.PosePreset.toJson(it)) } }
             }
             else -> workspace.editMotion(input.text("state"), input).compact()
         }

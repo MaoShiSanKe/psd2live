@@ -344,40 +344,13 @@ class ViewModelAgentWorkspace(
         }
     }
 
-    override fun bakeSkeletonMotion(request: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
-        val state = viewModel.state.value
-        val preview = requireNotNull(state.previewModel) { "No model is loaded" }
-        val parsed = AgentSkeletonBake.parse(request, AgentSkeletonBake.defaultFps(request, state.rigEdits.motionClips))
-        val result = AgentSkeletonBake.bake(preview.rig.puppet, state.rigEdits.skeleton, parsed)
-        return kotlinx.serialization.json.buildJsonObject {
-            put("state", snapshot().historyHeadNodeId ?: "")
-            AgentSkeletonBake.report(result, request["include_curves"]?.jsonPrimitive?.booleanOrNull ?: false)
-                .forEach { (key, value) -> put(key, value) }
-        }
-    }
-
-    override fun posePresets(): List<io.github.psd2live.core.PosePreset> = viewModel.state.value.rigEdits.posePresets
-
     override fun motionClips(): List<io.github.psd2live.core.MotionClip> = viewModel.state.value.rigEdits.motionClips
 
     override suspend fun editMotion(state: String, request: kotlinx.serialization.json.JsonObject): AgentWorkspaceMutationResult =
         mutateRigKeyform(state, null, "Edited motion", request["id"]?.jsonPrimitive?.contentOrNull ?: "motion") { document, puppet ->
             val ranges = puppet.parameters.associate { it.id.raw to (it.min..it.max) }
             val edits = document.rigEdits
-            when (val mode = request["mode"]?.jsonPrimitive?.contentOrNull) {
-                "pose_put", "pose_delete" ->
-                    document.copy(rigEdits = edits.copy(posePresets = AgentSkeletonBake.poses(edits.posePresets, request, ranges)))
-                "bake" -> {
-                    val parsed = AgentSkeletonBake.parse(request, AgentSkeletonBake.defaultFps(request, edits.motionClips))
-                    val result = AgentSkeletonBake.bake(puppet, edits.skeleton, parsed)
-                    val clips = AgentSkeletonMotionEdits.validated(AgentSkeletonBake.apply(edits.motionClips, request, parsed, result), ranges)
-                    document.copy(rigEdits = edits.copy(motionClips = clips))
-                }
-                else -> {
-                    require(mode != null) { "Motion mode is required" }
-                    document.copy(rigEdits = edits.copy(motionClips = AgentSkeletonMotionEdits.motion(edits.motionClips, request, ranges, edits.skeleton)))
-                }
-            }
+            document.copy(rigEdits = edits.copy(motionClips = AgentSkeletonMotionEdits.motion(edits.motionClips, request, ranges, edits.skeleton)))
         }
 
     override suspend fun updateProjectSettings(

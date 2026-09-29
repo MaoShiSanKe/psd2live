@@ -15,7 +15,6 @@
 | Rig 结构 / 形变 | 层级树、画布工具、关键形、路径、物理 | `structure/appearance/canvas/form/deform/rig/path/physics` | 复用持久化编辑命令或同一 Rig 模型 |
 | 骨架与姿态 | 骨骼标签页、姿态工具 | `skeleton`、`preview` | 同一 `SkeletonSpec`；FK/IK 求值不写历史，骨架编辑写历史并重建 |
 | 动作时间线 | 动画面板、动作编辑器 | `motion`、`view.motion` | 同一 `MotionClip`；片段编辑写历史，动态采样另行验收 |
-| 骨骼动作烘焙 | 动作编辑器工具栏「烘焙骨骼」对话框 | `motion.bake/bake_preview/pose_*` | 同一 `SkeletonBake`；写入一个 `MotionClip` 变更和姿势快照，各占一个历史节点，预览不写历史 |
 | 检查 / 历史 | 画布预览、撤销树 | `inspect/view/revision` | `view` 可固定镜头批量采样；UI 适合交互查看 |
 | 保存 / 导出 | 工程保存、模型导出、PSD 导出 | `revision.save`、`export`、`export_psd` | 使用项目编码、管线导出和 PSD 写入器 |
 

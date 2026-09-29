@@ -232,14 +232,10 @@ data class RigEditOverlay(
     val authoringJournal: List<kotlinx.serialization.json.JsonObject> = emptyList(),
     /** Authored motions and overrides of the generated ones; they do not touch the rig. */
     val motionClips: List<MotionClip> = emptyList(),
-    /** Named parameter snapshots, usually skeleton poses; like motions they do not touch the rig. */
-    val posePresets: List<PosePreset> = emptyList(),
 ) {
 	init {
         require(motionClips.map { it.id }.distinct().size == motionClips.size) { "Duplicate motion IDs" }
         require(motionClips.mapNotNull { it.builtin?.lowercase() }.let { it.distinct().size == it.size }) { "A generated motion has one override" }
-        require(posePresets.map { it.id }.distinct().size == posePresets.size) { "Duplicate pose IDs" }
-        require(posePresets.size <= PosePreset.MAX_POSES) { "At most ${PosePreset.MAX_POSES} poses" }
 		require(warpEdits.map { it.id }.distinct().size == warpEdits.size) { "Duplicate Warp IDs" }
         require(physicsEdits.map { it.id }.distinct().size == physicsEdits.size) { "Duplicate physics IDs" }
         require(validFps(physicsFps)) { "FPS must be $UNLIMITED_FPS (unlimited) or within $PHYSICS_FPS_RANGE" }

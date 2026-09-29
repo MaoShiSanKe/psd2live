@@ -34,18 +34,10 @@ class AuthoringParityTest {
             return AgentWorkspaceMutationResult("next", "revision-next", summary = "skeleton")
         }
         override fun motionClips() = clips
-        var poses: List<io.github.psd2live.core.PosePreset> = emptyList()
-        var bakeRequest: JsonObject? = null
-        override fun posePresets() = poses
-        override fun bakeSkeletonMotion(request: JsonObject): JsonObject {
-            bakeRequest = request
-            return buildJsonObject { put("state", "head"); put("keys", 3) }
-        }
         override suspend fun editMotion(state: String, request: JsonObject): AgentWorkspaceMutationResult {
             assertEquals("head", state)
             val ranges = mapOf("ParamArmLA" to (-90f..150f))
-            if (request.getValue("mode").jsonPrimitive.content.startsWith("pose_")) poses = AgentSkeletonBake.poses(poses, request, ranges)
-            else clips = AgentSkeletonMotionEdits.motion(clips, request, ranges, armature)
+            clips = AgentSkeletonMotionEdits.motion(clips, request, ranges, armature)
             return AgentWorkspaceMutationResult("next", "revision-next", summary = "motion")
         }
         override fun snapshot() = AgentProjectSnapshot(
@@ -131,40 +123,5 @@ class AuthoringParityTest {
         val sampled = call("motion", buildJsonObject { put("mode", "sample"); put("id", "custom"); put("time", 0.5) })
         assertFalse(sampled.isError == true)
         assertTrue(sampled.structuredContent?.get("values")?.jsonObject?.isEmpty() == true)
-    }
-
-    @Test fun bakeAndPoseModesRouteThroughTheMotionTool() = runBlocking {
-        val workspace = Workspace()
-        val server = createAgentMcpServer(workspace)
-        suspend fun call(request: JsonObject) = server.tools.getValue("motion").handler.invoke(connection,
-            CallToolRequest(CallToolRequestParams("motion", buildJsonObject { put("request", request) })))
-        val keys = buildJsonArray {
-            add(buildJsonObject { put("time", 0); put("values", buildJsonObject { put("ParamArmLA", 0) }) })
-            add(buildJsonObject {
-                put("time", 1); put("ease", "LINEAR")
-                put("ik", buildJsonArray { add(buildJsonObject { put("bone_id", "arm"); put("target", buildJsonArray { add(1); add(2) }) }) })
-            })
-        }
-        // The preview is a read: no state is needed and it reaches the workspace's solver.
-        val preview = call(buildJsonObject { put("mode", "bake_preview"); put("keys", keys); put("tolerance", 0.1); put("curve", "bezier") })
-        assertFalse(preview.isError == true)
-        assertEquals(3, preview.structuredContent?.get("keys")?.jsonPrimitive?.int)
-        assertEquals("bezier", workspace.bakeRequest?.get("curve")?.jsonPrimitive?.content)
-        // A bake is a write and needs the state and a target clip.
-        assertTrue(call(buildJsonObject { put("mode", "bake"); put("keys", keys) }).isError == true)
-        assertTrue(call(buildJsonObject { put("mode", "bake_preview"); put("keys", buildJsonArray {}) }).isError == true)
-        assertTrue(call(buildJsonObject { put("mode", "bake_preview"); put("keys", keys); put("curve", "spline") }).isError == true)
-        assertTrue(call(buildJsonObject { put("mode", "bake_preview"); put("keys", keys); put("unknown", 1) }).isError == true)
-
-        val put = call(buildJsonObject {
-            put("mode", "pose_put"); put("state", "head")
-            put("pose", buildJsonObject { put("id", "lean"); put("values", buildJsonObject { put("ParamArmLA", 10) }) })
-        })
-        assertFalse(put.isError == true)
-        val listed = call(buildJsonObject { put("mode", "pose_list") })
-        assertEquals("lean", listed.structuredContent?.get("poses")?.jsonArray?.single()?.jsonObject?.get("id")?.jsonPrimitive?.content)
-        val deleted = call(buildJsonObject { put("mode", "pose_delete"); put("state", "head"); put("id", "lean") })
-        assertFalse(deleted.isError == true)
-        assertTrue(workspace.poses.isEmpty())
     }
 }
