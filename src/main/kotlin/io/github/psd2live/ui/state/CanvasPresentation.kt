@@ -3,7 +3,57 @@ package io.github.psd2live.ui.state
 import androidx.compose.runtime.Immutable
 import org.umamo.runtime.model.ParameterId
 
-/** View-local interaction and preview pose. Model edits stay on PSD2LiveState. */
+/** The authored pose is distinct from the last evaluated preview frame. */
+@Immutable
+data class WorkspacePose(
+    val authoringPose: Boolean = false,
+    val parameterValues: Map<ParameterId, Float> = emptyMap(),
+    val lockedParameters: Set<ParameterId> = emptySet(),
+    val previewParameterValues: Map<ParameterId, Float> = emptyMap(),
+    val animationEnabled: Boolean = false,
+    val mouseTrackingEnabled: Boolean = true,
+) {
+    fun applyTo(state: PSD2LiveState) = state.copy(
+        parameterValues = parameterValues, lockedParameters = lockedParameters,
+        previewParameterValues = previewParameterValues, animationEnabled = animationEnabled,
+        mouseTrackingEnabled = mouseTrackingEnabled,
+    )
+
+    fun applyTo(presentation: CanvasPresentation) = presentation.copy(
+        parameterValues = parameterValues, lockedParameters = lockedParameters,
+        previewParameterValues = previewParameterValues, animationEnabled = animationEnabled,
+        mouseTrackingEnabled = mouseTrackingEnabled,
+    )
+
+    companion object {
+        fun capture(state: PSD2LiveState) = WorkspacePose(state.activeWorkspace.pose?.authoringPose ?: false, state.parameterValues, state.lockedParameters,
+            state.previewParameterValues, state.animationEnabled, state.mouseTrackingEnabled)
+        fun capture(presentation: CanvasPresentation) = WorkspacePose(false, presentation.parameterValues,
+            presentation.lockedParameters, presentation.previewParameterValues,
+            presentation.animationEnabled, presentation.mouseTrackingEnabled)
+    }
+}
+
+/** Session fields remain as compatibility projections for old saved workspaces. */
+internal fun EditorWorkspace.withPose(pose: WorkspacePose): EditorWorkspace {
+    val canvases = canvases.map { canvas ->
+        val edit = pose.applyTo(canvas.editSession.presentation)
+        val preview = pose.applyTo(canvas.previewSession.presentation)
+        if (edit == canvas.editSession.presentation && preview == canvas.previewSession.presentation) canvas
+        else canvas.copy(editSession = canvas.editSession.copy(presentation = edit),
+            previewSession = canvas.previewSession.copy(presentation = preview))
+    }
+    return if (this.pose == pose && canvases == this.canvases) this else copy(pose = pose, canvases = canvases)
+}
+
+/** Enter direct posing even when the requested value equals the last authored value. */
+internal fun PSD2LiveState.authoringPose(suppressPreviewEffects: Boolean = true): PSD2LiveState {
+    val state = copy(animationEnabled = false, previewParameterValues = emptyMap())
+    val pose = WorkspacePose.capture(state).copy(authoringPose = suppressPreviewEffects)
+    return state.updateActiveWorkspace { it.withPose(pose) }
+}
+
+/** View-local interaction plus compatibility projections of the workspace pose. */
 @Immutable
 data class CanvasPresentation(
     val selectedLayerId: String? = null,
@@ -75,7 +125,9 @@ fun PSD2LiveState.forCanvas(
             if (pane.id == canvasId) pane.copy(mode = targetMode) else pane
         })
     }
-    return presentation.applyTo(projected)
+    val shared = workspace.pose ?: if (workspaceId == activeWorkspace.id) WorkspacePose.capture(this)
+        else WorkspacePose.capture(workspace.activeCanvas.presentation)
+    return shared.applyTo(presentation.applyTo(projected))
 }
 
 /** The preview controlled by playback panels, or this canvas's latent preview session. */
@@ -151,7 +203,15 @@ internal fun pruneCanvasSessions(state: PSD2LiveState): PSD2LiveState {
                 )
             }
         }
-        if (!canvasChanged) workspace else workspace.copy(canvases = canvases)
+        val local = if (!canvasChanged) workspace else workspace.copy(canvases = canvases)
+        val pose = workspace.pose ?: if (workspace.id == state.activeWorkspace.id) WorkspacePose.capture(state)
+            else WorkspacePose.capture(workspace.activeCanvas.presentation)
+        fun normalized(values: Map<ParameterId, Float>) = puppet.parameters.associate { parameter ->
+            parameter.id to (values[parameter.id]?.takeIf { it.isFinite() } ?: parameter.default).coerceIn(parameter.min, parameter.max)
+        }
+        local.withPose(pose.copy(parameterValues = normalized(pose.parameterValues),
+            lockedParameters = pose.lockedParameters.intersect(parameterIds),
+            previewParameterValues = if (pose.previewParameterValues.isEmpty()) emptyMap() else normalized(pose.previewParameterValues)))
     }
     val pruned = if (workspaces == state.workspaces) state else state.copy(workspaces = workspaces)
     val active = pruned.activeCanvas.presentation
@@ -159,7 +219,7 @@ internal fun pruneCanvasSessions(state: PSD2LiveState): PSD2LiveState {
 }
 
 /** Keep the panel projection and its owning canvas in the same atomic state update. */
-internal fun reconcileCanvasPresentation(previous: PSD2LiveState, next: PSD2LiveState): PSD2LiveState {
+private fun reconcileLocalPresentation(previous: PSD2LiveState, next: PSD2LiveState): PSD2LiveState {
     if (previous === next) return next
     val sameOwner = previous.activeWorkspace.id == next.activeWorkspace.id &&
         previous.activeCanvas.id == next.activeCanvas.id && previous.activeCanvas.mode == next.activeCanvas.mode
@@ -180,4 +240,25 @@ internal fun reconcileCanvasPresentation(previous: PSD2LiveState, next: PSD2Live
         })
     }
     return saved.activeCanvas.presentation.applyTo(saved)
+}
+
+/** Resolve shared changes once, independently of which canvas owns keyboard focus. */
+internal fun reconcileCanvasPresentation(previous: PSD2LiveState, next: PSD2LiveState): PSD2LiveState {
+    if (previous === next) return next
+    val local = reconcileLocalPresentation(previous, next)
+    val switched = previous.activeWorkspace.id != next.activeWorkspace.id
+    val explicit = next.activeWorkspace.pose?.takeIf { it != previous.activeWorkspace.pose }
+    var shared = explicit ?: if (switched && previous.projectOpenGeneration == next.projectOpenGeneration)
+        next.activeWorkspace.pose ?: WorkspacePose.capture(next.activeCanvas.presentation)
+    else WorkspacePose.capture(next)
+    // An authored pose change invalidates the cached preview, never the user's locks.
+    if (!switched && shared.parameterValues != previous.parameterValues)
+        shared = shared.copy(previewParameterValues = emptyMap())
+    if (shared.animationEnabled || shared.mouseTrackingEnabled != previous.mouseTrackingEnabled)
+        shared = shared.copy(authoringPose = false)
+    var result = local
+    if (switched && previous.projectOpenGeneration == next.projectOpenGeneration)
+        result = result.updateWorkspace(previous.activeWorkspace.id) { it.withPose(WorkspacePose.capture(previous)) }
+    result = result.updateActiveWorkspace { it.withPose(shared) }
+    return shared.applyTo(result)
 }

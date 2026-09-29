@@ -264,7 +264,7 @@ class MultiCanvasIsolationTest {
         }
     }
 
-    @Test fun parameterPoseAndPlaybackRemainOnTheirCanvas() {
+    @Test fun parameterPoseAndPlaybackAreSharedByTheWorkspace() {
         PSD2LiveViewModel().use { vm ->
             val firstId = vm.state.value.activeCanvas.id
             val parameter = org.umamo.runtime.model.ParameterId("pose")
@@ -272,13 +272,13 @@ class MultiCanvasIsolationTest {
                 it.copy(parameterValues = mapOf(parameter to 0.5f), lockedParameters = setOf(parameter), animationEnabled = true, mouseTrackingEnabled = false)
             }
             val secondId = vm.addCanvas(CanvasMode.PREVIEW)
-            assertTrue(vm.state.value.parameterValues.isEmpty())
-            assertFalse(vm.state.value.animationEnabled)
-            assertTrue(vm.state.value.mouseTrackingEnabled)
+            assertEquals(0.5f, vm.state.value.parameterValues[parameter])
+            assertTrue(vm.state.value.animationEnabled)
+            assertFalse(vm.state.value.mouseTrackingEnabled)
             vm.focusCanvas(firstId)
             assertEquals(0.5f, vm.state.value.parameterValues[parameter])
             assertTrue(vm.state.value.animationEnabled)
-            assertFalse(vm.canvasEditorFor(secondId).state.animationEnabled)
+            assertTrue(vm.canvasEditorFor(secondId).state.animationEnabled)
         }
     }
 
@@ -337,7 +337,7 @@ class MultiCanvasIsolationTest {
             vm.focusCanvas(secondId)
             vm.acceptSdkFrame(frame(secondKey, 0.9f), 1_050_000_000L)
             assertEquals(0.9f, vm.state.value.previewParameterValues[parameter])
-            assertEquals(0.1f, vm.state.value.forCanvas(firstId).previewParameterValues[parameter])
+            assertEquals(0.9f, vm.state.value.forCanvas(firstId).previewParameterValues[parameter])
         }
     }
 
@@ -353,21 +353,21 @@ class MultiCanvasIsolationTest {
         }
     }
 
-    @Test fun playbackControlsTargetThePreviewCanvas() {
+    @Test fun playbackControlsShareStateWithoutStealingCanvasFocus() {
         PSD2LiveViewModel().use { vm ->
             val editId = vm.state.value.activeCanvas.id
             val previewId = vm.addCanvas(CanvasMode.PREVIEW, focus = false)
             vm.setAnimationEnabled(true)
-            assertEquals(previewId, vm.state.value.activeCanvas.id)
+            assertEquals(editId, vm.state.value.activeCanvas.id)
             assertTrue(vm.state.value.animationEnabled)
-            assertFalse(vm.state.value.forCanvas(editId).animationEnabled)
+            assertTrue(vm.state.value.forCanvas(editId).animationEnabled)
 
             vm.focusCanvas(editId)
             vm.setAnimationEnabled(false)
             assertEquals(editId, vm.state.value.activeCanvas.id)
             assertFalse(vm.state.value.previewPanelState().animationEnabled)
             vm.triggerMotion("Blink")
-            assertEquals(previewId, vm.state.value.activeCanvas.id)
+            assertEquals(editId, vm.state.value.activeCanvas.id)
             assertTrue(vm.state.value.animationEnabled)
         }
     }
@@ -413,7 +413,7 @@ class MultiCanvasIsolationTest {
             assertFalse(vm.state.value.showMesh)
             assertEquals(TabCamera(), vm.state.value.activeCanvas.camera)
             assertNull(vm.state.value.selectedLayerId)
-            assertTrue(vm.state.value.parameterValues.isEmpty())
+            assertEquals(0.4f, vm.state.value.parameterValues[parameter])
             assertTrue(vm.state.value.isLayerVisible("hidden-edit"))
             assertEquals("edit-layer", editor.state.selectedLayerId)
             assertEquals(CanvasTool.BRUSH, editor.tool)
@@ -432,10 +432,10 @@ class MultiCanvasIsolationTest {
             assertEquals(2f, vm.state.value.canvasZoom)
             assertTrue(vm.state.value.showRotation)
             assertTrue(vm.state.value.showMesh)
-            assertEquals(0.4f, vm.state.value.parameterValues[parameter])
+            assertEquals(-0.6f, vm.state.value.parameterValues[parameter])
             assertFalse(vm.state.value.isLayerVisible("hidden-edit"))
             assertTrue(vm.state.value.isLayerVisible("hidden-preview"))
-            assertFalse(vm.state.value.animationEnabled)
+            assertTrue(vm.state.value.animationEnabled)
 
             vm.setCanvasMode(canvasId, CanvasMode.PREVIEW)
             assertEquals("preview-layer", vm.state.value.selectedLayerId)
@@ -564,30 +564,30 @@ class MultiCanvasIsolationTest {
                 it.copy(animationEnabled = true)
             }
             vm.setCanvasMode(id, CanvasMode.EDIT)
-            assertFalse(vm.state.value.animationEnabled)
+            assertTrue(vm.state.value.animationEnabled)
             assertTrue(vm.state.value.previewPanelState().animationEnabled)
             assertEquals(-0.5f, vm.state.value.previewPanelState().parameterValues[parameter])
 
             vm.setMouseTrackingEnabled(false)
             assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
             assertFalse(vm.state.value.previewPanelState().mouseTrackingEnabled)
-            assertTrue(vm.state.value.forCanvas(id, mode = CanvasMode.EDIT).mouseTrackingEnabled)
+            assertFalse(vm.state.value.forCanvas(id, mode = CanvasMode.EDIT).mouseTrackingEnabled)
 
             vm.resetPreviewParameters()
-            assertEquals(0.25f, vm.state.value.forCanvas(id, mode = CanvasMode.EDIT).parameterValues[parameter])
+            assertEquals(vm.state.value.parameterValues, vm.state.value.forCanvas(id, mode = CanvasMode.PREVIEW).parameterValues)
         }
     }
 
-    @Test fun playingFromEditSwitchesTheSameCanvasToItsPreviewSession() {
+    @Test fun playingFromEditDoesNotCreateOrSwitchCanvas() {
         PSD2LiveViewModel().use { vm ->
             val id = vm.state.value.activeCanvas.id
             vm.selectLayer("edit-only")
             vm.setAnimationEnabled(true)
             assertEquals(1, vm.state.value.activeWorkspace.canvases.size)
             assertEquals(id, vm.state.value.activeCanvas.id)
-            assertEquals(CanvasMode.PREVIEW, vm.state.value.activeCanvas.mode)
+            assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
             assertTrue(vm.state.value.animationEnabled)
-            assertNull(vm.state.value.selectedLayerId)
+            assertEquals("edit-only", vm.state.value.selectedLayerId)
             assertEquals("edit-only", vm.state.value.forCanvas(id, mode = CanvasMode.EDIT).selectedLayerId)
         }
     }

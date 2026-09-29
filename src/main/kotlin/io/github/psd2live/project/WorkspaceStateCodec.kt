@@ -215,6 +215,10 @@ internal object WorkspaceStateCodec {
         val activeCanvasId = obj["activeCanvasId"]?.jsonPrimitive?.contentOrNull
             ?.takeIf { requested -> canvases.any { it.id == requested } }
             ?: canvases.first().id
+        // Older files migrate the focused canvas's pose once; every canvas then shares it.
+        val pose = WorkspacePose.capture(obj["pose"]?.let(::decodePresentation)
+            ?: canvases.first { it.id == activeCanvasId }.presentation)
+            .copy(authoringPose = obj["authoringPose"]?.jsonPrimitive?.booleanOrNull ?: false)
         return EditorWorkspace(
             id = id,
             name = obj["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
@@ -228,7 +232,8 @@ internal object WorkspaceStateCodec {
             }?.toMap().orEmpty(),
             canvases = canvases,
             activeCanvasId = activeCanvasId,
-        )
+            pose = pose,
+        ).withPose(pose)
     }
 
     /**
@@ -398,6 +403,10 @@ internal object WorkspaceStateCodec {
                 }
             }
             put("activeCanvasId", workspace.activeCanvasId)
+            val pose = if (workspace.id == state.activeWorkspace.id) WorkspacePose.capture(state)
+                else workspace.pose ?: WorkspacePose.capture(workspace.activeCanvas.presentation)
+            put("pose", encodePresentation(pose.applyTo(CanvasPresentation())))
+            put("authoringPose", pose.authoringPose)
             putJsonArray("canvases") { workspace.canvases.forEach { canvas -> add(buildJsonObject {
                 put("id", canvas.id)
                 put("mode", canvas.mode.name)
@@ -649,7 +658,7 @@ internal object WorkspaceStateCodec {
             val activeSessionKey = if (decoded.activeCanvas.mode == CanvasMode.EDIT) "editSession" else "previewSession"
             val hasPresentation = savedActive?.containsKey("presentation") == true ||
                 (savedActive?.get(activeSessionKey) as? JsonObject)?.containsKey("presentation") == true
-            if (hasPresentation) decoded.activeCanvas.presentation.applyTo(decoded)
+            if (hasPresentation) (decoded.activeWorkspace.pose ?: WorkspacePose.capture(decoded.activeCanvas.presentation)).applyTo(decoded.activeCanvas.presentation.applyTo(decoded))
             else decoded.updateCanvas(decoded.activeCanvas.id) { canvas ->
                 canvas.updateSession { it.copy(presentation = CanvasPresentation.capture(decoded)) }
             }

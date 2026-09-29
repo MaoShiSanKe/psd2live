@@ -362,6 +362,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     private inline fun updateState(transform: (PSD2LiveState) -> PSD2LiveState) {
         synchronized(stateLock) {
+            val before = _state.value
             _state.update { current ->
                 var next = reconcileCanvasPresentation(current, transform(current))
                 val parameters = next.previewModel?.rig?.puppet?.parameters
@@ -381,6 +382,26 @@ class PSD2LiveViewModel : AutoCloseable {
                 if (next.previewModel !== current.previewModel ||
                     next.projectOpenGeneration != current.projectOpenGeneration
                 ) pruneCanvasSessions(next) else next
+            }
+            val after = _state.value
+            if (before.activeWorkspace.id != after.activeWorkspace.id ||
+                before.projectOpenGeneration != after.projectOpenGeneration) {
+                motionEditor.playing = false
+                motionPlayer.stop()
+                latestLiveParameters = emptyMap()
+                pausedPhysics = emptyMap()
+                _livePose.value = emptyMap()
+                physicsClock = PhysicsClock.NONE
+                pointerActive = false
+                followX = 0f
+                followY = 0f
+                elapsed = 0.0
+            } else if (before.previewModel !== after.previewModel ||
+                (after.activeWorkspace.pose?.authoringPose == true &&
+                    (before.parameterValues != after.parameterValues || before.activeWorkspace.pose?.authoringPose != true))) {
+                _livePose.value = emptyMap()
+                pausedPhysics = emptyMap()
+                latestLiveParameters = emptyMap()
             }
             _uiState.value = _state.value
         }
@@ -410,14 +431,16 @@ class PSD2LiveViewModel : AutoCloseable {
                 ?.canvases?.firstOrNull { it.id == canvasId } ?: return@updateState current
             val targetMode = mode ?: canvas.mode
             val projected = current.forCanvas(canvasId, workspaceId, targetMode)
-            val presentation = CanvasPresentation.capture(transform(projected))
-            if (presentation == canvas.session(targetMode).presentation) return@updateState current
+            val transformed = transform(projected)
+            val shared = WorkspacePose.capture(transformed)
+            val presentation = CanvasPresentation.capture(transformed)
+            if (presentation == canvas.session(targetMode).presentation && shared == current.activeWorkspace.pose) return@updateState current
             current.updateWorkspace(workspaceId) { workspace ->
                 workspace.copy(canvases = workspace.canvases.map {
                     if (it.id == canvasId) it.updateSession(targetMode) { session ->
                         session.copy(presentation = presentation)
                     } else it
-                })
+                }).withPose(shared)
             }
         }
     }
@@ -1409,7 +1432,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			_sdkFrame.value = frame
 		}
 		if (canvas == null || canvas.id == current.previewControlCanvas().id) publishLivePose(current, frame)
-		val activeAnimatedCanvas = canvas != null && canvas.id == current.activeCanvas.id &&
+		val activeAnimatedCanvas = canvas != null && canvas.id == current.previewControlCanvas().id &&
 			animationEnabled && !current.meshOnly
 		val publishParameters = activeAnimatedCanvas &&
 			(lastSdkParameterCanvasId != frame.viewId || nowNanos - lastSdkParameterPublishNanos >= SDK_PARAMETER_PUBLISH_INTERVAL_NANOS)
@@ -1420,7 +1443,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (publishParameters || current.sdkStatus != "ready") {
 			updateState { latest ->
 				if (canvas == null || latest.activeWorkspace.id != current.activeWorkspace.id ||
-					latest.activeCanvas.id != canvas.id || !previewFrameMatchesState(latest, frame.animationEnabled)) {
+					latest.previewControlCanvas().id != canvas.id || !previewFrameMatchesState(latest, frame.animationEnabled)) {
 					if (latest.sdkStatus == "ready") latest else latest.copy(sdkStatus = "ready")
 				} else {
 					val values = if (publishParameters) parameterValuesAfterPreviewFrame(latest, frame.parameters)
@@ -1435,7 +1458,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** The frame's pose for the panels: all of it while animating, the pointer's look while paused. */
 	private fun publishLivePose(current: PSD2LiveState, frame: CubismSdkFrame) {
 		val panel = current.previewPanelState()
-		val tracked = canvasPointers[frame.viewId] != null && panel.mouseTrackingEnabled && !current.meshOnly
+		val tracked = canvasPointers[frame.viewId] != null && panel.mouseTrackingEnabled && !current.meshOnly && current.activeWorkspace.pose?.authoringPose != true
 		val swinging = pausedPhysics
 		_livePose.value = when {
 			frame.animationEnabled -> panel.parameterValues + frame.parameters
@@ -2151,11 +2174,11 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (motionEditor.focusedCurve == parameterId) motionEditor.focusedCurve = null
 	}
 
-	/** The value the preview shows for [parameterId], else its default. */
+	/** The current authored workspace value, never a cached preview frame. */
 	private fun currentMotionParameterValue(parameterId: String): Float {
 		val state = _state.value.previewPanelState()
 		val id = ParameterId(parameterId)
-		return state.previewParameterValues[id] ?: state.parameterValues[id]
+		return state.parameterValues[id]
 			?: state.previewModel?.rig?.puppet?.parameters?.firstOrNull { it.id == id }?.default ?: 0f
 	}
 
@@ -2261,10 +2284,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (clip != null) poseMotionPreview(clip, t)
 	}
 
-	/** Writes the clip's values at [time] onto the preview canvas' paused pose. */
+	/** Samples the clip into the shared authoring pose without changing canvas layout. */
 	private fun poseMotionPreview(clip: MotionClip, time: Float) {
 		if (clip.curves.isEmpty()) return
-		if (_state.value.activeWorkspace.canvases.none { it.mode == CanvasMode.PREVIEW }) ensurePreviewCanvas(focus = false)
 		val current = _state.value
 		val parameters = current.previewModel?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
 		val values = MotionClips.sampleAll(clip, time.toDouble(), loop = false)
@@ -2275,8 +2297,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			it.copy(
 				animationEnabled = false,
 				parameterValues = it.parameterValues + values,
-				previewParameterValues = it.previewParameterValues + values,
-			)
+			).authoringPose()
 		}
 	}
 
@@ -2314,6 +2335,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	// endregion
+
 
 	/** Commit an edited armature as one undoable project change and rebuild its derived rig. */
 	fun setSkeleton(spec: io.github.psd2live.core.SkeletonSpec) {
@@ -2992,17 +3014,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		markWorkspaceChanged()
 	}
 
-	/** Focuses an edit canvas, creating the mode on the active canvas when none exists. */
+	/** Focus an existing visible edit canvas without changing the workspace layout. */
 	fun ensureEditCanvas() {
 		val workspace = _state.value.activeWorkspace
-		val existing = workspace.activeCanvas.takeIf { it.mode == CanvasMode.EDIT }
-            ?: workspace.canvases.firstOrNull { it.mode == CanvasMode.EDIT }
-		if (existing != null) {
-			if (existing.id in workspace.hiddenModules) setModuleVisible(existing.id, true)
-			focusCanvas(existing.id)
-		} else {
-			setCanvasMode(workspace.activeCanvas.id, CanvasMode.EDIT)
-		}
+		val existing = workspace.activeCanvas.takeIf { it.mode == CanvasMode.EDIT && it.id !in workspace.hiddenModules }
+			?: workspace.canvases.firstOrNull { it.mode == CanvasMode.EDIT && it.id !in workspace.hiddenModules }
+		if (existing != null) focusCanvas(existing.id)
 	}
 
 	/** Makes sure a preview canvas is on screen. [focus] selects it. */
@@ -3235,7 +3252,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (enabled) {
 			// The editor's playback poses a paused preview; the running animation takes over.
 			motionEditor.playing = false
-			focusPreviewControl()
 		}
 		val current = _state.value
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
@@ -3245,11 +3261,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	private fun focusPreviewControl() {
-		val target = _state.value.previewControlCanvas()
-		if (target.mode == CanvasMode.PREVIEW) focusCanvas(target.id)
-		else setCanvasMode(target.id, CanvasMode.PREVIEW)
-	}
 
 	fun setParameterSearchQuery(query: String) {
 		updateState { it.copy(parameterSearchQuery = query) }
@@ -3849,13 +3860,16 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setParameterValue(id: ParameterId, value: Float) {
+        motionEditor.playing = false
+        motionPlayer.stop()
 		updateState { current ->
 			val model = current.previewModel
 			val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
 			val clamped = if (param != null) value.coerceIn(param.min, param.max) else value
 			current.copy(
+				animationEnabled = false,
 				parameterValues = current.parameterValues + (id to clamped),
-			)
+			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
 		}
 	    markWorkspaceChanged()
 	}
@@ -3863,10 +3877,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** Several parameters in one state update, so a gesture that moves a chain redraws once, not per joint. */
 	fun setParameterValues(values: Map<ParameterId, Float>) {
 		if (values.isEmpty()) return
+        motionEditor.playing = false
+        motionPlayer.stop()
 		updateState { current ->
 			val parameters = current.previewModel?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
 			val clamped = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
-			current.copy(parameterValues = current.parameterValues + clamped)
+			current.copy(parameterValues = current.parameterValues + clamped).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
 		}
 		markWorkspaceChanged()
 	}
@@ -3929,7 +3945,7 @@ class PSD2LiveViewModel : AutoCloseable {
 					val a = from[id] ?: to
 					next[id] = a + (to - a) * eased
 				}
-				current.copy(parameterValues = next, lockedParameters = current.lockedParameters + targets.keys)
+				current.copy(parameterValues = next).authoringPose()
 			}
 			if (t >= 1f) break
 			delay(16L)
@@ -3946,9 +3962,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
 			val defaultVal = param?.default ?: 0f
 			current.copy(
-				lockedParameters = current.lockedParameters + id,
 				parameterValues = current.parameterValues + (id to defaultVal),
-			)
+			).authoringPose()
 		}
 		if (id == StandardParameters.ANGLE_X || id == StandardParameters.EYE_BALL_X || id == StandardParameters.BODY_X) {
 			followX = 0f
@@ -4044,7 +4059,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	private fun shownParameterValues(): Map<ParameterId, Float>? {
 		val current = _state.value
 		val parameters = current.previewModel?.rig?.puppet?.parameters ?: return null
-		val live = current.previewLive && (current.animationEnabled || current.mouseTrackingEnabled ||
+		val live = current.activeCanvas.mode == CanvasMode.PREVIEW && current.activeWorkspace.pose?.authoringPose != true && current.previewLive && (current.animationEnabled || current.mouseTrackingEnabled ||
 			(current.generatePhysics && !current.meshOnly))
 		val pose = if (live) livePose.value else emptyMap()
 		return parameters.associate { it.id to (pose[it.id] ?: current.parameterValues[it.id] ?: it.default) }
@@ -4060,7 +4075,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setMouseTrackingEnabled(enabled: Boolean) {
-		if (enabled) focusPreviewControl()
 		val current = _state.value
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
 			it.copy(mouseTrackingEnabled = enabled)
@@ -4520,21 +4534,24 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	private fun scheduleRuntimeBundleUpdate() {
-		val previous = _state.value.previewModel ?: return
+		if (_state.value.previewModel == null) return
 		if (_state.value.isAnalyzing || _state.value.isGenerating) return
 
 		previewRebuildJob?.cancel()
 		previewRebuildJob = scope.launch {
 			delay(200)
 			try {
+				val previous = _state.value.previewModel ?: return@launch
 				val config = _state.value.buildConfig()
 				val updated = runInterruptible(Dispatchers.Default) {
 					pipeline.updateRuntimeBundle(previous, config)
 				}
+				var accepted = false
 				updateState {
-					it.copy(previewModel = updated)
+					if (it.previewModel !== previous || it.buildConfig() != config) it
+					else { accepted = true; it.copy(previewModel = updated) }
 				}
-				refreshSdkSession(updated)
+				if (accepted) refreshSdkSession(updated) else scheduleRuntimeBundleUpdate()
 			} catch (failure: Throwable) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
 				val detail = failure.message ?: failure.javaClass.simpleName
@@ -4673,16 +4690,17 @@ class PSD2LiveViewModel : AutoCloseable {
 	 */
 	fun triggerMotion(name: String) {
 		motionEditor.playing = false
-		ensurePreviewCanvas(focus = true)
 		updateState { it.copy(animationEnabled = true) }
 		ensureSdkSessionLoaded()
 		val current = _state.value
-		sdkSession.startMotion(name, priority = MOTION_PRIORITY_FORCE, viewId = canvasRenderKey(current.activeCanvas.id))
+		current.activeWorkspace.canvases.filter { it.mode == CanvasMode.PREVIEW && it.id !in current.activeWorkspace.hiddenModules }.forEach {
+            sdkSession.startMotion(name, priority = MOTION_PRIORITY_FORCE, viewId = canvasRenderKey(it.id))
+        }
 		if (name.equals("Idle", ignoreCase = true)) {
 			motionPlayer.stop()
 			elapsed = 0.0
 		} else {
-			motionPlayer.start(name, current.previewModel?.config?.rigEdits?.skeleton, current.rigEdits.motionClips)
+			motionPlayer.start(name, current.rigEdits.skeleton, current.rigEdits.motionClips)
 		}
 	}
 
@@ -4723,7 +4741,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val inPreview = current.previewLive
 		val isMeshOnly = current.meshOnly
 		val anim = inPreview && current.animationEnabled && !isMeshOnly
-		val tracking = inPreview && current.mouseTrackingEnabled && !isMeshOnly
+		val tracking = inPreview && current.mouseTrackingEnabled && !isMeshOnly && current.activeWorkspace.pose?.authoringPose != true
 		if (anim) elapsed += dt
 
 		// 0. The animation editor's own playback poses the paused preview.
@@ -4813,7 +4831,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		private set
 
 	private fun stepPausedPhysics(current: PSD2LiveState, model: RigPreviewModel?, on: Boolean, tracking: Boolean, dt: Float) {
-		if (!on || model == null) {
+		if (!on || model == null || current.activeWorkspace.pose?.authoringPose == true) {
 			if (physicsClock == PhysicsClock.PAUSED) physicsClock = PhysicsClock.NONE
 			// The software preview let go of the swing: back to the edit pose, unless the pointer holds a look.
 			if (pausedPhysics.isNotEmpty() && current.sdkStatus != "ready" && !pointerActive) {
@@ -4931,12 +4949,12 @@ class PSD2LiveViewModel : AutoCloseable {
 			ensureSdkSessionLoaded()
 		}
 		val isAnim = inPreview && presentation.animationEnabled && !snapshot.meshOnly
-		val tracking = inPreview && presentation.mouseTrackingEnabled && !snapshot.meshOnly
-		val liveParams = if (canvas == null || canvas.id == snapshot.activeCanvas.id) latestLiveParameters else emptyMap()
+		val tracking = inPreview && presentation.mouseTrackingEnabled && !snapshot.meshOnly && snapshot.activeWorkspace.pose?.authoringPose != true
+		val liveParams = latestLiveParameters
 		val previewValues = parameterValuesForPreview(
 			snapshot, presentation.animationEnabled, presentation.parameterValues,
 			presentation.lockedParameters, liveParams,
-		).let { if (!isAnim && drivesClock && pausedPhysics.isNotEmpty()) it + pausedPhysics else it }
+		).let { if (!isAnim && snapshot.activeWorkspace.pose?.authoringPose != true && pausedPhysics.isNotEmpty()) it + pausedPhysics else it }
 		sdkSession.render(
 			CubismSdkPreviewSession.RenderRequest(
 				width = width,

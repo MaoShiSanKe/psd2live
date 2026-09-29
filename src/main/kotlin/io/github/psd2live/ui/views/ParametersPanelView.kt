@@ -2186,7 +2186,7 @@ private fun ParameterKeyMarks?.toSliderMarks(): List<SliderKeyMark> {
 @Composable
 private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2LiveViewModel): Float {
 	val pose by viewModel.livePose.collectAsState()
-	val live = state.previewLive && (state.animationEnabled || state.mouseTrackingEnabled || (state.generatePhysics && !state.meshOnly))
+	val live = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW && state.activeWorkspace.pose?.authoringPose != true && state.previewLive && (state.animationEnabled || state.mouseTrackingEnabled || (state.generatePhysics && !state.meshOnly))
 	return (if (live) pose[param.id] else null) ?: state.parameterValues[param.id] ?: param.default
 }
 

@@ -238,6 +238,8 @@ enum class WorkspacePreset(
 @Immutable
 data class EditorWorkspace(
 	val id: String,
+	/** Authoring pose and playback controls shared by every canvas in this workspace. */
+	val pose: WorkspacePose? = null,
 	val name: String = "",
 	val preset: WorkspacePreset = WorkspacePreset.EDIT,
 	/** Serialized dock tree. Null means the [preset]'s arrangement. */
