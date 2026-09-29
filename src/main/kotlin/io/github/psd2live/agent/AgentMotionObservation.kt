@@ -1,5 +1,6 @@
 package io.github.psd2live.agent
 
+import io.github.psd2live.core.CubismJson
 import io.github.psd2live.core.CubismRuntimeAsset
 import io.github.psd2live.core.CubismRuntimeBundle
 import kotlinx.serialization.json.*
@@ -70,5 +71,6 @@ internal fun observationMotion(bundle: CubismRuntimeBundle, frames: JsonArray, d
     val directory = bundle.manifestPath.substringBeforeLast('/', "")
     val motionPath = if (directory.isEmpty()) path else "$directory/$path"
     return bundle.copy(assets = bundle.assets.filterNot { it.path in setOf(bundle.manifestPath, motionPath) } +
-        CubismRuntimeAsset(bundle.manifestPath, updated.toString().encodeToByteArray()) + CubismRuntimeAsset(motionPath, motion.toString().encodeToByteArray()))
+        CubismRuntimeAsset(bundle.manifestPath, CubismJson.normalize(updated.toString()).encodeToByteArray()) +
+        CubismRuntimeAsset(motionPath, CubismJson.normalize(motion.toString()).encodeToByteArray()))
 }
