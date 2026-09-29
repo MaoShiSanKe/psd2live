@@ -84,15 +84,6 @@ internal object SkeletonRig {
 	val legsWarpId = DeformerId("DeformSkelLegs")
 	private val skeletonGroupId = ParameterGroupId("ParamGroupSkeleton")
 
-	/** Narrowest angle step between two keys of a corrective axis; a key never has to be denser. */
-	private const val KEY_STEP = 7.5
-
-	/**
-	 * Farthest, in home-space pixels, the linear blend between two neighbouring keys may stray from the
-	 * arc a vertex or a pivot really turns along. A corrective axis takes as few keys as keep within it.
-	 */
-	private const val KEY_TOLERANCE = 1.0
-
 	/**
 	 * How far, in canvas pixels, a vertex of one part may sit from a vertex or the outline of another and
 	 * still be welded to it, as the glue brush's matching distance.
@@ -114,9 +105,6 @@ internal object SkeletonRig {
 
 	/** Columns of a body half's warp; its rows follow the waist band so the bend stays smooth. */
 	private const val BODY_WARP_COLUMNS = 4
-
-	/** Most keyforms one mesh may carry; beyond it the keys thin out evenly. */
-	private const val MAX_MESH_CELLS = 600
 
 	/** Home-space units below which a pose leaves a mesh no shape of its own. */
 	private const val POSE_EPSILON = 1e-4f
@@ -218,7 +206,7 @@ internal object SkeletonRig {
 		// 3. The body halves spliced into the body chain as warps - the head rotation and everything else on
 		// the breath warp ends up under the upper body - and a rotation deformer per limb bone hung from them.
 		val bends = LinkedHashMap<String, BodyBend>()
-		model = addBodyWarps(model, bones.filter { it.role.body }, frame, bends)
+		model = addBodyWarps(model, bones.filter { it.role.body }, frame, bends, spec.sampling)
 		model = addRotations(model, joints, parentOf, spec, frame, bends, plan.blend)
 		model = addParameters(model, bones, plan.blend)
 
@@ -231,14 +219,14 @@ internal object SkeletonRig {
 		for ((id, root) in drawableRoot) {
 			val drawableId = DrawableId(id)
 			model = skinDrawable(model, drawableId, canvas.getValue(drawableId), treeBones.getValue(root), parentOf, poses,
-				plan.homes.getValue(id), plan.blend)
+				plan.homes.getValue(id), plan.blend, spec.sampling)
 		}
 
 		// 6. The welded parts glued, no deformer left holding nothing, and no joint inside one mesh left as a
 		// rotation of its own.
 		model = model.copy(glues = model.glues + seams.glues)
 		model = pruneEmptyBones(model, joints)
-		model = foldLinkBones(model, joints)
+		model = foldLinkBones(model, joints, spec.sampling)
 		model = withSkeletonGroup(model, bones, poses)
 		return model.withDerivedRenderRoot()
 	}
@@ -400,8 +388,8 @@ internal object SkeletonRig {
 		}
 
 		/** Every bone's own parameter as an axis, keyed densely enough that the turn stays on its arc. */
-		fun grid(): KeyformGrid<WarpLatticeForm> {
-			val axes = bones.map { KeyformAxis(ParameterId(it.parameterId), angleKeys(it.minAngle to it.maxAngle, KEY_STEP)) }
+		fun grid(sampling: SkeletonSampling = SkeletonSampling()): KeyformGrid<WarpLatticeForm> {
+			val axes = bones.map { KeyformAxis(ParameterId(it.parameterId), angleKeys(it.minAngle to it.maxAngle, sampling.minimumStepDegrees.toDouble())) }
 			return KeyformGrid(axes, cartesian(axes).map { coordinate ->
 				KeyformCell(coordinate, WarpLatticeForm(lattice(DoubleArray(bones.size) { b ->
 					axes[b].keys[coordinate[b]] * bones[b].direction.toDouble()
@@ -422,14 +410,14 @@ internal object SkeletonRig {
 	 * Being the identity in its host's space at rest, a bend warp moves nothing it takes over and changes
 	 * none of its coordinates. [bends] receives the warp each body bone is read from.
 	 */
-	private fun addBodyWarps(base: PuppetModel, bodies: List<SkeletonBone>, frame: Bounds, bends: MutableMap<String, BodyBend>): PuppetModel {
+	private fun addBodyWarps(base: PuppetModel, bodies: List<SkeletonBone>, frame: Bounds, bends: MutableMap<String, BodyBend>, sampling: SkeletonSampling): PuppetModel {
 		if (bodies.isEmpty()) return base
 		val halves = bodies.sortedBy { if (it.role == BoneRole.UPPER_BODY) 0 else 1 }
 		val torsoHost = if (base.deformers.any { it.id == breathId }) breathId else bodyId
-		var model = splice(base, torsoWarpId, tr("model.deformer.skeletonTorso"), torsoHost, halves, frame, adoptDeformers = true, bends)
+		var model = splice(base, torsoWarpId, tr("model.deformer.skeletonTorso"), torsoHost, halves, frame, adoptDeformers = true, bends, sampling)
 		val lower = halves.firstOrNull { it.role == BoneRole.LOWER_BODY }
 		if (lower != null && torsoHost != bodyId) {
-			model = splice(model, legsWarpId, tr("model.deformer.skeletonLegs"), bodyId, listOf(lower), frame, adoptDeformers = false, bends)
+			model = splice(model, legsWarpId, tr("model.deformer.skeletonLegs"), bodyId, listOf(lower), frame, adoptDeformers = false, bends, sampling)
 		}
 		return model
 	}
@@ -447,11 +435,12 @@ internal object SkeletonRig {
 		frame: Bounds,
 		adoptDeformers: Boolean,
 		bends: MutableMap<String, BodyBend>,
+		sampling: SkeletonSampling,
 	): PuppetModel {
 		val hostRest = worlds(model, emptyMap(), setOf(host))[host] ?: return model
 		val bend = BodyBend(id, hostRest, bones, frame)
 		val partId = model.parts.firstOrNull { it.id.raw == "PartBody" }?.id
-		val warp = Deformer.Warp(id, name, host, partId, bend.rows, bend.columns, true, bend.grid())
+		val warp = Deformer.Warp(id, name, host, partId, bend.rows, bend.columns, true, bend.grid(sampling))
 		val deformers = if (!adoptDeformers) model.deformers else model.deformers.map { deformer ->
 			when {
 				deformer.parent != host -> deformer
@@ -890,6 +879,7 @@ internal object SkeletonRig {
 		poses: List<SkeletonPose>,
 		home: Int,
 		blend: Set<ParameterId>,
+		sampling: SkeletonSampling,
 	): PuppetModel {
 		val drawable = base.drawables.firstOrNull { it.id == drawableId } ?: return base
 		val mesh = drawable.mesh ?: return base
@@ -945,8 +935,8 @@ internal object SkeletonRig {
 			val range = ranges[id]
 			ranges[id] = if (range == null) bone.minAngle to bone.maxAngle else minOf(range.first, bone.minAngle) to maxOf(range.second, bone.maxAngle)
 		}
-		val sides = ranges.mapValues { (id, range) -> fittedSides(range) { deltasAt(mapOf(id to it)) } }
-		val axes = gridAxes(sides.filterKeys { it !in blend }, ranges)
+		val sides = ranges.mapValues { (id, range) -> fittedSides(range, sampling) { deltasAt(mapOf(id to it)) } }
+		val axes = gridAxes(sides.filterKeys { it !in blend }, ranges, sampling)
 		val blendAxes = sides.filterKeys { it in blend }.map { (id, side) -> KeyformAxis(id, keysOf(ranges.getValue(id), side.first, side.second)) }
 
 		val skinGrid = if (axes.isEmpty()) null else KeyformGrid(axes, cartesian(axes).map { coordinate ->
@@ -1062,37 +1052,39 @@ internal object SkeletonRig {
 	/**
 	 * How many evenly spaced keys each side of 0 needs across [range] so the linear blend between two
 	 * neighbours of [at] - a mesh's home-space deltas at a value - strays from it by no more than
-	 * [KEY_TOLERANCE], with keys never closer than [KEY_STEP].
+	 * the configured tolerance, with keys never closer than the configured minimum step.
 	 */
-	private fun fittedSides(range: Pair<Float, Float>, at: (Float) -> FloatArray): Pair<Int, Int> {
+	private fun fittedSides(range: Pair<Float, Float>, sampling: SkeletonSampling, at: (Float) -> FloatArray): Pair<Int, Int> {
 		val memo = HashMap<Float, FloatArray>()
 		fun sample(value: Float) = memo.getOrPut(value) { at(value) }
 		fun side(limit: Float): Int {
-			val most = ceil(abs(limit) / KEY_STEP - 1e-6).toInt()
+			val most = ceil(abs(limit) / sampling.minimumStepDegrees - 1e-6).toInt()
 			return (1..most).firstOrNull { n ->
-				(0 until n).all { i -> straight(sample(limit * i / n), sample(limit * (i + 1) / n), sample(limit * (i + 0.5f) / n)) }
+				(0 until n).all { i -> straight(sample(limit * i / n), sample(limit * (i + 1) / n), sample(limit * (i + 0.5f) / n), sampling.tolerancePx) }
 			} ?: most
 		}
 		return side(range.first) to side(range.second)
 	}
 
-	/** Whether every vertex of [middle] lies within [KEY_TOLERANCE] of halfway between [a] and [b]. */
-	private fun straight(a: FloatArray, b: FloatArray, middle: FloatArray): Boolean {
+	/** Whether every vertex of [middle] lies within [tolerance] of halfway between [a] and [b]. */
+	private fun straight(a: FloatArray, b: FloatArray, middle: FloatArray, tolerance: Float): Boolean {
 		for (i in middle.indices step 2) {
 			val dx = middle[i] - (a[i] + b[i]) * 0.5
 			val dy = middle[i + 1] - (a[i + 1] + b[i + 1]) * 0.5
-			if (dx * dx + dy * dy > KEY_TOLERANCE * KEY_TOLERANCE) return false
+			if (dx * dx + dy * dy > tolerance * tolerance) return false
 		}
 		return true
 	}
 
 	/**
 	 * The keyform axes of a mesh's multiplying bones, each with the keys of [sides] on either side of 0,
-	 * thinned from the densest side down while the grid would hold more than [MAX_MESH_CELLS] forms.
+	 * thinned from the densest side down while the grid would hold more than the configured limit.
 	 */
-	private fun gridAxes(sides: Map<ParameterId, Pair<Int, Int>>, ranges: Map<ParameterId, Pair<Float, Float>>): List<KeyformAxis> {
+	private fun gridAxes(sides: Map<ParameterId, Pair<Int, Int>>, ranges: Map<ParameterId, Pair<Float, Float>>, sampling: SkeletonSampling): List<KeyformAxis> {
 		val counts = sides.mapValues { intArrayOf(it.value.first, it.value.second) }
-		while (counts.values.fold(1) { acc, c -> acc * (c[0] + c[1] + 1) } > MAX_MESH_CELLS) {
+		while (counts.values.fold(1L) { acc, c ->
+			if (acc > sampling.maxMeshKeyforms) acc else acc * (c[0] + c[1] + 1)
+		} > sampling.maxMeshKeyforms) {
 			val densest = counts.values.maxBy { it[0] + it[1] }
 			val side = if (densest[0] >= densest[1]) 0 else 1
 			if (densest[side] <= 1) break
@@ -1106,11 +1098,11 @@ internal object SkeletonRig {
 		keysOf(range, ceil(abs(range.first) / step - 1e-6).toInt(), ceil(range.second / step - 1e-6).toInt())
 
 	/**
-	 * The widest step that keeps a pivot [radius] pixels out within [KEY_TOLERANCE] of its arc between
-	 * two keys, and never narrower than [KEY_STEP].
+	 * The widest step that keeps a pivot [radius] pixels out within the configured tolerance of its arc
+	 * between two keys, and never narrower than the configured minimum step.
 	 */
-	private fun arcStep(radius: Double): Double =
-		if (radius <= KEY_TOLERANCE) 90.0 else max(KEY_STEP, Math.toDegrees(2.0 * acos(1.0 - KEY_TOLERANCE / radius)))
+	private fun arcStep(radius: Double, sampling: SkeletonSampling): Double =
+		if (radius <= sampling.tolerancePx) 90.0 else max(sampling.minimumStepDegrees.toDouble(), Math.toDegrees(2.0 * acos(1.0 - sampling.tolerancePx / radius)))
 
 	/** [below] evenly spaced keys from [range]'s start to 0 and [above] from 0 to its end, 0 among them. */
 	private fun keysOf(range: Pair<Float, Float>, below: Int, above: Int): FloatArray {
@@ -1251,7 +1243,7 @@ internal object SkeletonRig {
 	 * Only a link under another bone's rotation folds: angles add across two rotations, so the child's
 	 * angle is the sum of both and only its pivot needs keys along the link's arc (see [foldLink]).
 	 */
-	private fun foldLinkBones(model: PuppetModel, bones: List<SkeletonBone>): PuppetModel {
+	private fun foldLinkBones(model: PuppetModel, bones: List<SkeletonBone>, sampling: SkeletonSampling): PuppetModel {
 		val boneDeformers = bones.mapTo(HashSet()) { DeformerId(it.deformerId) }
 		val boneParameters = bones.mapTo(HashSet()) { ParameterId(it.parameterId) }
 		var result = model
@@ -1263,7 +1255,7 @@ internal object SkeletonRig {
 			if (result.drawables.any { it.parentDeformerId == id }) continue
 			val children = result.deformers.filter { it.parent == id }
 			if (children.isEmpty() || children.any { it !is Deformer.Rotation }) continue
-			result = foldLink(result, link, parent, children.map { it as Deformer.Rotation }, boneParameters)
+			result = foldLink(result, link, parent, children.map { it as Deformer.Rotation }, boneParameters, sampling)
 		}
 		return result
 	}
@@ -1281,13 +1273,14 @@ internal object SkeletonRig {
 		host: DeformerId,
 		children: List<Deformer.Rotation>,
 		boneParameters: Set<ParameterId>,
+		sampling: SkeletonSampling,
 	): PuppetModel {
 		val defaults = model.parameters.associate { it.id to it.default }
 		val default: (ParameterId) -> Float = { defaults[it] ?: 0f }
 		// The children's pivots swing round the link's at this reach, keyed to stay as close to the arc as the
 		// meshes around them stay to theirs.
 		val reach = children.maxOf { child -> rotationFormAt(child.geometryGrid, default)?.let { hypot(it.originX, it.originY) } ?: 0f }
-		val step = arcStep(reach.toDouble())
+		val step = arcStep(reach.toDouble(), sampling)
 		val linkAxes = link.geometryGrid!!.axes.map { axis -> KeyformAxis(axis.parameterId, angleKeys(axis.keys.first() to axis.keys.last(), step)) }
 		val linkRest = rotationFormAt(link.geometryGrid, default) ?: RotationPivotForm(0f, 0f, 0f, 1f)
 		val linkShapes = link.blendShapes.map { binding ->

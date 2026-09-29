@@ -3,6 +3,7 @@ package io.github.psd2live.core
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import io.github.psd2live.ui.parameterKeyMarks
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.Deformer
@@ -719,6 +720,7 @@ class SkeletonRigTest {
 	@Test fun jsonRoundTripsAndReadsVersionOne() {
 		val spec = arm("arm")
 		val tuned = spec.withBone(spec.bone("fore")!!.copy(minAngle = -80f, maxAngle = 10f, blendWidth = 14f))
+			.copy(sampling = SkeletonSampling(0.5f, 5f, 900))
 		assertEquals(tuned, SkeletonSpec.fromJson(tuned.toJson()))
 		val v1 = buildJsonObject {
 			put("version", JsonPrimitive(1))
@@ -734,6 +736,18 @@ class SkeletonRigTest {
 		val read = SkeletonSpec.fromJson(v1.jsonObject).bone("fore")!!
 		assertEquals(BoneRole.FOREARM.minAngle, read.minAngle)
 		assertEquals(null, read.blendWidth)
+		assertEquals(SkeletonSampling(), SkeletonSpec.fromJson(v1.jsonObject).sampling)
+	}
+
+	@Test fun toleranceChangesTheBakedParameterPointCount() {
+		val drawable = strip("arm", 100f, 95f, 435f, 18f, 20f)
+		val spec = arm("arm")
+		val fine = spec.copy(sampling = SkeletonSampling(tolerancePx = 0.25f, maxMeshKeyforms = 1200))
+		val coarse = spec.copy(sampling = SkeletonSampling(tolerancePx = 4f, maxMeshKeyforms = 1200))
+		val parameter = spec.bone("fore")!!.parameterId
+		val fineCount = SkeletonRig.apply(legacy(drawable), fine, frame).parameterKeyMarks().getValue(ParameterId(parameter)).allKeys.size
+		val coarseCount = SkeletonRig.apply(legacy(drawable), coarse, frame).parameterKeyMarks().getValue(ParameterId(parameter)).allKeys.size
+		assertTrue(fineCount > coarseCount, "Expected finer tolerance to use more points: $fineCount vs $coarseCount")
 	}
 
 	@Test fun versionTwoAnchorsFoldIntoUpperAndLowerBody() {

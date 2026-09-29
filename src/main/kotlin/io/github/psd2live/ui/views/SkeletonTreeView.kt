@@ -43,12 +43,14 @@ import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.BoneRole
 import io.github.psd2live.core.SkeletonBone
 import io.github.psd2live.core.SkeletonRig
+import io.github.psd2live.core.SkeletonSampling
 import io.github.psd2live.core.SkeletonSpec
 import io.github.psd2live.core.SkeletonWeights
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CanvasEditor
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.SkeletonPalette
+import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactSlider
@@ -67,6 +69,7 @@ import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import java.awt.Cursor
+import org.umamo.runtime.model.ParameterId
 import kotlin.math.roundToInt
 
 // Same geometry as the hierarchy tree, so the two tabs read as one tree control.
@@ -102,6 +105,15 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 		?: state.previewModel?.config?.rigEdits?.skeleton?.takeIf { it.bones.isNotEmpty() }
 	val shown = draft ?: committed
 	val enabled = shown?.enabled == true
+	val baked = state.previewModel?.config?.rigEdits?.skeleton
+	val pointCounts = remember(state.previewModel?.rig?.puppet, baked, shown) {
+		if (shown != null && shown.enabled && baked == shown) {
+			val marks = state.previewModel.rig.puppet.parameterKeyMarks()
+			shown.bones.filterNot { it.role.anchor }.associate { bone ->
+				bone.parameterId to (marks[ParameterId(bone.parameterId)]?.allKeys?.size ?: 0)
+			}
+		} else null
+	}
 	val posing = editor.skeletonSelected && editor.hierarchyMode == EditHierarchyMode.DEFORM
 	val rig = state.previewModel?.rig
 	// Meshes are listed by their layer's name - what the layers panel and a split named them - rather than
@@ -226,6 +238,8 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 					bone = bone,
 					expanded = expanded,
 					selected = editor.skeletonSelected && bone.id == editor.selectedBoneId,
+					pointCount = pointCounts?.get(bone.parameterId),
+					countPending = shown.enabled && pointCounts == null,
 					editable = true,
 					onToggle = { collapsed[bone.id] = expanded },
 					onSelect = { if (draft != null) editor.selectBone(bone.id) else editor.selectSkeleton(bone.id) },
@@ -267,6 +281,7 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 				CompactButton(text = tr("skeleton.panel.done"), onClick = { editor.finishSkeletonEdit() }, isPrimary = true, height = 22.dp)
 			}
 		} else {
+			SamplingSettings(shown, pointCounts, editor.selectedBoneId, viewModel)
 			val meshes = shown.bones.filterNot { it.role.anchor }.flatMap { it.drawableIds }.distinct().size
 			Text(
 				tr("skeleton.tree.summary", shown.bones.count { !it.role.anchor }, meshes),
@@ -336,6 +351,8 @@ private fun BoneRow(
 	bone: SkeletonBone,
 	expanded: Boolean,
 	selected: Boolean,
+	pointCount: Int?,
+	countPending: Boolean,
 	editable: Boolean,
 	onToggle: () -> Unit,
 	onSelect: () -> Unit,
@@ -400,7 +417,8 @@ private fun BoneRow(
 			Spacer(Modifier.width(4.dp))
 		}
 		if (!bone.role.anchor) {
-			Text(bone.parameterId, color = if (selected) colors.selectionText.copy(alpha = 0.7f) else colors.textMuted,
+			Text(bone.parameterId + when { pointCount != null -> " · $pointCount"; countPending -> " · …"; else -> "" },
+				color = if (selected) colors.selectionText.copy(alpha = 0.7f) else colors.textMuted,
 				style = typography.monoSmall.copy(fontSize = 9.sp), maxLines = 1)
 		}
 	}
@@ -510,6 +528,69 @@ private fun BoneSettings(editor: CanvasEditor, spec: SkeletonSpec, bone: Skeleto
 			CompactSlider(value = bone.maxAngle, onValueChange = { editor.setBoneLimits(bone.minAngle, it) },
 				valueRange = 0f..180f, modifier = Modifier.weight(1f))
 		}
+	}
+}
+
+/** Project-wide skeleton key sampling, with counts read from the rebuilt rig. */
+@Composable
+private fun SamplingSettings(
+	spec: SkeletonSpec,
+	pointCounts: Map<String, Int>?,
+	selectedBoneId: String?,
+	viewModel: PSD2LiveViewModel,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val sampling = spec.sampling
+	fun change(next: SkeletonSampling) {
+		val current = viewModel.state.value.rigEdits.skeleton ?: spec
+		if (current.sampling != next) viewModel.setSkeleton(current.copy(sampling = next))
+	}
+	Row(
+		Modifier.fillMaxWidth().height(24.dp).background(colors.panelElevated)
+			.border(BorderStroke(1.dp, colors.divider)).padding(horizontal = 8.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Text(tr("skeleton.sampling.title"), modifier = Modifier.weight(1f), color = colors.textPrimary,
+			style = typography.header.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold))
+		CompactButton(text = tr("skeleton.sampling.reset"), onClick = { change(SkeletonSampling()) },
+			enabled = sampling != SkeletonSampling(), height = 18.dp)
+	}
+	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		SettingRow(tr("skeleton.sampling.tolerance"), "%.2fpx".format(sampling.tolerancePx)) {
+			CompactSlider(value = sampling.tolerancePx, onValueChange = {
+				change(sampling.copy(tolerancePx = ((it * 20f).roundToInt() / 20f).coerceIn(SkeletonSampling.TOLERANCE_RANGE)))
+			}, onValueChangeStarted = { viewModel.beginEditorField("skeleton.sampling.tolerance") },
+				onValueChangeFinished = { viewModel.endEditorField("skeleton.sampling.tolerance") },
+				valueRange = SkeletonSampling.TOLERANCE_RANGE, modifier = Modifier.weight(1f))
+		}
+		SettingRow(tr("skeleton.sampling.step"), "%.1f°".format(sampling.minimumStepDegrees)) {
+			CompactSlider(value = sampling.minimumStepDegrees, onValueChange = {
+				change(sampling.copy(minimumStepDegrees = ((it * 2f).roundToInt() / 2f).coerceIn(SkeletonSampling.STEP_RANGE)))
+			}, onValueChangeStarted = { viewModel.beginEditorField("skeleton.sampling.step") },
+				onValueChangeFinished = { viewModel.endEditorField("skeleton.sampling.step") },
+				valueRange = SkeletonSampling.STEP_RANGE, modifier = Modifier.weight(1f))
+		}
+		SettingRow(tr("skeleton.sampling.max"), sampling.maxMeshKeyforms.toString()) {
+			CompactSlider(value = sampling.maxMeshKeyforms.toFloat(), onValueChange = {
+				change(sampling.copy(maxMeshKeyforms = ((it / 10f).roundToInt() * 10).coerceIn(SkeletonSampling.MESH_LIMIT_RANGE)))
+			}, onValueChangeStarted = { viewModel.beginEditorField("skeleton.sampling.max") },
+				onValueChangeFinished = { viewModel.endEditorField("skeleton.sampling.max") },
+				valueRange = SkeletonSampling.MESH_LIMIT_RANGE.first.toFloat()..SkeletonSampling.MESH_LIMIT_RANGE.last.toFloat(),
+				modifier = Modifier.weight(1f))
+		}
+		val countText = when {
+			!spec.enabled -> tr("skeleton.sampling.disabled")
+			pointCounts == null -> tr("skeleton.sampling.calculating")
+			else -> {
+				val total = pointCounts.values.sum()
+				val selected = selectedBoneId?.let(spec::bone)?.let { pointCounts[it.parameterId] }
+				if (selected == null) tr("skeleton.sampling.points", total)
+				else tr("skeleton.sampling.pointsSelected", total, selected)
+			}
+		}
+		Text(countText, color = colors.textMuted, style = typography.caption.copy(fontSize = 10.sp),
+			modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp))
 	}
 }
 

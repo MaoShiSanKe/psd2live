@@ -176,6 +176,37 @@ data class SkeletonBone(
 	}
 }
 
+/** Sampling controls for skeleton parameter keys. Defaults preserve projects saved before version 4. */
+data class SkeletonSampling(
+	val tolerancePx: Float = 1f,
+	val minimumStepDegrees: Float = 7.5f,
+	val maxMeshKeyforms: Int = 600,
+) {
+	init {
+		require(tolerancePx.isFinite() && tolerancePx in TOLERANCE_RANGE)
+		require(minimumStepDegrees.isFinite() && minimumStepDegrees in STEP_RANGE)
+		require(maxMeshKeyforms in MESH_LIMIT_RANGE)
+	}
+
+	fun toJson(): JsonObject = buildJsonObject {
+		put("tolerancePx", tolerancePx)
+		put("minimumStepDegrees", minimumStepDegrees)
+		put("maxMeshKeyforms", maxMeshKeyforms)
+	}
+
+	companion object {
+		val TOLERANCE_RANGE = 0.25f..4f
+		val STEP_RANGE = 2.5f..20f
+		val MESH_LIMIT_RANGE = 100..1200
+
+		fun fromJson(o: JsonObject): SkeletonSampling = SkeletonSampling(
+			tolerancePx = o["tolerancePx"]?.jsonPrimitive?.floatOrNull ?: 1f,
+			minimumStepDegrees = o["minimumStepDegrees"]?.jsonPrimitive?.floatOrNull ?: 7.5f,
+			maxMeshKeyforms = o["maxMeshKeyforms"]?.jsonPrimitive?.intOrNull ?: 600,
+		)
+	}
+}
+
 /**
  * The authored skeleton. [enabled] false keeps the legacy rig where every body layer hangs under the
  * shared breath warp.
@@ -183,6 +214,7 @@ data class SkeletonBone(
 data class SkeletonSpec(
 	val enabled: Boolean = true,
 	val bones: List<SkeletonBone> = emptyList(),
+	val sampling: SkeletonSampling = SkeletonSampling(),
 ) {
 	init {
 		require(bones.map { it.id }.distinct().size == bones.size) { "Duplicate bone IDs" }
@@ -264,8 +296,9 @@ data class SkeletonSpec(
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 3)
+		put("version", 4)
 		put("enabled", enabled)
+		put("sampling", sampling.toJson())
 		putJsonArray("bones") { bones.forEach { add(it.toJson()) } }
 	}
 
@@ -277,6 +310,7 @@ data class SkeletonSpec(
 			val spec = SkeletonSpec(
 				enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
 				bones = raw.map(SkeletonBone::fromJson),
+				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(),
 			)
 			return migrateAnchors(spec, raw.associate { it.getValue("id").jsonPrimitive.content to it.getValue("role").jsonPrimitive.content })
 		}
