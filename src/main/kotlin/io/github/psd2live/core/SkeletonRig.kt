@@ -270,8 +270,8 @@ internal object SkeletonRig {
 			val skinBones = skinBones(tree, parentOf)
 			val drawableId = DrawableId(id)
 			val frame = canvas.getValue(drawableId)
-			val skins = SkeletonWeights.skin(frame, skinBones)
 			val triangles = model.drawables.first { it.id == drawableId }.mesh!!.indices
+			val skins = SkeletonWeights.skin(frame, skinBones, triangles)
 			val home = homeBone(skins, skinBones, frame, triangles) { tree[it].parameterId in candidates }
 			homes[id] = home
 			for (moving in dependencies(skins, skinBones, home)) {
@@ -891,7 +891,7 @@ internal object SkeletonRig {
 		val mesh = drawable.mesh ?: return base
 		if (canvas.size != mesh.positions.size) return base
 		val skinBones = skinBones(tree, parentOf)
-		val skins = SkeletonWeights.skin(canvas, skinBones)
+		val skins = SkeletonWeights.skin(canvas, skinBones, mesh.indices)
 		val deformerOf = tree.map { DeformerId(it.deformerId) }
 
 		// Bones whose angle changes where a vertex sits relative to home.
@@ -1215,7 +1215,7 @@ internal object SkeletonRig {
 			val home = members.associateWith { id ->
 				val frame = canvas.getValue(id)
 				val triangles = model.drawables.first { it.id == id }.mesh!!.indices
-				homeBone(SkeletonWeights.skin(frame, skinBones), skinBones, frame, triangles) { tree[it].parameterId in candidates }
+				homeBone(SkeletonWeights.skin(frame, skinBones, triangles), skinBones, frame, triangles) { tree[it].parameterId in candidates }
 			}
 			fun isAncestor(ancestor: Int, bone: Int) =
 				generateSequence(skinBones[bone].parent.takeIf { it >= 0 }) { skinBones[it].parent.takeIf { p -> p >= 0 } }.any { it == ancestor }

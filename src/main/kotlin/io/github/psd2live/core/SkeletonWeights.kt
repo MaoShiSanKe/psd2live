@@ -2,6 +2,7 @@ package io.github.psd2live.core
 
 import kotlin.math.abs
 import kotlin.math.hypot
+import java.util.PriorityQueue
 
 /**
  * One bone of a limb as the skinning sees it: its rest segment in canvas pixels, the index of its parent
@@ -85,13 +86,14 @@ internal object SkeletonWeights {
 	/**
 	 * Skins every vertex of [canvas] (interleaved x, y in canvas pixels) to [bones].
 	 *
-	 * The nearest bone owns a vertex; the joint at either end of that bone then decides how much of the
-	 * neighbour across it the vertex follows. Near both joints of a short bone the closer joint wins.
+	 * The nearest bone gives each vertex an initial weight. The mesh edges then diffuse ambiguous
+	 * weights from rigid regions within each connected component. Near both joints of a short bone
+	 * the closer joint wins.
 	 */
-	fun skin(canvas: FloatArray, bones: List<SkinBone>): List<VertexSkin> {
+	fun skin(canvas: FloatArray, bones: List<SkinBone>, triangles: IntArray): List<VertexSkin> {
 		require(bones.isNotEmpty())
 		val children = bones.indices.groupBy { bones[it].parent }
-		return (0 until canvas.size / 2).map { vertex ->
+		val initial = (0 until canvas.size / 2).map { vertex ->
 			val x = canvas[vertex * 2].toDouble()
 			val y = canvas[vertex * 2 + 1].toDouble()
 			val primary = bones.indices.minBy { segmentDistance(bones[it], x, y) }
@@ -118,6 +120,89 @@ internal object SkeletonWeights {
 			for (child in children[primary].orEmpty()) consider(primary, child)
 			best ?: VertexSkin(primary, primary, 0f)
 		}
+		if (triangles.isEmpty()) return initial
+		return followMeshBranches(canvas, triangles, bones, initial)
+	}
+
+	/**
+	 * A band is an infinite line in canvas space. On a broad or branching drawing, a digit can extend
+	 * sideways into the parent's side of that line although it is connected to the child's rigid region.
+	 * Use distance along the mesh surface to the rigid regions to resolve those lateral vertices. The
+	 * original axial blend remains at the joint centre and at both edges of the band.
+	 */
+	private fun followMeshBranches(
+		canvas: FloatArray, triangles: IntArray, bones: List<SkinBone>, initial: List<VertexSkin>,
+	): List<VertexSkin> {
+		val count = initial.size
+		val edges = Array(count) { HashMap<Int, Double>() }
+		fun edge(a: Int, b: Int) {
+			if (a !in 0 until count || b !in 0 until count || a == b) return
+			val length = hypot((canvas[a * 2] - canvas[b * 2]).toDouble(), (canvas[a * 2 + 1] - canvas[b * 2 + 1]).toDouble())
+			edges[a][b] = minOf(edges[a][b] ?: Double.POSITIVE_INFINITY, length)
+			edges[b][a] = minOf(edges[b][a] ?: Double.POSITIVE_INFINITY, length)
+		}
+		for (at in 0 until triangles.size - 2 step 3) {
+			val a = triangles[at]; val b = triangles[at + 1]; val c = triangles[at + 2]
+			edge(a, b); edge(b, c); edge(c, a)
+		}
+		fun distances(seeds: List<Int>): DoubleArray {
+			val result = DoubleArray(count) { Double.POSITIVE_INFINITY }
+			val queue = PriorityQueue<Pair<Double, Int>>(compareBy { it.first })
+			for (seed in seeds) { result[seed] = 0.0; queue.add(0.0 to seed) }
+			while (queue.isNotEmpty()) {
+				val (distance, vertex) = queue.remove()
+				if (distance > result[vertex]) continue
+				for ((neighbor, length) in edges[vertex]) {
+					val next = distance + length
+					if (next < result[neighbor]) { result[neighbor] = next; queue.add(next to neighbor) }
+				}
+			}
+			return result
+		}
+		val result = initial.toMutableList()
+		for (child in bones.indices) {
+			val parent = bones[child].parent
+			val half = bones[child].blend
+			if (parent < 0 || half <= 0.0) continue
+			val normal = bandNormal(bones, child)
+			val axial = DoubleArray(count) { vertex ->
+				val dx = canvas[vertex * 2] - bones[child].headX
+				val dy = canvas[vertex * 2 + 1] - bones[child].headY
+				dx * normal[0] + dy * normal[1]
+			}
+			val parentSeeds = (0 until count).filter { initial[it].from == parent && initial[it].rigid && axial[it] <= -half }
+			val childSeeds = (0 until count).filter { initial[it].from == child && initial[it].rigid && axial[it] >= half }
+			if (parentSeeds.isEmpty() || childSeeds.isEmpty()) continue
+			val fromParent = distances(parentSeeds)
+			val fromChild = distances(childSeeds)
+			for (vertex in 0 until count) {
+				val skin = initial[vertex]
+				if ((skin.from != parent && skin.from != child) || (skin.to != parent && skin.to != child)) continue
+				val s = axial[vertex]
+				if (abs(s) >= half) continue
+				val parentDistance = fromParent[vertex]
+				val childDistance = fromChild[vertex]
+				if (!parentDistance.isFinite() || !childDistance.isFinite() || parentDistance + childDistance <= 1e-9) continue
+				val dx = canvas[vertex * 2] - bones[child].headX
+				val dy = canvas[vertex * 2 + 1] - bones[child].headY
+				val lateral = abs(dx * -normal[1] + dy * normal[0])
+				val across = smoothstep(lateral / half)
+				val edgeFade = (1.0 - (s / half) * (s / half)).coerceIn(0.0, 1.0)
+				val geometric = parentDistance / (parentDistance + childDistance)
+				val original = when {
+					skin.from == child -> 1.0
+					skin.rigid -> 0.0
+					else -> skin.weight.toDouble()
+				}
+				val weight = (original + (geometric - original) * across * edgeFade).coerceIn(0.0, 1.0).toFloat()
+				result[vertex] = when {
+					weight <= 0f -> VertexSkin(parent, parent, 0f)
+					weight >= 1f -> VertexSkin(child, child, 0f)
+					else -> VertexSkin(parent, child, weight)
+				}
+			}
+		}
+		return result
 	}
 
 	/** Distance from ([x], [y]) to [bone]'s segment. */

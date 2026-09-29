@@ -92,9 +92,10 @@ internal object SkeletonPoseTool {
 			val drawableId = DrawableId(id)
 			if (drawableId in out) continue
 			val canvas = rest[drawableId] ?: continue
+			val triangles = model.drawables.firstOrNull { it.id == drawableId }?.mesh?.indices ?: continue
 			val tree = trees.getValue(rootOf.getValue(bone.id))
 			val skinBones = SkeletonRig.skinBones(tree, parentOf)
-			out[drawableId] = tree to SkeletonWeights.skin(canvas, skinBones)
+			out[drawableId] = tree to SkeletonWeights.skin(canvas, skinBones, triangles)
 		}
 		return out
 	}
