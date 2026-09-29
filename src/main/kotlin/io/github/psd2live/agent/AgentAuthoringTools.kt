@@ -569,7 +569,13 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         variant("mode", "auto", buildJsonObject { put("state", string()) }, listOf("state")),
         variant("mode", "put", buildJsonObject {
             put("state", string()); put("spec", objectSchema(buildJsonObject {
-                put("version", integer(1, 3)); put("enabled", boolean()); put("bones", arraySchema(objectSchema(boneFields,
+                put("version", integer(1, 4)); put("enabled", boolean())
+                put("sampling", objectSchema(buildJsonObject {
+                    put("tolerancePx", buildJsonObject { put("type", "number"); put("minimum", 0.25); put("maximum", 4.0) })
+                    put("minimumStepDegrees", buildJsonObject { put("type", "number"); put("minimum", 2.5); put("maximum", 20.0) })
+                    put("maxMeshKeyforms", integer(100, 1200))
+                }))
+                put("bones", arraySchema(objectSchema(boneFields,
                     listOf("id", "role", "head", "tail")), 0, 128))
             }, listOf("enabled", "bones")))
         }, listOf("state", "spec")),

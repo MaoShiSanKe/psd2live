@@ -357,24 +357,20 @@ class SkeletonRigTest {
 		}
 	}
 
-	@Test fun separateJointsTurnByBlendShapesThatAdd() {
+	@Test fun meshCoveringShoulderKeepsItsAttachmentAndCoupledJointsUseKeyforms() {
 		val arm = strip("arm", 100f, 95f, 435f, 18f, 10f)
 		val spec = arm("arm")
 		val baked = SkeletonRig.apply(model(arm), spec, frame)
 		val old = SkeletonRig.apply(legacy(arm), spec, frame)
 		val bones = listOf("ParamArmLA", "ParamArmLB", "ParamHandL").map(::ParameterId)
-		// Every vertex follows one joint at most relative to the forearm, so each bone only adds.
-		for (id in bones) {
-			assertEquals(ParameterKind.BLEND_SHAPE, baked.parameters.single { it.id == id }.kind, id.raw)
-			assertEquals(ParameterKind.NORMAL, old.parameters.single { it.id == id }.kind, id.raw)
-		}
-		assertTrue(baked.deformers.none { d -> d.axes().any { it in bones } })
-		assertTrue(baked.drawables.none { d -> d.geometryGrid?.axes.orEmpty().any { it.parameterId in bones } })
+		// The mesh covers the shoulder. Its rotation is exact at the attachment; the two downstream
+		// joints are coupled on the hand and therefore need a multiplying keyform grid.
+		assertEquals(ParameterKind.BLEND_SHAPE, baked.parameters.single { it.id == bones[0] }.kind)
+		for (id in bones.drop(1)) assertEquals(ParameterKind.NORMAL, baked.parameters.single { it.id == id }.kind)
+		for (id in bones) assertEquals(ParameterKind.NORMAL, old.parameters.single { it.id == id }.kind)
 		val mesh = baked.drawables.single()
-		assertEquals(DeformerId("DeformSkel_fore"), mesh.parentDeformerId)
-		val forms = mesh.blendShapes.filter { it.parameterId in bones }.sumOf { it.keys.size }
-		val cells = old.drawables.single().geometryGrid!!.cells.size
-		assertTrue(forms * 4 < cells, "$forms blend keys against $cells keyforms")
+		assertEquals(DeformerId("DeformSkel_upper"), mesh.parentDeformerId)
+		assertEquals(bones.drop(1), mesh.geometryGrid!!.axes.map { it.parameterId })
 		// At rest nothing moves; turned, the arm lands where the multiplied keyforms put it.
 		val expected = rest(arm)
 		val actual = canvas(baked).getValue(arm.id)
@@ -392,6 +388,32 @@ class SkeletonRigTest {
 				p = rotate(p.first, p.second, 100f, 100f, a)
 				assertEquals(p.first, posed[v * 2], 1f)
 				assertEquals(p.second, posed[v * 2 + 1], 1f)
+			}
+		}
+	}
+
+	@Test fun coveredJointDoesNotDependOnDownstreamJointSampling() {
+		// Even if the editable binding names a distal bone, the proximal joint covered by this mesh
+		// carries it. Distal keys cannot move its attachment.
+		val arm = strip("arm", 100f, 95f, 435f, 18f, 10f)
+		val bound = arm("arm")
+		val spec = bound.copy(
+			bones = bound.bones.map { when (it.id) {
+				"upper" -> it.copy(drawableIds = emptyList())
+				"fore" -> it.copy(drawableIds = listOf("arm"))
+				else -> it
+			} },
+			sampling = SkeletonSampling(tolerancePx = 4f, minimumStepDegrees = 2.5f),
+		)
+		val baked = SkeletonRig.apply(model(arm), spec, frame)
+		assertEquals(DeformerId("DeformSkel_upper"), baked.drawables.single().parentDeformerId)
+		val source = rest(arm)
+		for (angle in listOf(-137f, -106f, -73f, -42f, -11f, 13f, 37f, 64f, 93f, 127f)) {
+			val posed = canvas(baked, mapOf("ParamArmLB" to angle)).getValue(arm.id)
+			for (vertex in 0 until source.size / 2) {
+				if (source[vertex * 2 + 1] > 120f) continue
+				assertEquals(source[vertex * 2], posed[vertex * 2], 0.01f, "shoulder x $vertex at $angle")
+				assertEquals(source[vertex * 2 + 1], posed[vertex * 2 + 1], 0.01f, "shoulder y $vertex at $angle")
 			}
 		}
 	}
@@ -428,7 +450,7 @@ class SkeletonRigTest {
 		}
 	}
 
-	@Test fun aMeshHangsUnderTheBoneItMostlyDraws() {
+	@Test fun aMeshHangsUnderTheBoneItMostlyDrawsWhenItDoesNotCoverItsRootJoint() {
 		// A sleeve from the lower upper arm to the wrist, mostly forearm, as a stocking reaches up the thigh.
 		val sleeve = strip("sleeve", 100f, 200f, 370f, 16f, 10f)
 		val spec = SkeletonSpec(bones = listOf(
@@ -437,7 +459,8 @@ class SkeletonRigTest {
 			bone("fore", "upper", BoneRole.FOREARM, 100f, 250f, 100f, 370f),
 		))
 		val baked = SkeletonRig.apply(model(sleeve), spec, frame)
-		// The shoulder stays as the pivot that carries the forearm, which carries the sleeve.
+		// The shoulder lies outside this sleeve, while the elbow lies within it. The forearm carries
+		// the mesh even though it was bound to the limb through its upper arm.
 		val rotations = baked.deformers.filterIsInstance<Deformer.Rotation>().associate { it.id.raw to it.parent?.raw }
 		assertEquals(mapOf("DeformSkel_upper" to "DeformSkelTorso", "DeformSkel_fore" to "DeformSkel_upper"), rotations)
 		assertEquals("DeformSkel_fore", baked.drawables.single().parentDeformerId?.raw)
@@ -461,6 +484,17 @@ class SkeletonRigTest {
 			checked++
 		}
 		assertTrue(checked > 0)
+	}
+
+	@Test fun meshCoveringNoJointUsesGeometricHome() {
+		val cuff = strip("cuff", 100f, 285f, 345f, 16f, 10f)
+		val spec = SkeletonSpec(bones = listOf(
+			chest,
+			bone("upper", "chest", BoneRole.UPPER_ARM, 100f, 100f, 100f, 250f, listOf("cuff")),
+			bone("fore", "upper", BoneRole.FOREARM, 100f, 250f, 100f, 370f),
+		))
+		val baked = SkeletonRig.apply(model(cuff), spec, frame)
+		assertEquals(DeformerId("DeformSkel_fore"), baked.drawables.single().parentDeformerId)
 	}
 
 	@Test fun elbowBendKeepsTheLimbWidthAndNeverFolds() {
@@ -631,7 +665,8 @@ class SkeletonRigTest {
 				assertEquals(own + (turns[bone] ?: 0f), SkeletonMotions.sample(played.getValue(id), time, false), 1e-3f, "$id at $time")
 			}
 		}
-		// Played on the bones, the gesture stacks exactly with the arm turned by hand.
+		// Played on the bones, the gesture stacks with the arm turned by hand. At the hand, two
+		// downstream mesh axes interpolate together, so their individual chord errors can add.
 		val turns = SkeletonPoses.boneTurns(spec, SkeletonPoses.arms, 1f)
 		val values = turns.map { (bone, turn) -> spec.bone(bone)!!.parameterId to turn + if (bone == "fore") -40f else 0f }.toMap()
 		val posed = canvas(baked, values).getValue(arm.id)
@@ -641,8 +676,8 @@ class SkeletonRigTest {
 			var p = rotate(expected[v * 2], expected[v * 2 + 1], 100f, 370f, values.getValue("ParamHandL"))
 			p = rotate(p.first, p.second, 100f, 250f, values.getValue("ParamArmLB"))
 			p = rotate(p.first, p.second, 100f, 100f, values.getValue("ParamArmLA"))
-			assertEquals(p.first, posed[v * 2], 1f)
-			assertEquals(p.second, posed[v * 2 + 1], 1f)
+			assertEquals(p.first, posed[v * 2], 1.5f)
+			assertEquals(p.second, posed[v * 2 + 1], 1.5f)
 		}
 	}
 

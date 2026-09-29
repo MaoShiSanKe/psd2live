@@ -36,6 +36,8 @@ import org.umamo.runtime.model.WarpForm
 import org.umamo.runtime.model.WarpLatticeForm
 import org.umamo.runtime.model.withDerivedRenderRoot
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.core.mesh.Point
+import io.github.psd2live.core.mesh.pointInTriangleInclusive
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.atan2
@@ -201,7 +203,7 @@ internal object SkeletonRig {
 		canvas = seams.canvas
 
 		// 2c. The bone each mesh hangs under, and the bone parameters whose turns only ever add.
-		val plan = planBlend(canvas, drawableRoot, treeBones, parentOf, candidates)
+		val plan = planBlend(model, canvas, drawableRoot, treeBones, parentOf, candidates)
 
 		// 3. The body halves spliced into the body chain as warps - the head rotation and everything else on
 		// the breath warp ends up under the upper body - and a rotation deformer per limb bone hung from them.
@@ -254,6 +256,7 @@ internal object SkeletonRig {
 	 * model, so one use that multiplies it with another keeps it a keyform axis everywhere.
 	 */
 	private fun planBlend(
+		model: PuppetModel,
 		canvas: Map<DrawableId, FloatArray>,
 		drawableRoot: Map<String, String>,
 		treeBones: Map<String, List<SkeletonBone>>,
@@ -265,8 +268,11 @@ internal object SkeletonRig {
 		for ((id, root) in drawableRoot) {
 			val tree = treeBones.getValue(root)
 			val skinBones = skinBones(tree, parentOf)
-			val skins = SkeletonWeights.skin(canvas.getValue(DrawableId(id)), skinBones)
-			val home = homeBone(skins, skinBones) { tree[it].parameterId in candidates }
+			val drawableId = DrawableId(id)
+			val frame = canvas.getValue(drawableId)
+			val skins = SkeletonWeights.skin(frame, skinBones)
+			val triangles = model.drawables.first { it.id == drawableId }.mesh!!.indices
+			val home = homeBone(skins, skinBones, frame, triangles) { tree[it].parameterId in candidates }
 			homes[id] = home
 			for (moving in dependencies(skins, skinBones, home)) {
 				val parameters = moving.mapTo(HashSet()) { tree[it].parameterId }
@@ -863,7 +869,7 @@ internal object SkeletonRig {
 	// Skinning
 
 	/**
-	 * Re-homes one mesh under the bone that carries most of it and bakes the rest of its limb into
+	 * Re-homes one mesh under its proximal covered joint (or the best geometric fallback) and bakes the rest of its limb into
 	 * corrective keyforms.
 	 *
 	 * Each keyform is computed against the deformer transforms the evaluator itself builds for that cell,
@@ -1013,25 +1019,53 @@ internal object SkeletonRig {
 	}
 
 	/**
-	 * The bone a mesh hangs under: the one carrying most of it.
+	 * The bone a mesh hangs under: its most proximal covered joint, then a geometric fallback.
 	 *
-	 * Each part of a split limb hangs under its own bone, pivoting on its joint. A mesh that spans
-	 * several bones hangs under the one it mostly draws - a stocking under the shin even when its top
-	 * reaches up the thigh - so turning that bone's rotation deformer turns the part of the drawing it
-	 * names. The rest of the mesh follows the other joints in its keyforms: the bones above it keep their
-	 * rotations as pivots that carry it, and those below it hold nothing and are pruned or folded.
+	 * A mesh reaching the limb's attachment follows that bone exactly at the attachment, even if most
+	 * vertices lie farther down the limb. When its art starts below that joint, the first joint inside
+	 * the mesh is its home. If the mesh covers no joint, prefer an uncoupled bone with the most skin load.
+	 * Every other joint is baked into the mesh's own keyforms. This choice is shared with seam welding
+	 * and blend-shape planning, so the rig and glue agree on which bone carries each part.
 	 */
-	internal fun homeBone(skins: List<VertexSkin>, bones: List<SkinBone>, blendable: (Int) -> Boolean = { false }): Int {
+	internal fun homeBone(skins: List<VertexSkin>, bones: List<SkinBone>, canvas: FloatArray, triangles: IntArray,
+		blendable: (Int) -> Boolean = { false }): Int {
 		val load = DoubleArray(bones.size)
 		for (skin in skins) {
 			load[skin.from] += 1.0 - skin.weight
 			load[skin.to] += skin.weight.toDouble()
 		}
-		// Where the heaviest bone would leave some vertex moving with two bones, one of them a blend-shape
-		// candidate, a bone the mesh touches that keeps every joint apart wins instead (see [planBlend]).
+		// A joint covered by the mesh is an attachment point, regardless of how many vertices lie
+		// farther along the limb. Choose the most proximal covered joint: its portion then follows a
+		// rotation deformer exactly, with no inverse keyform arc that can drift between parameter keys.
+		// This also places a short sleeve under its elbow when the shoulder lies outside that mesh.
+		fun depth(index: Int): Int {
+			var current = index
+			var result = 0
+			while (bones[current].parent >= 0) { result++; current = bones[current].parent }
+			return result
+		}
+		val points = List(canvas.size / 2) { Point(canvas[it * 2].toDouble(), canvas[it * 2 + 1].toDouble()) }
+		val covered = bones.indices.filter { load[it] > 0.0 && covers(points, triangles, bones[it].headX, bones[it].headY) }
+		if (covered.isNotEmpty()) return covered.minWith(compareBy<Int> { depth(it) }.thenByDescending { load[it] })
+		// A mesh that covers no joint keeps the geometric choice that minimizes coupled axes.
 		fun coupled(home: Int) = dependencies(skins, bones, home).any { moving -> moving.size > 1 && moving.any(blendable) }
 		val carrying = load.indices.filter { load[it] > 0.0 }.ifEmpty { load.indices.toList() }
 		return carrying.minWith(compareBy<Int> { if (coupled(it)) 1 else 0 }.thenByDescending { load[it] })
+	}
+
+	/** Whether a joint lies on the mesh surface in the rest pose. */
+	private fun covers(points: List<Point>, triangles: IntArray, x: Double, y: Double): Boolean {
+		val joint = Point(x, y)
+		for (i in triangles.indices step 3) {
+			val a = points[triangles[i]]
+			val b = points[triangles[i + 1]]
+			val c = points[triangles[i + 2]]
+			if (x < minOf(a.x, b.x, c.x) || x > maxOf(a.x, b.x, c.x) ||
+				y < minOf(a.y, b.y, c.y) || y > maxOf(a.y, b.y, c.y)) continue
+			val twiceArea = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+			if (abs(twiceArea) > 1e-8 && pointInTriangleInclusive(joint, a, b, c)) return true
+		}
+		return false
 	}
 
 	/**
@@ -1179,7 +1213,9 @@ internal object SkeletonRig {
 			if (members.size < 2) continue
 			val skinBones = skinBones(tree, parentOf)
 			val home = members.associateWith { id ->
-				homeBone(SkeletonWeights.skin(canvas.getValue(id), skinBones), skinBones) { tree[it].parameterId in candidates }
+				val frame = canvas.getValue(id)
+				val triangles = model.drawables.first { it.id == id }.mesh!!.indices
+				homeBone(SkeletonWeights.skin(frame, skinBones), skinBones, frame, triangles) { tree[it].parameterId in candidates }
 			}
 			fun isAncestor(ancestor: Int, bone: Int) =
 				generateSequence(skinBones[bone].parent.takeIf { it >= 0 }) { skinBones[it].parent.takeIf { p -> p >= 0 } }.any { it == ancestor }
