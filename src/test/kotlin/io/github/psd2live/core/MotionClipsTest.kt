@@ -32,8 +32,13 @@ class MotionClipsTest {
 
 	private fun curve(vararg keys: MotionKey) = MotionCurve("ParamAngleX", keys.toList())
 
+	@Test fun defaultInterpolationIsBezier() {
+		val key = MotionKey(0f, 1f)
+		assertEquals(MotionInterpolation.BEZIER, key.interpolation)
+	}
+
 	@Test fun linearSegmentsInterpolateAndHoldTheirEnds() {
-		val c = curve(MotionKey(0.5f, 0f), MotionKey(1.5f, 10f))
+		val c = curve(MotionKey(0.5f, 0f, MotionInterpolation.LINEAR), MotionKey(1.5f, 10f, MotionInterpolation.LINEAR))
 		assertEquals(0f, MotionClips.sample(c, 0f))
 		assertEquals(5f, MotionClips.sample(c, 1f), 1e-4f)
 		assertEquals(10f, MotionClips.sample(c, 3f))
@@ -48,7 +53,7 @@ class MotionClipsTest {
 	}
 
 	@Test fun aDefaultBezierEasesThroughTheMiddleAndStaysMonotonic() {
-		val c = curve(MotionKey(0f, 0f, MotionInterpolation.BEZIER), MotionKey(1f, 1f))
+		val c = curve(MotionKey(0f, 0f), MotionKey(1f, 1f))
 		assertEquals(0.5f, MotionClips.sample(c, 0.5f), 1e-3f)
 		// Eased: slower than linear near the start.
 		assertTrue(MotionClips.sample(c, 0.1f) < 0.1f)
@@ -102,7 +107,7 @@ class MotionClipsTest {
 					MotionKey(2f, 0f),
 				)),
 				// Starts late: a hold from zero is added.
-				MotionCurve("ParamAngleY", listOf(MotionKey(0.5f, 3f), MotionKey(1f, 4f))),
+				MotionCurve("ParamAngleY", listOf(MotionKey(0.5f, 3f, MotionInterpolation.LINEAR), MotionKey(1f, 4f, MotionInterpolation.LINEAR))),
 				MotionCurve("ParamMissing", listOf(MotionKey(0f, 1f), MotionKey(1f, 2f))),
 			),
 		)

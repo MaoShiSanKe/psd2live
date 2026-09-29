@@ -62,6 +62,7 @@ class MotionKeyEditsTest {
         kotlin.test.assertNotNull(curveC)
         assertEquals(listOf(0f, 1.2f), curveC.keys.map { it.time })
         assertEquals(listOf(2f, 10f), curveC.keys.map { it.value })
+        assertEquals(listOf(io.github.psd2live.core.MotionInterpolation.BEZIER, io.github.psd2live.core.MotionInterpolation.BEZIER), curveC.keys.map { it.interpolation })
         assertEquals(setOf(MotionKeyRef("C", 0f), MotionKeyRef("C", 1.2f)), refs)
     }
 

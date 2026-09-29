@@ -26,7 +26,7 @@ data class MotionHandle(val x: Float = 1f / 3f, val y: Float = 0f) {
 data class MotionKey(
 	val time: Float,
 	val value: Float,
-	val interpolation: MotionInterpolation = MotionInterpolation.LINEAR,
+	val interpolation: MotionInterpolation = MotionInterpolation.BEZIER,
 	val outHandle: MotionHandle = MotionHandle(),
 	val inHandle: MotionHandle = MotionHandle(),
 ) {
@@ -134,7 +134,7 @@ object MotionClips {
 		loop = loop,
 		duration = duration.takeIf { it > 0f } ?: 2f,
 		curves = tracks.distinctBy { it.first }.map { (parameter, points) ->
-			MotionCurve(parameter, normalized(points.map { (time, value) -> MotionKey(time, value) }))
+			MotionCurve(parameter, normalized(points.map { (time, value) -> MotionKey(time, value, MotionInterpolation.LINEAR) }))
 		},
 	)
 
@@ -257,7 +257,7 @@ object MotionClips {
 					for (key in curve.keys) add(buildJsonObject {
 						put("time", key.time)
 						put("value", key.value)
-						if (key.interpolation != MotionInterpolation.LINEAR) put("interpolation", key.interpolation.name)
+						if (key.interpolation != MotionInterpolation.BEZIER) put("interpolation", key.interpolation.name)
 						if (key.outHandle != MotionHandle()) put("out", JsonArray(listOf(JsonPrimitive(key.outHandle.x), JsonPrimitive(key.outHandle.y))))
 						if (key.inHandle != MotionHandle()) put("in", JsonArray(listOf(JsonPrimitive(key.inHandle.x), JsonPrimitive(key.inHandle.y))))
 					})
@@ -290,7 +290,7 @@ object MotionClips {
 						value = key.getValue("value").jsonPrimitive.float,
 						interpolation = key["interpolation"]?.jsonPrimitive?.contentOrNull
 							?.let { name -> MotionInterpolation.entries.firstOrNull { it.name == name } }
-							?: MotionInterpolation.LINEAR,
+							?: MotionInterpolation.BEZIER,
 						outHandle = handle("out"),
 						inHandle = handle("in"),
 					)

@@ -524,7 +524,7 @@ private fun TrackRow(
 			onClick = { viewModel.setMotionKey(curve.parameterId, editor.playhead) },
 			tooltip = tr("animation.editor.addKey"),
 			size = 18.dp,
-		) { KeyGlyph(MotionInterpolation.LINEAR, colors.textMuted, 7.dp) }
+		) { KeyGlyph(MotionInterpolation.BEZIER, colors.textMuted, 7.dp) }
 		CompactIconButton(
 			onClick = { viewModel.removeMotionCurve(curve.parameterId) },
 			tooltip = tr("animation.editor.removeTrack"),

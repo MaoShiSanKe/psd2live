@@ -71,7 +71,10 @@ class PreviewMotionPlayerTest {
         val override = io.github.psd2live.core.MotionClip(
             id = "o", name = "Nod", builtin = "Nod", duration = 1f,
             curves = listOf(io.github.psd2live.core.MotionCurve("ParamAngleY",
-                listOf(io.github.psd2live.core.MotionKey(0f, 0f), io.github.psd2live.core.MotionKey(1f, 10f)))),
+                listOf(
+                    io.github.psd2live.core.MotionKey(0f, 0f, io.github.psd2live.core.MotionInterpolation.LINEAR),
+                    io.github.psd2live.core.MotionKey(1f, 10f, io.github.psd2live.core.MotionInterpolation.LINEAR),
+                ))),
         )
         val custom = override.copy(id = "c", name = "Happy Jump", builtin = null)
         val clips = listOf(override, custom)

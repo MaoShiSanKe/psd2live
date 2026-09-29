@@ -132,7 +132,7 @@ object MotionGenerator {
 
 	private fun curve(parameter: String, points: List<Pair<Float, Float>>): Curve {
 		require(points.size >= 2)
-		return curve(MotionCurve(parameter, points.map { (time, value) -> MotionKey(time, value) }))
+		return curve(MotionCurve(parameter, points.map { (time, value) -> MotionKey(time, value, MotionInterpolation.LINEAR) }))
 	}
 
 	private fun curve(source: MotionCurve): Curve {

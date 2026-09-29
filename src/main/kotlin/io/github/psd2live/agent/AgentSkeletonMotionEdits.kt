@@ -153,7 +153,7 @@ internal object AgentSkeletonMotionEdits {
         fun handle(name: String) = value[name]?.jsonArray?.let { MotionHandle(it[0].jsonPrimitive.float, it[1].jsonPrimitive.float) }
             ?: MotionHandle()
         val interpolation = value["interpolation"]?.jsonPrimitive?.contentOrNull?.let(MotionInterpolation::valueOf)
-            ?: MotionInterpolation.LINEAR
+            ?: MotionInterpolation.BEZIER
         return MotionKey(value.getValue("time").jsonPrimitive.float, value.getValue("value").jsonPrimitive.float,
             interpolation, handle("out"), handle("in"))
     }

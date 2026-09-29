@@ -32,7 +32,7 @@ class WorkspacePoseTest {
         PSD2LiveViewModel().use { vm ->
             val preview = preview()
             val clip = MotionClip("clip", "Clip", curves = listOf(MotionCurve(parameter.raw,
-                listOf(MotionKey(0f, -1f), MotionKey(1f, 1f)))))
+                listOf(MotionKey(0f, -1f, io.github.psd2live.core.MotionInterpolation.LINEAR), MotionKey(1f, 1f, io.github.psd2live.core.MotionInterpolation.LINEAR)))))
             vm.setStateForTest(vm.state.value.copy(previewModel = preview,
                 rigEdits = vm.state.value.rigEdits.copy(motionClips = listOf(clip))))
             val first = vm.state.value.activeCanvas.id
@@ -203,6 +203,7 @@ class WorkspacePoseTest {
             assertNotNull(curve)
             assertEquals(listOf(0f, 0.8f), curve.keys.map { it.time })
             assertEquals(listOf(2f, 6f), curve.keys.map { it.value })
+            assertEquals(listOf(io.github.psd2live.core.MotionInterpolation.BEZIER, io.github.psd2live.core.MotionInterpolation.BEZIER), curve.keys.map { it.interpolation })
         }
     }
 
