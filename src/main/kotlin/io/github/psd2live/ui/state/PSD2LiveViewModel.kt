@@ -363,7 +363,13 @@ class PSD2LiveViewModel : AutoCloseable {
     private inline fun updateState(transform: (PSD2LiveState) -> PSD2LiveState) {
         synchronized(stateLock) {
             _state.update { current ->
-                val next = reconcileCanvasPresentation(current, transform(current))
+                var next = reconcileCanvasPresentation(current, transform(current))
+                val parameters = next.previewModel?.rig?.puppet?.parameters
+                if (parameters != null && (parameters != current.previewModel?.rig?.puppet?.parameters ||
+                    next.rigEdits.motionClips != current.rigEdits.motionClips)) {
+                    val clips = MotionClips.reconcileParameters(next.rigEdits.motionClips, parameters)
+                    if (clips != next.rigEdits.motionClips) next = next.copy(rigEdits = next.rigEdits.copy(motionClips = clips))
+                }
                 if (next.projectOpenGeneration != current.projectOpenGeneration) {
                     pendingMeshSplit = null
                     pendingBatchMeshSplit = null

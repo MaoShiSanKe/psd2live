@@ -386,7 +386,7 @@ class PSD2LivePipeline {
 
 		val motions = buildList<Pair<String, Pair<String, String>>> {
 			if (config.exportMotions && !config.meshOnly) {
-				val clips = config.rigEdits.motionClips
+				val clips = MotionClips.reconcileParameters(config.rigEdits.motionClips, rig.puppet.parameters)
 				fun add(group: String, file: String, motion: String?) {
 					motion ?: return
 					val json = CubismJson.normalize(motion).also { Json.parseToJsonElement(it) }

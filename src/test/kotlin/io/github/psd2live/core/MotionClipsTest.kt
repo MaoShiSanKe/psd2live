@@ -13,6 +13,23 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MotionClipsTest {
+	@Test fun changedDefinitionsRemoveDeletedTracksAndClampBezierControls() {
+		val parameter = org.umamo.runtime.model.Parameter(org.umamo.runtime.model.ParameterId("kept"), "Kept", -1f, 1f, 0f)
+		val clips = listOf(MotionClip("clip", "Clip", curves = listOf(
+			MotionCurve("deleted", listOf(MotionKey(0f, 0f))),
+			MotionCurve("kept", listOf(
+				MotionKey(0f, -4f, MotionInterpolation.BEZIER, outHandle = MotionHandle(y = 9f)),
+				MotionKey(1f, 5f, inHandle = MotionHandle(y = -10f)),
+			)),
+		)))
+		val reconciled = MotionClips.reconcileParameters(clips, listOf(parameter))
+		val curve = reconciled.single().curves.single()
+		assertEquals("kept", curve.parameterId)
+		assertEquals(listOf(-1f, 1f), curve.keys.map { it.value })
+		for (i in 0..100) assertTrue(MotionClips.sample(curve, i / 100f) in -1f..1f)
+		assertEquals(reconciled, MotionClips.reconcileParameters(reconciled, listOf(parameter)))
+	}
+
 	private fun curve(vararg keys: MotionKey) = MotionCurve("ParamAngleX", keys.toList())
 
 	@Test fun linearSegmentsInterpolateAndHoldTheirEnds() {

@@ -72,6 +72,20 @@ data class MotionClip(
 }
 
 object MotionClips {
+	/** Parameter deletion removes tracks; range changes constrain keys and Bezier control values. */
+	fun reconcileParameters(clips: List<MotionClip>, parameters: List<org.umamo.runtime.model.Parameter>): List<MotionClip> {
+		val definitions = parameters.associateBy { it.id.raw }
+		return clips.map { clip -> clip.copy(curves = clip.curves.mapNotNull { curve ->
+			val parameter = definitions[curve.parameterId] ?: return@mapNotNull null
+			curve.copy(keys = curve.keys.map { key ->
+				val value = key.value.coerceIn(parameter.min, parameter.max)
+				key.copy(value = value,
+					inHandle = key.inHandle.copy(y = (key.value + key.inHandle.y).coerceIn(parameter.min, parameter.max) - value),
+					outHandle = key.outHandle.copy(y = (key.value + key.outHandle.y).coerceIn(parameter.min, parameter.max) - value))
+			})
+		}) }
+	}
+
 	/** The generated motions, in the order the panel lists them. */
 	val BUILTIN_NAMES: List<String> = listOf("Idle", "Blink", "Nod", "Shake") + SkeletonMotions.presets.map { it.name }
 
