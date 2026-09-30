@@ -510,6 +510,9 @@ interface AgentWorkspace {
     /** Stores [bake] as simulation [id]'s bake (null clears it) and turns physics on for a bake. */
     suspend fun putSimulationBake(id: String, bake: io.github.psd2live.core.sim.SimBakeResult?, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Simulation baking is unavailable")
+    /** Stores several simulations' bakes (null clears one) as one history node. */
+    suspend fun putSimulationBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult?>, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation baking is unavailable")
     /** Runs simulation [id] on the current rig and reports how it moves; read-only. */
     fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject =
         throw UnsupportedOperationException("Simulation is unavailable")

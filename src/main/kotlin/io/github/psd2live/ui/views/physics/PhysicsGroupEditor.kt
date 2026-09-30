@@ -181,9 +181,9 @@ internal fun PhysicsGroupEditor(
 	}
 }
 
-/** A folder-style header over its padded body, shown while [open]. */
+/** A folder-style header over its padded body, shown while [open]; the simulation panel uses it too. */
 @Composable
-private fun PhysicsSection(
+internal fun PhysicsSection(
 	title: String,
 	open: Boolean,
 	onToggle: () -> Unit,

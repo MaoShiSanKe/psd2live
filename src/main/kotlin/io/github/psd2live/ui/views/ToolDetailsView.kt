@@ -922,7 +922,9 @@ internal fun ToolDetailsView(
                     }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(tr("editor.weightKind"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                        CompactDropdown(org.umamo.runtime.model.VertexGroupKind.entries, editor.weightGroupKind, { kind ->
+                        // Wind moves nothing the editor bakes or previews, so it is not offered.
+                        CompactDropdown(org.umamo.runtime.model.VertexGroupKind.entries.filter { it != org.umamo.runtime.model.VertexGroupKind.WIND || it == editor.weightGroupKind },
+                            editor.weightGroupKind, { kind ->
                             // A group named after its old kind follows the new one.
                             if (editor.weightGroupName == editor.weightGroupKind.jsonName) editor.weightGroupName = kind.jsonName
                             editor.weightGroupKind = kind

@@ -1361,10 +1361,19 @@ class ViewModelAgentWorkspace(
     }
 
     override suspend fun putSimulationBake(id: String, bake: io.github.psd2live.core.sim.SimBakeResult?, expectedHead: String) =
-        mutateRigKeyform(expectedHead, null, if (bake != null) "Baked simulation $id" else "Cleared simulation bake $id", id) { document, _ ->
-            document.copy(rigEdits = io.github.psd2live.core.sim.SimAuthoring.withBake(document.rigEdits, id, bake),
-                settings = if (bake == null) document.settings else kotlinx.serialization.json.JsonObject(document.settings +
-                    ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
+        putSimulationBakes(mapOf(id to bake), expectedHead, if (bake != null) "Baked simulation $id" else "Cleared simulation bake $id", id)
+
+    override suspend fun putSimulationBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult?>, expectedHead: String) =
+        putSimulationBakes(bakes, expectedHead,
+            if (bakes.values.any { it != null }) "Baked simulations ${bakes.keys.joinToString()}" else "Cleared simulation bakes ${bakes.keys.joinToString()}",
+            bakes.keys.firstOrNull() ?: "simulation")
+
+    private suspend fun putSimulationBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult?>, expectedHead: String, summary: String, affected: String) =
+        mutateRigKeyform(expectedHead, null, summary, affected) { document, _ ->
+            val rigEdits = bakes.entries.fold(document.rigEdits) { edits, (id, bake) -> io.github.psd2live.core.sim.SimAuthoring.withBake(edits, id, bake) }
+            // A bake is a pendulum group, so exporting it needs physics on.
+            document.copy(rigEdits = rigEdits, settings = if (bakes.values.all { it == null }) document.settings else kotlinx.serialization.json.JsonObject(document.settings +
+                ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
         }
 
     override fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject {

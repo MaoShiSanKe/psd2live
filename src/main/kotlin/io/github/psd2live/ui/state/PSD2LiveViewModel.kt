@@ -373,12 +373,16 @@ class PSD2LiveViewModel : AutoCloseable {
         data object Idle : SimulationStatus
         data object Preparing : SimulationStatus
         data class Running(val notes: List<String>) : SimulationStatus
-        data class Report(val id: String, val report: kotlinx.serialization.json.JsonObject) : SimulationStatus
         data class Failed(val message: String) : SimulationStatus
     }
 
-    /** The simulation being baked and how far along, 0..1; null while none is. */
-    data class SimulationBaking(val id: String, val progress: Float)
+    /**
+     * The simulation being baked and how far along, 0..1; null while none is. A batch bakes [count]
+     * simulations one after another, [index] of them done.
+     */
+    data class SimulationBaking(val id: String, val progress: Float, val index: Int = 0, val count: Int = 1) {
+        val overall: Float get() = (index + progress) / count
+    }
 
     private val _simulationBaking = MutableStateFlow<SimulationBaking?>(null)
     val simulationBaking: StateFlow<SimulationBaking?> = _simulationBaking.asStateFlow()
@@ -410,6 +414,66 @@ class PSD2LiveViewModel : AutoCloseable {
                 _simulationBaking.value = null
             }
         }
+    }
+
+    /** The enabled simulations a bake would change: unbaked or stale ones, or every one when all are up to date. */
+    internal fun simulationsToBake(current: PSD2LiveState = _state.value): List<String> {
+        val puppet = current.previewModel?.rig?.puppet ?: return emptyList()
+        val enabled = current.rigEdits.simEdits.filter { it.enabled }
+        val outdated = enabled.filter { it.bake == null || io.github.psd2live.core.sim.SimBake.stale(puppet, it) }
+        return (outdated.ifEmpty { enabled }).map { it.id }
+    }
+
+    /**
+     * Bakes [simulationsToBake] one after another, each on the rig with the bakes before it, and commits
+     * them together as one history node. A simulation that fails keeps its old bake and is reported.
+     */
+    internal fun bakeAllSimulations() {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val ids = simulationsToBake(current)
+        if (simBaking?.isActive == true || ids.isEmpty()) return
+        _simulationBaking.value = SimulationBaking(ids.first(), 0f, 0, ids.size)
+        simBaking = scope.launch {
+            try {
+                val (bakes, failures) = withContext(Dispatchers.Default) {
+                    val job = coroutineContext[kotlinx.coroutines.Job]
+                    var overlay = current.rigEdits
+                    val bakes = LinkedHashMap<String, io.github.psd2live.core.sim.SimBakeResult?>()
+                    val failures = ArrayList<String>()
+                    ids.forEachIndexed { index, id ->
+                        try {
+                            val bake = io.github.psd2live.core.sim.SimAuthoring.bake(overlay, model.baseRig.puppet, id,
+                                progress = { _simulationBaking.value = SimulationBaking(id, it, index, ids.size) },
+                                cancelled = { job?.isCancelled == true },
+                            )
+                            overlay = io.github.psd2live.core.sim.SimAuthoring.withBake(overlay, id, bake)
+                            bakes[id] = bake
+                        } catch (failure: IllegalArgumentException) {
+                            failures += "$id: ${failure.message ?: failure}"
+                        }
+                        if (job?.isCancelled == true) throw kotlinx.coroutines.CancellationException("Bake cancelled")
+                    }
+                    bakes to failures
+                }
+                if (bakes.isNotEmpty()) runSimulationMutation("Baked simulations ${bakes.keys.joinToString()}") { workspace, head ->
+                    workspace.putSimulationBakes(bakes, head)
+                }
+                if (failures.isNotEmpty()) _simulationStatus.value = SimulationStatus.Failed(failures.joinToString("\n"))
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
+            } finally {
+                _simulationBaking.value = null
+            }
+        }
+    }
+
+    /** Removes every simulation's bake as one history node. */
+    internal fun clearAllSimulationBakes() {
+        val ids = _state.value.rigEdits.simEdits.filter { it.bake != null }.map { it.id }
+        if (ids.isEmpty()) return
+        runSimulationMutation("Cleared simulation bakes") { workspace, head -> workspace.putSimulationBakes(ids.associateWith { null }, head) }
     }
 
     internal fun cancelSimulationBake() {
@@ -496,24 +560,6 @@ class PSD2LiveViewModel : AutoCloseable {
         canvasEditor.weightGroupName = model.rig.puppet.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.kind == kind }?.name
             ?: kind.jsonName
         canvasEditor.activateTool(io.github.psd2live.ui.CanvasTool.WEIGHT_PAINT)
-    }
-
-    /** Runs the standard test on [id] off the frame thread; the result arrives in [simulationStatus]. */
-    internal fun reportSimulation(id: String) {
-        val current = _state.value
-        val model = current.previewModel ?: return
-        val edit = current.rigEdits.simEdits.firstOrNull { it.id == id } ?: return
-        _simulationStatus.value = SimulationStatus.Preparing
-        scope.launch {
-            _simulationStatus.value = try {
-                SimulationStatus.Report(id, withContext(Dispatchers.Default) {
-                    io.github.psd2live.core.sim.SimAuthoring.report(model.rig.puppet, edit, wind = 1500f to 0f)
-                })
-            } catch (failure: Exception) {
-                if (failure is kotlinx.coroutines.CancellationException) throw failure
-                SimulationStatus.Failed(failure.message ?: failure.toString())
-            }
-        }
     }
 
     private fun runSimulationMutation(

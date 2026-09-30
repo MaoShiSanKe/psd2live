@@ -445,12 +445,16 @@ internal fun StatusDot(color: Color, label: String) {
 }
 
 @Composable
-internal fun OriginBadge(origin: PhysicsOrigin) {
+internal fun OriginBadge(origin: PhysicsOrigin) = RowBadge(tr("physics.origin.${origin.name.lowercase()}"))
+
+/** A small muted tag at the end of a list row. */
+@Composable
+internal fun RowBadge(text: String) {
 	val colors = LocalToolColors.current
 	Box(
 		Modifier.clip(RoundedCornerShape(2.dp)).background(colors.controlHover).padding(horizontal = 4.dp, vertical = 1.dp),
 	) {
-		Text(tr("physics.origin.${origin.name.lowercase()}"), style = LocalToolTypography.current.caption.copy(fontSize = 9.sp), color = colors.textMuted, maxLines = 1)
+		Text(text, style = LocalToolTypography.current.caption.copy(fontSize = 9.sp), color = colors.textMuted, maxLines = 1)
 	}
 }
 

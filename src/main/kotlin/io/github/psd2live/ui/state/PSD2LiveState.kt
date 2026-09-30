@@ -35,7 +35,7 @@ internal const val DEFAULT_WORKSPACE_ID = "workspace"
 
 /** Right-hand dock modules the title-bar inspector toggle shows and hides together. */
 internal val INSPECTOR_DOCK_MODULES = setOf(
-	"settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics",
+	"settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics", "simulation",
 )
 
 /** Modules a fresh workspace layout already contains. History is added from the window menu. */
@@ -194,25 +194,25 @@ enum class WorkspacePreset(
 	/** Mesh topology: the hierarchy beside the edit canvas, the mesh panel on the right. */
 	MESH(
 		listOf(CanvasMode.EDIT),
-		setOf("layers", "skeleton", "log", "animationEditor", "tools", "inspector", "settings", "parameters", "animation", "physics"),
+		setOf("layers", "skeleton", "log", "animationEditor", "tools", "inspector", "settings", "parameters", "animation", "physics", "simulation"),
 	),
 
 	/** Binding parameters: the edit canvas and a live preview side by side, parameters always visible. */
 	RIG(
 		listOf(CanvasMode.EDIT, CanvasMode.PREVIEW),
-		setOf("animationEditor", "settings", "layers", "mesh", "animation", "physics"),
+		setOf("animationEditor", "settings", "layers", "mesh", "animation", "physics", "simulation"),
 	),
 
 	/** Authoring motions: motions left of the preview canvas, the animation editor below both, parameters on the right. */
 	ANIMATION(
 		listOf(CanvasMode.PREVIEW),
-		setOf("hierarchy", "skeleton", "log", "settings", "layers", "tools", "mesh", "inspector", "physics"),
+		setOf("hierarchy", "skeleton", "log", "settings", "layers", "tools", "mesh", "inspector", "physics", "simulation"),
 	),
 
 	/** Checking the finished model: a large preview with the motion list only. */
 	PREVIEW(
 		listOf(CanvasMode.PREVIEW),
-		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "parameters", "physics"),
+		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "parameters", "physics", "simulation"),
 	),
 
 	/** Tuning physics: the preview and parameters beside a wide physics panel, to shake the model while editing. */

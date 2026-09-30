@@ -97,10 +97,8 @@ internal fun reconcileDockModules(
     }
     placeModules.forEach { module ->
         if (result?.allModules()?.contains(module) != true) {
-            // Simulation opens as a tab beside physics, the panel it is tuned alongside, when that is docked.
-            val beside = if (module == OPTIONAL_SIMULATION_MODULE) result?.allModules()?.firstOrNull { it == "physics" } else null
-            val anchor = beside ?: result?.allModules()?.firstOrNull(::isCanvasModule) ?: result?.allModules()?.firstOrNull()
-            val side = if (beside != null) DockSide.CENTER else if (module == "history") DockSide.LEFT else DockSide.BOTTOM
+            val anchor = result?.allModules()?.firstOrNull(::isCanvasModule) ?: result?.allModules()?.firstOrNull()
+            val side = if (module == "history") DockSide.LEFT else DockSide.BOTTOM
             result = dockBesideModule(result, module, anchor, side)
         }
     }
@@ -109,7 +107,7 @@ internal fun reconcileDockModules(
 
 /** Repair the exact root-level split produced by the old module-ID auto-placement bug. */
 internal fun repairLegacyCanvasDocking(saved: DockNode): DockNode {
-    val withMesh = ensureAnimationEditorDockTab(ensureSkeletonDockTab(ensureMeshDockTab(saved)))
+    val withMesh = ensureSimulationDockTab(ensureAnimationEditorDockTab(ensureSkeletonDockTab(ensureMeshDockTab(saved))))
     val defaultShape = defaultDockLayout()
     fun sameDefaultShape(node: DockNode, expected: DockNode): Boolean =
         node.modules == expected.modules && node.horizontal == expected.horizontal && node.ratio == expected.ratio &&
@@ -176,6 +174,17 @@ internal fun ensureAnimationEditorDockTab(root: DockNode): DockNode {
     }
 }
 
+/** Insert the simulation tab after physics if an older saved layout is missing it. */
+internal fun ensureSimulationDockTab(root: DockNode): DockNode {
+    if (root.allModules().contains("simulation")) return root
+    val host = root.containing("physics") ?: return root
+    return root.update(host.id) { node ->
+        val modules = node.modules.toMutableList()
+        modules.add((modules.indexOf("physics") + 1).coerceIn(0, modules.size), "simulation")
+        node.copy(modules = modules)
+    }
+}
+
 internal fun defaultDockLayout(canvas: String = PRIMARY_CANVAS_ID): DockNode {
     val canvasAndLog = DockNode(horizontal = false, ratio = .72f,
         first = DockNode(modules = listOf(canvas)),
@@ -184,7 +193,7 @@ internal fun defaultDockLayout(canvas: String = PRIMARY_CANVAS_ID): DockNode {
     return DockNode(ratio = .60f, first = workspace,
         second = DockNode(horizontal = false, ratio = .32f,
             first = DockNode(modules = listOf("settings")),
-            second = DockNode(modules = listOf("layers", "parameters", "tools", "mesh", "inspector", "animation", "physics"))))
+            second = DockNode(modules = listOf("layers", "parameters", "tools", "mesh", "inspector", "animation", "physics", "simulation"))))
 }
 
 private fun leaf(vararg modules: String) = DockNode(modules = modules.toList())
@@ -211,20 +220,20 @@ internal fun presetDockLayout(workspace: EditorWorkspace): DockNode {
         WorkspacePreset.EDIT, WorkspacePreset.BLANK -> defaultDockLayout(names[0])
         WorkspacePreset.MESH -> row(.22f, leaf("hierarchy", "layers", "skeleton"),
             row(.72f, column(.78f, leaf(names[0]), leaf("log", "animationEditor")),
-                column(.55f, leaf("mesh", "tools"), leaf("inspector", "parameters", "settings", "animation", "physics"))))
+                column(.55f, leaf("mesh", "tools"), leaf("inspector", "parameters", "settings", "animation", "physics", "simulation"))))
         WorkspacePreset.RIG -> row(.20f, leaf("hierarchy", "skeleton"),
             row(.75f, column(.76f, row(.5f, leaf(names[0]), leaf(names[1])), leaf("log", "animationEditor")),
-                column(.45f, leaf("parameters"), leaf("inspector", "tools", "mesh", "layers", "settings", "animation", "physics"))))
+                column(.45f, leaf("parameters"), leaf("inspector", "tools", "mesh", "layers", "settings", "animation", "physics", "simulation"))))
         WorkspacePreset.ANIMATION -> row(.78f,
-            column(.62f, row(.26f, leaf("animation", "physics", "hierarchy", "skeleton"), leaf(names[0])),
+            column(.62f, row(.26f, leaf("animation", "physics", "simulation", "hierarchy", "skeleton"), leaf(names[0])),
                 leaf("animationEditor", "log")),
             leaf("parameters", "settings", "layers", "tools", "mesh", "inspector"))
         WorkspacePreset.PREVIEW -> row(.16f, leaf("hierarchy", "skeleton"),
             row(.78f, column(.80f, leaf(names[0]), leaf("log", "animationEditor")),
-                column(.50f, leaf("animation", "physics", "settings", "layers", "tools", "mesh", "inspector"), leaf("parameters"))))
+                column(.50f, leaf("animation", "physics", "simulation", "settings", "layers", "tools", "mesh", "inspector"), leaf("parameters"))))
         WorkspacePreset.PHYSICS -> row(.5f, column(.82f, leaf(names[0]), leaf("log", "animationEditor")),
             row(.5f, leaf("parameters", "hierarchy", "skeleton"),
-                leaf("physics", "animation", "settings", "layers", "tools", "mesh", "inspector")))
+                leaf("physics", "simulation", "animation", "settings", "layers", "tools", "mesh", "inspector")))
         WorkspacePreset.HISTORY -> row(.5f, leaf("history"), defaultDockLayout(names[0]))
     }
     return names.filterIndexed { index, _ -> slots[index] == null }
@@ -240,15 +249,12 @@ internal fun presetVisibleLayout(preset: WorkspacePreset): Pair<DockNode?, Edito
 
 internal val dockJson = Json { ignoreUnknownKeys = true }
 
-/** Shown only from the window menu, like history; a fresh layout does not contain it. */
-internal const val OPTIONAL_SIMULATION_MODULE = "simulation"
-
 /**
  * The dock tree [workspace] is arranged by: its saved layout when that still decodes and names only
  * known modules, otherwise its preset's. Hidden modules are still in it; the dock projects them out.
  */
 internal fun workspaceDockRoot(workspace: EditorWorkspace): DockNode {
-    val allowed = DEFAULT_DOCK_MODULES + setOf("history", OPTIONAL_SIMULATION_MODULE) + workspace.canvases.map { it.id }
+    val allowed = DEFAULT_DOCK_MODULES + setOf("history") + workspace.canvases.map { it.id }
     val saved = workspace.layoutJson?.let { raw ->
         runCatching { dockJson.decodeFromString<DockNode>(raw) }.getOrNull()?.remove("export")
     }?.takeIf { node -> node.allModules().all { it in allowed } }
