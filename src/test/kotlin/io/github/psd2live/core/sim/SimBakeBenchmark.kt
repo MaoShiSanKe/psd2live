@@ -50,6 +50,7 @@ class SimBakeBenchmark {
             println("=== $modes modes, $keys keys: %.1f s; held-out R² %.3f, p95 %.1f px, peak %.2f, clipped %.3f, jerk ×%.2f".format(
                 (System.nanoTime() - t) / 1e9, bake.fit, bake.maxErrorPx, bake.peak, bake.clipped, bake.jerk))
             println("    ${bake.physics}")
+            for (mode in bake.modes) println("    %s: swing %.1f px, %.0f%% of the motion".format(mode.axis.parameter, mode.amplitude, mode.energy * 100))
             for (blend in listOf(false, true)) {
                 val written = o.copy(simEdits = o.simEdits.map { it.copy(blendShapes = blend) })
                 val baked = SimAuthoring.withBake(written, "back", bake).applyTo(initial.baseRig.puppet)

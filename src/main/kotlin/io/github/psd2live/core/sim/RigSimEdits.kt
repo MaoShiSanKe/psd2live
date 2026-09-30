@@ -114,7 +114,7 @@ data class RigSimEdit(
     val inputs: List<PhysicsInput> = emptyList(),
     val enabled: Boolean = true,
     /** Dynamic modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum each. */
-    val modes: Int = 1,
+    val modes: Int = 2,
     /**
      * Parameters whose pose is baked exactly, as corrections on their own axes (a leg pushing the skirt).
      * Null picks the parameters that move a collider.
@@ -162,7 +162,7 @@ data class RigSimEdit(
         if (colliders.isNotEmpty()) putJsonArray("colliders") { colliders.forEach { add(it.toJson()) } }
         if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
         if (!enabled) put("enabled", false)
-        if (modes != 1) put("modes", modes)
+        if (modes != 2) put("modes", modes)
         staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
         if (keys != 5) put("keys", keys)
         blendShapes?.let { put("blend_shapes", it) }

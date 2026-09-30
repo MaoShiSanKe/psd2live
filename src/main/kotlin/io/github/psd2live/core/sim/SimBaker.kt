@@ -29,10 +29,12 @@ import kotlin.math.sqrt
  * 3. Subspace: the few principal directions of that residual, measured in px at the default pose.
  * 4. Pendulum: [SimPendulumFit] finds the Cubism pendulum whose driven vertices' angles play the motion
  *    best - following it, settling like it and no jerkier - each vertex driving one -1..1 parameter that
- *    spans the vertex's whole swing over that motion, so it does not stall at ±1.
- * 5. Keys: evenly spread over -1..1, their shapes solved for all mode parameters together by least
- *    squares over every frame as the pendulum plays it - arcs and one-sided pushes included - and kept on
- *    a smooth curve so the body's speed does not jump at a key.
+ *    spans the vertex's whole swing over that motion, so it does not stall at ±1. The first mode carries
+ *    the swing; each later one is one more segment fitted over what the modes above leave - the body
+ *    bending and bunching up as it lags.
+ * 5. Keys: evenly spread over -1..1, their shapes solved mode by mode, each by least squares over every
+ *    frame as the pendulum plays it - arcs and one-sided pushes included - over what the modes before it
+ *    leave, and kept on a smooth curve so the body's speed does not jump at a key.
  *
  * [model] must not carry this simulation's own bake.
  */
@@ -177,12 +179,12 @@ object SimBaker {
         options.progress(0.95f)
         val keys = edit.modeKeys
         var kept = outputs.indices.toList()
-        var shapes = solveKeys(residuals, kept.map { fit.played[it] }, kept.map { keys }, space.size, weights)
+        var shapes = solveModes(residuals, kept.map { fit.played[it] }, keys, space.size, weights)
         while (kept.isNotEmpty()) {
             val moving = kept.filterIndexed { place, _ -> shapes[place].maxOf { space.motionPx(it) } >= MIN_MOTION_PX }
             if (moving.size == kept.size) break
             kept = moving
-            shapes = if (kept.isEmpty()) emptyList() else solveKeys(residuals, kept.map { fit.played[it] }, kept.map { keys }, space.size, weights)
+            shapes = if (kept.isEmpty()) emptyList() else solveModes(residuals, kept.map { fit.played[it] }, keys, space.size, weights)
         }
         require(kept.isNotEmpty() || statics.isNotEmpty()) { "The fitted pendulum does not move ${edit.id}; nothing to bake" }
         val axes = kept.mapIndexed { place, k -> SimBakedAxis(outputs[k], keys.copyOf(), space.split(shapes[place])) }
@@ -258,6 +260,28 @@ object SimBaker {
         val below = if (parameter.default > parameter.min) List(side) { parameter.min + (parameter.default - parameter.min) * it / side } else emptyList()
         val above = if (parameter.max > parameter.default) List(side) { parameter.max - (parameter.max - parameter.default) * it / side }.reversed() else emptyList()
         return (below + parameter.default + above).distinct().toFloatArray()
+    }
+
+    /**
+     * Key shapes for each mode in turn over what the modes before it leave, like the pendulum is fitted:
+     * solved together, the shapes of two modes that swing nearly alike grow large and cancel. Returns per
+     * mode, per key, the offsets.
+     */
+    internal fun solveModes(residuals: List<FloatArray>, played: List<FloatArray>, keys: FloatArray, size: Int,
+                            weights: FloatArray? = null): List<List<FloatArray>> {
+        var left = residuals
+        return played.mapIndexed { k, values ->
+            val shapes = solveKeys(left, listOf(values), listOf(keys), size, weights).single()
+            if (k < played.lastIndex) left = left.mapIndexed { f, r ->
+                val u = values[f].coerceIn(keys.first(), keys.last())
+                var j = 0
+                while (j < keys.size - 2 && u > keys[j + 1]) j++
+                val t = (u - keys[j]) / (keys[j + 1] - keys[j])
+                val a = shapes[j]; val b = shapes[j + 1]
+                FloatArray(size) { r[it] - (a[it] * (1f - t) + b[it] * t) }
+            }
+            shapes
+        }
     }
 
     /**

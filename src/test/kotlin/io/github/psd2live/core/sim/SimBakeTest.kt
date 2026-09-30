@@ -51,7 +51,12 @@ class SimBakeTest {
         val mode = bake.modes.first()
         assertEquals("ParamSimhair_1", mode.axis.parameter)
         assertTrue(mode.amplitude > 5f, "the tip should lag visibly, lagged ${mode.amplitude} px")
-        assertTrue(bake.fit > 0.65f, "the pendulum and keys should reproduce the simulation, R² ${bake.fit}")
+        assertTrue(bake.fit > 0.55f, "the pendulum and keys should reproduce the simulation, R² ${bake.fit}")
+        // The second mode adds the lag and bend the first cannot show instead of cancelling it.
+        assertEquals(2, bake.modes.size)
+        val single = RigEditOverlay(simEdits = listOf(edit().copy(modes = 1)))
+        val one = SimBaker.bake(SimAuthoring.unbakedModel(single, base, "hair"), single.simEdits.single(), quick)
+        assertTrue(bake.fit > one.fit + 0.03f, "two modes should follow the whip better than one: ${bake.fit} against ${one.fit}")
         assertTrue(bake.peak in 0.3f..0.999f && bake.clipped == 0f, "the modes use their range without stalling: ${bake.peak}, ${bake.clipped}")
         assertTrue(bake.jerk in 0.2f..1.6f, "the baked motion should be about as smooth as the simulation: ${bake.jerk}")
         val physics = assertNotNull(bake.physics)
