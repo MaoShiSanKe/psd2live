@@ -152,6 +152,7 @@ internal fun DrawScope.drawToolIcon(
         CanvasTool.GLUE -> pen.glue()
         CanvasTool.SUBDIVIDE -> pen.subdivide()
         CanvasTool.KNIFE -> pen.knife()
+        CanvasTool.WEIGHT_PAINT -> pen.weightPaint()
         CanvasTool.PAINT_BRUSH -> pen.paintBrush()
         CanvasTool.PAINT_PENCIL -> pen.pencil()
         CanvasTool.PAINT_ERASER -> pen.eraser()
@@ -463,6 +464,16 @@ private fun IconPen.knife() = turned(-45f) {
     fill(blade, soft)
     outline(blade)
     fillBox(12f, 7.2f, 5.6f, 3.4f, 1.4f)
+}
+
+/** A triangle whose corners carry falling weights, under a brush ring's arc. */
+private fun IconPen.weightPaint() {
+    val face = path { m(3f, 14.5f); l(9f, 4f); l(15f, 14.5f); z() }
+    fill(face, soft)
+    outline(face)
+    dot(3f, 14.5f, 2.4f)
+    dot(9f, 4f, 1.7f)
+    dot(15f, 14.5f, 1.1f)
 }
 
 // --- painting --------------------------------------------------------------------------------------------

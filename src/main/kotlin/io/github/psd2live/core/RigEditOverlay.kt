@@ -232,6 +232,8 @@ data class RigEditOverlay(
     val authoringJournal: List<kotlinx.serialization.json.JsonObject> = emptyList(),
     /** Authored motions and overrides of the generated ones; they do not touch the rig. */
     val motionClips: List<MotionClip> = emptyList(),
+    /** Simulated bodies; they read the rebuilt rig and, once baked, write back through their own generator. */
+    val simEdits: List<io.github.psd2live.core.sim.RigSimEdit> = emptyList(),
 ) {
 	init {
         require(motionClips.map { it.id }.distinct().size == motionClips.size) { "Duplicate motion IDs" }
@@ -240,6 +242,7 @@ data class RigEditOverlay(
         require(physicsEdits.map { it.id }.distinct().size == physicsEdits.size) { "Duplicate physics IDs" }
         require(validFps(physicsFps)) { "FPS must be $UNLIMITED_FPS (unlimited) or within $PHYSICS_FPS_RANGE" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
+        require(simEdits.map { it.id }.distinct().size == simEdits.size) { "Duplicate simulation IDs" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
 			"Rig parameter edits contain duplicate IDs"

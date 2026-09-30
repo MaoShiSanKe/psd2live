@@ -356,6 +356,154 @@ class PSD2LiveViewModel : AutoCloseable {
             }
         }
     }
+    // Simulation: the panel's edits commit through the workspace like swings; the live preview runs here.
+
+    private val simPreview = io.github.psd2live.core.sim.SimPreview()
+    private val _simulationFrames = MutableStateFlow<io.github.psd2live.core.sim.SimulatedFrame?>(null)
+    /** The live simulation's latest frame, for the canvas; null while none runs or it is still preparing. */
+    val simulationFrames: StateFlow<io.github.psd2live.core.sim.SimulatedFrame?> = _simulationFrames.asStateFlow()
+    private val _simulationStatus = MutableStateFlow<SimulationStatus>(SimulationStatus.Idle)
+    val simulationStatus: StateFlow<SimulationStatus> = _simulationStatus.asStateFlow()
+    private var simPreparing: kotlinx.coroutines.Job? = null
+
+    /** What the simulation panel shows under the list. */
+    sealed interface SimulationStatus {
+        data object Idle : SimulationStatus
+        data object Preparing : SimulationStatus
+        data class Running(val notes: List<String>) : SimulationStatus
+        data class Report(val id: String, val report: kotlinx.serialization.json.JsonObject) : SimulationStatus
+        data class Failed(val message: String) : SimulationStatus
+    }
+
+    /** Runs simulation [id] live in the preview, or stops it with null. */
+    internal fun setSimulationPreview(id: String?) {
+        if (_state.value.simulationPreviewId == id) return
+        simPreparing?.cancel()
+        simPreview.clear()
+        _simulationFrames.value = null
+        _simulationStatus.value = SimulationStatus.Idle
+        updateState { it.copy(simulationPreviewId = id) }
+    }
+
+    /** Puts the live simulation back at rest. */
+    internal fun restartSimulationPreview() {
+        val model = _state.value.previewModel ?: return
+        simPreview.restart(model.rig.puppet, simulationPose(_state.value, model))
+    }
+
+    /** Creates or replaces [edit] as one history node. */
+    internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) =
+        runSimulationMutation("Set simulation ${edit.id}") { workspace, head ->
+            workspace.putSimulation(edit.toJson(), head, null)
+        }
+
+    internal fun deleteSimulation(id: String) {
+        if (_state.value.simulationPreviewId == id) setSimulationPreview(null)
+        runSimulationMutation("Deleted simulation $id") { workspace, head -> workspace.deleteSimulation(id, head) }
+    }
+
+    /** A new simulation of the meshes of the selected layers; returns its ID, or null with nothing selected. */
+    internal fun createSimulationFromSelection(kind: io.github.psd2live.core.sim.SimKind): String? {
+        val current = _state.value
+        val model = current.previewModel ?: return null
+        val layers = current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) }
+        val meshes = model.rig.layerIdByDrawableId.filter { (drawable, layer) ->
+            layer in layers && model.rig.puppet.drawables.any { it.id.raw == drawable && it.mesh != null }
+        }.keys.sorted()
+        if (meshes.isEmpty()) return null
+        val id = io.github.psd2live.core.sim.SimAuthoring.nextId(current.rigEdits)
+        putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes))
+        return id
+    }
+
+    /**
+     * Opens the weight brush on [drawableId] for a group of [kind]: selects the mesh's layer, puts the
+     * canvas in Edit and names the group after the kind unless the mesh already has one of that kind.
+     */
+    internal fun beginVertexGroupPaint(drawableId: String, kind: org.umamo.runtime.model.VertexGroupKind) {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val layer = model.rig.layerIdByDrawableId[drawableId] ?: return
+        selectLayer(layer)
+        setCanvasMode(current.activeCanvas.id, CanvasMode.EDIT)
+        canvasEditor.weightGroupKind = kind
+        canvasEditor.weightGroupName = model.rig.puppet.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.kind == kind }?.name
+            ?: kind.jsonName
+        canvasEditor.activateTool(io.github.psd2live.ui.CanvasTool.WEIGHT_PAINT)
+    }
+
+    /** Runs the standard test on [id] off the frame thread; the result arrives in [simulationStatus]. */
+    internal fun reportSimulation(id: String) {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val edit = current.rigEdits.simEdits.firstOrNull { it.id == id } ?: return
+        _simulationStatus.value = SimulationStatus.Preparing
+        scope.launch {
+            _simulationStatus.value = try {
+                SimulationStatus.Report(id, withContext(Dispatchers.Default) {
+                    io.github.psd2live.core.sim.SimAuthoring.report(model.rig.puppet, edit, wind = 1500f to 0f)
+                })
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                SimulationStatus.Failed(failure.message ?: failure.toString())
+            }
+        }
+    }
+
+    private fun runSimulationMutation(
+        summary: String,
+        mutation: suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult,
+    ) {
+        if (_state.value.canvasEditBusy) return
+        updateState { it.copy(canvasEditBusy = true) }
+        scope.launch {
+            try {
+                val workspace = requireNotNull(agentWorkspace) { "Project workspace unavailable" }
+                val head = requireNotNull(workspace.snapshot().historyHeadNodeId) { "Project history unavailable" }
+                withContext(Dispatchers.Default) { mutation(workspace, head) }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: summary)
+            } finally {
+                updateState { it.copy(canvasEditBusy = false) }
+            }
+        }
+    }
+
+    /** The pose the live simulation follows: the playing preview's, or the paused edit pose with its physics. */
+    private fun simulationPose(current: PSD2LiveState, model: RigPreviewModel): Map<ParameterId, Float> =
+        if (current.previewLive && current.animationEnabled && !current.meshOnly && latestLiveParameters.isNotEmpty()) latestLiveParameters
+        else parameterScrubPose(current, current.previewPanelState().parameterValues) + pausedPhysics
+
+    private fun stepSimulationPreview(current: PSD2LiveState, model: RigPreviewModel?, dt: Float) {
+        val id = current.simulationPreviewId ?: return
+        val edit = current.rigEdits.simEdits.firstOrNull { it.id == id }
+        if (model == null || edit == null) {
+            _simulationFrames.value = null
+            return
+        }
+        val puppet = model.rig.puppet
+        val pose = simulationPose(current, model)
+        if (simPreview.needs(puppet, edit)) {
+            simPreparing?.cancel()
+            simPreview.begin(puppet, edit)
+            _simulationStatus.value = SimulationStatus.Preparing
+            simPreparing = scope.launch {
+                _simulationStatus.value = try {
+                    SimulationStatus.Running(withContext(Dispatchers.Default) { simPreview.prepare(puppet, edit, pose) })
+                } catch (failure: Exception) {
+                    if (failure is kotlinx.coroutines.CancellationException) throw failure
+                    SimulationStatus.Failed(failure.message ?: failure.toString())
+                }
+            }
+            return
+        }
+        simPreview.step(puppet, edit, pose, dt)?.let { _simulationFrames.value = it }
+    }
+
+    /** False while a live simulation needs frames, so the paused preview keeps pumping. */
+    val previewSettled: Boolean get() = pausedPhysicsSettled && _state.value.simulationPreviewId == null
+
     private val meshSplitQueue = ArrayDeque<String>()
     private val manualMeshSplitRequests = mutableSetOf<String>()
     private var meshSplitChecking = false
@@ -4944,6 +5092,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		// 5. Paused, physics still runs, on the pose the user sets: a slider or the pointer's look swings it.
 		stepPausedPhysics(current, model, inPreview && !anim && current.generatePhysics && !isMeshOnly, tracking, dt)
+		// 6. The live simulation follows whichever pose the preview now shows.
+		if (inPreview) stepSimulationPreview(current, model, dt)
 	}
 
 	/** What the software physics is stepping for; switching starts it from rest, as a fresh Cubism model would. */

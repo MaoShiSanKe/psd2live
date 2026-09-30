@@ -16,6 +16,9 @@ internal object MeshRebuildEdits {
         val journal = overlay.authoringJournal.mapNotNull { command ->
             when (command["op"]?.jsonPrimitive?.content) {
                 "canvas_topology" -> if (command["id"]?.jsonPrimitive?.content == drawableId) null else command
+                // Weights of the replaced mesh; the caller resamples them onto the new one (VertexGroupJournal).
+                VertexGroupJournal.PUT, VertexGroupJournal.DELETE ->
+                    if (topologyChanged && command["target"]?.jsonPrimitive?.content == meshTarget) null else command
                 "canvas_geometry" -> {
                     val isTargetMesh = command["kind"]?.jsonPrimitive?.content == "mesh" &&
                         command["id"]?.jsonPrimitive?.content == drawableId

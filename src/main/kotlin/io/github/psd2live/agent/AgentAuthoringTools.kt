@@ -35,7 +35,7 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
     }
 
     tool("inspect", "Read project context, find objects/layers/parameters, or inspect one kind:id's direct axes, channels and parent. No point arrays. Query and page before expanding.",
-        buildJsonObject { put("scope", choices("project", "settings", "preview", "objects", "layers", "parameters", "physics", "swings", "paths")); put("query", string()); put("target", string()); put("offset", integer(0)); put("limit", integer(1, 64)) }) { a ->
+        buildJsonObject { put("scope", choices("project", "settings", "preview", "objects", "layers", "parameters", "physics", "swings", "paths", "simulations", "vertex_groups")); put("query", string()); put("target", string()); put("offset", integer(0)); put("limit", integer(1, 64)) }) { a ->
         val snapshot = workspace.snapshot()
         val state = snapshot.historyHeadNodeId
         val target = a["target"]?.jsonPrimitive?.content
@@ -96,6 +96,13 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                 }
                 "physics" -> { put("fps", workspace.physicsFps()); put("groups", JsonArray(workspace.listPhysics().map { it.toJson() })) }
                 "swings" -> put("swings", JsonArray(workspace.listSwings().map { it.toJson() }))
+                "simulations" -> {
+                    put("simulations", JsonArray(workspace.listSimulations().map { it.toJson() }))
+                    // Glue keys are what glue_roles take.
+                    put("glues", JsonArray(workspace.currentPuppet()?.glues.orEmpty().map { glue -> buildJsonObject {
+                        put("key", io.github.psd2live.core.sim.glueKey(glue)); put("pairs", glue.pairs.size)
+                    } }))
+                }
                 "settings" -> put("settings", workspace.projectSettings())
                 "preview" -> put("preview", workspace.previewSession())
                 else -> {
@@ -114,6 +121,11 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                         "paths" -> workspace.currentPuppet()?.deformPaths.orEmpty().map { p -> buildJsonObject {
                             put("id", p.id); put("target", "mesh:${p.drawableId.raw}"); put("level", p.editLevel)
                             put("width", p.width); put("hardness", p.hardness); put("closed", p.closed); put("pointCount", p.points.size)
+                        } }
+                        "vertex_groups" -> workspace.currentPuppet()?.vertexGroups.orEmpty().map { g -> buildJsonObject {
+                            put("target", "mesh:${g.drawableId.raw}"); put("name", g.name); put("kind", g.kind.jsonName)
+                            put("vertices", g.weights.size); put("weighted", g.weights.count { it > 0f })
+                            put("max", g.weights.maxOrNull() ?: 0f)
                         } }
                         else -> error("Unknown inspect scope")
                     }.filter { a["query"]?.jsonPrimitive?.content?.let { query -> it.toString().contains(query, ignoreCase = true) } ?: true }
@@ -333,6 +345,49 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
     adapted("physics", "Author Cubism pendulums: put creates or patches a group by ID (inputs, outputs on pendulum vertices, 1..16 pendulums, normalization; enabled=false turns any group off, generated ones included), delete removes a user group or reverts a replaced generated one, simulate steps inputs and reports each output's peak, final value and settling, fit scales outputs to a standard sway, config sets evaluation order and fps, import reads a physics3.json. inspect scope=physics lists every group in evaluation order with origin and status. Author the output parameters' forms first; static view poses do not show settling.",
         mapOf("put" to "physics_put", "delete" to "physics_delete", "simulate" to "physics_simulate", "fit" to "physics_fit",
             "config" to "physics_config", "import" to "physics_import"), true)
+    val simulationFields = buildJsonObject {
+        put("mode", choices("put", "delete", "simulate")); put("state", string()); put("id", string()); put("name", string())
+        put("kind", choices("cloth", "hair")); put("targets", arraySchema(string(), 1, 64)); put("enabled", boolean())
+        put("material", objectSchema(buildJsonObject {
+            put("mass", number()); put("stretch", number()); put("bend", number()); put("damping", number()); put("goal", number()); put("slack", number())
+        }))
+        put("groups", buildJsonObject { put("type", "object"); put("additionalProperties", string()) })
+        put("glue_roles", buildJsonObject { put("type", "object"); put("additionalProperties", choices("ignore", "pin", "constraint")) })
+        put("colliders", arraySchema(objectSchema(buildJsonObject { put("mesh", string()); put("group", string()); put("margin", number()) }, listOf("mesh")), 0, 32))
+        put("inputs", arraySchema(objectSchema(buildJsonObject {
+            put("parameter", string()); put("weight", number()); put("type", choices("x", "angle")); put("reflect", boolean())
+        }, listOf("parameter")), 0, 16))
+        put("hold", number()); put("release", number()); put("wind", vector(2))
+    }
+    tool("simulation", "2D cloth and hair simulation on ArtMeshes (editor-side; a later bake turns it into keys and pendulums). put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend, goal = spring back to the drawn shape, slack = long-range give) except mass and damping (1/s). " +
+        "Pins come from the PIN vertex group; a glue is never a pin unless glue_roles sets its key (meshA|meshB from inspect scope=simulations) to pin (follow the other mesh) or constraint (both sides simulated). groups names the vertex group to use per kind. colliders are meshes whose COLLIDER group (or whole mesh) pushes COLLIDE vertices out, following the rig. " +
+        "simulate runs it (settle, each input held at max for hold s then released, optional wind [x, y] px/s² with y up) and reports peaks, rest drift, stretch and setup notes. delete removes it.",
+        simulationFields, listOf("mode"), true) { a ->
+        when (a.text("mode")) {
+            "put" -> workspace.putSimulation(JsonObject(a - "mode" - "state" - "hold" - "release" - "wind"), a.text("state"), null).compact()
+            "delete" -> workspace.deleteSimulation(a.text("id"), a.text("state")).compact()
+            else -> workspace.reportSimulation(a.text("id"), a["hold"]?.jsonPrimitive?.float ?: 0.5f, a["release"]?.jsonPrimitive?.float ?: 1.5f,
+                a["wind"]?.jsonArray?.let { it[0].jsonPrimitive.float to it[1].jsonPrimitive.float })
+        }
+    }
+    tool("vertex_group", "Editor-only per-vertex 0..1 weights on an ArtMesh that the simulation reads (never exported). kind: pin, collide, collider, stiffness, mass, damping, wind, goal. " +
+        "rule: fill (every vertex value), outline (outline vertices value), gradient (along from->to canvas px, start at from to end at to), glue (vertices glued to another mesh take their glue weight x value), region (inside rect [x0, y0, x1, y1] canvas px). " +
+        "mode combines with the existing group: replace (default), max, min, add, subtract. delete=true removes the group. inspect scope=vertex_groups lists groups.",
+        buildJsonObject {
+            put("state", string()); put("target", string()); put("name", string()); put("kind", choices("pin", "collide", "collider", "stiffness", "mass", "damping", "wind", "goal"))
+            put("rule", choices("fill", "outline", "gradient", "glue", "region")); put("value", number())
+            put("from", vector(2)); put("to", vector(2)); put("start", number()); put("end", number()); put("rect", vector(4))
+            put("mode", choices("replace", "max", "min", "add", "subtract")); put("delete", boolean())
+        }, listOf("state", "target", "name"), true) { a ->
+        val target = a.text("target")
+        val command = if (a["delete"]?.jsonPrimitive?.booleanOrNull == true) buildJsonObject {
+            put("op", "vertex_group_delete"); put("target", target); put("name", a.text("name"))
+        } else {
+            require("rule" in a) { "rule is required unless delete=true" }
+            JsonObject(a - "state" - "delete" + ("op" to JsonPrimitive("vertex_group_rule")))
+        }
+        workspace.authorRig(a.text("state"), JsonArray(listOf(command)), MutationAuthor.AGENT).compact()
+    }
     tool("appearance", "Rename, show/hide or reorganize objects in one ordered edit. For an animated switch use form opacity keys instead of static visibility. Local reparenting changes inherited motion.",
         buildJsonObject { put("state", string()); put("edits", legacy.getValue("object_edit").tool.inputSchema.properties!!.getValue("edits")) }, listOf("state", "edits"), true) { a ->
         workspace.authorRig(a.text("state"), buildJsonArray { add(buildJsonObject { put("op", "structure"); put("edits", a.getValue("edits")) }) }, MutationAuthor.AGENT).compact()

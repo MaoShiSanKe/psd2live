@@ -103,6 +103,8 @@ internal enum class CanvasTool(val action: ShortcutAction) {
     SUBDIVIDE(ShortcutAction.TOOL_SUBDIVIDE),
     /** The knife: click anchors along a cut, connect them, commit with Enter. */
     KNIFE(ShortcutAction.TOOL_KNIFE),
+    /** Paints a simulation vertex group (pin, collider, stiffness...) on the edited meshes. */
+    WEIGHT_PAINT(ShortcutAction.TOOL_WEIGHT_PAINT),
     // Painting mode tools (L1)
     PAINT_BRUSH(ShortcutAction.TOOL_PAINT_BRUSH),
     PAINT_PENCIL(ShortcutAction.TOOL_PAINT_PENCIL),
@@ -309,7 +311,7 @@ private fun drawableToolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool
     EditHierarchyMode.EDIT -> listOf(
         listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT),
         listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE),
-        listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE),
+        listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE, CanvasTool.WEIGHT_PAINT),
     )
     EditHierarchyMode.PAINT -> listOf(
         listOf(CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER),
@@ -908,6 +910,19 @@ internal class CanvasEditor(
     var glueStrokeB by mutableStateOf<Set<Int>>(emptySet())
     private var glueStroking = false
     private var glueErasing = false
+
+    /** The vertex group the weight brush paints, by name, and the kind a new group of that name gets. */
+    var weightGroupName by mutableStateOf("pin")
+    /** The name strokes write to: a blank field falls back to the kind's own name. */
+    private val paintedGroupName: String get() = weightGroupName.trim().ifBlank { weightGroupKind.jsonName }
+    var weightGroupKind by mutableStateOf(VertexGroupKind.PIN)
+    /** Off: a stroke adds [strength] (Alt subtracts). On: it pulls the weights toward [strength]. */
+    var weightPaintSet by mutableStateOf(false)
+    private var weightStroking = false
+    private var weightErasing = false
+    /** Per edited mesh, the strongest brush falloff the current stroke has reached at each vertex. */
+    var weightStroke by mutableStateOf<Map<String, FloatArray>>(emptyMap())
+        private set
     var brushSelecting by mutableStateOf(false)
 
     /**
@@ -1951,6 +1966,16 @@ internal class CanvasEditor(
                     addedLips.mapNotNull { it.path },
             )
             .let { puppet -> if (addedLips.isEmpty()) puppet else puppet.withDerivedRenderRoot() }
+            .let { puppet ->
+                // A rebuilt mesh carries its vertex groups over by position, as its paths are rebound.
+                val rebuilt = puppet.vertexGroups.mapTo(HashSet()) { it.drawableId.raw }.filter { id ->
+                    val before = currentPreview.rig.puppet.drawables.firstOrNull { it.id.raw == id }?.mesh
+                    val after = puppet.drawables.firstOrNull { it.id.raw == id }?.mesh
+                    before != null && after != null && !before.positions.contentEquals(after.positions)
+                }
+                if (rebuilt.isEmpty()) puppet else puppet.copy(vertexGroups = puppet.vertexGroups.filterNot { it.drawableId.raw in rebuilt } +
+                    rebuilt.flatMap { VertexGroupJournal.rebuiltGroups(currentPreview.rig.puppet, puppet, it) })
+            }
         val updatedRig = currentPreview.rig.copy(
             puppet = updatedPuppet,
             pageByDrawableId = updatedPageByDrawableId,
@@ -1990,7 +2015,13 @@ internal class CanvasEditor(
                     targetDrawable.id.raw,
                     previousBasePaths,
                     survivingPaths,
-                ),
+                ).let { edits ->
+                    VertexGroupJournal.replaceMeshGroups(
+                        edits,
+                        targetDrawable.id.raw,
+                        updatedPuppet.vertexGroups.filter { it.drawableId == targetDrawable.id },
+                    )
+                },
             )
         } else currentPreview.config
 
@@ -2153,6 +2184,8 @@ internal class CanvasEditor(
             placement = null; placementHandle = PlacementHandle.NONE; placementDragStart = null; placementDragSnapshot = null
         }
         glueStroking = false
+        weightStroking = false
+        weightStroke = emptyMap()
         glueStrokeA = emptySet()
         glueStrokeB = emptySet()
         poseDrag = null
@@ -3082,7 +3115,7 @@ internal class CanvasEditor(
         tool == CanvasTool.SKELETON_POSE -> EditHierarchyMode.DEFORM
         tool == CanvasTool.SKELETON_EDIT -> EditHierarchyMode.EDIT
         tool in PAINT_TOOLS -> EditHierarchyMode.PAINT
-        tool == CanvasTool.KNIFE || tool == CanvasTool.SUBDIVIDE -> EditHierarchyMode.EDIT
+        tool == CanvasTool.KNIFE || tool == CanvasTool.SUBDIVIDE || tool == CanvasTool.WEIGHT_PAINT -> EditHierarchyMode.EDIT
         else -> EditHierarchyMode.DEFORM
     }
 
@@ -4666,6 +4699,81 @@ internal class CanvasEditor(
     internal fun layerIdForDrawable(drawableId: String): String? =
         state.previewModel?.rig?.layerIdByDrawableId[drawableId]
 
+    /** [drawableId]'s current weights in the brushed group, or null when it has no such group. */
+    fun vertexGroupWeights(drawableId: String): FloatArray? {
+        val mesh = model.drawables.firstOrNull { it.id.raw == drawableId }?.mesh ?: return null
+        return model.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.name == paintedGroupName }
+            ?.weights?.takeIf { it.size == mesh.vertexCount }
+    }
+
+    /** What [drawableId]'s group becomes when the current stroke is released; its current weights between strokes. */
+    fun paintedWeights(drawableId: String): FloatArray? {
+        val stroke = weightStroke[drawableId] ?: return vertexGroupWeights(drawableId)
+        val base = vertexGroupWeights(drawableId) ?: FloatArray(stroke.size)
+        val amount = strength.coerceIn(0f, 1f)
+        return FloatArray(stroke.size) { i ->
+            val reach = stroke[i]
+            val w = base.getOrElse(i) { 0f }
+            when {
+                reach <= 0f -> w
+                weightPaintSet -> w + (amount - w) * reach
+                weightErasing -> w - amount * reach
+                else -> w + amount * reach
+            }.coerceIn(0f, 1f)
+        }
+    }
+
+    private fun accumulateWeightStroke(from: Offset, to: Offset, viewport: CanvasViewport) {
+        val targets = editMeshTargets()
+        if (targets.isEmpty()) return
+        val screens = targets.map { screen(it.geometry.points, it, viewport) }
+        val tip = BrushTip((radius * viewport.scale).toFloat(), hardness, brushShape, brushAngle, brushAspect, brushFalloff)
+        val surfaces = targets.map { t -> BrushSurface(screens[targets.indexOf(t)], if (connectedOnly) neighbors(t) else null, t.indices, t.id.hashCode()) }
+        val reached = brushWeights(surfaces, from, to, tip, connectedOnly)
+        val next = weightStroke.toMutableMap()
+        targets.forEachIndexed { at, t ->
+            val w = reached[at]
+            if (w.none { it > 0f }) return@forEachIndexed
+            val merged = next[t.id]?.copyOf() ?: FloatArray(t.count)
+            for (i in 0 until minOf(merged.size, w.size)) merged[i] = maxOf(merged[i], w[i])
+            next[t.id] = merged
+        }
+        weightStroke = next
+    }
+
+    private fun commitWeightStroke() {
+        val painted = weightStroke.keys.mapNotNull { id ->
+            val weights = paintedWeights(id) ?: return@mapNotNull null
+            val kind = model.vertexGroups.firstOrNull { it.drawableId.raw == id && it.name == paintedGroupName }?.kind ?: weightGroupKind
+            VertexGroupJournal.encode(VertexGroup(paintedGroupName, DrawableId(id), kind, weights))
+        }
+        weightStroke = emptyMap()
+        if (painted.isEmpty()) return
+        head = null
+        commitBatch(painted)
+    }
+
+    /** Fills or clears the brushed group on every edited mesh at once. */
+    fun fillVertexGroup(value: Float) {
+        val commands = editMeshTargets().mapNotNull { t ->
+            val mesh = model.drawables.firstOrNull { it.id.raw == t.id }?.mesh ?: return@mapNotNull null
+            val kind = model.vertexGroups.firstOrNull { it.drawableId.raw == t.id && it.name == paintedGroupName }?.kind ?: weightGroupKind
+            VertexGroupJournal.encode(VertexGroup(paintedGroupName, DrawableId(t.id), kind, FloatArray(mesh.vertexCount) { value.coerceIn(0f, 1f) }))
+        }
+        if (commands.isEmpty()) return
+        head = null
+        commitBatch(commands)
+    }
+
+    /** Removes the brushed group from every edited mesh that has it. */
+    fun deleteVertexGroup() {
+        val commands = editMeshTargets().filter { t -> model.vertexGroups.any { it.drawableId.raw == t.id && it.name == paintedGroupName } }
+            .map { VertexGroupJournal.delete(it.id, paintedGroupName) }
+        if (commands.isEmpty()) return
+        head = null
+        commitBatch(commands)
+    }
+
     private fun accumulateGlueHits(from: Offset, to: Offset, viewport: CanvasViewport) {
         val pair = glueMeshPair() ?: return
         val radius = (radius * viewport.scale).toFloat()
@@ -4978,6 +5086,18 @@ internal class CanvasEditor(
             target()?.kind != "mesh" && placement == null) {
             pickLayer(pos, viewport)?.let { selectLayer(it) }
             error = tr("editor.creationSelectFirst")
+            return true
+        }
+        if (tool == CanvasTool.WEIGHT_PAINT) {
+            if (editMeshTargets().isEmpty()) {
+                error = tr("editor.weightNeedMesh")
+                return true
+            }
+            weightErasing = alt
+            weightStroke = emptyMap()
+            weightStroking = true
+            dragging = true
+            accumulateWeightStroke(pos, pos, viewport)
             return true
         }
         if (tool == CanvasTool.GLUE) {
@@ -5320,6 +5440,12 @@ internal class CanvasEditor(
             return
         }
 
+        if (weightStroking) {
+            accumulateWeightStroke(previous, pos, viewport)
+            previous = pos
+            return
+        }
+
         if (hierarchyMode == EditHierarchyMode.PAINT && isPainting) {
             paintStrokeCurrent = pos
             // A pick scrubs: the colour follows the pointer for as long as the button is held.
@@ -5570,6 +5696,13 @@ internal class CanvasEditor(
             subdivideEdges = emptySet()
             targetAtPress = null; original = null
             if (covered.isNotEmpty()) topology("subdivide", edges = covered)
+            return
+        }
+
+        if (weightStroking) {
+            weightStroking = false
+            dragging = false
+            commitWeightStroke()
             return
         }
 

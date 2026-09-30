@@ -97,8 +97,10 @@ internal fun reconcileDockModules(
     }
     placeModules.forEach { module ->
         if (result?.allModules()?.contains(module) != true) {
-            val anchor = result?.allModules()?.firstOrNull(::isCanvasModule) ?: result?.allModules()?.firstOrNull()
-            val side = if (module == "history") DockSide.LEFT else DockSide.BOTTOM
+            // Simulation opens as a tab beside physics, the panel it is tuned alongside, when that is docked.
+            val beside = if (module == OPTIONAL_SIMULATION_MODULE) result?.allModules()?.firstOrNull { it == "physics" } else null
+            val anchor = beside ?: result?.allModules()?.firstOrNull(::isCanvasModule) ?: result?.allModules()?.firstOrNull()
+            val side = if (beside != null) DockSide.CENTER else if (module == "history") DockSide.LEFT else DockSide.BOTTOM
             result = dockBesideModule(result, module, anchor, side)
         }
     }
@@ -238,12 +240,15 @@ internal fun presetVisibleLayout(preset: WorkspacePreset): Pair<DockNode?, Edito
 
 internal val dockJson = Json { ignoreUnknownKeys = true }
 
+/** Shown only from the window menu, like history; a fresh layout does not contain it. */
+internal const val OPTIONAL_SIMULATION_MODULE = "simulation"
+
 /**
  * The dock tree [workspace] is arranged by: its saved layout when that still decodes and names only
  * known modules, otherwise its preset's. Hidden modules are still in it; the dock projects them out.
  */
 internal fun workspaceDockRoot(workspace: EditorWorkspace): DockNode {
-    val allowed = DEFAULT_DOCK_MODULES + setOf("history") + workspace.canvases.map { it.id }
+    val allowed = DEFAULT_DOCK_MODULES + setOf("history", OPTIONAL_SIMULATION_MODULE) + workspace.canvases.map { it.id }
     val saved = workspace.layoutJson?.let { raw ->
         runCatching { dockJson.decodeFromString<DockNode>(raw) }.getOrNull()?.remove("export")
     }?.takeIf { node -> node.allModules().all { it in allowed } }

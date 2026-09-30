@@ -1320,6 +1320,27 @@ class ViewModelAgentWorkspace(
 
     override fun listSwings() = viewModel.state.value.rigEdits.swingEdits
 
+    override fun listSimulations() = viewModel.state.value.rigEdits.simEdits
+
+    override suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult {
+        val id = arguments["id"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("id is required")
+        return mutateRigKeyform(expectedHead, taskId, "Set simulation $id", id) { document, puppet ->
+            document.copy(rigEdits = io.github.psd2live.core.sim.SimAuthoring.put(document.rigEdits, puppet, arguments))
+        }
+    }
+
+    override suspend fun deleteSimulation(id: String, expectedHead: String) =
+        mutateRigKeyform(expectedHead, null, "Deleted simulation $id", id) { document, _ ->
+            document.copy(rigEdits = io.github.psd2live.core.sim.SimAuthoring.remove(document.rigEdits, id))
+        }
+
+    override fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject {
+        val state = viewModel.state.value
+        val model = state.previewModel ?: throw IllegalStateException("No rig preview is available")
+        val edit = requireNotNull(state.rigEdits.simEdits.firstOrNull { it.id == id }) { "Simulation not found: $id" }
+        return io.github.psd2live.core.sim.SimAuthoring.report(model.rig.puppet, edit, hold, release, wind)
+    }
+
     override suspend fun putSwing(edit: io.github.psd2live.core.RigSwingEdit, estimatePhysics: Boolean, expectedHead: String,
         taskId: String?, author: MutationAuthor) =
         mutateRigKeyform(expectedHead, taskId, "Set swing ${edit.id}", edit.id, author) { document, puppet ->

@@ -164,6 +164,10 @@ internal fun BoxScope.CanvasEditorOverlay(
                         else (if (editor.strength > 0.001f) (w / editor.strength).coerceIn(0f, 1f) else w.coerceIn(0f, 1f)) * 0.62f
                     }
                 }
+                if (editor.tool == CanvasTool.WEIGHT_PAINT) {
+                    val weights = editor.paintedWeights(t.id)
+                    if (weights != null) drawWeightWash(pts.take(minOf(t.count, weights.size)), t.indices, VertexGroupWashColor) { i -> weights[i] * 0.7f }
+                }
                 if (editor.tool == CanvasTool.GLUE && editor.glueSubTool == GlueSubTool.WEIGHT) {
                     val shown = when (editor.glueWeightMode) {
                         GlueWeightMode.A -> t.id == gluePair?.first
@@ -2901,6 +2905,8 @@ private fun DrawScope.drawWeightWash(pts: List<Offset>, indices: IntArray, color
 }
 
 private val BrushWeightColor = Color(0xFFF81818)
+/** The simulation weight brush: a green wash, apart from the deform brush red and the glue sides. */
+private val VertexGroupWashColor = Color(0xFF3FC46B)
 
 /**
  * The tip's own falloff fill while Alt + right-drag retunes a deform brush. Kept faint, so the wash of

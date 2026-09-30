@@ -911,6 +911,42 @@ internal fun ToolDetailsView(
                     )
                 }
             }
+            CanvasTool.WEIGHT_PAINT -> {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(tr("editor.weightGroup"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                        io.github.psd2live.ui.components.CompactTextField(value = editor.weightGroupName, onValueChange = { name: String ->
+                            editor.weightGroupName = name.filterNot { it.isISOControl() }
+                        }, modifier = Modifier.weight(1f), height = 24.dp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(tr("editor.weightKind"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                        CompactDropdown(org.umamo.runtime.model.VertexGroupKind.entries, editor.weightGroupKind, { kind ->
+                            // A group named after its old kind follows the new one.
+                            if (editor.weightGroupName == editor.weightGroupKind.jsonName) editor.weightGroupName = kind.jsonName
+                            editor.weightGroupKind = kind
+                        }, Modifier.weight(1f), itemLabel = { tr("sim.group.${it.jsonName}") }, height = 24.dp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CompactButton(text = tr("editor.weightAdd"), onClick = { editor.weightPaintSet = false }, isPrimary = !editor.weightPaintSet, height = 24.dp)
+                        CompactButton(text = tr("editor.weightSet"), onClick = { editor.weightPaintSet = true }, isPrimary = editor.weightPaintSet, height = 24.dp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                        CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = 500.0, unit = "px", height = 24.dp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(tr("editor.strength"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                        CompactNumberSpinner(value = (editor.strength * 100).toDouble(), onValueChange = { editor.strength = it.toFloat() / 100f }, min = 1.0, max = 100.0, unit = "%", height = 24.dp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CompactButton(text = tr("editor.weightFill"), onClick = { editor.fillVertexGroup(1f) }, enabled = editor.editable, height = 24.dp)
+                        CompactButton(text = tr("editor.weightClear"), onClick = { editor.fillVertexGroup(0f) }, enabled = editor.editable, height = 24.dp)
+                        CompactButton(text = tr("editor.weightDelete"), onClick = { editor.deleteVertexGroup() }, enabled = editor.editable, danger = true, height = 24.dp)
+                    }
+                    Text(tr("editor.weightHint"), style = typography.caption.copy(fontSize = 10.5.sp), color = colors.textMuted)
+                }
+            }
             CanvasTool.SUBDIVIDE -> {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = 500.0, unit = "px", height = 24.dp)

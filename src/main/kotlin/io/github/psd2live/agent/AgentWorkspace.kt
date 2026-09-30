@@ -491,6 +491,15 @@ interface AgentWorkspace {
     /** Scales group [id]'s outputs so a standard head sway swings each to [target] of its parameter's end. */
     suspend fun fitPhysics(id: String, target: Float, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Physics scale fitting is unavailable")
+    fun listSimulations(): List<io.github.psd2live.core.sim.RigSimEdit> = emptyList()
+    /** [arguments] are a `simulation` put request, laid over the simulation with that ID. */
+    suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation editing is unavailable")
+    suspend fun deleteSimulation(id: String, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation deletion is unavailable")
+    /** Runs simulation [id] on the current rig and reports how it moves; read-only. */
+    fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject =
+        throw UnsupportedOperationException("Simulation is unavailable")
     fun listSwings(): List<io.github.psd2live.core.RigSwingEdit> = emptyList()
     /** [estimatePhysics] sizes the pendulum from the first target instead of taking the edit's. */
     suspend fun putSwing(edit: io.github.psd2live.core.RigSwingEdit, estimatePhysics: Boolean, expectedHead: String, taskId: String?,

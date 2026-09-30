@@ -1039,6 +1039,7 @@ private fun DockModuleContent(
 		"inspector" -> InspectorPanelView(vm.canvasEditorFor(state.activeCanvas.id), vm, state)
 		"animation" -> AnimationPanelView(vm, state)
 		"physics" -> PhysicsPanelView(vm, state)
+		"simulation" -> io.github.psd2live.ui.views.simulation.SimulationPanelView(vm, state)
 	}
 }
 

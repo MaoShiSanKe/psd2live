@@ -170,9 +170,12 @@ class PSD2LivePipeline {
 				DeformPathJournal.encode(DeformPathJournal.rebind(path, oldMesh, newMesh))
 			}
 
-		val rebasedEdits = retainedEdits.copy(
+		val rebasedEdits = rebuiltMeshIds.fold(retainedEdits.copy(
 			authoringJournal = retainedEdits.authoringJournal + deleteCommands + putCommands,
-		)
+		)) { edits, drawableId ->
+			val groups = VertexGroupJournal.rebuiltGroups(current.rig.puppet, retainedRig.puppet, drawableId)
+			if (groups.isEmpty()) edits else VertexGroupJournal.replaceMeshGroups(edits, drawableId, groups)
+		}
 		val rebasedConfig = config.copy(rigEdits = rebasedEdits)
 		val rig = baseRig.withRigEdits(rebasedEdits)
 		val runtimeBundle = buildRuntimeBundle(

@@ -514,6 +514,8 @@ data class PSD2LiveState(
 	val drawOrderOverrides: Map<String, Float> = emptyMap(),
 	/** Durable parameter/keyform edits replayed after each generated-rig rebuild. */
 	val rigEdits: RigEditOverlay = RigEditOverlay.Empty,
+	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
+	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
 	val successExportMessage: String? = null,
 ) {
