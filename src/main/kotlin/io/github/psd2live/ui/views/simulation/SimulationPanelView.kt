@@ -274,10 +274,10 @@ private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppe
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		FieldLabel(tr("sim.blendShapes"), tooltip = tr("sim.blendShapesTip"))
-		Spacer(Modifier.weight(1f))
-		CompactCheckbox(sim.blendShapes, { commit(sim.copy(blendShapes = it)) })
+		CompactDropdown(listOf(null, true, false), sim.blendShapes, { commit(sim.copy(blendShapes = it)) }, Modifier.weight(1f),
+			itemLabel = { tr(when (it) { null -> "sim.blendShapesAuto"; true -> "sim.blendShapesOn"; false -> "sim.blendShapesOff" }) }, height = 22.dp)
 	}
-	if (sim.blendShapes && !puppet.runtimeTarget.supports(org.umamo.runtime.model.RuntimeFeature.MeshWarpBlendShapes))
+	if (sim.blendShapes == true && !puppet.runtimeTarget.supports(org.umamo.runtime.model.RuntimeFeature.MeshWarpBlendShapes))
 		Text(tr("sim.blendShapesUnavailable"), style = caption, color = colors.textMuted)
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		FieldLabel(tr("sim.autoBake"), tooltip = tr("sim.autoBakeTip"))

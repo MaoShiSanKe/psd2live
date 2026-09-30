@@ -122,8 +122,11 @@ data class RigSimEdit(
     val staticInputs: List<String>? = null,
     /** Keys on each mode parameter and static axis, odd within [KEY_COUNTS]: more follow arcs and pushes more closely. */
     val keys: Int = 5,
-    /** Writes the modes as blend shapes where the target runtime has them, so their keys add instead of multiplying the grid. */
-    val blendShapes: Boolean = true,
+    /**
+     * Writes the modes as blend shapes (true) or keyform axes (false) where the target runtime has blend
+     * shapes; null picks blend shapes only where keyform axes would multiply a mesh's keyforms past a few dozen.
+     */
+    val blendShapes: Boolean? = null,
     /** Bakes again with every change made in the simulation panel or through MCP, in the same history step. */
     val autoBake: Boolean = true,
     /** The materialized bake; the rebuild writes it back without simulating. */
@@ -156,7 +159,7 @@ data class RigSimEdit(
         if (modes != 2) put("modes", modes)
         staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
         if (keys != 5) put("keys", keys)
-        if (!blendShapes) put("blend_shapes", false)
+        blendShapes?.let { put("blend_shapes", it) }
         if (!autoBake) put("auto_bake", false)
         bake?.let { put("bake", it.toJson()) }
     }
@@ -185,7 +188,11 @@ data class RigSimEdit(
                 else -> value.jsonArray.map { it.jsonPrimitive.content }
             },
             keys = o["keys"]?.jsonPrimitive?.intOrNull ?: keys,
-            blendShapes = o["blend_shapes"]?.jsonPrimitive?.booleanOrNull ?: blendShapes,
+            blendShapes = when (val value = o["blend_shapes"]) {
+                null -> blendShapes
+                is JsonNull -> null
+                else -> value.jsonPrimitive.booleanOrNull ?: blendShapes
+            },
             autoBake = o["auto_bake"]?.jsonPrimitive?.booleanOrNull ?: autoBake,
             bake = when (val value = o["bake"]) {
                 null -> bake

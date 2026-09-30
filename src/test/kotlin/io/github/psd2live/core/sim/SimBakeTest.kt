@@ -58,8 +58,8 @@ class SimBakeTest {
         val offsets = mode.axis.offsets.getValue("hair")
         for (key in offsets) { assertEquals(0f, key[0], 1e-4f); assertEquals(0f, key[2], 1e-4f) }
 
-        // By default the modes are blend shapes: they add to the grid instead of multiplying it.
-        val baked = SimAuthoring.withBake(overlay, "hair", bake)
+        // As blend shapes the modes add to the grid instead of multiplying it.
+        val baked = SimAuthoring.withBake(RigEditOverlay(simEdits = listOf(edit().copy(blendShapes = true))), "hair", bake)
         val model = baked.applyTo(base)
         val parameter = model.parameters.single { it.id.raw == mode.axis.parameter }
         assertEquals(ParameterKind.BLEND_SHAPE, parameter.kind)
@@ -67,7 +67,9 @@ class SimBakeTest {
         val drawable = model.drawables.single()
         assertEquals(3, drawable.geometryGrid!!.cells.size)
         assertEquals(bake.parameters.toSet(), drawable.blendShapes.map { it.parameterId.raw }.toSet())
-        assertContentEquals(floatArrayOf(-1f, -0.5f, 0f, 0.5f, 1f), drawable.blendShapes.first().keys)
+        val keys = drawable.blendShapes.first().keys
+        assertEquals(5, keys.size); assertEquals(-1f, keys.first()); assertEquals(0f, keys[2]); assertEquals(1f, keys.last())
+        for (k in keys.indices) assertEquals(keys[k], -keys[keys.size - 1 - k], 1e-6f)
         // Rebuilding twice gives the same rig: the bake is written back, never simulated again.
         val rebuilt = baked.applyTo(base).drawables.single().blendShapes
         assertEquals(drawable.blendShapes.flatMap { b -> b.forms.flatMap { it?.positionDeltas?.toList().orEmpty() } },
@@ -130,6 +132,8 @@ class SimBakeTest {
         val sim = baked.simEdits.single()
         assertEquals(sim, RigSimEdit.fromJson(Json.parseToJsonElement(sim.toJson().toString()).jsonObject))
         val tuned = sim.copy(keys = 7, blendShapes = false, autoBake = false)
+        assertEquals(tuned.copy(blendShapes = true), RigSimEdit.fromJson(Json.parseToJsonElement(tuned.copy(blendShapes = true).toJson().toString()).jsonObject))
+        assertNull(tuned.patched(buildJsonObject { put("blend_shapes", JsonNull) }).blendShapes)
         assertEquals(tuned, RigSimEdit.fromJson(Json.parseToJsonElement(tuned.toJson().toString()).jsonObject))
         // How the modes are written is not part of what the bake depends on.
         assertEquals(SimBake.fingerprint(base, sim), SimBake.fingerprint(base, sim.copy(blendShapes = false, autoBake = false)))
@@ -163,6 +167,45 @@ class SimBakeTest {
         }
     }
 
+    @Test fun modeKeysSitWhereTheMotionIs() {
+        // Mostly small swings with a rare hard one: the inner keys go where the frames are, ±1 stays the edge.
+        val played = FloatArray(1000) { if (it % 100 == 0) 0.9f else 0.2f * kotlin.math.sin(it * 0.1f) }
+        val five = SimBaker.modeKeys(played, 5)
+        assertEquals(5, five.size); assertEquals(-1f, five.first()); assertEquals(0f, five[2]); assertEquals(1f, five.last())
+        assertTrue(five[3] in 0.1f..0.3f, "the inner key follows the everyday swing: ${five.toList()}")
+        val nine = SimBaker.modeKeys(played, 9)
+        for (k in 1 until nine.size) assertTrue(nine[k] - nine[k - 1] >= 0.05f - 1e-6f, "keys stay apart: ${nine.toList()}")
+        for (k in nine.indices) assertEquals(nine[k], -nine[nine.size - 1 - k], 1e-6f)
+        assertContentEquals(floatArrayOf(-1f, 0f, 1f), SimBaker.modeKeys(played, 3))
+    }
+
+    @Test fun hardMotionDoesNotPinTheModesAtTheirEnds() {
+        val base = strand()
+        val overlay = RigEditOverlay(simEdits = listOf(edit()))
+        val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), overlay.simEdits.single(), quick)
+        val model = SimAuthoring.withBake(overlay, "hair", bake).applyTo(base)
+        val engine = PhysicsEngine(listOfNotNull(bake.physics), PhysicsEngine.ranges(model.parameters))
+        // The head flung from side to side over 0.15 s every half second: a parameter stuck at ±1 stalls the hair.
+        var most = 0f
+        for (f in 0 until 300) {
+            val target = if ((f / 30) % 2 == 0) 30f else -30f
+            val t = ((f % 30) / 9f).coerceAtMost(1f)
+            val value = -target + 2f * target * t * t * (3f - 2f * t)
+            most = maxOf(most, engine.step(mapOf(angle.raw to value), 1f / 60f).values.maxOf { abs(it) })
+        }
+        assertTrue(most < 0.999f, "the modes should keep room for hard motion, reached $most")
+    }
+
+    @Test fun modesAreBlendShapesOnlyWhereAxesWouldMultiplyTooFar() {
+        val base = strand()
+        // 3 keyforms × 5 keys stays small; 3 × 9 × 9 × 9 does not.
+        assertFalse(SimGenerator.usesBlendShapes(base, edit().copy(modes = 1)))
+        assertTrue(SimGenerator.usesBlendShapes(base, edit().copy(modes = 3, keys = 9)))
+        assertTrue(SimGenerator.usesBlendShapes(base, edit().copy(modes = 1, blendShapes = true)))
+        assertFalse(SimGenerator.usesBlendShapes(base, edit().copy(modes = 3, keys = 9, blendShapes = false)))
+        assertFalse(SimGenerator.usesBlendShapes(base.copy(runtimeTarget = RuntimeTarget.Cubism40), edit().copy(modes = 1, blendShapes = true)))
+    }
+
     @Test fun keysSetHowManyKeysModesAndStaticAxesGet() {
         val base = strand()
         val overlay = RigEditOverlay(simEdits = listOf(edit().copy(keys = 3)))
@@ -178,11 +221,11 @@ class SimBakeTest {
         val played = FloatArray(400) { kotlin.math.sin(it * 0.05f) }
         val residuals = played.map { u -> floatArrayOf(10f * u, 6f * u * u) }
         val keys = floatArrayOf(-1f, -0.5f, 0f, 0.5f, 1f)
-        val shapes = SimBaker.solveKeys(residuals, listOf(played), keys, 2).single()
-        // The least-squares keys, not the curve's values: between the keys the lines pass under the curve.
+        val shapes = SimBaker.solveKeys(residuals, listOf(played), listOf(keys), 2).single()
+        // The straight part is kept exactly; the arc is kept too, a little flattened so the shapes turn no sharp corner at a key.
         for ((k, key) in keys.withIndex()) assertEquals(10f * key, shapes[k][0], 0.3f)
-        assertEquals(5.87f, shapes[0][1], 0.05f); assertEquals(1.15f, shapes[1][1], 0.05f)
-        assertEquals(1.15f, shapes[3][1], 0.05f); assertEquals(5.86f, shapes[4][1], 0.05f)
+        assertEquals(shapes[0][1], shapes[4][1], 0.05f); assertEquals(shapes[1][1], shapes[3][1], 0.05f)
+        assertTrue(shapes[4][1] > 4f && shapes[3][1] in 0.5f..2f, "the keys follow the arc: ${shapes.map { it[1] }}")
     }
 
     @Test fun principalDirectionsComeLargestFirst() {

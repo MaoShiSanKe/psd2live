@@ -365,14 +365,14 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
             put("parameter", string()); put("weight", number()); put("type", choices("x", "angle")); put("reflect", boolean())
         }, listOf("parameter")), 0, 16))
         put("modes", integer(1, 3)); put("keys", buildJsonObject { put("type", "integer"); put("enum", JsonArray(listOf(3, 5, 7, 9).map(::JsonPrimitive))) }); put("static_inputs", arraySchema(string(), 0, 4))
-        put("blend_shapes", boolean()); put("auto_bake", boolean())
+        put("blend_shapes", buildJsonObject { put("type", JsonArray(listOf(JsonPrimitive("boolean"), JsonPrimitive("null")))) }); put("auto_bake", boolean())
         put("hold", number()); put("release", number()); put("wind", vector(2))
     }
     tool("simulation", "2D cloth and hair simulation on ArtMeshes. It runs in the editor only; bake is what exports. put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend, goal = spring back to the drawn shape, slack = long-range give) except mass and damping (1/s). " +
         "Pins come from the PIN vertex group; a glue is never a pin unless glue_roles sets its key (meshA|meshB from inspect scope=simulations) to pin (follow the other mesh) or constraint (both sides simulated). groups names the vertex group to use per kind. colliders are meshes whose COLLIDER group (or whole mesh) pushes COLLIDE vertices out, following the rig. " +
         "inputs are the parameters that shake it (empty: head and body angles). simulate runs it (settle, each input held at max for hold s then released, optional wind [x, y] px/s² with y up) and reports peaks, rest drift, stretch and setup notes. " +
         "bake (1-4 s) reduces it to what Cubism plays: static_inputs (default: parameters that move a collider) get exact corrections on their own axes, and the remaining motion becomes modes (1..3) parameters ParamSim<id>_<k> with keys (3..9) each, driven by one fitted pendulum PhysicsSim_<id>; " +
-        "it reports R² and the 95th-percentile error in px against the simulation on motion the fit never saw. blend_shapes (default true) writes the modes as blend shapes where the Cubism target has them, so their keys add to the keyforms instead of multiplying them. " +
+        "it reports R² and the 95th-percentile error in px against the simulation on motion the fit never saw. Keys sit where the motion is and the parameters are scaled so hard motion does not reach ±1. blend_shapes true writes the modes as blend shapes where the Cubism target has them (their keys add to the keyforms instead of multiplying them), false as keyform axes; null (default) uses blend shapes only past 64 keyforms on a target. " +
         "With auto_bake (default true) every put bakes again in the same step and reports the bake or bake_error; otherwise, or after changing meshes or weights, the bake stays in place but stale (inspect shows it): bake again. clear_bake removes it. delete removes the simulation.",
         simulationFields, listOf("mode"), true) { a ->
         when (a.text("mode")) {

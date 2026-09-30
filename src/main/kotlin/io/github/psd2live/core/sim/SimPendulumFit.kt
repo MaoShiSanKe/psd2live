@@ -36,8 +36,8 @@ internal object SimPendulumFit {
         val r2: Float,
     )
 
-    /** Parameter values past this percentile of a vertex's swing are clamped at ±1. */
-    private const val SCALE_PERCENTILE = 0.98f
+    /** How far past the largest swing seen ±1 lies. */
+    private const val HEADROOM = 1.15f
     private const val RIDGE = 1e-2
     private const val ALS_ROUNDS = 6
     /**
@@ -78,7 +78,15 @@ internal object SimPendulumFit {
         previous: RigPhysicsEdit? = null,
         /** Called between candidates; throw from it to stop. */
         check: () -> Unit = {},
+        /**
+         * The frames the pendulum is fitted to, from the start; later ones (hard motion) only set how far
+         * the parameters are scaled and are played in [Result.played].
+         */
+        fitted: Int = motion.size,
     ): Result {
+        val allTrack = track
+        val track = if (fitted == motion.size) track else track.map { it.copyOf(fitted) }
+        val motion = if (fitted == motion.size) motion else motion.subList(0, fitted)
         val frames = motion.size
         require(heldOutMotion.isEmpty() || heldOutTrack.size == inputs.size && heldOutTrack.all { it.size == heldOutMotion.size })
         val m = motion.firstOrNull()?.size ?: 0
@@ -214,17 +222,19 @@ internal object SimPendulumFit {
             return error
         }
         val chosen = found.minBy(::heldOutError)
-        val raw = run(chosen.chain, chosen.links)
-        // Each parameter spans its vertex's swing: ±1 at the 98th percentile of the angle.
+        val raw = run(chosen.chain, chosen.links, allTrack)
+        val rawHeldOut = if (heldOutMotion.isEmpty()) null else run(chosen.chain, chosen.links, heldOutTrack, setOf(0))
+        // Each parameter spans its vertex's whole swing over the hardest motion, with room to spare: a
+        // parameter that hits ±1 holds the body still while the pendulum still swings, which reads as a stall.
         val scales = FloatArray(n) { k ->
-            val sorted = raw[k].map(::abs).sorted()
-            val peak = sorted.getOrElse(((sorted.size - 1) * SCALE_PERCENTILE).toInt()) { 0f }
-            if (peak > 1e-6f) 1f / peak else 1f
+            var peak = raw[k].maxOf(::abs)
+            rawHeldOut?.let { peak = maxOf(peak, it[k].maxOf(::abs)) }
+            if (peak > 1e-6f) 1f / (peak * HEADROOM) else 1f
         }
         fun clamp(angles: Array<FloatArray>) = angles.mapIndexed { k, angle -> FloatArray(angle.size) { (angle[it] * scales[k]).coerceIn(-1f, 1f) } }
         val played = clamp(raw)
-        val error = regress(played, motion, n, m).second
-        val heldOut = if (heldOutMotion.isEmpty()) emptyList() else clamp(run(chosen.chain, chosen.links, heldOutTrack, setOf(0)))
+        val error = regress(played.map { it.copyOf(fitted) }, motion, n, m).second
+        val heldOut = rawHeldOut?.let(::clamp) ?: emptyList()
         return Result(setting(chosen.chain, chosen.links, scales), played, heldOut, (1.0 - error / total).toFloat())
     }
 

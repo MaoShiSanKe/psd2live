@@ -23,6 +23,8 @@ import org.umamo.runtime.model.*
 object SimGenerator {
     /** Past this many cells a mesh's keyform grid is left alone. */
     private const val MAX_CELLS = 200_000
+    /** Past this many keyforms on a target, a simulation left to choose writes its modes as blend shapes. */
+    const val AUTO_BLEND_CELLS = 64L
 
     fun apply(model: PuppetModel, sims: List<RigSimEdit>): PuppetModel =
         sims.fold(model) { current, sim -> applyOne(current, sim).first }
@@ -51,9 +53,23 @@ object SimGenerator {
         return pose.filterKeys { it.raw !in owned }
     }
 
-    /** Whether [sim]'s modes go in as blend shapes on [model]. */
-    fun usesBlendShapes(model: PuppetModel, sim: RigSimEdit): Boolean =
-        sim.blendShapes && model.runtimeTarget.supports(RuntimeFeature.MeshWarpBlendShapes)
+    /**
+     * Whether [sim]'s modes go in as blend shapes on [model]. Keyform axes play the same and every Cubism
+     * version reads them, so left to choose, blend shapes are used only where the axes would multiply a
+     * target's keyforms past [AUTO_BLEND_CELLS].
+     */
+    fun usesBlendShapes(model: PuppetModel, sim: RigSimEdit): Boolean {
+        if (!model.runtimeTarget.supports(RuntimeFeature.MeshWarpBlendShapes)) return false
+        sim.blendShapes?.let { return it }
+        val modes = sim.bake?.modes?.map { it.axis.keys.size } ?: List(sim.modes) { sim.keys }
+        val own = modes.indices.map { ParameterId(parameterId(sim, it + 1)) }.toSet()
+        val added = modes.fold(1L) { n, keys -> n * keys }
+        return sim.targets.any { target ->
+            val grid = model.drawables.firstOrNull { it.id.raw == target }?.geometryGrid
+            val cells = grid?.axes?.filter { it.parameterId !in own }?.fold(1L) { n, axis -> n * axis.keys.size } ?: 1L
+            cells * added > AUTO_BLEND_CELLS
+        }
+    }
 
     fun applyOne(model: PuppetModel, sim: RigSimEdit): Pair<PuppetModel, List<String>> {
         val bake = sim.bake?.takeIf { sim.enabled } ?: return model to emptyList()
