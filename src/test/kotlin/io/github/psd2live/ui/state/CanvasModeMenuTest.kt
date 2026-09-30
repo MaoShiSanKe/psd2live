@@ -16,6 +16,20 @@ import org.umamo.format.art.*
 import kotlin.test.*
 
 class CanvasModeMenuTest {
+    @Test fun modeShortcutsCoverEveryChoiceAcrossPresetsWithoutConflicts() {
+        for (preset in KeymapPreset.entries) {
+            val keymap = Keymap.of(preset)
+            CanvasModeChoice.entries.forEachIndexed { index, choice ->
+                assertEquals("Alt+${index + 1}", keymap.labelFor(choice.shortcut))
+                for (binding in keymap.bindingsFor(choice.shortcut)) {
+                    assertEquals(listOf(choice.shortcut), keymap.conflictIndex()[binding])
+                }
+            }
+        }
+        val custom = Keymap.DEFAULT.with(ShortcutAction.MODE_PREVIEW, listOf(parseKeyBinding("Alt+9")!!))
+        assertEquals("Alt+9", custom.labelFor(CanvasModeChoice.PREVIEW.shortcut))
+    }
+
     private fun preview(): RigPreviewModel {
         val layer = WorkspaceSourceLayer(LayerId("body"), "body", "", SourceLayerKind.Raster, true, 1,
             LayerBounds(0, 0, 8, 8), 1f, false, LayerBlend.Normal, ChannelMask.ALL,

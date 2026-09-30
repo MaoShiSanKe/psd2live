@@ -2497,6 +2497,7 @@ private fun BoxScope.HierarchyModeBar(
     ) {
         // The mode menu: every mode, Preview included, behind one button (Blender's mode dropdown).
         CanvasModeMenu(
+            keymap = editor.state.keymap,
             current = CanvasModeChoice.of(editor.hierarchyMode),
             // A mode asked for before there was anything to work on: it reads as waiting rather than
             // as in force, which is what the canvas is doing until a part is picked.

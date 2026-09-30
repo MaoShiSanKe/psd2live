@@ -581,6 +581,11 @@ fun CanvasViewportComposable(
 					else -> Unit
 				}
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                CanvasModeChoice.entries.firstOrNull { it.shortcut == action }?.let { choice ->
+                    if (previewModel == null) return@onKeyEvent false
+                    if (!editor.busy && !canvasState.canvasEditBusy) editor.chooseCanvasMode(choice)
+                    return@onKeyEvent true
+                }
 				if (mode != CanvasMode.EDIT || previewModel == null) return@onKeyEvent false
 				// Consumes rather than falls through while a commit is running.
 				if (editor.busy || canvasState.canvasEditBusy) return@onKeyEvent true

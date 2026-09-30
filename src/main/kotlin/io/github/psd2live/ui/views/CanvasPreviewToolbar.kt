@@ -233,6 +233,7 @@ internal fun BoxScope.PreviewModeBar(editor: io.github.psd2live.ui.CanvasEditor,
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		CanvasModeMenu(
+			keymap = editor.state.keymap,
 			current = CanvasModeChoice.PREVIEW,
 			modifier = Modifier
 				.tutorialTarget(TutorialTargetId.EDIT_TAB)

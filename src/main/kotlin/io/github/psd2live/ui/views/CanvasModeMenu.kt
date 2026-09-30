@@ -7,12 +7,10 @@ import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -76,6 +74,12 @@ import androidx.compose.ui.window.PopupProperties
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.modeLabel
+import io.github.psd2live.ui.state.Keymap
+import io.github.psd2live.ui.state.ShortcutAction
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -96,6 +100,8 @@ internal enum class CanvasModeChoice(val mode: EditHierarchyMode?) {
     PAINT(EditHierarchyMode.PAINT),
     PREVIEW(null),
     ;
+
+    val shortcut: ShortcutAction get() = ShortcutAction.valueOf("MODE_$name")
 
     val label: String get() = mode?.let(::modeLabel) ?: tr("editor.mode.preview")
 
@@ -128,20 +134,17 @@ internal fun CanvasModeIcon(choice: CanvasModeChoice, color: Color, size: Dp = 1
 
 private val MenuItemHeight = 28.dp
 private val MenuItemGap = 1.dp
-private val MenuDividerHeight = 9.dp
 private val MenuWidth = 212.dp
 
-/** Where each row sits in the list: the rows are evenly spaced, with a divider before Preview. */
-private fun menuRowTop(index: Int): Dp {
-    val divider = if (CanvasModeChoice.entries[index] == CanvasModeChoice.PREVIEW) MenuDividerHeight else 0.dp
-    return (MenuItemHeight + MenuItemGap) * index + divider
-}
+/** Every mode uses the same row spacing. */
+private fun menuRowTop(index: Int): Dp = (MenuItemHeight + MenuItemGap) * index
 
 /**
  * The canvas mode menu, Blender's mode dropdown: the button shows the mode in force and opens a list of
  * every mode. The list scales in from the button, its rows slide in one after another, and the highlight
  * that marks the current mode glides to the row under the pointer's choice. 1-7 pick a row while it is
- * open, the arrows walk it, Enter takes the row in focus and Esc closes it.
+ * open, the arrows walk it, Home/End jump to the ends, Enter takes the row and Esc closes it.
+ * The registered mode shortcuts also work while the canvas has focus.
  */
 @Composable
 internal fun CanvasModeMenu(
@@ -150,6 +153,7 @@ internal fun CanvasModeMenu(
     modifier: Modifier = Modifier,
     waiting: CanvasModeChoice? = null,
     enabled: Boolean = true,
+    keymap: Keymap = Keymap.DEFAULT,
 ) {
     val colors = LocalToolColors.current
     var open by remember { mutableStateOf(false) }
@@ -162,11 +166,11 @@ internal fun CanvasModeMenu(
             hovered -> colors.accent.copy(alpha = 0.26f)
             else -> colors.accent.copy(alpha = 0.18f)
         },
-        animationSpec = tween(140),
+        animationSpec = tween(80),
     )
     val chevronTurn by animateFloatAsState(
         targetValue = if (open) 180f else 0f,
-        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = tween(100, easing = FastOutSlowInEasing),
     )
 
     Box(modifier) {
@@ -188,9 +192,9 @@ internal fun CanvasModeMenu(
                 targetState = current,
                 transitionSpec = {
                     val down = targetState.ordinal > initialState.ordinal
-                    (slideInVertically(tween(200, easing = FastOutSlowInEasing)) { h -> if (down) h / 2 else -h / 2 } +
-                        fadeIn(tween(160, delayMillis = 40))) togetherWith
-                        (slideOutVertically(tween(160, easing = FastOutLinearInEasing)) { h -> if (down) -h / 2 else h / 2 } +
+                    (slideInVertically(tween(100, easing = FastOutSlowInEasing)) { h -> if (down) h / 2 else -h / 2 } +
+                        fadeIn(tween(80))) togetherWith
+                        (slideOutVertically(tween(100, easing = FastOutLinearInEasing)) { h -> if (down) -h / 2 else h / 2 } +
                             fadeOut(tween(100)))
                 },
             ) { choice ->
@@ -215,6 +219,7 @@ internal fun CanvasModeMenu(
             }
         }
         CanvasModeMenuPopup(
+            keymap = keymap,
             expanded = open,
             current = current,
             waiting = waiting,
@@ -229,6 +234,7 @@ internal fun CanvasModeMenu(
 
 @Composable
 private fun CanvasModeMenuPopup(
+    keymap: Keymap,
     expanded: Boolean,
     current: CanvasModeChoice,
     waiting: CanvasModeChoice?,
@@ -255,7 +261,7 @@ private fun CanvasModeMenuPopup(
             LocalToolColors provides colors,
             LocalToolTypography provides typography,
         ) {
-            // Same entrance as the canvas context menus, so every canvas popup opens the same way.
+            // A short entrance keeps mode changes responsive.
             val transition = rememberTransition(visibility, "CanvasModeMenu")
             val alpha by transition.animateFloat(
                 transitionSpec = {
@@ -266,14 +272,14 @@ private fun CanvasModeMenuPopup(
             ) { if (it) 1f else 0f }
             val scale by transition.animateFloat(
                 transitionSpec = {
-                    if (false isTransitioningTo true) spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)
+                    if (false isTransitioningTo true) tween(100, easing = LinearOutSlowInEasing)
                     else tween(80, easing = FastOutLinearInEasing)
                 },
                 label = "scale",
             ) { if (it) 1f else 0.92f }
             val lift by transition.animateFloat(
                 transitionSpec = {
-                    if (false isTransitioningTo true) tween(160, easing = FastOutSlowInEasing)
+                    if (false isTransitioningTo true) tween(100, easing = FastOutSlowInEasing)
                     else tween(80, easing = FastOutLinearInEasing)
                 },
                 label = "lift",
@@ -282,12 +288,17 @@ private fun CanvasModeMenuPopup(
             val choices = CanvasModeChoice.entries
             var focused by remember { mutableStateOf(current.ordinal) }
             val focusRequester = remember { FocusRequester() }
-            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+            LaunchedEffect(expanded) {
+                if (expanded) {
+                    focused = current.ordinal
+                    focusRequester.requestFocus()
+                }
+            }
 
             // The highlight glides between rows instead of jumping, following the keyboard or the pointer.
             val highlightTop by animateDpAsState(
                 targetValue = menuRowTop(focused),
-                animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
+                animationSpec = tween(80, easing = FastOutSlowInEasing),
             )
 
             Box(
@@ -312,6 +323,14 @@ private fun CanvasModeMenuPopup(
                     .focusable()
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        if (!expanded) return@onPreviewKeyEvent true
+                        val action = keymap.match(event, io.github.psd2live.ui.state.ShortcutScope.CANVAS)
+                        CanvasModeChoice.entries.firstOrNull { it.shortcut == action }?.let {
+                            onSelect(it)
+                            return@onPreviewKeyEvent true
+                        }
+                        if (event.isAltPressed || event.isCtrlPressed || event.isMetaPressed || event.isShiftPressed)
+                            return@onPreviewKeyEvent false
                         val digit = when (event.key) {
                             Key.One, Key.NumPad1 -> 0
                             Key.Two, Key.NumPad2 -> 1
@@ -325,6 +344,8 @@ private fun CanvasModeMenuPopup(
                         when {
                             digit != null -> { onSelect(choices[digit]); true }
                             event.key == Key.DirectionDown -> { focused = (focused + 1) % choices.size; true }
+                            event.key == Key.MoveHome -> { focused = 0; true }
+                            event.key == Key.MoveEnd -> { focused = choices.lastIndex; true }
                             event.key == Key.DirectionUp -> { focused = (focused - 1 + choices.size) % choices.size; true }
                             event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Spacebar -> {
                                 onSelect(choices[focused]); true
@@ -345,20 +366,10 @@ private fun CanvasModeMenuPopup(
                 )
                 Column {
                     choices.forEachIndexed { index, choice ->
-                        if (choice == CanvasModeChoice.PREVIEW) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(MenuDividerHeight)
-                                    .padding(horizontal = 6.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Box(Modifier.fillMaxWidth().height(0.5.dp).background(colors.divider.copy(alpha = 0.7f)))
-                            }
-                        }
                         ModeMenuRow(
                             choice = choice,
                             index = index,
+                            shortcutLabel = keymap.labelFor(choice.shortcut),
                             selected = choice == current,
                             waiting = choice == waiting,
                             onHover = { focused = index },
@@ -376,6 +387,7 @@ private fun CanvasModeMenuPopup(
 private fun ModeMenuRow(
     choice: CanvasModeChoice,
     index: Int,
+    shortcutLabel: String?,
     selected: Boolean,
     waiting: Boolean,
     onHover: () -> Unit,
@@ -389,8 +401,8 @@ private fun ModeMenuRow(
     // Rows arrive one after another, a few milliseconds apart, sliding in from the button's side.
     val arrival = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        delay(index * 18L)
-        arrival.animateTo(1f, tween(190, easing = FastOutSlowInEasing))
+        delay(index * 5L)
+        arrival.animateTo(1f, tween(90, easing = FastOutSlowInEasing))
     }
     val tint by animateColorAsState(
         targetValue = when {
@@ -399,7 +411,7 @@ private fun ModeMenuRow(
             hovered -> colors.textPrimary
             else -> colors.textMuted
         },
-        animationSpec = tween(120),
+        animationSpec = tween(80),
     )
     val density = LocalDensity.current
 
@@ -419,7 +431,7 @@ private fun ModeMenuRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // The current mode is marked by a bar at the row's edge; the moving highlight is the focus.
-        val bar by animateFloatAsState(if (selected) 1f else 0f, tween(180, easing = FastOutSlowInEasing))
+        val bar by animateFloatAsState(if (selected) 1f else 0f, tween(80, easing = FastOutSlowInEasing))
         Box(
             Modifier
                 .width(2.dp)
@@ -444,7 +456,7 @@ private fun ModeMenuRow(
             Spacer(Modifier.width(6.dp))
         }
         Text(
-            text = "${index + 1}",
+            text = shortcutLabel?.let { "${index + 1} / $it" } ?: "${index + 1}",
             color = colors.textMuted.copy(alpha = 0.7f),
             fontSize = 9.5.sp,
             fontFamily = FontFamily.Monospace,

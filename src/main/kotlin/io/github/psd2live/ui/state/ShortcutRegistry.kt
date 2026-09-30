@@ -71,6 +71,14 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     OPEN_SETTINGS(ShortcutCategory.VIEW, "help.shortcuts.settings"),
     OPEN_HELP(ShortcutCategory.VIEW, "help.shortcuts.help"),
 
+    MODE_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.select"),
+    MODE_DEFORM(ShortcutCategory.CANVAS_TOOLS, "editor.mode.deform"),
+    MODE_EDIT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.edit"),
+    MODE_SIMULATE(ShortcutCategory.CANVAS_TOOLS, "editor.mode.simulate"),
+    MODE_SKELETON(ShortcutCategory.CANVAS_TOOLS, "editor.mode.skeleton"),
+    MODE_PAINT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.paint"),
+    MODE_PREVIEW(ShortcutCategory.CANVAS_TOOLS, "editor.mode.preview"),
+
     // Canvas tools
     TOOL_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.select"),
     TOOL_LASSO_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.lasso_select"),
@@ -194,6 +202,14 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.ZOOM_RESET to keys("Ctrl+0", "Ctrl+NumPad0"),
     ShortcutAction.OPEN_SETTINGS to keys("Ctrl+,"),
     ShortcutAction.OPEN_HELP to keys("F1"),
+
+    ShortcutAction.MODE_SELECT to keys("Alt+1", "Alt+NumPad1"),
+    ShortcutAction.MODE_DEFORM to keys("Alt+2", "Alt+NumPad2"),
+    ShortcutAction.MODE_EDIT to keys("Alt+3", "Alt+NumPad3"),
+    ShortcutAction.MODE_SIMULATE to keys("Alt+4", "Alt+NumPad4"),
+    ShortcutAction.MODE_SKELETON to keys("Alt+5", "Alt+NumPad5"),
+    ShortcutAction.MODE_PAINT to keys("Alt+6", "Alt+NumPad6"),
+    ShortcutAction.MODE_PREVIEW to keys("Alt+7", "Alt+NumPad7"),
 
     ShortcutAction.TOOL_SELECT to keys("V", "T"),
     ShortcutAction.TOOL_LASSO_SELECT to keys("L"),

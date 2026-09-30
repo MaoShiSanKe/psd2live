@@ -25,6 +25,7 @@ import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
+import io.github.psd2live.ui.components.drawSingleBoneIcon
 import io.github.psd2live.ui.components.drawBoneIcon
 import org.umamo.runtime.model.VertexGroupKind
 import kotlin.math.PI
@@ -225,18 +226,7 @@ internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
             pen.dot(9f, 3.4f, 1.8f)
             pen.dot(14.8f, 3.4f, 1.8f)
         }
-        // Skeleton: two bones meeting at a joint.
-        EditHierarchyMode.SKELETON -> {
-            val upper = pen.path { m(3.4f, 3f); l(5.6f, 2.4f); l(10f, 9.6f); l(8.2f, 10.8f); z() }
-            val lower = pen.path { m(9.4f, 10.2f); l(14.6f, 12.6f); l(13.8f, 14.8f); l(8.6f, 12f); z() }
-            pen.fill(upper, pen.soft)
-            pen.outline(upper)
-            pen.fill(lower, pen.soft)
-            pen.outline(lower)
-            pen.dot(4.2f, 3f, 1.9f)
-            pen.dot(9.2f, 10.4f, 2.2f)
-            pen.dot(14.6f, 14f, 1.6f)
-        }
+        EditHierarchyMode.SKELETON -> drawSingleBoneIcon(color)
         // Paint: a palette with its wells.
         EditHierarchyMode.PAINT -> {
             val palette = pen.path {
