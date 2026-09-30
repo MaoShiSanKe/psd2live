@@ -113,10 +113,46 @@ object SimAuthoring {
     fun unbakedModel(overlay: RigEditOverlay, base: PuppetModel, id: String): PuppetModel =
         overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = null) else it }).applyTo(base)
 
-    /** Bakes simulation [id] of [overlay] on the rig rebuilt from [base]; slow, so call it off the frame thread. */
-    fun bake(overlay: RigEditOverlay, base: PuppetModel, id: String, options: SimBaker.Options = SimBaker.Options()): SimBakeResult {
+    /**
+     * Bakes simulation [id] of [overlay] on the rig rebuilt from [base], its pendulum fitted at [overlay]'s
+     * physics rate; takes a second or so, so call it off the frame thread.
+     */
+    fun bake(
+        overlay: RigEditOverlay,
+        base: PuppetModel,
+        id: String,
+        progress: (Float) -> Unit = {},
+        cancelled: () -> Boolean = { false },
+    ): SimBakeResult {
         val edit = requireNotNull(overlay.simEdits.firstOrNull { it.id == id }) { "Simulation not found: $id" }
-        return SimBaker.bake(unbakedModel(overlay, base, id), edit, options)
+        return SimBaker.bake(unbakedModel(overlay, base, id), edit,
+            SimBaker.Options(physicsFps = overlay.physicsFps, progress = progress, cancelled = cancelled))
+    }
+
+    /**
+     * [overlay] with simulation [id] baked again when it bakes on its own ([RigSimEdit.autoBake]) and its bake
+     * is missing or stale; the old bake's pendulum is where the fit starts, which is quicker. When the bake
+     * fails or is [cancelled] the old bake stays, stale, and the second value says why.
+     */
+    fun rebaked(
+        overlay: RigEditOverlay,
+        base: PuppetModel,
+        id: String,
+        progress: (Float) -> Unit = {},
+        cancelled: () -> Boolean = { false },
+    ): Pair<RigEditOverlay, String?> {
+        val edit = overlay.simEdits.firstOrNull { it.id == id } ?: return overlay to null
+        if (!edit.autoBake || !edit.enabled) return overlay to null
+        val model = unbakedModel(overlay, base, id)
+        if (edit.bake != null && edit.bake.fingerprint == SimBake.fingerprint(model, edit)) return overlay to null
+        return try {
+            withBake(overlay, id, SimBaker.bake(model, edit, SimBaker.Options(physicsFps = overlay.physicsFps, previous = edit.bake?.physics,
+                progress = progress, cancelled = cancelled))) to null
+        } catch (failure: java.util.concurrent.CancellationException) {
+            overlay to "Bake cancelled"
+        } catch (failure: IllegalArgumentException) {
+            overlay to (failure.message ?: "Bake failed")
+        }
     }
 
     /** [overlay] with [bake] as simulation [id]'s bake; null clears it. */

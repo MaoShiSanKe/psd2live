@@ -76,9 +76,9 @@ class SimBakeResult(
     val modes: List<SimBakedMode>,
     /** The pendulum driving [modes]; null when there are none. */
     val physics: RigPhysicsEdit? = null,
-    /** Share of the simulated motion the pendulum and keys reproduce over the training run (R²). */
+    /** Share of the simulated motion the pendulum and keys reproduce (R²), on held-out motion the fit never saw. */
     val fit: Float = 0f,
-    /** How far, in px, the baked result strays from the simulation over the training run (95th percentile). */
+    /** How far, in px, the baked result strays from the simulation on that motion (95th percentile of frames). */
     val maxErrorPx: Float = 0f,
 ) {
     val parameters: List<String> get() = modes.map { it.axis.parameter }
@@ -97,9 +97,11 @@ class SimBakeResult(
         putJsonArray("modes") {
             for (mode in modes) addJsonObject { put("parameter", mode.axis.parameter); put("amplitude_px", mode.amplitude); put("energy", mode.energy) }
         }
+        modes.firstOrNull()?.let { put("keys", it.axis.keys.size) }
         physics?.let { put("pendulum", it.id); put("segments", it.segments.size) }
         if (statics.isNotEmpty()) putJsonArray("static_inputs") { statics.forEach { add(it.parameter) } }
-        put("fit_r2", fit); put("max_error_px", maxErrorPx)
+        // Both measured on held-out motion the fit never saw.
+        put("fit_r2", fit); put("error_p95_px", maxErrorPx)
     }
 
     private val canonical: String by lazy { toJson().toString() }
@@ -130,7 +132,7 @@ object SimBake {
      */
     fun fingerprint(model: PuppetModel, edit: RigSimEdit): String {
         val text = StringBuilder()
-        val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake")
+        val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake")
         text.append(settings.toString())
         val meshes = edit.targets + edit.colliders.map { it.drawableId }
         for (raw in meshes) {

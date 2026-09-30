@@ -71,6 +71,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.math.abs
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
@@ -395,10 +397,10 @@ class PSD2LiveViewModel : AutoCloseable {
             try {
                 val bake = withContext(Dispatchers.Default) {
                     val job = coroutineContext[kotlinx.coroutines.Job]
-                    io.github.psd2live.core.sim.SimAuthoring.bake(current.rigEdits, model.baseRig.puppet, id, io.github.psd2live.core.sim.SimBaker.Options(
+                    io.github.psd2live.core.sim.SimAuthoring.bake(current.rigEdits, model.baseRig.puppet, id,
                         progress = { _simulationBaking.value = SimulationBaking(id, it) },
                         cancelled = { job?.isCancelled == true },
-                    ))
+                    )
                 }
                 runSimulationMutation("Baked simulation $id") { workspace, head -> workspace.putSimulationBake(id, bake, head) }
             } catch (failure: Exception) {
@@ -411,9 +413,26 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     internal fun cancelSimulationBake() {
+        simBakeCancelled = true
         simBaking?.cancel()
         simBaking = null
         _simulationBaking.value = null
+    }
+
+    @Volatile private var simBakeCancelled = false
+
+    /**
+     * Runs [bake] for simulation [id] with its progress shown in [simulationBaking] and the panel's Cancel
+     * wired to its second argument; for bakes that run inside a workspace edit.
+     */
+    internal fun <T> trackSimulationBake(id: String, bake: (progress: (Float) -> Unit, cancelled: () -> Boolean) -> T): T {
+        simBakeCancelled = false
+        _simulationBaking.value = SimulationBaking(id, 0f)
+        try {
+            return bake({ _simulationBaking.value = SimulationBaking(id, it) }, { simBakeCancelled })
+        } finally {
+            _simulationBaking.value = null
+        }
     }
 
     /** Removes simulation [id]'s bake: its parameters, keys and pendulums go with it. */
@@ -439,7 +458,9 @@ class PSD2LiveViewModel : AutoCloseable {
     /** Creates or replaces [edit] as one history node. */
     internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) =
         runSimulationMutation("Set simulation ${edit.id}") { workspace, head ->
-            workspace.putSimulation(edit.toJson(), head, null)
+            val (result, report) = workspace.putSimulation(edit.toJson(), head, null)
+            report["bake_error"]?.jsonPrimitive?.contentOrNull?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
+            result
         }
 
     internal fun deleteSimulation(id: String) {

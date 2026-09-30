@@ -61,8 +61,9 @@ import org.umamo.runtime.model.VertexGroupKind
 import java.util.Locale
 
 /**
- * Simulation: cloth and hair bodies simulated in 2D on their meshes. Edits commit one history node each;
- * sliders commit on release. The live preview runs the selected body over the preview's pose.
+ * Simulation: cloth and hair bodies simulated in 2D on their meshes. Edits commit one history node each,
+ * baked again in the same node when the body bakes on its own; sliders commit on release. The preview plays
+ * either the export (the bake, as Cubism plays it) or the reference simulation, which never exports.
  */
 @Composable
 internal fun SimulationPanelView(
@@ -90,9 +91,11 @@ internal fun SimulationPanelView(
 				enabled = puppet != null && !state.canvasEditBusy, height = 22.dp)
 			Spacer(Modifier.weight(1f))
 			val live = selected != null && state.simulationPreviewId == selected.id
-			CompactToggleChip(tr("sim.live"), live, { viewModel.setSimulationPreview(if (live) null else selected?.id) },
-				enabled = selected != null, tooltip = tr("sim.liveTooltip"))
-			CompactIconButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"), size = 20.dp) {
+			CompactToggleChip(tr("sim.previewExport"), !live, { viewModel.setSimulationPreview(null) },
+				enabled = selected != null, tooltip = tr("sim.previewExportTip"))
+			CompactToggleChip(tr("sim.previewReference"), live, { viewModel.setSimulationPreview(selected?.id) },
+				enabled = selected != null, tooltip = tr("sim.previewReferenceTip"))
+			if (live) CompactIconButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"), size = 20.dp) {
 				IconReset(modifier = Modifier.size(12.dp), tint = colors.textMuted)
 			}
 		}
@@ -132,8 +135,8 @@ private fun SimulationRow(sim: RigSimEdit, selected: Boolean, live: Boolean, onS
 		horizontalArrangement = Arrangement.spacedBy(6.dp),
 	) {
 		Text(sim.name, style = typography.caption.copy(fontSize = 11.sp), color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-		Text(tr("sim.kind.${sim.kind.jsonName}") + " · " + tr("sim.meshCount", sim.targets.size) + if (live) " · " + tr("sim.live") else "",
-			style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
+		Text(tr("sim.kind.${sim.kind.jsonName}") + " · " + tr("sim.meshCount", sim.targets.size) + if (live) " · " + tr("sim.previewReference") else "",
+			style = typography.caption.copy(fontSize = 9.5.sp), color = if (live) colors.warning else colors.textMuted)
 		// Only a baked simulation exports; the dot says which ones do.
 		Box(Modifier.size(6.dp).background(if (sim.bake != null) colors.accent else colors.warning, androidx.compose.foundation.shape.CircleShape))
 		CompactIconButton(onClick = onDelete, tooltip = tr("sim.delete"), size = 16.dp) { IconClose(modifier = Modifier.size(9.dp), tint = colors.textMuted) }
@@ -251,8 +254,8 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 }
 
 /**
- * The bake: how many modes, which parameters are baked as exact poses, and the bake's state - missing,
- * stale or its fit per mode. Only a baked simulation exports.
+ * The bake: how many modes and keys, which parameters are baked as exact poses, how the modes are written,
+ * and the bake's state - missing, stale, or how well it matches the simulation. Only a baked simulation exports.
  */
 @Composable
 private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppet: PuppetModel, sim: RigSimEdit, commit: (RigSimEdit) -> Unit) {
@@ -265,6 +268,21 @@ private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppe
 		FieldLabel(tr("sim.modes"), tooltip = tr("sim.modesTip"))
 		CompactDropdown((1..RigSimEdit.MAX_MODES).toList(), sim.modes, { commit(sim.copy(modes = it)) }, Modifier.weight(1f),
 			itemLabel = { "$it" }, height = 22.dp)
+		FieldLabel(tr("sim.keys"), tooltip = tr("sim.keysTip"))
+		CompactDropdown(RigSimEdit.KEY_COUNTS.filter { it % 2 == 1 }, sim.keys, { commit(sim.copy(keys = it)) }, Modifier.weight(1f),
+			itemLabel = { "$it" }, height = 22.dp)
+	}
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.blendShapes"), tooltip = tr("sim.blendShapesTip"))
+		Spacer(Modifier.weight(1f))
+		CompactCheckbox(sim.blendShapes, { commit(sim.copy(blendShapes = it)) })
+	}
+	if (sim.blendShapes && !puppet.runtimeTarget.supports(org.umamo.runtime.model.RuntimeFeature.MeshWarpBlendShapes))
+		Text(tr("sim.blendShapesUnavailable"), style = caption, color = colors.textMuted)
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.autoBake"), tooltip = tr("sim.autoBakeTip"))
+		Spacer(Modifier.weight(1f))
+		CompactCheckbox(sim.autoBake, { commit(sim.copy(autoBake = it)) })
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		FieldLabel(tr("sim.staticInputs"), tooltip = tr("sim.staticInputsTip"))
@@ -301,6 +319,8 @@ private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppe
 				style = caption, color = colors.textPrimary)
 			if (bake.physics != null) Text(tr("sim.bakedFit", bake.physics.id, String.format(Locale.US, "%.2f", bake.fit)), style = caption,
 				color = if (bake.fit < 0.8f) colors.warning else colors.textPrimary)
+			if (bake.modes.isNotEmpty()) Text(tr(if (io.github.psd2live.core.sim.SimGenerator.usesBlendShapes(puppet, sim)) "sim.bakedAsBlend" else "sim.bakedAsGrid"),
+				style = caption, color = colors.textMuted)
 			if (bake.statics.isNotEmpty()) Text(tr("sim.bakedStatics", bake.statics.joinToString { it.parameter }), style = caption, color = colors.textPrimary)
 			Text(tr("sim.bakedError", String.format(Locale.US, "%.1f", bake.maxErrorPx)), style = caption, color = colors.textMuted)
 			issues.forEach { Hint(it) }

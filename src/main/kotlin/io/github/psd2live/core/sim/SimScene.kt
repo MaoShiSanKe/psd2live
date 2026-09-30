@@ -106,6 +106,13 @@ class SimScene private constructor(
         return residual
     }
 
+    /** Takes [calibrated]'s goal offsets (a scene built from the same rig and edit) instead of calibrating again. */
+    fun adopt(calibrated: SimScene) {
+        require(calibrated.state.count == state.count) { "Scenes of different bodies" }
+        calibrated.state.goalOffsetX.copyInto(state.goalOffsetX)
+        calibrated.state.goalOffsetY.copyInto(state.goalOffsetY)
+    }
+
     /** Writes goals and anchors for this frame. */
     private fun place(world: Map<DrawableId, FloatArray>): Boolean {
         val s = state

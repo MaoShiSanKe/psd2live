@@ -492,8 +492,12 @@ interface AgentWorkspace {
     suspend fun fitPhysics(id: String, target: Float, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Physics scale fitting is unavailable")
     fun listSimulations(): List<io.github.psd2live.core.sim.RigSimEdit> = emptyList()
-    /** [arguments] are a `simulation` put request, laid over the simulation with that ID. */
-    suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?): AgentWorkspaceMutationResult =
+    /**
+     * [arguments] are a `simulation` put request, laid over the simulation with that ID. A simulation that
+     * bakes on its own is baked again in the same step; the second value reports that bake or why it failed.
+     */
+    suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?):
+        Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
         throw UnsupportedOperationException("Simulation editing is unavailable")
     suspend fun deleteSimulation(id: String, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Simulation deletion is unavailable")

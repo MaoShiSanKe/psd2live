@@ -37,7 +37,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `asset` | `request.mode` | `psd/create/split/reference/import/register/preview/add/place/finalize/inspect/reprocess/remove`；`psd` 从本地绝对路径导入空工作区 |
 | `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics` | `request.mode` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、按阶跃输入模拟并返回峰值与稳定时间、按标准晃动调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
-| `simulation` | 顶层 `mode`、`state`、`id` | `put/delete/simulate/bake/clear_bake`：网格上的 2D 布料 / 头发模拟，只在编辑器内运行；`bake` 把它烘焙成 `ParamSim<id>_<k>` 参数的关键形与拟合摆锤 `PhysicsSim_<id>`（每节驱动一个参数），并返回拟合 R² 与误差，见[模拟与烘焙](../guide/SIMULATION.md) |
+| `simulation` | 顶层 `mode`、`state`、`id` | `put/delete/simulate/bake/clear_bake`：网格上的 2D 布料 / 头发模拟，只在编辑器内运行；`bake` 把它烘焙成 `ParamSim<id>_<k>` 参数（`keys` 个关键点，默认写成融合变形）与拟合摆锤 `PhysicsSim_<id>`，并返回在检验动作上的 R² 与误差；`auto_bake` 开启（默认）时 `put` 在同一步内重新烘焙，见[模拟与烘焙](../guide/SIMULATION.md) |
 | `vertex_group` | 顶层 `state`、`target`、`name` | 按规则 `fill/outline/gradient/glue/region` 生成或 `delete` 仅本软件使用的顶点权重组（固定点、碰撞、刚度等），不导出 |
 | `skeleton` | `request.mode` | `get/propose/auto/put/enable/bone/move/bind/remove/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定；`pose` 求 FK/IK 参数值，不写历史 |
 | `motion` | `request.mode` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧 |

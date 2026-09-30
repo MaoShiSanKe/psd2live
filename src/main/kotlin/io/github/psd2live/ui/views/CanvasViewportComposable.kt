@@ -1368,8 +1368,11 @@ fun CanvasViewportComposable(
 			// Floating Stats Pill Badge
 			val zoomPct = (zoom * 100).toInt()
 			val fpsStr = if (fps > 0f) "%.1f FPS · ".format(fps) else ""
+			// The reference simulation is not what exports: say so wherever it is on screen.
+			val referenceSimulation = simulated != null
 			val badgeText = when (mode) {
 				CanvasMode.PREVIEW -> when {
+					referenceSimulation -> "${fpsStr}${tr("canvas.preview.simReference", zoomPct)}"
 					sdkFrame != null -> "${fpsStr}${tr(
 						if (previewModel.hasRuntimePhysics) "canvas.preview.cubismPhysicsOn" else "canvas.preview.cubismPhysicsOff",
 						zoomPct,
@@ -1377,7 +1380,7 @@ fun CanvasViewportComposable(
 					canvasState.sdkStatus != null && canvasState.sdkStatus != "ready" -> "${fpsStr}${tr("canvas.preview.softwareFallback", zoomPct)}"
 					previewModel.hasRuntimePhysics -> "${fpsStr}${tr("canvas.preview.physicsOn", zoomPct)}"
 					else -> "${fpsStr}${tr("canvas.preview.physicsOff", zoomPct)}"
-				}
+				} + if (!referenceSimulation && canvasState.rigEdits.simEdits.any { it.enabled && it.bake == null }) tr("canvas.preview.simUnbaked") else ""
 				CanvasMode.EDIT -> if (showMesh) {
 					val vertexCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.vertexCount ?: 0 }
 					val triangleCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.triangleCount ?: 0 }
@@ -1404,7 +1407,7 @@ fun CanvasViewportComposable(
 					Text(
 						text = badgeText,
 						style = typography.caption.copy(fontSize = 11.sp),
-						color = colors.textPrimary,
+						color = if (referenceSimulation && mode == CanvasMode.PREVIEW) colors.warning else colors.textPrimary,
 					)
 				}
 			}

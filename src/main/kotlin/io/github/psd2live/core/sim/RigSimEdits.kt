@@ -120,6 +120,12 @@ data class RigSimEdit(
      * Null picks the parameters that move a collider.
      */
     val staticInputs: List<String>? = null,
+    /** Keys on each mode parameter and static axis, odd within [KEY_COUNTS]: more follow arcs and pushes more closely. */
+    val keys: Int = 5,
+    /** Writes the modes as blend shapes where the target runtime has them, so their keys add instead of multiplying the grid. */
+    val blendShapes: Boolean = true,
+    /** Bakes again with every change made in the simulation panel or through MCP, in the same history step. */
+    val autoBake: Boolean = true,
     /** The materialized bake; the rebuild writes it back without simulating. */
     val bake: SimBakeResult? = null,
 ) {
@@ -132,7 +138,11 @@ data class RigSimEdit(
         require(staticInputs == null || staticInputs.size <= MAX_STATIC_INPUTS && staticInputs.distinct().size == staticInputs.size) {
             "At most $MAX_STATIC_INPUTS distinct static inputs"
         }
+        require(keys in KEY_COUNTS && keys % 2 == 1) { "A simulation bakes an odd number of keys within $KEY_COUNTS" }
     }
+
+    /** The mode parameters' keys: [keys] values evenly spread over -1..1. */
+    val modeKeys: FloatArray get() = FloatArray(keys) { -1f + 2f * it / (keys - 1) }
 
     fun toJson() = buildJsonObject {
         put("id", id); put("name", name); put("kind", kind.jsonName)
@@ -145,6 +155,9 @@ data class RigSimEdit(
         if (!enabled) put("enabled", false)
         if (modes != 2) put("modes", modes)
         staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
+        if (keys != 5) put("keys", keys)
+        if (!blendShapes) put("blend_shapes", false)
+        if (!autoBake) put("auto_bake", false)
         bake?.let { put("bake", it.toJson()) }
     }
 
@@ -171,6 +184,9 @@ data class RigSimEdit(
                 is JsonNull -> null
                 else -> value.jsonArray.map { it.jsonPrimitive.content }
             },
+            keys = o["keys"]?.jsonPrimitive?.intOrNull ?: keys,
+            blendShapes = o["blend_shapes"]?.jsonPrimitive?.booleanOrNull ?: blendShapes,
+            autoBake = o["auto_bake"]?.jsonPrimitive?.booleanOrNull ?: autoBake,
             bake = when (val value = o["bake"]) {
                 null -> bake
                 is JsonNull -> null
@@ -182,6 +198,7 @@ data class RigSimEdit(
     companion object {
         const val MAX_MODES = 3
         const val MAX_STATIC_INPUTS = 4
+        val KEY_COUNTS = 3..9
 
         fun fromJson(o: JsonObject): RigSimEdit {
             val kind = o.string("kind")?.let(SimKind::parse) ?: SimKind.CLOTH

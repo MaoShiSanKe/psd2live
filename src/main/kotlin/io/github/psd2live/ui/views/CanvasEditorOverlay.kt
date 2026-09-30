@@ -2837,7 +2837,7 @@ private fun SimulateModeExtras(editor: CanvasEditor, focus: () -> Unit) {
             )
         } else {
             StructureActionChip(
-                text = tr("sim.live"),
+                text = tr("sim.previewReference"),
                 onClick = { viewModel.setSimulationPreview(if (live) null else simulation.id); focus() },
                 primary = live,
             )
