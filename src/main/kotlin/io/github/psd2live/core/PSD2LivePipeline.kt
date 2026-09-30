@@ -69,7 +69,11 @@ class PSD2LivePipeline {
 	): RigPreviewModel {
 		val analysis = MouthLipLayers.prepare(CharacterAnalyzer.analyze(source, config), config)
 		val atlas = AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
-		val ids = current.rig.layerIdByDrawableId.map { (drawableId, layerId) -> layerId to DrawableId(drawableId) }.toMap()
+		val existingIds = current.rig.layerIdByDrawableId.map { (drawableId, layerId) -> layerId to DrawableId(drawableId) }.toMap()
+		val ids = RigBuilder.assignSplitDrawableIds(analysis, existingIds)
+		val committedConfig = config.copy(rigEdits = config.rigEdits.copy(
+			splitDrawableIds = ids.mapValues { it.value.raw },
+		))
 		val generated = RigBuilder.buildPreservingDeformers(
 			analysis, atlas, config, meshCache, current.analysis, current.config, ids,
 		)
@@ -77,13 +81,13 @@ class PSD2LivePipeline {
 			deformers = current.baseRig.puppet.deformers,
 			parameters = (generated.puppet.parameters + current.baseRig.puppet.parameters).distinctBy { it.id },
 		))
-		val replayed = baseRig.withRigEdits(config.rigEdits)
+		val replayed = baseRig.withRigEdits(committedConfig.rigEdits)
 		val rig = replayed.copy(puppet = replayed.puppet.copy(
 			deformers = current.rig.puppet.deformers,
 			parameters = (replayed.puppet.parameters + current.rig.puppet.parameters).distinctBy { it.id },
 		))
-		val bundle = buildRuntimeBundle("psd2live-preview", analysis, atlas, rig, config).first
-		return RigPreviewModel(analysis, atlas, rig, config, bundle, baseRig)
+		val bundle = buildRuntimeBundle("psd2live-preview", analysis, atlas, rig, committedConfig).first
+		return RigPreviewModel(analysis, atlas, rig, committedConfig, bundle, baseRig)
 	}
 
 	/** Hierarchy-only edits retain textures but rebuild all parent-space geometry and keyforms. */

@@ -563,6 +563,9 @@ object RigBuilder {
 	 * journal itself says which naming it speaks. Empty when the document was never split.
 	 */
 	private fun splitStableDrawableIds(inputAnalysis: PipelineAnalysis, config: PipelineConfig): Map<String, DrawableId> {
+		if (config.rigEdits.splitDrawableIds.isNotEmpty()) {
+			return config.rigEdits.splitDrawableIds.mapValues { DrawableId(it.value) }
+		}
 		val splitBaselineIds = config.rigEdits.splitBaselineLayerIds
 		val splitNamed = config.rigEdits.referencesSplitDrawable() ||
 			config.drawOrderOverrides.keys.any { it.startsWith(SPLIT_DRAWABLE_PREFIX) }
@@ -605,6 +608,21 @@ object RigBuilder {
 			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
 		), config, meshCache)), stableDrawableIds,
 	)
+
+	/** Allocate final semantic names before any split mesh can be referenced by an edit. */
+	internal fun assignSplitDrawableIds(analysis: PipelineAnalysis, existing: Map<String, DrawableId>): Map<String, DrawableId> {
+		val ids = existing.toMutableMap()
+		val reserved = existing.values.toMutableSet()
+		val counts = mutableMapOf<String, Int>()
+		for (layer in orderMouthLayers(analysis.layers.sortedBy { it.source.order })) {
+			if (layer.source.id.raw in ids || layer.opaquePixels == 0) continue
+			var id = uniqueDrawableId(layer, counts)
+			while (id in reserved) id = uniqueDrawableId(layer, counts)
+			ids[layer.source.id.raw] = id
+			reserved += id
+		}
+		return ids
+	}
 
 	private fun buildWithContext(
 		inputAnalysis: PipelineAnalysis,
@@ -708,6 +726,7 @@ object RigBuilder {
 		}
 
 		val builtDeformPaths = mutableListOf<DeformPath>()
+		val reservedDrawableIds = stableDrawableIds.values.toMutableSet()
 		val orderedLayers = orderMouthLayers(analysis.layers.sortedBy { it.source.order })
 		for ((drawIndex, layer) in orderedLayers.withIndex()) {
 			val placement = atlas.placementByLayerId[layer.source.id.raw]
@@ -719,7 +738,13 @@ object RigBuilder {
 			val (parentId, parentFrame) = context.parentAndFrame(layer, config)
 			val id = stableDrawableIds[layer.source.id.raw]
 				?: if (stableDrawableIds.isEmpty()) uniqueDrawableId(layer, idCounts)
+				else if (config.rigEdits.splitDrawableIds.isNotEmpty()) {
+					var candidate = uniqueDrawableId(layer, idCounts)
+					while (candidate in reservedDrawableIds) candidate = uniqueDrawableId(layer, idCounts)
+					candidate
+				}
 				else stableSplitDrawableId(layer.source.id.raw, stableDrawableIds.values)
+			reservedDrawableIds += id
 			val parts = buildDrawableMesh(
 				layer,
 				rigLayer,

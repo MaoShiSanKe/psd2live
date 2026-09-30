@@ -227,6 +227,8 @@ data class RigEditOverlay(
     val calibrationLayerIds: Set<String> = emptySet(),
     /** Source layers active before the first mesh split; preserves the generated Warp frames on rebuild. */
     val splitBaselineLayerIds: Set<String> = emptySet(),
+    /** Committed drawable ids, including formally named split pieces, preserved across rebuilds. */
+    val splitDrawableIds: Map<String, String> = emptyMap(),
     val structureEdits: List<kotlinx.serialization.json.JsonObject> = emptyList(),
     /** New authoring commands replay in actual order, after the legacy baseline. */
     val authoringJournal: List<kotlinx.serialization.json.JsonObject> = emptyList(),

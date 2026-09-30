@@ -392,6 +392,7 @@ internal class AgentWorkspaceStore(
             put("assetLayers", JsonObject(document.rigEdits.assetLayers))
             putJsonArray("calibrationLayerIds") { document.rigEdits.calibrationLayerIds.sorted().forEach { add(JsonPrimitive(it)) } }
             putJsonArray("splitBaselineLayerIds") { document.rigEdits.splitBaselineLayerIds.sorted().forEach { add(JsonPrimitive(it)) } }
+            put("splitDrawableIds", JsonObject(document.rigEdits.splitDrawableIds.mapValues { JsonPrimitive(it.value) }))
             put("structure", JsonArray(document.rigEdits.structureEdits))
             put("authoringJournal", JsonArray(document.rigEdits.authoringJournal))
             putJsonArray("warps") { document.rigEdits.warpEdits.forEach { add(it.toJson()) } }
@@ -562,6 +563,7 @@ internal class AgentWorkspaceStore(
             assetLayers = rigEditObject.optionalObject("assetLayers").mapValues { it.value.jsonObject },
             calibrationLayerIds = rigEditObject.optionalArray("calibrationLayerIds").map { it.jsonPrimitive.content }.toSet(),
             splitBaselineLayerIds = rigEditObject.optionalArray("splitBaselineLayerIds").map { it.jsonPrimitive.content }.toSet(),
+            splitDrawableIds = rigEditObject.optionalObject("splitDrawableIds").mapValues { it.value.jsonPrimitive.content },
             structureEdits = rigEditObject.optionalArray("structure").map { it.jsonObject },
             authoringJournal = rigEditObject.optionalArray("authoringJournal").map { it.jsonObject },
             warpEdits = rigEditObject.optionalArray("warps").map { io.github.psd2live.core.RigWarpEdit.fromJson(it.jsonObject) },
