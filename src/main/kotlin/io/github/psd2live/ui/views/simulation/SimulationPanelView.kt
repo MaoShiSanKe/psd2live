@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -63,9 +64,12 @@ import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactSlider
-import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconClose
+import io.github.psd2live.ui.components.IconCollapseAll
+import io.github.psd2live.ui.components.IconExpandAll
+import io.github.psd2live.ui.components.IconEye
+import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -74,6 +78,7 @@ import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.views.PanelSectionRow
 import io.github.psd2live.ui.views.PanelToolButton
+import io.github.psd2live.ui.views.shownToolLabels
 import io.github.psd2live.ui.views.SimSectionIcon
 import io.github.psd2live.ui.views.SimSectionIconView
 import io.github.psd2live.ui.views.VertexGroupKindIcon
@@ -88,6 +93,9 @@ import org.umamo.runtime.model.PuppetModel
 import org.umamo.runtime.model.RuntimeFeature
 import org.umamo.runtime.model.VertexGroupKind
 import java.util.Locale
+
+/** The panel's foldable sections: the body list and the selected body's editor sections. */
+private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "colliders", "glue", "groups")
 
 /** Whether a simulation exports, and as its current setup. */
 private enum class BakeState { BAKED, STALE, UNBAKED, DISABLED }
@@ -112,7 +120,9 @@ internal fun SimulationPanelView(
 	val selected = sims.firstOrNull { it.id == selectedId } ?: sims.firstOrNull()
 	val status by viewModel.simulationStatus.collectAsState()
 	val puppet = state.previewModel?.rig?.puppet
-	var listOpen by remember { mutableStateOf(true) }
+	// Which sections are open survives switching bodies; the toolbar opens or closes them all.
+	var open by remember { mutableStateOf(SECTIONS - "groups") }
+	val listOpen = "bodies" in open
 	// Staleness hashes the targets' keyforms: once per rig and edit, not per frame.
 	val bakeStates = remember(puppet, sims) {
 		sims.associate { sim ->
@@ -126,7 +136,7 @@ internal fun SimulationPanelView(
 	}
 
 	Column(modifier.fillMaxSize().background(colors.panelBackground)) {
-		SimulationToolbar(viewModel, state, sims, selected, bakeStates) { selectedId = it }
+		SimulationToolbar(viewModel, state, sims, selected, bakeStates, { open = it }) { selectedId = it }
 		Divider(color = colors.divider)
 		if (puppet == null) {
 			Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -137,7 +147,7 @@ internal fun SimulationPanelView(
 		val scroll = rememberScrollState()
 		Box(Modifier.fillMaxSize()) {
 			Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(end = 6.dp)) {
-				PanelSectionRow(tr("sim.bodies"), listOpen, { listOpen = !listOpen }, count = sims.size)
+				PanelSectionRow(tr("sim.bodies"), listOpen, { open = if (listOpen) open - "bodies" else open + "bodies" }, count = sims.size)
 				PhysicsRowDivider()
 				if (listOpen) {
 					if (sims.isEmpty()) {
@@ -151,7 +161,7 @@ internal fun SimulationPanelView(
 					}
 				}
 				StatusLine(status)
-				if (selected != null) SimulationEditor(viewModel, state, puppet, selected, bakeStates[selected.id] ?: BakeState.UNBAKED)
+				if (selected != null) SimulationEditor(viewModel, state, puppet, selected, bakeStates[selected.id] ?: BakeState.UNBAKED, open) { open = it }
 				Spacer(Modifier.height(8.dp))
 			}
 			VerticalScrollbar(rememberScrollbarAdapter(scroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
@@ -172,10 +182,7 @@ private fun BakeState.color(): Color {
 
 private fun BakeState.label() = tr("sim.state.${name.lowercase()}")
 
-/**
- * New body and the preview choice, then one status line: how many bodies export as set up, with Bake all
- * (the outdated ones, or every one when none is) and Clear all; while a bake runs, its progress and Cancel.
- */
+/** New body, Bake all with how many bodies export as set up, and the preview choice, in one row. */
 @Composable
 private fun SimulationToolbar(
 	viewModel: PSD2LiveViewModel,
@@ -183,40 +190,96 @@ private fun SimulationToolbar(
 	sims: List<RigSimEdit>,
 	selected: RigSimEdit?,
 	states: Map<String, BakeState>,
+	onOpenSections: (Set<String>) -> Unit,
 	onCreated: (String) -> Unit,
 ) {
 	val colors = LocalToolColors.current
-	val caption = LocalToolTypography.current.caption.copy(fontSize = 10.sp)
-	val baking by viewModel.simulationBaking.collectAsState()
 	var newMenuOpen by remember { mutableStateOf(false) }
 	val ready = state.previewModel != null
+	val baking by viewModel.simulationBaking.collectAsState()
+	val outdated = states.values.any { it == BakeState.UNBAKED || it == BakeState.STALE }
+	val live = selected != null && state.simulationPreviewId == selected.id
 	Column(
 		Modifier.fillMaxWidth().background(colors.panelElevated).padding(horizontal = 4.dp, vertical = 3.dp),
 		verticalArrangement = Arrangement.spacedBy(3.dp),
 	) {
-		Row(Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-			Box {
-				PanelToolButton(tr("sim.new"), showLabel = true, onClick = { newMenuOpen = true }, enabled = ready && !state.canvasEditBusy,
-					tooltip = tr("sim.newTip")) {
-					IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+		BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
+			val labels = listOf(tr("sim.new"), tr("sim.bakeAll"), tr("sim.previewExport"), tr("sim.previewReference"))
+			val labelsShown = shownToolLabels(labels, if (live) 7 else 6, maxWidth)
+			Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+				Box {
+					PanelToolButton(labels[0], showLabel = labelsShown > 0, onClick = { newMenuOpen = true }, enabled = ready && !state.canvasEditBusy,
+						tooltip = tr("sim.newTip")) {
+						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+					}
+					TreeContextMenu(expanded = newMenuOpen, onDismissRequest = { newMenuOpen = false }, minWidth = 140.dp) {
+						for (kind in SimKind.entries) CompactMenuItem(tr("sim.kind.${kind.jsonName}"), {
+							newMenuOpen = false
+							viewModel.createSimulationFromSelection(kind)?.let(onCreated)
+						})
+					}
 				}
-				TreeContextMenu(expanded = newMenuOpen, onDismissRequest = { newMenuOpen = false }, minWidth = 140.dp) {
-					for (kind in SimKind.entries) CompactMenuItem(tr("sim.kind.${kind.jsonName}"), {
-						newMenuOpen = false
-						viewModel.createSimulationFromSelection(kind)?.let(onCreated)
-					})
+				PanelToolButton(labels[1], showLabel = labelsShown > 1, onClick = viewModel::bakeAllSimulations,
+					enabled = sims.any { it.enabled } && baking == null && !state.canvasEditBusy,
+					tooltip = tr(if (outdated) "sim.bakeAllTip" else "sim.rebakeAllTip")) {
+					SimSectionIconView(SimSectionIcon.BAKE, if (outdated) colors.warning else colors.textPrimary, size = 11.dp)
 				}
-			}
-			Spacer(Modifier.weight(1f))
-			val live = selected != null && state.simulationPreviewId == selected.id
-			CompactToggleChip(tr("sim.previewExport"), !live, { viewModel.setSimulationPreview(null) },
-				enabled = selected != null, showCheckWhenSelected = false, tooltip = tr("sim.previewExportTip"))
-			CompactToggleChip(tr("sim.previewReference"), live, { viewModel.setSimulationPreview(selected?.id) },
-				enabled = selected != null, showCheckWhenSelected = false, tooltip = tr("sim.previewReferenceTip"))
-			if (live) CompactIconButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"), size = 22.dp) {
-				IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+				Spacer(Modifier.weight(1f))
+				PanelToolButton(labels[2], showLabel = labelsShown > 2, onClick = { viewModel.setSimulationPreview(null) },
+					enabled = selected != null, active = !live, tooltip = tr("sim.previewExportTip")) {
+					IconEye(visible = true, modifier = Modifier.size(12.dp), tint = if (!live) colors.accent else colors.textMuted)
+				}
+				PanelToolButton(labels[3], showLabel = labelsShown > 3, onClick = { viewModel.setSimulationPreview(selected?.id) },
+					enabled = selected != null, active = live, tooltip = tr("sim.previewReferenceTip")) {
+					IconPlay(modifier = Modifier.size(12.dp), tint = if (live) colors.accent else colors.textMuted)
+				}
+				if (live) CompactIconButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"), size = 22.dp) {
+					IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+				}
+				CompactIconButton(onClick = { onOpenSections(SECTIONS) }, size = 22.dp, tooltip = tr("canvas.hierarchy.expandAll")) {
+					IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+				}
+				CompactIconButton(onClick = { onOpenSections(emptySet()) }, size = 22.dp, tooltip = tr("canvas.hierarchy.collapseAll")) {
+					IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+				}
 			}
 		}
+		Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+			BakeAllStatus(viewModel, sims, states, Modifier.weight(1f))
+		}
+	}
+}
+
+/**
+ * How many bodies export as set up; while a bake runs, show its progress and Cancel instead.
+ */
+@Composable
+private fun RowScope.BakeAllStatus(
+	viewModel: PSD2LiveViewModel,
+	sims: List<RigSimEdit>,
+	states: Map<String, BakeState>,
+	modifier: Modifier,
+) {
+	val colors = LocalToolColors.current
+	val caption = LocalToolTypography.current.caption.copy(fontSize = 10.sp)
+	val baking by viewModel.simulationBaking.collectAsState()
+	val enabled = sims.count { it.enabled }
+	val outdated = states.values.count { it == BakeState.UNBAKED || it == BakeState.STALE }
+	val running = baking
+	if (running != null) {
+		CompactIconButton(onClick = viewModel::cancelSimulationBake, tooltip = tr("sim.cancelBake"), size = 22.dp) {
+			IconClose(modifier = Modifier.size(9.dp), tint = colors.textPrimary)
+		}
+		val percent = (running.progress * 100f).toInt()
+		Text(if (running.count > 1) tr("sim.bakingBatch", running.id, running.index + 1, running.count, percent) else tr("sim.bakingOne", running.id, percent),
+			style = caption, color = colors.accent, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
+		return
+	}
+	Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+		if (enabled == 0) return@Row
+		Dot(if (outdated > 0) colors.warning else colors.success)
+		Text(if (outdated > 0) tr("sim.outdated", outdated, enabled) else tr("sim.allBaked", enabled, enabled),
+			style = caption, color = if (outdated > 0) colors.warning else colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
 	}
 }
 
@@ -320,15 +383,21 @@ private fun StatusLine(status: PSD2LiveViewModel.SimulationStatus) {
 }
 
 @Composable
-private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppet: PuppetModel, sim: RigSimEdit, bakeState: BakeState) {
+private fun SimulationEditor(
+	viewModel: PSD2LiveViewModel,
+	state: PSD2LiveState,
+	puppet: PuppetModel,
+	sim: RigSimEdit,
+	bakeState: BakeState,
+	open: Set<String>,
+	onOpen: (Set<String>) -> Unit,
+) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val caption = typography.caption.copy(fontSize = 9.5.sp)
 	fun commit(next: RigSimEdit) { if (next != sim) viewModel.putSimulation(next) }
-	// Which sections are open survives switching bodies.
-	var open by remember { mutableStateOf(setOf("bake", "material", "inputs", "colliders", "glue")) }
 	fun section(key: String) = key in open
-	fun toggle(key: String) { open = if (key in open) open - key else open + key }
+	fun toggle(key: String) = onOpen(if (key in open) open - key else open + key)
 
 	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
 		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
