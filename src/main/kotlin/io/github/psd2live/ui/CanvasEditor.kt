@@ -2250,6 +2250,7 @@ internal class CanvasEditor(
      */
     fun activateTool(next: CanvasTool) {
         if (busy) return
+        endTemporarySelection()
         if (next in CREATION_TOOLS) {
             activateCreationTool(next)
             return
@@ -3088,6 +3089,7 @@ internal class CanvasEditor(
     @JvmName("changeHierarchyMode")
     fun setHierarchyMode(next: EditHierarchyMode) {
         if (busy) return
+        endTemporarySelection()
         if (next == EditHierarchyMode.SKELETON) {
             if (hierarchyMode == EditHierarchyMode.SKELETON) return
             if (placement != null) cancelPlacement()
@@ -3097,6 +3099,67 @@ internal class CanvasEditor(
         }
         if (!hasPartFor(next)) { deferMode(next, null); return }
         enterMode(next)
+    }
+
+    private data class TemporarySelection(
+        val mode: EditHierarchyMode,
+        val tool: CanvasTool,
+        val selection: Map<String, Set<Int>>,
+        val objects: Set<String>,
+        val layerId: String?,
+        val deformerId: String?,
+        val skeleton: Boolean,
+        val deferred: DeferredMode?,
+    )
+
+    private var temporarySelection: TemporarySelection? = null
+    internal val temporarilySelecting get() = temporarySelection != null
+
+    /** Suspend the mode without ending paint or skeleton drafts. Key repeat must not overwrite it. */
+    internal fun beginTemporarySelection(): Boolean {
+        if (temporarilySelecting) return true
+        if (busy || inGesture || adjustingBrush || drawingPath || placement != null || state.previewModel == null) return false
+        temporarySelection = TemporarySelection(hierarchyMode, tool, selection, objects,
+            state.selectedLayerId, state.selectedDeformerId, skeletonSelected, deferredMode)
+        deferredMode = null
+        hierarchyMode = EditHierarchyMode.SELECT
+        tool = CanvasTool.SELECT
+        selection = emptyMap()
+        clearHover()
+        return true
+    }
+
+    /** Keep the new object pick, restoring the old mode and tool whenever the new target supports them. */
+    internal fun endTemporarySelection() {
+        val previous = temporarySelection ?: return
+        temporarySelection = null
+        if (inGesture) cancel()
+        val sameTarget = objects == previous.objects && state.selectedLayerId == previous.layerId &&
+            state.selectedDeformerId == previous.deformerId && skeletonSelected == previous.skeleton
+        hierarchyMode = previous.mode
+        tool = previous.tool
+        selection = if (sameTarget) previous.selection else emptyMap()
+        deferredMode = previous.deferred
+        if (previous.mode == EditHierarchyMode.SKELETON && !skeletonSelected) {
+            if (takeSkeleton()) switchSkeletonTool(previous.tool)
+            else hierarchyMode = EditHierarchyMode.SELECT
+        }
+        if (previous.deferred != null) {
+            resolveDeferredMode()
+        } else if (!hasPartFor(previous.mode)) {
+            deferMode(previous.mode, previous.tool)
+        } else if (previous.mode == EditHierarchyMode.PAINT) {
+            startPaintSession(forceReload = false)
+        }
+        clearHover()
+    }
+
+    internal fun toggleQuickPreview() {
+        if (busy || inGesture || adjustingBrush || drawingPath || placement != null) return
+        endTemporarySelection()
+        val current = viewModel.uiState.value.activeWorkspace.canvases.firstOrNull { it.id == canvasId } ?: return
+        showCanvasMode(if (current.mode == CanvasMode.PREVIEW) CanvasMode.EDIT else CanvasMode.PREVIEW)
+        viewModel.requestCanvasFocus(canvasId)
     }
 
     /** Switches this canvas between editing and preview, as the canvas mode menu's Preview row does. */

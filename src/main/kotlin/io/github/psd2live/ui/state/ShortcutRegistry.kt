@@ -71,6 +71,9 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     OPEN_SETTINGS(ShortcutCategory.VIEW, "help.shortcuts.settings"),
     OPEN_HELP(ShortcutCategory.VIEW, "help.shortcuts.help"),
 
+    TEMPORARY_SELECT(ShortcutCategory.CANVAS_TOOLS, "shortcut.temporarySelect"),
+    QUICK_PREVIEW(ShortcutCategory.CANVAS_TOOLS, "shortcut.quickPreview"),
+
     MODE_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.select"),
     MODE_DEFORM(ShortcutCategory.CANVAS_TOOLS, "editor.mode.deform"),
     MODE_EDIT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.edit"),
@@ -202,6 +205,9 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.ZOOM_RESET to keys("Ctrl+0", "Ctrl+NumPad0"),
     ShortcutAction.OPEN_SETTINGS to keys("Ctrl+,"),
     ShortcutAction.OPEN_HELP to keys("F1"),
+
+    ShortcutAction.TEMPORARY_SELECT to keys("Z"),
+    ShortcutAction.QUICK_PREVIEW to keys("`"),
 
     ShortcutAction.MODE_SELECT to keys("Alt+1", "Alt+NumPad1"),
     ShortcutAction.MODE_DEFORM to keys("Alt+2", "Alt+NumPad2"),

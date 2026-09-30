@@ -73,6 +73,7 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | Tutorials | `F1` |
 | Zoom / pan | Wheel / middle drag or Space + left drag |
 | Frame selection / reset camera | `F` / `Home` or `0` |
+| Temporary selection / toggle quick preview | Hold `Z`, release to restore / grave accent key (below Esc) |
 | Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
 
 ## Troubleshooting

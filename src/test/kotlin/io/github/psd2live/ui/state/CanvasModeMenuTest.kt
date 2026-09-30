@@ -30,6 +30,93 @@ class CanvasModeMenuTest {
         assertEquals("Alt+9", custom.labelFor(CanvasModeChoice.PREVIEW.shortcut))
     }
 
+    @Test fun quickModeBindingsAreSingleKeysWithoutConflictsInEveryPreset() {
+        for (preset in KeymapPreset.entries) {
+            val keymap = Keymap.of(preset)
+            for ((action, key) in listOf(ShortcutAction.TEMPORARY_SELECT to "Z", ShortcutAction.QUICK_PREVIEW to "`")) {
+                assertEquals(key, keymap.labelFor(action))
+                assertEquals(listOf(action), keymap.conflictIndex()[parseKeyBinding(key)])
+            }
+        }
+    }
+
+    @Test fun temporarySelectionRestoresModeToolAndVerticesDespiteKeyRepeat() {
+        PSD2LiveViewModel().use { vm ->
+            val model = preview()
+            vm.setStateForTest(vm.state.value.copy(previewModel = model))
+            val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
+            editor.selectLayer(model.rig.layerIdByDrawableId.values.first())
+            editor.setHierarchyMode(EditHierarchyMode.SIMULATE)
+            editor.activateTool(CanvasTool.WEIGHT_GRADIENT)
+            val vertices = mapOf("body" to setOf(0))
+            editor.selection = vertices
+            assertTrue(editor.beginTemporarySelection())
+            assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
+            assertEquals(CanvasTool.SELECT, editor.tool)
+            assertTrue(editor.beginTemporarySelection())
+            editor.endTemporarySelection()
+            assertEquals(EditHierarchyMode.SIMULATE, editor.hierarchyMode)
+            assertEquals(CanvasTool.WEIGHT_GRADIENT, editor.tool)
+            assertEquals(vertices, editor.selection)
+            editor.endTemporarySelection()
+            assertEquals(EditHierarchyMode.SIMULATE, editor.hierarchyMode)
+        }
+    }
+
+    @Test fun temporarySelectionKeepsPaintSessionAndDefersIfTargetIsCleared() {
+        PSD2LiveViewModel().use { vm ->
+            val model = preview()
+            vm.setStateForTest(vm.state.value.copy(previewModel = model))
+            val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
+            editor.selectLayer(model.rig.layerIdByDrawableId.values.first())
+            editor.setHierarchyMode(EditHierarchyMode.PAINT)
+            val session = assertNotNull(editor.paintSession)
+            assertTrue(editor.beginTemporarySelection())
+            editor.endTemporarySelection()
+            assertSame(session, editor.paintSession)
+            assertTrue(editor.beginTemporarySelection())
+            editor.objects = emptySet()
+            editor.selectLayer(null)
+            editor.endTemporarySelection()
+            assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
+            assertEquals(EditHierarchyMode.PAINT, editor.deferredMode?.mode)
+        }
+    }
+
+    @Test fun temporarySelectionSuspendsDeferredModeUntilRelease() {
+        PSD2LiveViewModel().use { vm ->
+            val model = preview()
+            vm.setStateForTest(vm.state.value.copy(previewModel = model))
+            val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
+            editor.setHierarchyMode(EditHierarchyMode.DEFORM)
+            assertNotNull(editor.deferredMode)
+            assertTrue(editor.beginTemporarySelection())
+            editor.selectLayer(model.rig.layerIdByDrawableId.values.first())
+            editor.resolveDeferredMode()
+            assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
+            editor.endTemporarySelection()
+            assertEquals(EditHierarchyMode.DEFORM, editor.hierarchyMode)
+            assertNull(editor.deferredMode)
+        }
+    }
+
+    @Test fun quickPreviewReturnsToTheSameEditingModeAndTool() {
+        PSD2LiveViewModel().use { vm ->
+            val model = preview()
+            vm.setStateForTest(vm.state.value.copy(previewModel = model))
+            val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
+            editor.selectLayer(model.rig.layerIdByDrawableId.values.first())
+            editor.setHierarchyMode(EditHierarchyMode.SIMULATE)
+            editor.activateTool(CanvasTool.WEIGHT_GRADIENT)
+            editor.toggleQuickPreview()
+            assertEquals(CanvasMode.PREVIEW, vm.state.value.activeCanvas.mode)
+            editor.toggleQuickPreview()
+            assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
+            assertEquals(EditHierarchyMode.SIMULATE, editor.hierarchyMode)
+            assertEquals(CanvasTool.WEIGHT_GRADIENT, editor.tool)
+        }
+    }
+
     private fun preview(): RigPreviewModel {
         val layer = WorkspaceSourceLayer(LayerId("body"), "body", "", SourceLayerKind.Raster, true, 1,
             LayerBounds(0, 0, 8, 8), 1f, false, LayerBlend.Normal, ChannelMask.ALL,

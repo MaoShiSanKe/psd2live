@@ -3195,6 +3195,11 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
+	internal fun requestCanvasFocus(canvasId: String) {
+		focusCanvas(canvasId)
+		updateState { it.copy(focusCanvasRequest = it.focusCanvasRequest + 1) }
+	}
+
 	fun setCanvasMode(canvasId: String, mode: CanvasMode) {
 		var changed = false
 		updateState { current ->

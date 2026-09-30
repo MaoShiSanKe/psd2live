@@ -141,6 +141,7 @@ fun CanvasViewportComposable(
 ) {
     val editor = viewModel.canvasEditorFor(canvasId)
     val ownerState = state.forCanvas(canvasId)
+    var temporarySelectKey by remember(canvasId, ownerState.activeWorkspace.id) { mutableStateOf<Key?>(null) }
     key(ownerState.projectOpenGeneration, ownerState.activeWorkspace.id, canvasId, mode) {
 	// Hover belongs to the input session, so moving over this viewport invalidates only
 	// this viewport instead of the shared document and every docked panel.
@@ -199,6 +200,8 @@ fun CanvasViewportComposable(
         onDispose {
             viewModel.releaseRetainedCanvasFrame(renderKey)
             if (mode == CanvasMode.EDIT) {
+                editor.endTemporarySelection()
+                temporarySelectKey = null
                 editor.space = false
                 editor.altHeld = false
                 if (editor.inGesture) editor.cancel()
@@ -213,6 +216,10 @@ fun CanvasViewportComposable(
 	LaunchedEffect(mode, canvasState.keyCapture, canvasState.showSettingsDialog, canvasState.showExportDialog) {
 		if (mode == CanvasMode.EDIT &&
 			(canvasState.keyCapture != null || canvasState.showSettingsDialog || canvasState.showExportDialog)) editor.space = false
+        if (canvasState.keyCapture != null || canvasState.showSettingsDialog || canvasState.showExportDialog) {
+            editor.endTemporarySelection()
+            temporarySelectKey = null
+        }
 	}
 
 	// Rebinding happens in a modal that takes focus off the canvas. Pull it back on close so the
@@ -523,6 +530,8 @@ fun CanvasViewportComposable(
 			.onFocusChanged {
                 if (it.hasFocus) viewModel.focusCanvas(canvasId)
                 else {
+                    editor.endTemporarySelection()
+                    temporarySelectKey = null
                     isDragging = false
                     persistCamera()
                     if (mode == CanvasMode.EDIT) {
@@ -540,6 +549,13 @@ fun CanvasViewportComposable(
 				if (origin != canvasOrigin) canvasOrigin = origin
 			}
 			.onKeyEvent { event ->
+                // Match release by the physical key even if modifiers changed while it was held.
+                if (event.type == KeyEventType.KeyUp && event.key == temporarySelectKey) {
+                    temporarySelectKey = null
+                    editor.endTemporarySelection()
+                    return@onKeyEvent true
+                }
+
 				// A capture in the settings panel owns the keyboard. The root handler already
 				// swallowed the event, but stay inert anyway so nothing reaches the canvas
 				// mid-recording.
@@ -567,6 +583,17 @@ fun CanvasViewportComposable(
                 }
 				val action = canvasState.keymap.match(event, ShortcutScope.CANVAS)
 					?: return@onKeyEvent false
+                if (action == ShortcutAction.TEMPORARY_SELECT) {
+                    if (event.type == KeyEventType.KeyDown && mode == CanvasMode.EDIT &&
+                        !canvasState.canvasEditBusy && editor.beginTemporarySelection()) temporarySelectKey = event.key
+                    return@onKeyEvent true
+                }
+                if (action == ShortcutAction.QUICK_PREVIEW) {
+                    // Toggle on release so holding the key never flips repeatedly through both modes.
+                    if (event.type == KeyEventType.KeyUp && previewModel != null && !canvasState.canvasEditBusy)
+                        editor.toggleQuickPreview()
+                    return@onKeyEvent true
+                }
 				// Camera commands sit outside the mode and busy gates, as they always have: a
 				// long commit must not take the view controls away.
 				when (action) {
