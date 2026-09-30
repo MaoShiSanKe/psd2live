@@ -249,6 +249,8 @@ internal fun GroupTitle(
 		PhysicsOrigin.PRESET -> tr("physics.originNote.preset")
 		PhysicsOrigin.SKELETON -> tr("physics.originNote.skeleton")
 		PhysicsOrigin.SWING -> tr("physics.originNote.swing", swing?.name ?: "")
+		PhysicsOrigin.SIMULATION -> tr("physics.originNote.simulation",
+			io.github.psd2live.core.sim.SimGenerator.simulationOf(group.id, state.rigEdits.simEdits)?.name ?: "")
 		PhysicsOrigin.CUSTOM -> tr("physics.originNote.custom")
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

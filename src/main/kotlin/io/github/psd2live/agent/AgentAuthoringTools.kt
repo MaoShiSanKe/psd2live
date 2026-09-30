@@ -97,7 +97,14 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                 "physics" -> { put("fps", workspace.physicsFps()); put("groups", JsonArray(workspace.listPhysics().map { it.toJson() })) }
                 "swings" -> put("swings", JsonArray(workspace.listSwings().map { it.toJson() }))
                 "simulations" -> {
-                    put("simulations", JsonArray(workspace.listSimulations().map { it.toJson() }))
+                    val puppet = workspace.currentPuppet()
+                    // The bake's arrays stay out; its summary and whether it is stale are what a caller acts on.
+                    put("simulations", JsonArray(workspace.listSimulations().map { sim -> JsonObject(sim.toJson() - "bake" + buildJsonObject {
+                        sim.bake?.let { bake ->
+                            put("bake", bake.summary())
+                            if (puppet != null) put("bake_stale", io.github.psd2live.core.sim.SimBake.stale(puppet, sim))
+                        }
+                    }) }))
                     // Glue keys are what glue_roles take.
                     put("glues", JsonArray(workspace.currentPuppet()?.glues.orEmpty().map { glue -> buildJsonObject {
                         put("key", io.github.psd2live.core.sim.glueKey(glue)); put("pairs", glue.pairs.size)
@@ -346,7 +353,7 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         mapOf("put" to "physics_put", "delete" to "physics_delete", "simulate" to "physics_simulate", "fit" to "physics_fit",
             "config" to "physics_config", "import" to "physics_import"), true)
     val simulationFields = buildJsonObject {
-        put("mode", choices("put", "delete", "simulate")); put("state", string()); put("id", string()); put("name", string())
+        put("mode", choices("put", "delete", "simulate", "bake", "clear_bake")); put("state", string()); put("id", string()); put("name", string())
         put("kind", choices("cloth", "hair")); put("targets", arraySchema(string(), 1, 64)); put("enabled", boolean())
         put("material", objectSchema(buildJsonObject {
             put("mass", number()); put("stretch", number()); put("bend", number()); put("damping", number()); put("goal", number()); put("slack", number())
@@ -357,14 +364,18 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         put("inputs", arraySchema(objectSchema(buildJsonObject {
             put("parameter", string()); put("weight", number()); put("type", choices("x", "angle")); put("reflect", boolean())
         }, listOf("parameter")), 0, 16))
+        put("modes", integer(1, 3)); put("static_inputs", arraySchema(string(), 0, 4))
         put("hold", number()); put("release", number()); put("wind", vector(2))
     }
-    tool("simulation", "2D cloth and hair simulation on ArtMeshes (editor-side; a later bake turns it into keys and pendulums). put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend, goal = spring back to the drawn shape, slack = long-range give) except mass and damping (1/s). " +
+    tool("simulation", "2D cloth and hair simulation on ArtMeshes. It runs in the editor only; bake is what exports. put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend, goal = spring back to the drawn shape, slack = long-range give) except mass and damping (1/s). " +
         "Pins come from the PIN vertex group; a glue is never a pin unless glue_roles sets its key (meshA|meshB from inspect scope=simulations) to pin (follow the other mesh) or constraint (both sides simulated). groups names the vertex group to use per kind. colliders are meshes whose COLLIDER group (or whole mesh) pushes COLLIDE vertices out, following the rig. " +
-        "simulate runs it (settle, each input held at max for hold s then released, optional wind [x, y] px/s² with y up) and reports peaks, rest drift, stretch and setup notes. delete removes it.",
+        "inputs are the parameters that shake it (empty: head and body angles). simulate runs it (settle, each input held at max for hold s then released, optional wind [x, y] px/s² with y up) and reports peaks, rest drift, stretch and setup notes. " +
+        "bake (slow) reduces it to what Cubism plays: static_inputs (default: parameters that move a collider) get exact corrections on their own axes, and the remaining motion becomes modes (1..3) parameters ParamSim<id>_<k> with keyforms, driven by segment k of one fitted pendulum PhysicsSim_<id>; it reports the fit's R² and the error in px. Changing the setup leaves the bake in place but stale (inspect shows it); bake again. clear_bake removes it. delete removes the simulation.",
         simulationFields, listOf("mode"), true) { a ->
         when (a.text("mode")) {
-            "put" -> workspace.putSimulation(JsonObject(a - "mode" - "state" - "hold" - "release" - "wind"), a.text("state"), null).compact()
+            "put" -> workspace.putSimulation(JsonObject(a - "mode" - "state" - "hold" - "release" - "wind" - "bake"), a.text("state"), null).compact()
+            "bake" -> workspace.bakeSimulation(a.text("id"), a.text("state")).let { (result, summary) -> JsonObject(result.compact() + summary) }
+            "clear_bake" -> workspace.putSimulationBake(a.text("id"), null, a.text("state")).compact()
             "delete" -> workspace.deleteSimulation(a.text("id"), a.text("state")).compact()
             else -> workspace.reportSimulation(a.text("id"), a["hold"]?.jsonPrimitive?.float ?: 0.5f, a["release"]?.jsonPrimitive?.float ?: 1.5f,
                 a["wind"]?.jsonArray?.let { it[0].jsonPrimitive.float to it[1].jsonPrimitive.float })

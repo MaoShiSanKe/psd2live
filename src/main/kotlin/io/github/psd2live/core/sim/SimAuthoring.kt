@@ -106,6 +106,25 @@ object SimAuthoring {
         }
     }
 
+    /**
+     * The rig [overlay] rebuilds on [base] without simulation [id]'s bake, the rig a bake of it must read:
+     * baking over its own keys would count them twice.
+     */
+    fun unbakedModel(overlay: RigEditOverlay, base: PuppetModel, id: String): PuppetModel =
+        overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = null) else it }).applyTo(base)
+
+    /** Bakes simulation [id] of [overlay] on the rig rebuilt from [base]; slow, so call it off the frame thread. */
+    fun bake(overlay: RigEditOverlay, base: PuppetModel, id: String, options: SimBaker.Options = SimBaker.Options()): SimBakeResult {
+        val edit = requireNotNull(overlay.simEdits.firstOrNull { it.id == id }) { "Simulation not found: $id" }
+        return SimBaker.bake(unbakedModel(overlay, base, id), edit, options)
+    }
+
+    /** [overlay] with [bake] as simulation [id]'s bake; null clears it. */
+    fun withBake(overlay: RigEditOverlay, id: String, bake: SimBakeResult?): RigEditOverlay {
+        require(overlay.simEdits.any { it.id == id }) { "Simulation not found: $id" }
+        return overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = bake) else it })
+    }
+
     /** The simulated vertices of every target of [scene], world space, keyed by mesh. */
     fun positions(scene: SimScene): Map<DrawableId, FloatArray> = scene.offsets.keys.associateWith { requireNotNull(scene.positions(it)) }
 

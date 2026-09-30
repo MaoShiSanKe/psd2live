@@ -57,4 +57,4 @@
 - 写模型的 MCP 请求带当前历史 `state`；若 UI 同时改动导致过期，客户端应重读 `inspect`。预览参数不写模型历史。
 - 源图绘画和拆分会改变网格拓扑。拆分在已有运动绑定、Glue 时拒绝；MCP 绘画在目标已有关键形、Warp 或 Glue 时拒绝。UI 绘画另有交互式网格迁移流程。
 - `LayerClassificationIntegrationTest` 覆盖 Issue #13 分类字段、绘画像素和历史回退、单层网格、预览锁定、模型与 PSD 导出、PSD 再导入、套索对应的拆分算法及 user 历史归属。
-- `AuthoringParityTest` 检查 23 个公开 MCP 工具的注册与分类字段合并。全量验证命令：`./gradlew test --offline`。
+- `AuthoringParityTest` 检查 25 个公开 MCP 工具的注册与分类字段合并。全量验证命令：`./gradlew test --offline`。

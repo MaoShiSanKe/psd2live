@@ -134,6 +134,8 @@ private fun SimulationRow(sim: RigSimEdit, selected: Boolean, live: Boolean, onS
 		Text(sim.name, style = typography.caption.copy(fontSize = 11.sp), color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
 		Text(tr("sim.kind.${sim.kind.jsonName}") + " · " + tr("sim.meshCount", sim.targets.size) + if (live) " · " + tr("sim.live") else "",
 			style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
+		// Only a baked simulation exports; the dot says which ones do.
+		Box(Modifier.size(6.dp).background(if (sim.bake != null) colors.accent else colors.warning, androidx.compose.foundation.shape.CircleShape))
 		CompactIconButton(onClick = onDelete, tooltip = tr("sim.delete"), size = 16.dp) { IconClose(modifier = Modifier.size(9.dp), tint = colors.textMuted) }
 	}
 }
@@ -239,10 +241,81 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 		Text(tr("sim.inputsHint"), style = typography.caption.copy(fontSize = 9.sp), color = colors.textMuted)
 	}
 
+	PanelSectionRow(tr("sim.bake"), "bake" !in open, { open = open.toggle("bake") })
+	if ("bake" !in open) BakeEditor(viewModel, state, puppet, sim, ::commit)
+
 	Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
 		CompactButton(tr("sim.test"), { viewModel.reportSimulation(sim.id) }, height = 22.dp)
 		CompactButton(tr("sim.paintWeights"), { viewModel.beginVertexGroupPaint(sim.targets.first(), VertexGroupKind.PIN) }, height = 22.dp)
 	}
+}
+
+/**
+ * The bake: how many modes, which parameters are baked as exact poses, and the bake's state - missing,
+ * stale or its fit per mode. Only a baked simulation exports.
+ */
+@Composable
+private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppet: PuppetModel, sim: RigSimEdit, commit: (RigSimEdit) -> Unit) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val caption = typography.caption.copy(fontSize = 9.5.sp)
+	val baking by viewModel.simulationBaking.collectAsState()
+
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.modes"), tooltip = tr("sim.modesTip"))
+		CompactDropdown((1..RigSimEdit.MAX_MODES).toList(), sim.modes, { commit(sim.copy(modes = it)) }, Modifier.weight(1f),
+			itemLabel = { "$it" }, height = 22.dp)
+	}
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.staticInputs"), tooltip = tr("sim.staticInputsTip"))
+		Spacer(Modifier.weight(1f))
+		CompactCheckbox(sim.staticInputs == null, { auto -> commit(sim.copy(staticInputs = if (auto) null else emptyList())) }, label = tr("sim.staticAuto"))
+	}
+	val statics = sim.staticInputs
+	if (statics == null) {
+		Text(if (sim.colliders.isEmpty()) tr("sim.staticAutoNone") else tr("sim.staticAutoHint"), style = caption, color = colors.textMuted)
+	} else {
+		for (parameter in statics) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+			Text(parameter, style = caption, color = colors.textPrimary, modifier = Modifier.weight(1f))
+			CompactIconButton(onClick = { commit(sim.copy(staticInputs = statics - parameter)) }, tooltip = tr("sim.remove"), size = 16.dp) {
+				IconClose(modifier = Modifier.size(9.dp), tint = colors.textMuted)
+			}
+		}
+		val available = puppet.parameters.map { it.id.raw }.filter { it !in statics && sim.bake?.parameters?.contains(it) != true }
+		if (statics.size < RigSimEdit.MAX_STATIC_INPUTS && available.isNotEmpty()) CompactDropdown(listOf<String?>(null) + available, null, { id ->
+			if (id != null) commit(sim.copy(staticInputs = statics + id))
+		}, Modifier.fillMaxWidth(), itemLabel = { it ?: tr("sim.addStaticInput") }, height = 22.dp)
+	}
+
+	val bake = sim.bake
+	val running = baking?.takeIf { it.id == sim.id }
+	when {
+		running != null -> Text(tr("sim.baking", (running.progress * 100f).toInt()), style = caption, color = colors.accent)
+		bake == null -> Text(tr("sim.notBaked"), style = caption, color = colors.warning)
+		else -> {
+			// Both hash or rebuild the targets' keyforms: once per rig and edit, not per frame.
+			val stale = remember(puppet, sim) { io.github.psd2live.core.sim.SimBake.stale(puppet, sim) }
+			val issues = remember(puppet, sim) { io.github.psd2live.core.sim.SimGenerator.issues(puppet, sim) }
+			if (stale) Text(tr("sim.bakeStale"), style = caption, color = colors.warning)
+			for (mode in bake.modes) Text(tr("sim.bakedMode", mode.axis.parameter, String.format(Locale.US, "%.1f", mode.amplitude)),
+				style = caption, color = colors.textPrimary)
+			if (bake.physics != null) Text(tr("sim.bakedFit", bake.physics.id, String.format(Locale.US, "%.2f", bake.fit)), style = caption,
+				color = if (bake.fit < 0.8f) colors.warning else colors.textPrimary)
+			if (bake.statics.isNotEmpty()) Text(tr("sim.bakedStatics", bake.statics.joinToString { it.parameter }), style = caption, color = colors.textPrimary)
+			Text(tr("sim.bakedError", String.format(Locale.US, "%.1f", bake.maxErrorPx)), style = caption, color = colors.textMuted)
+			issues.forEach { Hint(it) }
+		}
+	}
+	Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+		if (running != null) {
+			CompactButton(tr("sim.cancelBake"), viewModel::cancelSimulationBake, height = 22.dp)
+		} else {
+			CompactButton(tr(if (bake == null) "sim.bakeAction" else "sim.rebake"), { viewModel.bakeSimulation(sim.id) },
+				enabled = baking == null && !state.canvasEditBusy, height = 22.dp)
+			CompactButton(tr("sim.clearBake"), { viewModel.clearSimulationBake(sim.id) }, enabled = bake != null && !state.canvasEditBusy, height = 22.dp)
+		}
+	}
+	Text(tr("sim.bakeHint"), style = typography.caption.copy(fontSize = 9.sp), color = colors.textMuted)
 }
 
 @Composable

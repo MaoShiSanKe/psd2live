@@ -110,15 +110,28 @@ data class RigSimEdit(
     val groups: Map<VertexGroupKind, String> = emptyMap(),
     val glueRoles: Map<String, GlueRole> = emptyMap(),
     val colliders: List<SimColliderRef> = emptyList(),
-    /** Parameters that move the rig during training and preview; the bake reads them. */
+    /** Parameters that move the rig during training and preview; the bake reads them. Empty uses the head and body angles. */
     val inputs: List<PhysicsInput> = emptyList(),
     val enabled: Boolean = true,
+    /** Dynamic modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum each. */
+    val modes: Int = 2,
+    /**
+     * Parameters whose pose is baked exactly, as corrections on their own axes (a leg pushing the skirt).
+     * Null picks the parameters that move a collider.
+     */
+    val staticInputs: List<String>? = null,
+    /** The materialized bake; the rebuild writes it back without simulating. */
+    val bake: SimBakeResult? = null,
 ) {
     init {
         require(listOf(id, name).all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Simulation ID and name are required" }
         require(targets.isNotEmpty() && targets.distinct().size == targets.size && targets.all { it.isNotBlank() }) { "Simulation needs distinct target meshes" }
         require(colliders.none { it.drawableId in targets }) { "A simulated mesh cannot also be its own collider" }
         require(inputs.map { it.parameter }.distinct().size == inputs.size) { "A parameter feeds a simulation once" }
+        require(modes in 1..MAX_MODES) { "A simulation bakes 1..$MAX_MODES modes" }
+        require(staticInputs == null || staticInputs.size <= MAX_STATIC_INPUTS && staticInputs.distinct().size == staticInputs.size) {
+            "At most $MAX_STATIC_INPUTS distinct static inputs"
+        }
     }
 
     fun toJson() = buildJsonObject {
@@ -130,9 +143,15 @@ data class RigSimEdit(
         if (colliders.isNotEmpty()) putJsonArray("colliders") { colliders.forEach { add(it.toJson()) } }
         if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
         if (!enabled) put("enabled", false)
+        if (modes != 2) put("modes", modes)
+        staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
+        bake?.let { put("bake", it.toJson()) }
     }
 
-    /** [o] laid over this edit: arrays and maps replace, `material` merges field by field. */
+    /**
+     * [o] laid over this edit: arrays and maps replace, `material` merges field by field. `bake` is taken
+     * as given (null clears it); leaving it out keeps the bake, which then reads as stale if the setup changed.
+     */
     fun patched(o: JsonObject): RigSimEdit {
         val nextKind = o.string("kind")?.let(SimKind::parse) ?: kind
         return copy(
@@ -146,10 +165,24 @@ data class RigSimEdit(
             colliders = o["colliders"]?.jsonArray?.map { SimColliderRef.fromJson(it.jsonObject) } ?: colliders,
             inputs = o["inputs"]?.jsonArray?.map { PhysicsInput.fromJson(it.jsonObject) } ?: inputs,
             enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: enabled,
+            modes = o["modes"]?.jsonPrimitive?.intOrNull ?: modes,
+            staticInputs = when (val value = o["static_inputs"]) {
+                null -> staticInputs
+                is JsonNull -> null
+                else -> value.jsonArray.map { it.jsonPrimitive.content }
+            },
+            bake = when (val value = o["bake"]) {
+                null -> bake
+                is JsonNull -> null
+                else -> SimBakeResult.fromJson(value.jsonObject)
+            },
         )
     }
 
     companion object {
+        const val MAX_MODES = 3
+        const val MAX_STATIC_INPUTS = 4
+
         fun fromJson(o: JsonObject): RigSimEdit {
             val kind = o.string("kind")?.let(SimKind::parse) ?: SimKind.CLOTH
             val id = requireNotNull(o.string("id")) { "id is required" }

@@ -375,6 +375,51 @@ class PSD2LiveViewModel : AutoCloseable {
         data class Failed(val message: String) : SimulationStatus
     }
 
+    /** The simulation being baked and how far along, 0..1; null while none is. */
+    data class SimulationBaking(val id: String, val progress: Float)
+
+    private val _simulationBaking = MutableStateFlow<SimulationBaking?>(null)
+    val simulationBaking: StateFlow<SimulationBaking?> = _simulationBaking.asStateFlow()
+    private var simBaking: kotlinx.coroutines.Job? = null
+
+    /**
+     * Bakes simulation [id] off the frame thread into parameters, keyforms and pendulums, then commits it
+     * as one history node. Progress arrives in [simulationBaking], a failure in [simulationStatus].
+     */
+    internal fun bakeSimulation(id: String) {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        if (simBaking?.isActive == true || current.rigEdits.simEdits.none { it.id == id }) return
+        _simulationBaking.value = SimulationBaking(id, 0f)
+        simBaking = scope.launch {
+            try {
+                val bake = withContext(Dispatchers.Default) {
+                    val job = coroutineContext[kotlinx.coroutines.Job]
+                    io.github.psd2live.core.sim.SimAuthoring.bake(current.rigEdits, model.baseRig.puppet, id, io.github.psd2live.core.sim.SimBaker.Options(
+                        progress = { _simulationBaking.value = SimulationBaking(id, it) },
+                        cancelled = { job?.isCancelled == true },
+                    ))
+                }
+                runSimulationMutation("Baked simulation $id") { workspace, head -> workspace.putSimulationBake(id, bake, head) }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
+            } finally {
+                _simulationBaking.value = null
+            }
+        }
+    }
+
+    internal fun cancelSimulationBake() {
+        simBaking?.cancel()
+        simBaking = null
+        _simulationBaking.value = null
+    }
+
+    /** Removes simulation [id]'s bake: its parameters, keys and pendulums go with it. */
+    internal fun clearSimulationBake(id: String) =
+        runSimulationMutation("Cleared simulation bake $id") { workspace, head -> workspace.putSimulationBake(id, null, head) }
+
     /** Runs simulation [id] live in the preview, or stops it with null. */
     internal fun setSimulationPreview(id: String?) {
         if (_state.value.simulationPreviewId == id) return
@@ -483,7 +528,8 @@ class PSD2LiveViewModel : AutoCloseable {
             return
         }
         val puppet = model.rig.puppet
-        val pose = simulationPose(current, model)
+        // The live body replaces what its own bake would add, so the baked modes stay at rest under it.
+        val pose = io.github.psd2live.core.sim.SimGenerator.withoutModes(simulationPose(current, model), edit)
         if (simPreview.needs(puppet, edit)) {
             simPreparing?.cancel()
             simPreview.begin(puppet, edit)

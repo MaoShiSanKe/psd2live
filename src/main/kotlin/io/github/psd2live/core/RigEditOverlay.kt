@@ -243,6 +243,7 @@ data class RigEditOverlay(
         require(validFps(physicsFps)) { "FPS must be $UNLIMITED_FPS (unlimited) or within $PHYSICS_FPS_RANGE" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
         require(simEdits.map { it.id }.distinct().size == simEdits.size) { "Duplicate simulation IDs" }
+        require(simEdits.mapNotNull { it.bake }.flatMap { it.parameters }.let { it.distinct().size == it.size }) { "Each simulation needs its own parameters" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
 			"Rig parameter edits contain duplicate IDs"
@@ -281,7 +282,7 @@ data class RigEditOverlay(
 		for (delete in keyformDeleteEdits) {
 			model = applyKeyformDelete(model, delete)
 		}
-		return SwingGenerator.apply(authoringJournal.fold(model, RigAuthoringJournal::replay), swingEdits)
+		return io.github.psd2live.core.sim.SimGenerator.apply(SwingGenerator.apply(authoringJournal.fold(model, RigAuthoringJournal::replay), swingEdits), simEdits)
 	}
 
 	fun upsert(edit: RigParameterEdit): RigEditOverlay {

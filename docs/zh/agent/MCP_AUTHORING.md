@@ -2,7 +2,7 @@
 
 [文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../STATUS.md)
 
-本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **23 个工具**。`project_get_state`、`rig_transform`、`asset_import_png` 等名称属于内部适配层，不是公开工具，不能直接调用。
+本页以 [AgentAuthoringTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentAuthoringTools.kt) 的公开注册为准。当前是 **25 个工具**。`project_get_state`、`rig_transform`、`asset_import_png` 等名称属于内部适配层，不是公开工具，不能直接调用。
 
 ## 接入
 
@@ -18,7 +18,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 
 | 工具 | 请求结构 | 用途 / 分支 |
 | --- | --- | --- |
-| `inspect` | 顶层 `scope` / `target` | `project`、`settings`、`preview`、`objects`、`layers`、`parameters`、`physics`、`swings`、`paths`；图层摘要包含有效网格配置 |
+| `inspect` | 顶层 `scope` / `target` | `project`、`settings`、`preview`、`objects`、`layers`、`parameters`、`physics`、`swings`、`paths`、`simulations`、`vertex_groups`；图层摘要包含有效网格配置 |
 | `layer` | 顶层 `state`、`layer_id` 及分类字段 | 更新既有源图层的类型、部件、侧别、参数关联和切换 ID；省略的字段保持原值 |
 | `layer_mesh` | 顶层 `state`、`layer_id`、`changes` 或 `reset` | 逐图层覆盖或重置自适应网格参数；用 `inspect.layers` 读取当前值 |
 | `paint` | `request.mode` | `brush/eraser/bucket/shape/clear`；画布像素坐标，一次手势一个历史节点 |
@@ -37,6 +37,8 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `asset` | `request.mode` | `psd/create/split/reference/import/register/preview/add/place/finalize/inspect/reprocess/remove`；`psd` 从本地绝对路径导入空工作区 |
 | `swing` | `request.mode` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics` | `request.mode` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、按阶跃输入模拟并返回峰值与稳定时间、按标准晃动调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
+| `simulation` | 顶层 `mode`、`state`、`id` | `put/delete/simulate/bake/clear_bake`：网格上的 2D 布料 / 头发模拟，只在编辑器内运行；`bake` 把它烘焙成 `ParamSim<id>_<k>` 参数的关键形与拟合摆锤 `PhysicsSim_<id>`（每节驱动一个参数），并返回拟合 R² 与误差，见[模拟与烘焙](../guide/SIMULATION.md) |
+| `vertex_group` | 顶层 `state`、`target`、`name` | 按规则 `fill/outline/gradient/glue/region` 生成或 `delete` 仅本软件使用的顶点权重组（固定点、碰撞、刚度等），不导出 |
 | `skeleton` | `request.mode` | `get/propose/auto/put/enable/bone/move/bind/remove/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定；`pose` 求 FK/IK 参数值，不写历史 |
 | `motion` | `request.mode` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧 |
 | `path` | `request.mode` | `get/list/preview/put/delete/deform` |

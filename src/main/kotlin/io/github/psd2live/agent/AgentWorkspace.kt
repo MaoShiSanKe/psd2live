@@ -497,6 +497,15 @@ interface AgentWorkspace {
         throw UnsupportedOperationException("Simulation editing is unavailable")
     suspend fun deleteSimulation(id: String, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Simulation deletion is unavailable")
+    /**
+     * Bakes simulation [id] into parameters, keyforms and pendulums on the current rig; slow. The second
+     * value summarizes the bake (modes, pendulum fit, error).
+     */
+    suspend fun bakeSimulation(id: String, expectedHead: String): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
+        throw UnsupportedOperationException("Simulation baking is unavailable")
+    /** Stores [bake] as simulation [id]'s bake (null clears it) and turns physics on for a bake. */
+    suspend fun putSimulationBake(id: String, bake: io.github.psd2live.core.sim.SimBakeResult?, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation baking is unavailable")
     /** Runs simulation [id] on the current rig and reports how it moves; read-only. */
     fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject =
         throw UnsupportedOperationException("Simulation is unavailable")
