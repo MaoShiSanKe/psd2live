@@ -602,6 +602,7 @@ fun CanvasViewportComposable(
 					ShortcutAction.TOOL_SUBDIVIDE -> { editor.activateTool(CanvasTool.SUBDIVIDE); true }
 					ShortcutAction.TOOL_KNIFE -> { editor.activateTool(CanvasTool.KNIFE); true }
 					ShortcutAction.TOOL_WEIGHT_PAINT -> { editor.activateTool(CanvasTool.WEIGHT_PAINT); true }
+					ShortcutAction.TOOL_WEIGHT_GRADIENT -> { editor.activateTool(CanvasTool.WEIGHT_GRADIENT); true }
 					ShortcutAction.SELECTION_STYLE_BOX -> { editor.selectionStyle = SelectionStyle.BOX; true }
 					ShortcutAction.SELECTION_STYLE_LASSO -> { editor.selectionStyle = SelectionStyle.LASSO; true }
 					ShortcutAction.SELECT_LINKED -> { editor.selectLinked(); true }
@@ -1334,6 +1335,8 @@ fun CanvasViewportComposable(
             )
         }
 		if (mode == CanvasMode.PREVIEW && previewModel != null) {
+			// The same mode menu as the edit canvas, on Preview: any other row goes back to editing.
+			PreviewModeBar(editor) { focusRequester.requestFocus() }
 			CanvasPreviewToolbar(
 				animationEnabled = canvasState.animationEnabled,
 				mouseTrackingEnabled = canvasState.mouseTrackingEnabled,

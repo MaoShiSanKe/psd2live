@@ -153,6 +153,7 @@ internal fun DrawScope.drawToolIcon(
         CanvasTool.SUBDIVIDE -> pen.subdivide()
         CanvasTool.KNIFE -> pen.knife()
         CanvasTool.WEIGHT_PAINT -> pen.weightPaint()
+        CanvasTool.WEIGHT_GRADIENT -> pen.weightGradient()
         CanvasTool.PAINT_BRUSH -> pen.paintBrush()
         CanvasTool.PAINT_PENCIL -> pen.pencil()
         CanvasTool.PAINT_ERASER -> pen.eraser()
@@ -206,6 +207,35 @@ internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
             }
             listOf(a, b, c, d).forEach { (x, y) -> pen.dot(x, y, 1.9f) }
         }
+        // Simulate: a cloth pinned along its top edge, its hem swinging free.
+        EditHierarchyMode.SIMULATE -> {
+            val cloth = pen.path {
+                m(3.2f, 3.4f)
+                l(14.8f, 3.4f)
+                c(15.4f, 7.6f, 16.6f, 11.4f, 15.6f, 14.8f)
+                c(13.6f, 13.2f, 11.6f, 16.4f, 9.2f, 14.6f)
+                c(7f, 16.4f, 4.6f, 13.2f, 2.4f, 14.6f)
+                c(2f, 10.6f, 3.4f, 7f, 3.2f, 3.4f)
+                z()
+            }
+            pen.fill(cloth, pen.soft)
+            pen.outline(cloth)
+            pen.dot(3.2f, 3.4f, 1.8f)
+            pen.dot(9f, 3.4f, 1.8f)
+            pen.dot(14.8f, 3.4f, 1.8f)
+        }
+        // Skeleton: two bones meeting at a joint.
+        EditHierarchyMode.SKELETON -> {
+            val upper = pen.path { m(3.4f, 3f); l(5.6f, 2.4f); l(10f, 9.6f); l(8.2f, 10.8f); z() }
+            val lower = pen.path { m(9.4f, 10.2f); l(14.6f, 12.6f); l(13.8f, 14.8f); l(8.6f, 12f); z() }
+            pen.fill(upper, pen.soft)
+            pen.outline(upper)
+            pen.fill(lower, pen.soft)
+            pen.outline(lower)
+            pen.dot(4.2f, 3f, 1.9f)
+            pen.dot(9.2f, 10.4f, 2.2f)
+            pen.dot(14.6f, 14f, 1.6f)
+        }
         // Paint: a palette with its wells.
         EditHierarchyMode.PAINT -> {
             val palette = pen.path {
@@ -226,6 +256,21 @@ internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
             pen.dot(5.8f, 11.8f, 1.4f)
         }
     }
+}
+
+/** Preview in the mode list: an eye, since the canvas only watches the model play. */
+internal fun DrawScope.drawPreviewModeIcon(color: Color) {
+    val pen = IconPen(this, color)
+    val eye = pen.path {
+        m(1.8f, 9f)
+        c(4.2f, 4.4f, 13.8f, 4.4f, 16.2f, 9f)
+        c(13.8f, 13.6f, 4.2f, 13.6f, 1.8f, 9f)
+        z()
+    }
+    pen.fill(eye, pen.soft)
+    pen.outline(eye)
+    pen.ring(9f, 9f, 2.6f)
+    pen.dot(9f, 9f, 1.1f)
 }
 
 internal fun DrawScope.drawBrushShapeIcon(shape: BrushShape, color: Color) {
@@ -474,6 +519,19 @@ private fun IconPen.weightPaint() {
     dot(3f, 14.5f, 2.4f)
     dot(9f, 4f, 1.7f)
     dot(15f, 14.5f, 1.1f)
+}
+
+/** A ramp from full to empty along the drag, with the drag's two ends. */
+private fun IconPen.weightGradient() {
+    val bands = 5
+    for (i in 0 until bands) {
+        val alpha = 1f - i / bands.toFloat()
+        fillBox(2.6f + i * 2.56f, 5f, 2.56f, 8f, 0f, color.copy(alpha = color.alpha * (0.12f + 0.5f * alpha)))
+    }
+    box(2.6f, 5f, 12.8f, 8f, 0.8f)
+    line(3.6f, 9f, 14.4f, 9f, width = 1.1f)
+    dot(3.6f, 9f, 1.8f)
+    ring(14.4f, 9f, 1.6f, width = 1.1f)
 }
 
 // --- painting --------------------------------------------------------------------------------------------

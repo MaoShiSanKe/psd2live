@@ -68,6 +68,21 @@ fun hierarchyModeViewPreset(mode: EditHierarchyMode, current: TabViewOptions): T
 		showDeformPaths = true,
 	)
 	EditHierarchyMode.EDIT -> current.copy(showMesh = true, showDeformPaths = true)
+	// The weights are the subject: the wires stay, the deformer guides would only cover them.
+	EditHierarchyMode.SIMULATE -> current.copy(
+		showMesh = true,
+		showWarp = false,
+		showRotation = false,
+		showDeformPaths = false,
+	)
+	// Bones over the art and nothing else, the way skeleton editing has always shown them.
+	EditHierarchyMode.SKELETON -> current.copy(
+		showMesh = false,
+		showWarp = false,
+		showRotation = false,
+		warpShowIndices = false,
+		showSkeleton = true,
+	)
 	EditHierarchyMode.PAINT -> current.copy(
 		showMesh = false,
 		showWarp = false,

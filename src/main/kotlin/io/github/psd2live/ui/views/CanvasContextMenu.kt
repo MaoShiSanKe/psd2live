@@ -75,7 +75,10 @@ internal fun canvasContextMenuHasContent(editor: CanvasEditor): Boolean {
         EditHierarchyMode.SELECT -> editor.tool in setOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT)
         EditHierarchyMode.DEFORM,
         EditHierarchyMode.EDIT,
+        EditHierarchyMode.SIMULATE,
         EditHierarchyMode.PAINT -> true
+        // Skeleton's two tools keep their actions on the mode strip and in the skeleton panel.
+        EditHierarchyMode.SKELETON -> false
     }
 }
 
@@ -115,6 +118,8 @@ internal fun CanvasContextMenu(
                 EditHierarchyMode.SELECT -> SelectModeContextMenu(editor, onDismissRequest, onAction)
                 EditHierarchyMode.DEFORM -> DeformModeContextMenu(editor, onDismissRequest, onAction)
                 EditHierarchyMode.EDIT -> EditModeContextMenu(editor, onDismissRequest, onAction)
+                EditHierarchyMode.SIMULATE -> SimulateModeContextMenu(editor, onDismissRequest, onAction)
+                EditHierarchyMode.SKELETON -> Unit
                 EditHierarchyMode.PAINT -> PaintModeContextMenu(editor, onDismissRequest, onAction)
             }
         }
@@ -230,6 +235,64 @@ private fun ColumnScope.SelectModeContextMenu(
         }
         else -> Unit
     }
+}
+
+// ─── SIMULATE mode ───────────────────────────────────────────────────────────
+
+@Composable
+private fun ColumnScope.SimulateModeContextMenu(
+    editor: CanvasEditor,
+    onDismissRequest: () -> Unit,
+    onAction: () -> Unit,
+) {
+    fun done() {
+        onAction()
+        onDismissRequest()
+    }
+    if (editor.tool == CanvasTool.WEIGHT_PAINT) {
+        ParamsPanel {
+            ParamSliderRow(
+                label = tr("editor.radius"),
+                value = editor.radius,
+                onValueChange = { editor.radius = it },
+                valueRange = 4f..500f,
+                display = "${editor.radius.toInt()}px",
+            )
+            ParamSliderRow(
+                label = tr("editor.hardness"),
+                value = editor.hardness * 100f,
+                onValueChange = { editor.hardness = (it / 100f).coerceIn(0f, 0.95f) },
+                valueRange = 0f..95f,
+                display = "${(editor.hardness * 100).toInt()}%",
+            )
+            ParamSliderRow(
+                label = tr("editor.strength"),
+                value = editor.strength * 100f,
+                onValueChange = { editor.strength = (it / 100f).coerceIn(0.01f, 1f) },
+                valueRange = 1f..100f,
+                display = "${(editor.strength * 100).toInt()}%",
+            )
+        }
+        CompactMenuDivider()
+    }
+    MenuSectionLabel(tr("editor.weightGroup"))
+    ActionGrid(
+        io.github.psd2live.ui.WeightPaintMode.entries.map { mode ->
+            ActionSpec(tr(mode.labelKey), primary = editor.weightPaintMode == mode) {
+                editor.weightPaintMode = mode
+                done()
+            }
+        }
+    )
+    CompactMenuDivider()
+    ActionGrid(
+        listOf(
+            ActionSpec(tr("editor.weightFill"), enabled = editor.editable) { editor.fillVertexGroup(1f); done() },
+            ActionSpec(tr("editor.weightClear"), enabled = editor.editable) { editor.fillVertexGroup(0f); done() },
+            ActionSpec(tr("editor.weightInvert"), enabled = editor.editable) { editor.invertVertexGroup(); done() },
+            ActionSpec(tr("editor.weightDelete"), enabled = editor.editable, danger = true) { editor.deleteVertexGroup(); done() },
+        )
+    )
 }
 
 // ─── DEFORM mode ─────────────────────────────────────────────────────────────

@@ -51,6 +51,8 @@ import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.frostedGlass
+import io.github.psd2live.ui.tutorial.TutorialTargetId
+import io.github.psd2live.ui.tutorial.tutorialTarget
 
 /**
  * Preview-tab twin of the edit left toolbar: play/pause, mouse tracking, physics and the project's frame
@@ -118,7 +120,7 @@ internal fun BoxScope.CanvasPreviewToolbar(
 	Column(
 		modifier = modifier
 			.align(Alignment.TopStart)
-			.padding(start = 8.dp, top = 8.dp)
+			.padding(start = 8.dp, top = 44.dp)
 			.width(animatedWidth)
 			.frostedGlass(
 				shape = RoundedCornerShape(6.dp),
@@ -195,6 +197,51 @@ internal fun BoxScope.CanvasPreviewToolbar(
 				}
 			}
 		}
+	}
+}
+
+/**
+ * Preview's mode bar: the canvas mode menu alone, where the edit canvas has it with its mode's extras.
+ * It is the way back to editing, so it stays where the edit canvas keeps it.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun BoxScope.PreviewModeBar(editor: io.github.psd2live.ui.CanvasEditor, focus: () -> Unit) {
+	val interactionSource = remember { MutableInteractionSource() }
+	val isHoveredBySource by interactionSource.collectIsHoveredAsState()
+	var isHoveredByEvent by remember { mutableStateOf(false) }
+	val isHovered = isHoveredBySource || isHoveredByEvent
+	val elevation by animateDpAsState(
+		targetValue = if (isHovered) 8.dp else 2.dp,
+		animationSpec = tween(durationMillis = 200),
+	)
+	Row(
+		modifier = Modifier
+			.align(Alignment.TopStart)
+			.padding(start = 8.dp, top = 8.dp)
+			.tutorialTarget(TutorialTargetId.MODE_BAR)
+			.frostedGlass(
+				shape = RoundedCornerShape(6.dp),
+				isHovered = isHovered,
+				elevation = elevation,
+				alpha = if (isHovered) 0.88f else 0.78f,
+			)
+			.hoverable(interactionSource)
+			.onPointerEvent(PointerEventType.Enter) { isHoveredByEvent = true }
+			.onPointerEvent(PointerEventType.Exit) { isHoveredByEvent = false }
+			.padding(horizontal = 4.dp, vertical = 3.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		CanvasModeMenu(
+			current = CanvasModeChoice.PREVIEW,
+			modifier = Modifier
+				.tutorialTarget(TutorialTargetId.EDIT_TAB)
+				.tutorialTarget(TutorialTargetId.PREVIEW_TAB),
+			onSelect = { choice ->
+				editor.chooseCanvasMode(choice)
+				focus()
+			},
+		)
 	}
 }
 

@@ -852,18 +852,7 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                 }
                 .padding(horizontal = if (tab) 10.dp else 7.dp, vertical = 2.dp))
         if (showCanvasTools) {
-            CanvasModeChip(
-                label = tr("tab.edit"),
-                active = canvas.mode == CanvasMode.EDIT,
-                modifier = Modifier.tutorialTarget(TutorialTargetId.EDIT_TAB),
-                onClick = { viewModel.setCanvasMode(canvas.id, CanvasMode.EDIT) },
-            )
-            CanvasModeChip(
-                label = tr("tab.preview"),
-                active = canvas.mode == CanvasMode.PREVIEW,
-                modifier = Modifier.tutorialTarget(TutorialTargetId.PREVIEW_TAB),
-                onClick = { viewModel.setCanvasMode(canvas.id, CanvasMode.PREVIEW) },
-            )
+            // Edit / Preview is picked from the canvas's own mode menu, with the editing modes.
             Box(Modifier.tutorialTarget(TutorialTargetId.VIEW_OPTIONS_MENU)) {
                 CanvasModeChip(
                     label = "${tr("tab.options.short")} \u25BE",

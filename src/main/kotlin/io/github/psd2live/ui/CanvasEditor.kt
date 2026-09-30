@@ -31,6 +31,10 @@ enum class EditHierarchyMode {
     DEFORM,
     /** 编辑: change structure - topology, splitting and deformer creation. */
     EDIT,
+    /** 模拟: simulation weight groups and cloth / hair setup on the selected meshes. */
+    SIMULATE,
+    /** 骨骼: pose the armature or reshape it. The skeleton is the target for as long as the mode lasts. */
+    SKELETON,
     /** 绘画: raster repainting of one layer slice. */
     PAINT,
 }
@@ -81,6 +85,8 @@ internal fun modeLabel(mode: EditHierarchyMode): String = tr(
         EditHierarchyMode.SELECT -> "editor.mode.select"
         EditHierarchyMode.DEFORM -> "editor.mode.deform"
         EditHierarchyMode.EDIT -> "editor.mode.edit"
+        EditHierarchyMode.SIMULATE -> "editor.mode.simulate"
+        EditHierarchyMode.SKELETON -> "editor.mode.skeleton"
         EditHierarchyMode.PAINT -> "editor.mode.paint"
     }
 )
@@ -105,6 +111,8 @@ internal enum class CanvasTool(val action: ShortcutAction) {
     KNIFE(ShortcutAction.TOOL_KNIFE),
     /** Paints a simulation vertex group (pin, collider, stiffness...) on the edited meshes. */
     WEIGHT_PAINT(ShortcutAction.TOOL_WEIGHT_PAINT),
+    /** Drags a linear gradient into the same vertex group the weight brush paints. */
+    WEIGHT_GRADIENT(ShortcutAction.TOOL_WEIGHT_GRADIENT),
     // Painting mode tools (L1)
     PAINT_BRUSH(ShortcutAction.TOOL_PAINT_BRUSH),
     PAINT_PENCIL(ShortcutAction.TOOL_PAINT_PENCIL),
@@ -276,6 +284,7 @@ internal val TOOLBAR_TOOL_ORDER = listOf(
     CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE,
     CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT,
     CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE,
+    CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT,
     CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER,
     CanvasTool.PAINT_BUCKET, CanvasTool.PAINT_EYEDROPPER,
     CanvasTool.PAINT_SHAPE,
@@ -289,18 +298,10 @@ internal val TOOLBAR_DIVIDERS = listOf(CanvasTool.BRUSH_SELECT, CanvasTool.SKELE
  * context menu or shortcuts (C / R / P).
  *
  * Object mode is the one without the vertex tools. Deform mode edits points without changing topology.
- * Edit mode handles mesh topology (subdivide / knife). Paint mode replaces layer pixels.
- *
- * With the skeleton as the target, Deform mode poses it and Edit mode reshapes it, and each offers only
- * that one tool: none of the point tools has anything to act on.
+ * Edit mode handles mesh topology (subdivide / knife). Simulate paints the simulation's vertex groups,
+ * Skeleton poses or reshapes the armature, and Paint replaces layer pixels.
  */
-internal fun toolbarGroups(mode: EditHierarchyMode, skeleton: Boolean = false): List<List<CanvasTool>> = when {
-    skeleton && mode == EditHierarchyMode.DEFORM -> listOf(listOf(CanvasTool.SKELETON_POSE))
-    skeleton && mode == EditHierarchyMode.EDIT -> listOf(listOf(CanvasTool.SKELETON_EDIT))
-    else -> drawableToolbarGroups(mode)
-}
-
-private fun drawableToolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = when (mode) {
+internal fun toolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = when (mode) {
     EditHierarchyMode.SELECT -> listOf(
         listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT),
     )
@@ -311,7 +312,13 @@ private fun drawableToolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool
     EditHierarchyMode.EDIT -> listOf(
         listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT),
         listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE),
-        listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE, CanvasTool.WEIGHT_PAINT),
+        listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE),
+    )
+    EditHierarchyMode.SIMULATE -> listOf(
+        listOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT),
+    )
+    EditHierarchyMode.SKELETON -> listOf(
+        listOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT),
     )
     EditHierarchyMode.PAINT -> listOf(
         listOf(CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER),
@@ -319,6 +326,12 @@ private fun drawableToolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool
         listOf(CanvasTool.PAINT_SHAPE),
     )
 }
+
+/** The simulation weight tools: both write the vertex group named in the tool options. */
+internal val WEIGHT_TOOLS = setOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT)
+
+/** The two tools of Skeleton mode. */
+internal val SKELETON_TOOLS = setOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT)
 
 /**
  * The target kinds a point selection may be framed in.
@@ -406,14 +419,14 @@ internal class CanvasEditor(
     private val canvasId: String = viewModel.state.value.activeCanvas.id,
 ) {
 	/**
-	 * The skeleton is a target of its own, like a drawable or a deformer: Object mode picks it, Deform mode
-	 * poses it and Edit mode reshapes it. It is kept on this canvas rather than in the document selection
-	 * because the armature is one per project; picking a layer or deformer anywhere drops it.
+	 * The skeleton is a target of its own, like a drawable or a deformer: Object mode picks it and Skeleton
+	 * mode poses or reshapes it. It is kept on this canvas rather than in the document selection because
+	 * the armature is one per project; picking a layer or deformer anywhere drops it.
 	 */
 	var skeletonSelected by mutableStateOf(false)
 		private set
 
-	/** Edit mode's working copy of the armature. Leaving Edit mode writes it back as one history entry. */
+	/** The Skeleton Edit tool's working copy of the armature. Leaving the tool writes it back as one history entry. */
 	var skeletonDraft by mutableStateOf<io.github.psd2live.core.SkeletonSpec?>(null)
 		private set
 	var selectedBoneId by mutableStateOf<String?>(null)
@@ -426,7 +439,13 @@ internal class CanvasEditor(
 
 	/** Makes the skeleton the target, dropping any layer or deformer selection, and keeps the current mode if it still applies. */
 	fun selectSkeleton(boneId: String? = null) {
-		val spec = committedSkeleton ?: return
+		if (!takeSkeleton(boneId)) return
+		settleModeOnTarget()
+	}
+
+	/** The target half of [selectSkeleton], without re-fitting the mode: entering Skeleton mode does that itself. */
+	private fun takeSkeleton(boneId: String? = null): Boolean {
+		val spec = committedSkeleton ?: return false
 		if (!skeletonSelected) {
 			skeletonSelected = true
 			objects = emptySet()
@@ -437,7 +456,7 @@ internal class CanvasEditor(
 		}
 		selectedBoneId = (skeletonDraft ?: spec).let { s -> boneId?.takeIf { s.bone(it) != null } ?: selectedBoneId?.takeIf { s.bone(it) != null }
 			?: s.bones.firstOrNull { !it.role.anchor }?.id }
-		settleModeOnTarget()
+		return true
 	}
 
 	/** Drops the skeleton target; an open edit is kept, not thrown away. */
@@ -448,97 +467,91 @@ internal class CanvasEditor(
 		settleModeOnTarget()
 	}
 
-	/** Selects the skeleton and enters Edit mode on it, proposing one from the layers' tags the first time. */
+	/** Enters Skeleton mode on the Edit tool, proposing an armature from the layers' tags the first time. */
 	fun beginSkeletonEdit() {
 		if (busy) return
 		if (placement != null) cancelPlacement()
-		if (committedSkeleton == null) {
-			val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return
-			viewModel.setSkeleton(spec.copy(enabled = true))
-		}
-		if (viewBeforeSkeletonEdit == null) {
-			viewBeforeSkeletonEdit = state.activeTabView
-		}
-		if (modeBeforeSkeletonEdit == null) {
-			modeBeforeSkeletonEdit = hierarchyMode.takeIf { it != EditHierarchyMode.EDIT } ?: EditHierarchyMode.SELECT
-		}
-		selectSkeleton()
-		setHierarchyMode(EditHierarchyMode.EDIT)
+		if (!ensureSkeleton()) return
+		enterSkeletonMode(CanvasTool.SKELETON_EDIT)
 	}
 
-	/** Selects the skeleton and enters Deform mode on it, where the pose tool turns its bones. */
+	/** Enters Skeleton mode on the Pose tool, which turns the bones of an enabled armature. */
 	fun beginSkeletonPose() {
 		if (busy) return
-		selectSkeleton()
-		// Without a skeleton there is nothing to pose, and Deform mode would fall on the selected drawable.
-		if (!skeletonSelected || committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
-		setHierarchyMode(EditHierarchyMode.DEFORM)
-		if (state.showWarp || state.showRotation || state.showMesh) {
-			viewModel.updateEditViewOptions(canvasId, workspaceId) {
-				it.copy(showWarp = false, showRotation = false, showMesh = false)
-			}
-		}
+		if (committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
+		enterSkeletonMode(CanvasTool.SKELETON_POSE)
 	}
 
-	/** Edit mode's display toggles from before the skeleton edit, put back when it closes. */
-	private var viewBeforeSkeletonEdit: TabViewOptions? = null
-	private var modeBeforeSkeletonEdit: EditHierarchyMode? = null
+	/** Proposes an armature from the layers' tags when the project has none yet. */
+	private fun ensureSkeleton(): Boolean {
+		if (committedSkeleton != null) return true
+		val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return false
+		viewModel.setSkeleton(spec.copy(enabled = true))
+		return committedSkeleton != null
+	}
+
+	private fun enterSkeletonMode(next: CanvasTool) {
+		if (hierarchyMode != EditHierarchyMode.SKELETON) {
+			modeBeforeSkeleton = hierarchyMode
+			enterMode(EditHierarchyMode.SKELETON)
+		}
+		if (hierarchyMode == EditHierarchyMode.SKELETON) switchSkeletonTool(next)
+	}
 
 	/**
-	 * Bones are placed on the rest pose, so the parameters go back to their defaults. The display drops
-	 * the deformer guides and mesh wires and keeps only the bones' color tint over the art.
+	 * Moves between the two Skeleton tools. The Edit tool works on a draft of the armature on the rest pose;
+	 * going back to Pose writes the draft back, the way leaving the mode does.
 	 */
+	private fun switchSkeletonTool(next: CanvasTool) {
+		error = null
+		if (next == CanvasTool.SKELETON_POSE) {
+			if (committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
+			commitSkeletonDraft()
+			tool = next
+		} else {
+			tool = CanvasTool.SKELETON_EDIT
+			if (skeletonDraft == null) openSkeletonDraft()
+		}
+		clearHover()
+	}
+
+	/** The mode Skeleton mode was entered from, where cancelling an edit of a disabled armature returns. */
+	private var modeBeforeSkeleton: EditHierarchyMode? = null
+
+	/** Bones are placed on the rest pose, so the parameters go back to their defaults. */
 	private fun openSkeletonDraft() {
 		val spec = committedSkeleton ?: return
 		skeletonDraft = spec
 		if (selectedBoneId == null || spec.bone(selectedBoneId!!) == null) selectedBoneId = spec.bones.firstOrNull { !it.role.anchor }?.id
 		viewModel.resetAllParameters()
-		val before = viewModel.updateEditViewOptions(canvasId, workspaceId) {
-			it.copy(showMesh = false, showWarp = false, showRotation = false, warpShowIndices = false)
-		}
-		if (viewBeforeSkeletonEdit == null) {
-			viewBeforeSkeletonEdit = before
-		}
-	}
-
-	/** Ends the edit, handing Edit mode back the display it had before. */
-	private fun closeSkeletonDraft(restoreView: Boolean = true) {
-		skeletonDraft = null
-		if (restoreView) {
-			viewBeforeSkeletonEdit?.let { before -> viewModel.updateEditViewOptions(canvasId, workspaceId) { before } }
-			viewBeforeSkeletonEdit = null
-		}
 	}
 
 	/** Writes the draft back when it changed. Keeps whether the skeleton is enabled. */
-	fun commitSkeletonDraft(restoreView: Boolean = true) {
+	fun commitSkeletonDraft() {
 		val draft = skeletonDraft ?: return
-		closeSkeletonDraft(restoreView)
+		skeletonDraft = null
 		val committed = state.rigEdits.skeleton
 		val next = draft.copy(enabled = committed?.enabled ?: true)
 		if (next != committed) viewModel.setSkeleton(next)
 	}
 
-	/** Leaves Edit mode on the skeleton, keeping the edit. */
+	/** Ends the edit, keeping it: on to posing when there is an enabled armature, else back where the mode was entered from. */
 	fun finishSkeletonEdit() {
 		if (skeletonDraft == null) return
-		setHierarchyMode(skeletonExitMode())
+		commitSkeletonDraft()
+		leaveSkeletonEdit()
 	}
 
-	/** Leaves Edit mode on the skeleton and throws the edit away. The skeleton stays selected. */
+	/** Ends the edit and throws it away. */
 	fun cancelSkeletonEdit() {
 		if (skeletonDraft == null) return
-		val targetMode = modeBeforeSkeletonEdit ?: EditHierarchyMode.SELECT
-		modeBeforeSkeletonEdit = null
 		skeletonDraft = null
-		setHierarchyMode(targetMode)
+		leaveSkeletonEdit()
 	}
 
-	/** Where leaving skeleton Edit mode lands: posing when there is an enabled skeleton to pose. */
-	private fun skeletonExitMode(): EditHierarchyMode {
-		val mode = if (committedSkeleton?.enabled == true) EditHierarchyMode.DEFORM else (modeBeforeSkeletonEdit ?: EditHierarchyMode.SELECT)
-		modeBeforeSkeletonEdit = null
-		return mode
+	private fun leaveSkeletonEdit() {
+		if (committedSkeleton?.enabled == true) switchSkeletonTool(CanvasTool.SKELETON_POSE)
+		else setHierarchyMode(modeBeforeSkeleton?.takeIf { it != EditHierarchyMode.SKELETON } ?: EditHierarchyMode.SELECT)
 	}
 
 	/** Turns the skeleton off or back on. The bones are kept either way, so turning it back on loses nothing. */
@@ -612,7 +625,7 @@ internal class CanvasEditor(
 
 	/** The pose tool is armed and has a baked skeleton to drive. */
 	fun posing(): Boolean = tool == CanvasTool.SKELETON_POSE && skeletonSelected &&
-		hierarchyMode == EditHierarchyMode.DEFORM && bakedSkeleton != null
+		hierarchyMode == EditHierarchyMode.SKELETON && bakedSkeleton != null
 
 	fun hoverPose(pos: Offset, viewport: CanvasViewport) {
 		poseHover = SkeletonPoseTool.hit(posedBones(), pos, viewport)
@@ -748,6 +761,8 @@ internal class CanvasEditor(
             tool == CanvasTool.SELECT && target?.kind == "rotation" -> "editor.rotationGestureHint"
             tool == CanvasTool.CREATE_DEFORM_PATH -> "editor.pathHint"
             tool == CanvasTool.INFLATE -> "editor.inflateHint"
+            tool == CanvasTool.WEIGHT_PAINT -> "editor.weightHint"
+            tool == CanvasTool.WEIGHT_GRADIENT -> "editor.weightGradientHint"
             hierarchyMode == EditHierarchyMode.PAINT -> "editor.paintHint"
             hierarchyMode == EditHierarchyMode.SELECT && tool == CanvasTool.SELECT -> "editor.objectHint"
             hierarchyMode == EditHierarchyMode.EDIT && tool == CanvasTool.SELECT &&
@@ -916,12 +931,24 @@ internal class CanvasEditor(
     /** The name strokes write to: a blank field falls back to the kind's own name. */
     private val paintedGroupName: String get() = weightGroupName.trim().ifBlank { weightGroupKind.jsonName }
     var weightGroupKind by mutableStateOf(VertexGroupKind.PIN)
-    /** Off: a stroke adds [strength] (Alt subtracts). On: it pulls the weights toward [strength]. */
-    var weightPaintSet by mutableStateOf(false)
+    /** How strokes and gradients combine with the group; Alt swaps adding and subtracting for one stroke. */
+    var weightPaintMode by mutableStateOf(WeightPaintMode.ADD)
     private var weightStroking = false
-    private var weightErasing = false
-    /** Per edited mesh, the strongest brush falloff the current stroke has reached at each vertex. */
+    /** The mode the stroke in hand runs in, Alt included; the options bar keeps showing [weightPaintMode]. */
+    var weightStrokeMode by mutableStateOf(WeightPaintMode.ADD)
+        private set
+    /** Per edited mesh, the strongest reach the current stroke or gradient has at each vertex. */
     var weightStroke by mutableStateOf<Map<String, FloatArray>>(emptyMap())
+        private set
+    /** Alt as of the last pointer move, so the brush ring shows a subtracting stroke before it starts. */
+    private var weightAltHeld by mutableStateOf(false)
+
+    /** The mode the stroke in hand runs in, or the one a press right now would start. */
+    fun weightStrokeModeShown(): WeightPaintMode =
+        if (weightStroking) weightStrokeMode else WeightPaint.effective(weightPaintMode, weightAltHeld)
+
+    /** The gradient being dragged, in screen space: start and end. */
+    var weightGradient by mutableStateOf<Pair<Offset, Offset>?>(null)
         private set
     var brushSelecting by mutableStateOf(false)
 
@@ -2186,6 +2213,7 @@ internal class CanvasEditor(
         glueStroking = false
         weightStroking = false
         weightStroke = emptyMap()
+        weightGradient = null
         glueStrokeA = emptySet()
         glueStrokeB = emptySet()
         poseDrag = null
@@ -2221,8 +2249,8 @@ internal class CanvasEditor(
             return
         }
         createSessionReturnMode = null
-        if (next == CanvasTool.SKELETON_POSE || next == CanvasTool.SKELETON_EDIT) {
-            // The skeleton tools are how the skeleton is reached, so arming one selects it.
+        if (next in SKELETON_TOOLS) {
+            // The skeleton tools are how the skeleton is reached, so arming one enters Skeleton mode on it.
             if (next == CanvasTool.SKELETON_EDIT) beginSkeletonEdit() else beginSkeletonPose()
             return
         }
@@ -3054,12 +3082,25 @@ internal class CanvasEditor(
     @JvmName("changeHierarchyMode")
     fun setHierarchyMode(next: EditHierarchyMode) {
         if (busy) return
+        if (next == EditHierarchyMode.SKELETON) {
+            if (hierarchyMode == EditHierarchyMode.SKELETON) return
+            if (placement != null) cancelPlacement()
+            if (!ensureSkeleton()) return
+            enterSkeletonMode(if (committedSkeleton?.enabled == true) CanvasTool.SKELETON_POSE else CanvasTool.SKELETON_EDIT)
+            return
+        }
         if (!hasPartFor(next)) { deferMode(next, null); return }
         enterMode(next)
     }
 
-    /** The left toolbar's tools for the current mode and target. */
-    fun palette(): List<CanvasTool> = toolbarGroups(hierarchyMode, skeletonSelected).flatten()
+    /** Switches this canvas between editing and preview, as the canvas mode menu's Preview row does. */
+    fun showCanvasMode(mode: CanvasMode) {
+        if (busy) return
+        viewModel.setCanvasMode(canvasId, mode)
+    }
+
+    /** The left toolbar's tools for the current mode. */
+    fun palette(): List<CanvasTool> = toolbarGroups(hierarchyMode).flatten()
 
     /**
      * Re-fits the mode to a target that changed kind — the skeleton picked, or dropped for a layer. The
@@ -3067,15 +3108,9 @@ internal class CanvasEditor(
      */
     private fun settleModeOnTarget() {
         if (busy) return
+        // Skeleton mode is the skeleton as the target; once something else is picked, it has nothing left to do.
+        if (hierarchyMode == EditHierarchyMode.SKELETON && !skeletonSelected) { enterMode(EditHierarchyMode.SELECT); return }
         if (!hasPartFor(hierarchyMode)) { enterMode(EditHierarchyMode.SELECT); return }
-        if (hierarchyMode == EditHierarchyMode.EDIT && skeletonSelected && skeletonDraft == null) openSkeletonDraft()
-        if (hierarchyMode == EditHierarchyMode.DEFORM && skeletonSelected) {
-            if (state.showWarp || state.showRotation || state.showMesh) {
-                viewModel.updateEditViewOptions(canvasId, workspaceId) {
-                    it.copy(showWarp = false, showRotation = false, showMesh = false)
-                }
-            }
-        }
         if (tool !in palette()) {
             cancel()
             tool = palette().first()
@@ -3092,18 +3127,18 @@ internal class CanvasEditor(
      */
     private fun hasPartFor(mode: EditHierarchyMode): Boolean = when {
         mode == EditHierarchyMode.SELECT -> true
-        // The skeleton poses once it is switched on, and reshapes whether or not it is.
-        skeletonSelected -> when (mode) {
-            EditHierarchyMode.DEFORM -> committedSkeleton?.enabled == true
-            EditHierarchyMode.EDIT -> committedSkeleton != null
-            else -> false
-        }
+        // Skeleton mode brings its own target, proposing an armature when there is none.
+        mode == EditHierarchyMode.SKELETON -> state.previewModel != null
+        // With the skeleton picked there is no drawable for the other modes to work on.
+        skeletonSelected -> false
         // No rig, no part: the canvas that would pick one is not there either, and there is no model for
         // [target] to read. The request waits, which is what it does anyway.
         state.previewModel == null -> false
         // Paint repaints one layer's pixels. A deformer is a target these modes can edit but not paint, and
         // entering paint mode on one would leave the session and the tools alike with nothing to draw on.
         mode == EditHierarchyMode.PAINT -> target(deformerId = null)?.kind == "mesh"
+        // Vertex groups live on meshes.
+        mode == EditHierarchyMode.SIMULATE -> target()?.kind == "mesh"
         else -> target() != null
     }
 
@@ -3112,10 +3147,10 @@ internal class CanvasEditor(
      * Creation tools are handled separately and never force Edit.
      */
     private fun modeForTool(tool: CanvasTool): EditHierarchyMode = when {
-        tool == CanvasTool.SKELETON_POSE -> EditHierarchyMode.DEFORM
-        tool == CanvasTool.SKELETON_EDIT -> EditHierarchyMode.EDIT
+        tool in SKELETON_TOOLS -> EditHierarchyMode.SKELETON
         tool in PAINT_TOOLS -> EditHierarchyMode.PAINT
-        tool == CanvasTool.KNIFE || tool == CanvasTool.SUBDIVIDE || tool == CanvasTool.WEIGHT_PAINT -> EditHierarchyMode.EDIT
+        tool in WEIGHT_TOOLS -> EditHierarchyMode.SIMULATE
+        tool == CanvasTool.KNIFE || tool == CanvasTool.SUBDIVIDE -> EditHierarchyMode.EDIT
         else -> EditHierarchyMode.DEFORM
     }
 
@@ -3167,24 +3202,15 @@ internal class CanvasEditor(
         createSessionReturnMode = null
         cancel()
         val prev = hierarchyMode
-        val savedBeforeEdit = if (next != EditHierarchyMode.EDIT || !skeletonSelected) viewBeforeSkeletonEdit else null
-        // Leaving skeleton Edit mode keeps the edit; entering it opens a working copy of the armature.
-        // The draft opens after the mode's own display toggles are swapped in, so its display switch sticks.
-        if (next != EditHierarchyMode.EDIT || !skeletonSelected) commitSkeletonDraft(restoreView = false)
-        hierarchyMode = next
-        if (savedBeforeEdit != null) {
-            viewModel.updateEditViewOptions(canvasId, workspaceId) {
-                savedBeforeEdit.copy(showWarp = false, showRotation = false, showMesh = false)
-            }
-            viewBeforeSkeletonEdit = null
-        } else if (skeletonSelected && next == EditHierarchyMode.DEFORM) {
-            if (state.showWarp || state.showRotation || state.showMesh) {
-                viewModel.updateEditViewOptions(canvasId, workspaceId) {
-                    it.copy(showWarp = false, showRotation = false, showMesh = false)
-                }
-            }
+        // Leaving Skeleton mode keeps an open edit, and gives the skeleton up as the target unless the mode
+        // gone to is Object mode, which can hold it. Entering it takes the skeleton.
+        if (next != EditHierarchyMode.SKELETON) {
+            commitSkeletonDraft()
+            if (skeletonSelected && next != EditHierarchyMode.SELECT) skeletonSelected = false
+        } else if (!takeSkeleton()) {
+            return
         }
-        if (next == EditHierarchyMode.EDIT && skeletonSelected && skeletonDraft == null) openSkeletonDraft()
+        hierarchyMode = next
         // Only Edit edits several meshes; any other mode keeps the primary's slice alone.
         if (next != EditHierarchyMode.EDIT) selection = target()?.id?.let { id -> selection.filterKeys { it == id } }.orEmpty()
         if (prev == EditHierarchyMode.PAINT && next != EditHierarchyMode.PAINT) {
@@ -3198,9 +3224,10 @@ internal class CanvasEditor(
             if (editLevel == 2) ensureBezierState()
         }
         if (tool !in palette()) {
-            tool = palette().first()
+            tool = if (next == EditHierarchyMode.SKELETON && committedSkeleton?.enabled != true) CanvasTool.SKELETON_EDIT else palette().first()
             if (objectMode) selection = emptyMap()
         }
+        if (next == EditHierarchyMode.SKELETON && tool == CanvasTool.SKELETON_EDIT && skeletonDraft == null) openSkeletonDraft()
         clearHover()
     }
 
@@ -4265,7 +4292,7 @@ internal class CanvasEditor(
      * in selection order. Empty outside Edit, and when the primary target is a deformer.
      */
     fun editMeshTargets(source: PuppetModel? = preview ?: state.previewModel?.rig?.puppet): List<CanvasTarget> {
-        if (hierarchyMode != EditHierarchyMode.EDIT) return emptyList()
+        if (hierarchyMode != EditHierarchyMode.EDIT && hierarchyMode != EditHierarchyMode.SIMULATE) return emptyList()
         val primary = target(source) ?: return emptyList()
         if (primary.kind != "mesh") return emptyList()
         val layers = LinkedHashSet(objects).apply { state.selectedLayerId?.let(::add) }
@@ -4706,37 +4733,97 @@ internal class CanvasEditor(
             ?.weights?.takeIf { it.size == mesh.vertexCount }
     }
 
-    /** What [drawableId]'s group becomes when the current stroke is released; its current weights between strokes. */
+    /** What [drawableId]'s group becomes when the current stroke or gradient is released; its current weights between them. */
     fun paintedWeights(drawableId: String): FloatArray? {
-        val stroke = weightStroke[drawableId] ?: return vertexGroupWeights(drawableId)
-        val base = vertexGroupWeights(drawableId) ?: FloatArray(stroke.size)
-        val amount = strength.coerceIn(0f, 1f)
-        return FloatArray(stroke.size) { i ->
-            val reach = stroke[i]
-            val w = base.getOrElse(i) { 0f }
-            when {
-                reach <= 0f -> w
-                weightPaintSet -> w + (amount - w) * reach
-                weightErasing -> w - amount * reach
-                else -> w + amount * reach
-            }.coerceIn(0f, 1f)
+        val reach = weightStroke[drawableId] ?: return vertexGroupWeights(drawableId)
+        val base = vertexGroupWeights(drawableId) ?: FloatArray(reach.size)
+        val neighbors = if (weightStrokeMode == WeightPaintMode.SMOOTH) {
+            editMeshTargets().firstOrNull { it.id == drawableId }?.let(::neighbors)
+        } else null
+        return WeightPaint.apply(base, reach, weightStrokeMode, strength, neighbors)
+    }
+
+    /** The weight brush's tip, in screen pixels. */
+    private fun weightTip(viewport: CanvasViewport) =
+        BrushTip((radius * viewport.scale).toFloat(), hardness, brushShape, brushAngle, brushAspect, brushFalloff)
+
+    /** How strongly a dab from [from] to [to] reaches each vertex of each edited mesh. */
+    private fun weightReach(from: Offset, to: Offset, viewport: CanvasViewport): Map<String, FloatArray> {
+        val targets = editMeshTargets()
+        if (targets.isEmpty()) return emptyMap()
+        val surfaces = targets.map { t ->
+            BrushSurface(screen(t.geometry.points, t, viewport), if (connectedOnly) neighbors(t) else null, t.indices, t.id.hashCode())
+        }
+        val reached = brushWeights(surfaces, from, to, weightTip(viewport), connectedOnly)
+        return targets.indices.associate { targets[it].id to reached[it] }
+    }
+
+    /**
+     * What a press at the pointer would reach right now, for the hover preview. Nothing while a stroke or a
+     * gradient is in hand: those show their own result.
+     */
+    fun weightBrushPreview(viewport: CanvasViewport): Map<String, FloatArray> {
+        if (tool != CanvasTool.WEIGHT_PAINT || weightStroking || weightGradient != null) return emptyMap()
+        val center = cursor ?: return emptyMap()
+        return weightReach(center, center, viewport).filterValues { w -> w.any { it > 0.0001f } }
+    }
+
+    /** The vertex nearest the pointer on the edited meshes and its weight, for the readout beside the cursor. */
+    fun weightUnderCursor(viewport: CanvasViewport): Pair<Offset, Float>? {
+        val center = cursor ?: return null
+        var best: Pair<Offset, Float>? = null
+        var bestDistance = WEIGHT_READOUT_REACH_PX
+        for (t in editMeshTargets()) {
+            val weights = paintedWeights(t.id)
+            val points = screen(t.geometry.points, t, viewport)
+            for (i in points.indices) {
+                val d = (points[i] - center).getDistance()
+                if (d < bestDistance) {
+                    bestDistance = d
+                    best = points[i] to (weights?.getOrNull(i) ?: 0f)
+                }
+            }
+        }
+        return best
+    }
+
+    private fun beginWeightTool(pos: Offset, viewport: CanvasViewport, alt: Boolean): Boolean {
+        if (editMeshTargets().isEmpty()) {
+            error = tr("editor.weightNeedMesh")
+            return true
+        }
+        weightStrokeMode = WeightPaint.effective(weightPaintMode, alt)
+        weightStroke = emptyMap()
+        weightStroking = true
+        dragging = true
+        if (tool == CanvasTool.WEIGHT_GRADIENT) {
+            weightGradient = pos to pos
+        } else {
+            accumulateWeightStroke(pos, pos, viewport)
+        }
+        return true
+    }
+
+    private fun dragWeightTool(from: Offset, to: Offset, viewport: CanvasViewport) {
+        val gradient = weightGradient
+        if (gradient == null) {
+            accumulateWeightStroke(from, to, viewport)
+            return
+        }
+        weightGradient = gradient.first to to
+        weightStroke = editMeshTargets().associate { t ->
+            t.id to WeightPaint.gradient(screen(t.geometry.points, t, viewport), gradient.first, to)
         }
     }
 
     private fun accumulateWeightStroke(from: Offset, to: Offset, viewport: CanvasViewport) {
-        val targets = editMeshTargets()
-        if (targets.isEmpty()) return
-        val screens = targets.map { screen(it.geometry.points, it, viewport) }
-        val tip = BrushTip((radius * viewport.scale).toFloat(), hardness, brushShape, brushAngle, brushAspect, brushFalloff)
-        val surfaces = targets.map { t -> BrushSurface(screens[targets.indexOf(t)], if (connectedOnly) neighbors(t) else null, t.indices, t.id.hashCode()) }
-        val reached = brushWeights(surfaces, from, to, tip, connectedOnly)
+        val reached = weightReach(from, to, viewport)
         val next = weightStroke.toMutableMap()
-        targets.forEachIndexed { at, t ->
-            val w = reached[at]
-            if (w.none { it > 0f }) return@forEachIndexed
-            val merged = next[t.id]?.copyOf() ?: FloatArray(t.count)
+        for ((id, w) in reached) {
+            if (w.none { it > 0f }) continue
+            val merged = next[id]?.copyOf() ?: FloatArray(w.size)
             for (i in 0 until minOf(merged.size, w.size)) merged[i] = maxOf(merged[i], w[i])
-            next[t.id] = merged
+            next[id] = merged
         }
         weightStroke = next
     }
@@ -4744,10 +4831,12 @@ internal class CanvasEditor(
     private fun commitWeightStroke() {
         val painted = weightStroke.keys.mapNotNull { id ->
             val weights = paintedWeights(id) ?: return@mapNotNull null
+            if (vertexGroupWeights(id)?.contentEquals(weights) == true) return@mapNotNull null
             val kind = model.vertexGroups.firstOrNull { it.drawableId.raw == id && it.name == paintedGroupName }?.kind ?: weightGroupKind
             VertexGroupJournal.encode(VertexGroup(paintedGroupName, DrawableId(id), kind, weights))
         }
         weightStroke = emptyMap()
+        weightGradient = null
         if (painted.isEmpty()) return
         head = null
         commitBatch(painted)
@@ -4759,6 +4848,17 @@ internal class CanvasEditor(
             val mesh = model.drawables.firstOrNull { it.id.raw == t.id }?.mesh ?: return@mapNotNull null
             val kind = model.vertexGroups.firstOrNull { it.drawableId.raw == t.id && it.name == paintedGroupName }?.kind ?: weightGroupKind
             VertexGroupJournal.encode(VertexGroup(paintedGroupName, DrawableId(t.id), kind, FloatArray(mesh.vertexCount) { value.coerceIn(0f, 1f) }))
+        }
+        if (commands.isEmpty()) return
+        head = null
+        commitBatch(commands)
+    }
+
+    /** Flips the brushed group (w -> 1 - w) on every edited mesh that has it. */
+    fun invertVertexGroup() {
+        val commands = editMeshTargets().mapNotNull { t ->
+            val group = model.vertexGroups.firstOrNull { it.drawableId.raw == t.id && it.name == paintedGroupName } ?: return@mapNotNull null
+            VertexGroupJournal.encode(group.copy(weights = FloatArray(group.weights.size) { 1f - group.weights[it] }))
         }
         if (commands.isEmpty()) return
         head = null
@@ -5088,18 +5188,7 @@ internal class CanvasEditor(
             error = tr("editor.creationSelectFirst")
             return true
         }
-        if (tool == CanvasTool.WEIGHT_PAINT) {
-            if (editMeshTargets().isEmpty()) {
-                error = tr("editor.weightNeedMesh")
-                return true
-            }
-            weightErasing = alt
-            weightStroke = emptyMap()
-            weightStroking = true
-            dragging = true
-            accumulateWeightStroke(pos, pos, viewport)
-            return true
-        }
+        if (tool in WEIGHT_TOOLS) return beginWeightTool(pos, viewport, alt)
         if (tool == CanvasTool.GLUE) {
             if (glueMeshPair() == null) {
                 error = tr("editor.glueNeedTwo", glueMeshCount())
@@ -5417,6 +5506,7 @@ internal class CanvasEditor(
         this.viewport = viewport
         updateHover(pos, viewport, ctrl, shift)
         shrinks = if (dragging && tool == CanvasTool.INFLATE) shrinkAtPress else inflateInvert xor alt
+        weightAltHeld = alt
         if (!dragging || busy) return
         swingHandle?.let { handle -> dragSwing(handle, pos, viewport); previous = pos; return }
         moved = moved || (pos - start).getDistance() > 2f
@@ -5441,7 +5531,8 @@ internal class CanvasEditor(
         }
 
         if (weightStroking) {
-            accumulateWeightStroke(previous, pos, viewport)
+            cursor = pos
+            dragWeightTool(previous, pos, viewport)
             previous = pos
             return
         }
@@ -5874,7 +5965,8 @@ internal class CanvasEditor(
         if (adjustingBrush || dragging) return false
         val painting = paintBrushActive
         if (!painting && tool != CanvasTool.BRUSH && tool != CanvasTool.SMOOTH && tool != CanvasTool.INFLATE &&
-            tool != CanvasTool.SUBDIVIDE && tool != CanvasTool.BRUSH_SELECT && tool != CanvasTool.GLUE
+            tool != CanvasTool.SUBDIVIDE && tool != CanvasTool.BRUSH_SELECT && tool != CanvasTool.GLUE &&
+            tool != CanvasTool.WEIGHT_PAINT
         ) return false
         adjustingBrush = true
         brushAxis = when {
@@ -6004,6 +6096,9 @@ private const val BRUSH_HARDNESS_SPAN_PX = 200f
 
 /** Drag distance before the gesture commits to radius or hardness; below it nothing is adjusted. */
 private const val BRUSH_AXIS_LOCK_PX = 4f
+
+/** How far from a vertex the weight readout still names it, in screen pixels. */
+private const val WEIGHT_READOUT_REACH_PX = 24f
 
 /**
  * Radially pushes [point] away from the closest point on the stroke segment [from]→[to], by [amount] pixels.
