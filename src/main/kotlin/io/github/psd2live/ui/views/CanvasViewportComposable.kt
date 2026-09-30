@@ -295,6 +295,9 @@ fun CanvasViewportComposable(
 	DisposableEffect(artworkCache) { onDispose { artworkCache.close() } }
 	val guideCache = remember { CanvasGuideImageCache() }
 	val sdkFrame by frameFlow.collectAsState()
+	val simulatedFrame by viewModel.simulationFrames.collectAsState()
+	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
+	val simulated = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
 	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toComposeImageBitmap() }
 	val background = canvasState.canvasBackground
 	val checkerLight = background.checkerLight?.let(::opaqueColor) ?: colors.checkerLight
@@ -417,7 +420,8 @@ fun CanvasViewportComposable(
 	// parameters are rendered next without building latency in a callback queue.
     // Animated previews read the latest camera each frame. Restarting their pump for
     // every pointer move stalls rendering and makes panning visibly trail the cursor.
-    val physicsLive = canvasState.generatePhysics && !canvasState.meshOnly
+    // A live simulation needs frames like physics does, paused or not.
+    val physicsLive = (canvasState.generatePhysics && !canvasState.meshOnly) || canvasState.simulationPreviewId != null
     // A continuous pump (playing, or paused physics) reads the latest camera and pose each frame. Restarting
     // it for every pan step or slider sample re-requests a frame out of pace and makes a drag stutter.
     val parameterScrubActive = viewModel.parameterScrubActive
@@ -473,7 +477,7 @@ fun CanvasViewportComposable(
 					val pacer = FramePacer(pumpInterval)
 					var lastPose = viewModel.state.value.previewPanelState().parameterValues
 					while (isActive) {
-						while (isActive && !viewModel.parameterScrubActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.pausedPhysicsSettled &&
+						while (isActive && !viewModel.parameterScrubActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.previewSettled &&
 							System.nanoTime() - lastPointerActivityNanos.get() > PAUSED_TRACKING_SETTLE_NANOS) {
 							val pose = viewModel.state.value.previewPanelState().parameterValues
 							if (pose != lastPose) { lastPose = pose; break }
@@ -597,6 +601,8 @@ fun CanvasViewportComposable(
 					ShortcutAction.TOOL_GLUE -> { editor.activateTool(CanvasTool.GLUE); true }
 					ShortcutAction.TOOL_SUBDIVIDE -> { editor.activateTool(CanvasTool.SUBDIVIDE); true }
 					ShortcutAction.TOOL_KNIFE -> { editor.activateTool(CanvasTool.KNIFE); true }
+					ShortcutAction.TOOL_WEIGHT_PAINT -> { editor.activateTool(CanvasTool.WEIGHT_PAINT); true }
+					ShortcutAction.TOOL_WEIGHT_GRADIENT -> { editor.activateTool(CanvasTool.WEIGHT_GRADIENT); true }
 					ShortcutAction.SELECTION_STYLE_BOX -> { editor.selectionStyle = SelectionStyle.BOX; true }
 					ShortcutAction.SELECTION_STYLE_LASSO -> { editor.selectionStyle = SelectionStyle.LASSO; true }
 					ShortcutAction.SELECT_LINKED -> { editor.selectLinked(); true }
@@ -985,7 +991,7 @@ fun CanvasViewportComposable(
 				!isDimmingActive &&
 				hoveredLayerId == null && hoveredDeformerId == null &&
 				(!showSelectionBounds || !hasActiveSelection) &&
-				canvasState.drawOrderOverrides.isEmpty() &&
+				canvasState.drawOrderOverrides.isEmpty() && simulated == null &&
 				nativeFrame != null && sdkBitmap != null &&
 				nativeFrame.image.width == w && nativeFrame.image.height == h
 
@@ -1013,7 +1019,12 @@ fun CanvasViewportComposable(
 				// keeps showing the last committed atlas, never an in-progress stroke.
 				// Document-space paint tiles only line up with the mesh at rest; driving the other
 				// layers with the live pose would leave the stroke floating off the art.
-				val geometry = editGeometry ?: RigCanvasSupport.evaluate(model, informationPose)
+				val geometry = (editGeometry ?: RigCanvasSupport.evaluate(model, informationPose)).let { evaluated ->
+					if (simulated == null) evaluated else org.umamo.render.eval.DeformedGeometry(
+						evaluated.worldPositions + simulated.positions.filterKeys { it in evaluated.worldPositions },
+						evaluated.drawOrder, evaluated.opacity,
+					)
+				}
 
 					// 3a. Texture Channel. The artwork always renders opaque; legibility of the
 					// overlays comes from the focus/dim options instead of a global transparency.
@@ -1324,6 +1335,8 @@ fun CanvasViewportComposable(
             )
         }
 		if (mode == CanvasMode.PREVIEW && previewModel != null) {
+			// The same mode menu as the edit canvas, on Preview: any other row goes back to editing.
+			PreviewModeBar(editor) { focusRequester.requestFocus() }
 			CanvasPreviewToolbar(
 				animationEnabled = canvasState.animationEnabled,
 				mouseTrackingEnabled = canvasState.mouseTrackingEnabled,
@@ -1355,8 +1368,11 @@ fun CanvasViewportComposable(
 			// Floating Stats Pill Badge
 			val zoomPct = (zoom * 100).toInt()
 			val fpsStr = if (fps > 0f) "%.1f FPS · ".format(fps) else ""
+			// The reference simulation is not what exports: say so wherever it is on screen.
+			val referenceSimulation = simulated != null
 			val badgeText = when (mode) {
 				CanvasMode.PREVIEW -> when {
+					referenceSimulation -> "${fpsStr}${tr("canvas.preview.simReference", zoomPct)}"
 					sdkFrame != null -> "${fpsStr}${tr(
 						if (previewModel.hasRuntimePhysics) "canvas.preview.cubismPhysicsOn" else "canvas.preview.cubismPhysicsOff",
 						zoomPct,
@@ -1364,7 +1380,7 @@ fun CanvasViewportComposable(
 					canvasState.sdkStatus != null && canvasState.sdkStatus != "ready" -> "${fpsStr}${tr("canvas.preview.softwareFallback", zoomPct)}"
 					previewModel.hasRuntimePhysics -> "${fpsStr}${tr("canvas.preview.physicsOn", zoomPct)}"
 					else -> "${fpsStr}${tr("canvas.preview.physicsOff", zoomPct)}"
-				}
+				} + if (!referenceSimulation && canvasState.rigEdits.simEdits.any { it.enabled && it.bake == null }) tr("canvas.preview.simUnbaked") else ""
 				CanvasMode.EDIT -> if (showMesh) {
 					val vertexCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.vertexCount ?: 0 }
 					val triangleCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.triangleCount ?: 0 }
@@ -1391,7 +1407,7 @@ fun CanvasViewportComposable(
 					Text(
 						text = badgeText,
 						style = typography.caption.copy(fontSize = 11.sp),
-						color = colors.textPrimary,
+						color = if (referenceSimulation && mode == CanvasMode.PREVIEW) colors.warning else colors.textPrimary,
 					)
 				}
 			}

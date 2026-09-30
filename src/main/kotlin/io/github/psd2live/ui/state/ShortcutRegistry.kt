@@ -86,6 +86,8 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     TOOL_GLUE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.glue"),
     TOOL_SUBDIVIDE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.subdivide"),
     TOOL_KNIFE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.knife"),
+    TOOL_WEIGHT_PAINT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.weight_paint"),
+    TOOL_WEIGHT_GRADIENT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.weight_gradient"),
     TOOL_PAINT_BRUSH(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_brush"),
     TOOL_PAINT_PENCIL(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_pencil"),
     TOOL_PAINT_ERASER(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_eraser"),
@@ -210,6 +212,8 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     // losing its conventional key.
     ShortcutAction.TOOL_SUBDIVIDE to keys("M"),
     ShortcutAction.TOOL_KNIFE to keys("K"),
+    ShortcutAction.TOOL_WEIGHT_PAINT to keys("Shift+V"),
+    ShortcutAction.TOOL_WEIGHT_GRADIENT to keys("Alt+V"),
     ShortcutAction.TOOL_PAINT_BRUSH to keys("Shift+P", "J"),
     ShortcutAction.TOOL_PAINT_PENCIL to keys("N"),
     ShortcutAction.TOOL_PAINT_ERASER to keys("E"),

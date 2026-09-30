@@ -115,6 +115,8 @@ data class PuppetModel(
 	val sources: List<ArtSource> = emptyList(),
 	/** Editor-only deform paths bound to ArtMeshes; CMO3 controllers round-trip them. */
 	val deformPaths: List<DeformPath> = emptyList(),
+	/** Editor-only per-vertex weights the simulation reads; no exporter writes them. */
+	val vertexGroups: List<VertexGroup> = emptyList(),
 ) {
 	/**
 	 * Every part by id, built once per model instance.

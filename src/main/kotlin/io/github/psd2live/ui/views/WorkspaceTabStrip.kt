@@ -96,6 +96,7 @@ internal val WINDOW_MODULES = listOf(
 	"inspector",
 	"animation",
 	"physics",
+	"simulation",
 )
 
 /**
@@ -486,6 +487,7 @@ internal fun moduleTitle(id: String): String = when {
 		"inspector" -> "tab.inspector"
 		"animation" -> "tab.animation"
 		"physics" -> "tab.physics"
+		"simulation" -> "tab.simulation"
 		else -> id
 	})
 }

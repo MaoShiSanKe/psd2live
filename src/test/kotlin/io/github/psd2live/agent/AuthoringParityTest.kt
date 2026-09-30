@@ -64,7 +64,7 @@ class AuthoringParityTest {
     @Test fun classificationMergesOmittedFieldsAndRejectsInvalidRequests() = runBlocking {
         val workspace = Workspace()
         val server = createAgentMcpServer(workspace)
-        assertEquals(23, server.tools.size)
+        assertEquals(25, server.tools.size)
         val layer = server.tools.getValue("layer")
         val result = layer.handler.invoke(connection, CallToolRequest(CallToolRequestParams("layer", buildJsonObject {
             put("state", "head"); put("layer_id", "hair"); put("type", "switch")
@@ -88,7 +88,7 @@ class AuthoringParityTest {
 
     @Test fun publicSurfaceIncludesParityRoutes() {
         val server = createAgentMcpServer(Workspace())
-        assertTrue(server.tools.keys.containsAll(listOf("layer", "layer_mesh", "paint", "preview", "structure", "canvas", "settings", "parameter", "export", "export_psd", "swing", "skeleton", "motion")))
+        assertTrue(server.tools.keys.containsAll(listOf("layer", "layer_mesh", "paint", "preview", "structure", "canvas", "settings", "parameter", "export", "export_psd", "swing", "skeleton", "motion", "simulation", "vertex_group")))
         assertTrue(server.tools.getValue("asset").tool.inputSchema.properties.toString().contains("psd"))
         assertFalse("parameter_delete" in server.tools.keys)
         assertTrue(server.tools.getValue("parameter").tool.inputSchema.properties.toString().contains("delete"))

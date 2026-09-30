@@ -37,6 +37,7 @@ internal object RigCommandDelta {
             "canvas_geometry" -> with(RigAuthoringJournal) { isCanvasGeometryNoOp(model, command) }
             "structure" -> isStructureNoOp(model, command)
             "path_put" -> isPathPutNoOp(model, command)
+            VertexGroupJournal.PUT -> VertexGroupJournal.isNoOp(model, command)
             // "copy" and "delete" rewrite or remove a slot with no single value to compare; "warp" and
             // "canvas_create_*" require an unused id; "canvas_topology" and "structure" rebuild or
             // restructure rather than overwrite one addressed slot. Each is a change whenever it is

@@ -181,17 +181,18 @@ internal fun PhysicsGroupEditor(
 	}
 }
 
-/** A folder-style header over its padded body, shown while [open]. */
+/** A folder-style header over its padded body, shown while [open]; the simulation panel uses it too. */
 @Composable
-private fun PhysicsSection(
+internal fun PhysicsSection(
 	title: String,
 	open: Boolean,
 	onToggle: () -> Unit,
 	count: Int? = null,
+	icon: (@Composable () -> Unit)? = null,
 	trailing: (@Composable RowScope.() -> Unit)? = null,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
-	PanelSectionRow(title, open, onToggle, count = count, icon = null, trailing = trailing?.let { t -> { Spacer(Modifier.width(6.dp)); t() } })
+	PanelSectionRow(title, open, onToggle, count = count, icon = icon, trailing = trailing?.let { t -> { Spacer(Modifier.width(6.dp)); t() } })
 	PhysicsRowDivider()
 	if (open) SectionBody(content)
 }
@@ -249,6 +250,8 @@ internal fun GroupTitle(
 		PhysicsOrigin.PRESET -> tr("physics.originNote.preset")
 		PhysicsOrigin.SKELETON -> tr("physics.originNote.skeleton")
 		PhysicsOrigin.SWING -> tr("physics.originNote.swing", swing?.name ?: "")
+		PhysicsOrigin.SIMULATION -> tr("physics.originNote.simulation",
+			io.github.psd2live.core.sim.SimGenerator.simulationOf(group.id, state.rigEdits.simEdits)?.name ?: "")
 		PhysicsOrigin.CUSTOM -> tr("physics.originNote.custom")
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

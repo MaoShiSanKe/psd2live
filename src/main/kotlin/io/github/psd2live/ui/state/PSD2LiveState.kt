@@ -35,7 +35,7 @@ internal const val DEFAULT_WORKSPACE_ID = "workspace"
 
 /** Right-hand dock modules the title-bar inspector toggle shows and hides together. */
 internal val INSPECTOR_DOCK_MODULES = setOf(
-	"settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics",
+	"settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics", "simulation",
 )
 
 /** Modules a fresh workspace layout already contains. History is added from the window menu. */
@@ -68,6 +68,21 @@ fun hierarchyModeViewPreset(mode: EditHierarchyMode, current: TabViewOptions): T
 		showDeformPaths = true,
 	)
 	EditHierarchyMode.EDIT -> current.copy(showMesh = true, showDeformPaths = true)
+	// The weights are the subject: the wires stay, the deformer guides would only cover them.
+	EditHierarchyMode.SIMULATE -> current.copy(
+		showMesh = true,
+		showWarp = false,
+		showRotation = false,
+		showDeformPaths = false,
+	)
+	// Bones over the art and nothing else, the way skeleton editing has always shown them.
+	EditHierarchyMode.SKELETON -> current.copy(
+		showMesh = false,
+		showWarp = false,
+		showRotation = false,
+		warpShowIndices = false,
+		showSkeleton = true,
+	)
 	EditHierarchyMode.PAINT -> current.copy(
 		showMesh = false,
 		showWarp = false,
@@ -179,25 +194,25 @@ enum class WorkspacePreset(
 	/** Mesh topology: the hierarchy beside the edit canvas, the mesh panel on the right. */
 	MESH(
 		listOf(CanvasMode.EDIT),
-		setOf("layers", "skeleton", "log", "animationEditor", "tools", "inspector", "settings", "parameters", "animation", "physics"),
+		setOf("layers", "skeleton", "log", "animationEditor", "tools", "inspector", "settings", "parameters", "animation", "physics", "simulation"),
 	),
 
 	/** Binding parameters: the edit canvas and a live preview side by side, parameters always visible. */
 	RIG(
 		listOf(CanvasMode.EDIT, CanvasMode.PREVIEW),
-		setOf("animationEditor", "settings", "layers", "mesh", "animation", "physics"),
+		setOf("animationEditor", "settings", "layers", "mesh", "animation", "physics", "simulation"),
 	),
 
 	/** Authoring motions: motions left of the preview canvas, the animation editor below both, parameters on the right. */
 	ANIMATION(
 		listOf(CanvasMode.PREVIEW),
-		setOf("hierarchy", "skeleton", "log", "settings", "layers", "tools", "mesh", "inspector", "physics"),
+		setOf("hierarchy", "skeleton", "log", "settings", "layers", "tools", "mesh", "inspector", "physics", "simulation"),
 	),
 
 	/** Checking the finished model: a large preview with the motion list only. */
 	PREVIEW(
 		listOf(CanvasMode.PREVIEW),
-		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "parameters", "physics"),
+		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "parameters", "physics", "simulation"),
 	),
 
 	/** Tuning physics: the preview and parameters beside a wide physics panel, to shake the model while editing. */
@@ -514,6 +529,8 @@ data class PSD2LiveState(
 	val drawOrderOverrides: Map<String, Float> = emptyMap(),
 	/** Durable parameter/keyform edits replayed after each generated-rig rebuild. */
 	val rigEdits: RigEditOverlay = RigEditOverlay.Empty,
+	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
+	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
 	val successExportMessage: String? = null,
 ) {

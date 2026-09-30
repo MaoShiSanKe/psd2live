@@ -17,7 +17,8 @@ object PhysicsCatalog {
 	): List<PhysicsGroup> {
 		val generated = PhysicsGenerator.presetRules(present, available).map { it to PhysicsOrigin.PRESET } +
 			PhysicsGenerator.skeletonRules(overlay.skeleton, available).map { it to PhysicsOrigin.SKELETON } +
-			PhysicsGenerator.swingRules(overlay.swingEdits, available).map { it to PhysicsOrigin.SWING }
+			PhysicsGenerator.swingRules(overlay.swingEdits, available).map { it to PhysicsOrigin.SWING } +
+			io.github.psd2live.core.sim.SimGenerator.physicsRules(overlay.simEdits, available).map { it to PhysicsOrigin.SIMULATION }
 		val generatedIds = generated.mapTo(HashSet()) { it.first.id }
 		val authored = overlay.physicsEdits.associateBy { it.id }
 		fun enabled(id: String, origin: PhysicsOrigin) =

@@ -139,18 +139,32 @@ internal fun BoxScope.CanvasEditorOverlay(
         //    one point both meshes share - is drawn once, as the single handle it is.
         val primaryMesh = currentTarget?.takeIf { it.kind == "mesh" }
         val editing = editor.hierarchyMode == EditHierarchyMode.EDIT
-        val meshTargets = (if (editing) editor.editMeshTargets() else emptyList()).ifEmpty { listOfNotNull(primaryMesh) }
-        if (showMesh && (editor.hierarchyMode == EditHierarchyMode.DEFORM || editing) && meshTargets.isNotEmpty()) {
+        // Simulate holds several meshes like Edit does, and always shows the painted group on them: the
+        // weights are what the mode is about, so they do not wait for the mesh toggle.
+        val simulating = editor.hierarchyMode == EditHierarchyMode.SIMULATE
+        val meshTargets = (if (editing || simulating) editor.editMeshTargets() else emptyList()).ifEmpty { listOfNotNull(primaryMesh) }
+        if ((showMesh || simulating) && (editor.hierarchyMode == EditHierarchyMode.DEFORM || editing || simulating) && meshTargets.isNotEmpty()) {
             val screens = meshTargets.associate { it.id to editor.screen(it.geometry.points, it, viewport) }
             val selection = editor.selection
             val gluePair = if (editor.tool == CanvasTool.GLUE) editor.glueMeshPair() else null
-            val meshColors = if (editing) editor.editMeshColors() else emptyMap()
+            val meshColors = if (editing || simulating) editor.editMeshColors() else emptyMap()
+            // Simulate: each mesh's group as it stands (or as the stroke in hand will leave it), and what a
+            // press right here would reach - the brush's hover preview.
+            val groupWeights = if (simulating) meshTargets.associate { it.id to editor.paintedWeights(it.id) } else emptyMap()
+            val weightReach = if (simulating) editor.weightBrushPreview(viewport) else emptyMap()
+            val weightTint = weightModeColor(editor.weightStrokeModeShown(), colors)
+            val readout = if (simulating && editor.tool == CanvasTool.WEIGHT_PAINT) editor.weightUnderCursor(viewport) else null
 
             // 1a. Weights washed onto the artwork. The deform brush shows its falloff in red while it is
             //     live, and while Alt + right-drag retunes it, what a press right there would pull - falloff
             //     and connected-only reach included; the glue weight brush shows each side's weld weight in
             //     that side's colour.
-            val retuneWeights = if (editor.adjustingBrush && editor.tool in DEFORM_BRUSH_TOOLS) editor.brushPreviewWeights(viewport) else emptyMap()
+            val retuneWeights = when {
+                !editor.adjustingBrush -> emptyMap()
+                editor.tool in DEFORM_BRUSH_TOOLS -> editor.brushPreviewWeights(viewport)
+                editor.tool == CanvasTool.WEIGHT_PAINT -> weightReach
+                else -> emptyMap()
+            }
             for (t in meshTargets) {
                 val pts = screens.getValue(t.id)
                 if (pts.isEmpty() || t.indices.isEmpty()) continue
@@ -163,6 +177,12 @@ internal fun BoxScope.CanvasEditorOverlay(
                         if (w <= 0.0001f) 0f
                         else (if (editor.strength > 0.001f) (w / editor.strength).coerceIn(0f, 1f) else w.coerceIn(0f, 1f)) * 0.62f
                     }
+                }
+                if (simulating) {
+                    // Blender's weight colours: blue where the group is empty, through green and yellow, to red
+                    // where it is full. A mesh without the group yet reads as all blue.
+                    val weights = groupWeights[t.id] ?: FloatArray(t.count)
+                    drawWeightHeat(pts.take(minOf(t.count, weights.size)), t.indices, weights)
                 }
                 if (editor.tool == CanvasTool.GLUE && editor.glueSubTool == GlueSubTool.WEIGHT) {
                     val shown = when (editor.glueWeightMode) {
@@ -266,6 +286,7 @@ internal fun BoxScope.CanvasEditorOverlay(
 
             // 1c. Edges. Every edited mesh is drawn alike, each in its own colour when there are several.
             for (t in meshTargets) {
+                if (simulating && !showMesh) continue
                 val pts = screens.getValue(t.id)
                 val meshColor = meshColors[t.id] ?: colors.accent
                 val primary = t.id == primaryMesh?.id
@@ -292,6 +313,23 @@ internal fun BoxScope.CanvasEditorOverlay(
                     gluePair?.first -> editor.glueStrokeA
                     gluePair?.second -> editor.glueStrokeB
                     else -> emptySet()
+                }
+                if (simulating) {
+                    val weights = groupWeights[t.id]
+                    val reach = weightReach[t.id]
+                    pts.forEachIndexed { i, p ->
+                        val r = reach?.getOrNull(i) ?: 0f
+                        if (showMesh) {
+                            drawCircle(Color.Black.copy(alpha = 0.6f), 2.7f, p)
+                            drawCircle(weightHeatColor(weights?.getOrNull(i) ?: 0f), 1.9f, p)
+                        }
+                        // The hover preview: a ring on every point the press would reach, as strong as the reach.
+                        if (r > 0.001f && !editor.adjustingBrush) {
+                            drawCircle(Color.Black.copy(alpha = 0.45f * r), 3.2f + r * 3.2f, p, style = Stroke(2.4f))
+                            drawCircle(weightTint.copy(alpha = 0.35f + 0.65f * r), 3.2f + r * 3.2f, p, style = Stroke(1.2f))
+                        }
+                    }
+                    continue
                 }
                 pts.forEachIndexed { i, p ->
                     val vertex = io.github.psd2live.core.MeshVertex(t.id, i)
@@ -341,6 +379,23 @@ internal fun BoxScope.CanvasEditorOverlay(
                     drawGluePoint(if (selected) Color.White else colors.windowBackground, radius + 1.2f, anchor)
                     drawGluePoint(GlueColorWeld, radius, anchor)
                 }
+            }
+
+            // The weight under the pointer: the nearest point is ringed and its value set beside it, small,
+            // so the number sits on the point it describes rather than over the art.
+            readout?.let { (point, weight) ->
+                drawCircle(Color.Black.copy(alpha = 0.7f), 6.2f, point, style = Stroke(3f))
+                drawCircle(Color.White, 6.2f, point, style = Stroke(1.3f))
+                val layout = textMeasurer.measure(
+                    text = "%.2f".format(weight),
+                    style = TextStyle(color = Color.White, fontSize = 10.sp, fontFamily = FontFamily.Monospace),
+                )
+                val origin = Offset(point.x + 8f, point.y - layout.size.height - 4f)
+                drawRoundRect(
+                    Color.Black.copy(alpha = 0.62f), origin - Offset(3f, 1f),
+                    Size(layout.size.width + 6f, layout.size.height + 2f), CornerRadius(3f, 3f),
+                )
+                drawText(layout, topLeft = origin)
             }
 
             // Dragging guide line
@@ -901,12 +956,34 @@ internal fun BoxScope.CanvasEditorOverlay(
             }
         }
 
-        // 4. BRUSH / SMOOTH / INFLATE mode: Shape-aware brush outline following cursor
-        if (editor.tool in listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)) {
+        // 3h. The weight gradient: the drag from full to empty, with the two lines the ramp runs between.
+        editor.weightGradient?.let { (from, to) ->
+            val axis = to - from
+            val length = axis.getDistance()
+            if (length > 1f) {
+                val normal = Offset(-axis.y / length, axis.x / length) * 36f
+                val full = weightHeatColor(editor.strength)
+                drawLine(Color.Black.copy(alpha = 0.55f), from, to, 3.2f, cap = StrokeCap.Round)
+                drawLine(Color.White.copy(alpha = 0.9f), from, to, 1.4f, cap = StrokeCap.Round)
+                drawLine(full, from - normal, from + normal, 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)))
+                drawLine(weightHeatColor(0f), to - normal, to + normal, 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)))
+                drawCircle(Color.Black.copy(alpha = 0.7f), 5.2f, from)
+                drawCircle(full, 4f, from)
+                drawCircle(Color.Black.copy(alpha = 0.7f), 5.2f, to, style = Stroke(2.8f))
+                drawCircle(weightHeatColor(0f), 5.2f, to, style = Stroke(1.4f))
+            }
+        }
+
+        // 4. BRUSH / SMOOTH / INFLATE / weight brush: Shape-aware brush outline following cursor
+        if (editor.tool in listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE, CanvasTool.WEIGHT_PAINT)) {
             val center = editor.cursor ?: editor.activeBrushCenter
             center?.let { center ->
                 val r = (editor.radius * viewport.scale).toFloat()
-                val ring = if (editor.tool == CanvasTool.INFLATE && editor.shrinks) colors.warning else colors.textPrimary
+                val ring = when {
+                    editor.tool == CanvasTool.WEIGHT_PAINT -> weightModeColor(editor.weightStrokeModeShown(), colors)
+                    editor.tool == CanvasTool.INFLATE && editor.shrinks -> colors.warning
+                    else -> colors.textPrimary
+                }
 
                 when (editor.brushShape) {
                     BrushShape.CIRCLE -> {
@@ -1145,8 +1222,8 @@ internal fun BoxScope.CanvasEditorOverlay(
         // describing — the brush outline and the hovered part's own highlight already say the same
         // thing without a box in the way.
     }
-    // The armature is only open for editing in Edit mode with the skeleton as the target.
-    val skeleton = editor.skeletonDraft?.takeIf { editor.skeletonSelected && editor.hierarchyMode == EditHierarchyMode.EDIT }
+    // The armature is only open for editing with Skeleton mode's Edit tool.
+    val skeleton = editor.skeletonDraft?.takeIf { editor.skeletonSelected && editor.hierarchyMode == EditHierarchyMode.SKELETON }
     if (skeleton != null) {
         val currentSkeleton by rememberUpdatedState(skeleton)
         val preview = editor.state.previewModel
@@ -2132,6 +2209,44 @@ private fun BoxScope.CanvasToolBar(
                 }
             }
         }
+
+        // The kinds of vertex group the weight tools paint sit under them the way the brush shapes do:
+        // picking one is picking which group of the mesh the strokes write.
+        AnimatedVisibility(
+            visible = editor.hierarchyMode == EditHierarchyMode.SIMULATE,
+            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .height(1.dp)
+                        .background(colors.border.copy(alpha = 0.45f))
+                )
+
+                io.github.psd2live.ui.PAINTED_GROUP_KINDS.forEach { kind ->
+                    ShapeItemRow(
+                        label = tr("sim.group.${kind.jsonName}"),
+                        isSelected = editor.weightGroupKind == kind,
+                        isToolbarExpanded = animatedWidth > 42.dp,
+                        textAlpha = textAlpha,
+                        textOffset = textOffset,
+                        isBusy = editor.busy,
+                        icon = { _ -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
+                        onClick = {
+                            editor.weightGroupKind = kind
+                            if (editor.tool !in io.github.psd2live.ui.WEIGHT_TOOLS) editor.activateTool(CanvasTool.WEIGHT_PAINT)
+                            focus()
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -2380,21 +2495,21 @@ private fun BoxScope.HierarchyModeBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        // Mode buttons: 物体模式 / 变形模式 / 编辑模式
-        EditHierarchyMode.entries.forEach { mode ->
-            ModeBarChip(
-                mode = mode,
-                text = modeLabel(mode),
-                isSelected = editor.hierarchyMode == mode,
-                // A mode asked for before there was anything to work on: it reads as waiting rather than
-                // as in force, which is what the canvas is doing until a part is picked.
-                isWaiting = editor.deferredMode?.mode == mode,
-                onClick = {
-                    editor.setHierarchyMode(mode)
-                    focus()
-                }
-            )
-        }
+        // The mode menu: every mode, Preview included, behind one button (Blender's mode dropdown).
+        CanvasModeMenu(
+            current = CanvasModeChoice.of(editor.hierarchyMode),
+            // A mode asked for before there was anything to work on: it reads as waiting rather than
+            // as in force, which is what the canvas is doing until a part is picked.
+            waiting = editor.deferredMode?.mode?.let { CanvasModeChoice.of(it) },
+            enabled = !editor.busy,
+            modifier = Modifier
+                .tutorialTarget(TutorialTargetId.EDIT_TAB)
+                .tutorialTarget(TutorialTargetId.PREVIEW_TAB),
+            onSelect = { choice ->
+                editor.chooseCanvasMode(choice)
+                focus()
+            },
+        )
 
         // 1 2 3 deformation level expansion animation
         AnimatedVisibility(
@@ -2548,6 +2663,51 @@ private fun BoxScope.HierarchyModeBar(
             }
         }
 
+        // Simulate: the group the weight tools write, and the live simulation of the meshes in hand.
+        AnimatedVisibility(
+            visible = editor.hierarchyMode == EditHierarchyMode.SIMULATE,
+            enter = expandHorizontally(
+                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                expandFrom = Alignment.Start,
+            ) + fadeIn(animationSpec = tween(160)),
+            exit = shrinkHorizontally(
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Start,
+            ) + fadeOut(animationSpec = tween(120)),
+        ) {
+            SimulateModeExtras(editor, focus)
+        }
+
+        // Skeleton: the one action each tool needs within reach of the canvas.
+        AnimatedVisibility(
+            visible = editor.hierarchyMode == EditHierarchyMode.SKELETON,
+            enter = expandHorizontally(
+                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                expandFrom = Alignment.Start,
+            ) + fadeIn(animationSpec = tween(160)),
+            exit = shrinkHorizontally(
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Start,
+            ) + fadeOut(animationSpec = tween(120)),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ModeBarDivider()
+                if (editor.skeletonDraft != null) {
+                    StructureActionChip(text = tr("skeleton.panel.cancel"), onClick = { editor.cancelSkeletonEdit(); focus() })
+                    StructureActionChip(text = tr("skeleton.panel.done"), onClick = { editor.finishSkeletonEdit(); focus() }, primary = true)
+                } else {
+                    StructureActionChip(
+                        text = tr("animation.resetPose"),
+                        onClick = { editor.resetSkeletonPose(); focus() },
+                        enabled = editor.bakedSkeleton != null,
+                    )
+                }
+            }
+        }
+
         // Temporary place-then-confirm session name (warp / rotation / path / layer import).
         val session = editor.placement
         AnimatedVisibility(
@@ -2664,62 +2824,78 @@ private fun SessionNameChip(text: String) {
 }
 
 @Composable
-private fun ModeBarChip(
-    mode: EditHierarchyMode,
-    text: String,
-    isSelected: Boolean,
-    isWaiting: Boolean = false,
-    onClick: () -> Unit,
-) {
+private fun ModeBarDivider() {
     val colors = LocalToolColors.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-
-    val bg = when {
-        isSelected -> colors.accent.copy(alpha = 0.22f)
-        isWaiting -> colors.warning.copy(alpha = 0.14f)
-        isHovered -> colors.controlHover.copy(alpha = 0.7f)
-        else -> Color.Transparent
-    }
-    val textColor = when {
-        isSelected -> colors.accent
-        isWaiting -> colors.warning
-        isHovered -> colors.textPrimary
-        else -> colors.textMuted
-    }
-
-    Row(
+    Box(
         modifier = Modifier
-            .height(24.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(bg)
-            .border(
-                0.5.dp,
-                when {
-                    isSelected -> colors.accent.copy(alpha = 0.5f)
-                    isWaiting -> colors.warning.copy(alpha = 0.5f)
-                    else -> Color.Transparent
-                },
-                RoundedCornerShape(4.dp)
-            )
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = 6.dp),
+            .padding(horizontal = 2.dp)
+            .height(14.dp)
+            .width(1.dp)
+            .background(colors.border.copy(alpha = 0.45f))
+    )
+}
+
+/**
+ * Simulate mode's strip: the vertex group the weight tools write, with its kind's colour, then the
+ * simulation of the meshes in hand - create one, or run it live and restart it.
+ */
+@Composable
+private fun SimulateModeExtras(editor: CanvasEditor, focus: () -> Unit) {
+    val colors = LocalToolColors.current
+    val viewModel = editor.viewModel
+    val state = editor.state
+    val meshes = editor.editMeshTargets().map { it.id }.toSet()
+    val simulation = state.rigEdits.simEdits.firstOrNull { edit -> edit.targets.any { it in meshes } }
+        ?: state.rigEdits.simEdits.firstOrNull()
+    val live = simulation != null && state.simulationPreviewId == simulation.id
+    Row(
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ModeIcon(mode = mode, color = textColor)
-        Spacer(Modifier.width(4.dp))
+        ModeBarDivider()
+        VertexGroupKindIcon(editor.weightGroupKind, vertexGroupKindColor(editor.weightGroupKind), size = 12.dp)
         Text(
-            text = text,
-            color = textColor,
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            text = tr("sim.group.${editor.weightGroupKind.jsonName}"),
+            fontSize = 10.5.sp,
+            color = colors.textMuted,
             maxLines = 1,
+            modifier = Modifier.padding(end = 2.dp),
         )
+        ModeBarDivider()
+        if (simulation == null) {
+            StructureActionChip(
+                text = tr("sim.newCloth"),
+                onClick = { viewModel.createSimulationFromSelection(io.github.psd2live.core.sim.SimKind.CLOTH); focus() },
+                enabled = meshes.isNotEmpty(),
+            )
+            StructureActionChip(
+                text = tr("sim.newHair"),
+                onClick = { viewModel.createSimulationFromSelection(io.github.psd2live.core.sim.SimKind.HAIR); focus() },
+                enabled = meshes.isNotEmpty(),
+            )
+        } else {
+            StructureActionChip(
+                text = tr("sim.previewReference"),
+                onClick = { viewModel.setSimulationPreview(if (live) null else simulation.id); focus() },
+                primary = live,
+            )
+            if (live) {
+                StructureActionChip(text = tr("sim.restartShort"), onClick = { viewModel.restartSimulationPreview(); focus() })
+            }
+        }
     }
+}
+
+/** One colour per vertex group kind, shared by the mode strip and the canvas. */
+internal fun vertexGroupKindColor(kind: org.umamo.runtime.model.VertexGroupKind): Color = when (kind) {
+    org.umamo.runtime.model.VertexGroupKind.PIN -> Color(0xFFE0564B)
+    org.umamo.runtime.model.VertexGroupKind.COLLIDE -> Color(0xFFE5A23A)
+    org.umamo.runtime.model.VertexGroupKind.COLLIDER -> Color(0xFFD9C640)
+    org.umamo.runtime.model.VertexGroupKind.STIFFNESS -> Color(0xFF5B8DEF)
+    org.umamo.runtime.model.VertexGroupKind.MASS -> Color(0xFFB07BE0)
+    org.umamo.runtime.model.VertexGroupKind.DAMPING -> Color(0xFF3FBCD6)
+    org.umamo.runtime.model.VertexGroupKind.WIND -> Color(0xFF7FD4F0)
+    org.umamo.runtime.model.VertexGroupKind.GOAL -> Color(0xFF3FC46B)
 }
 
 @Composable
@@ -2901,6 +3077,74 @@ private fun DrawScope.drawWeightWash(pts: List<Offset>, indices: IntArray, color
 }
 
 private val BrushWeightColor = Color(0xFFF81818)
+
+/** Blender's weight ramp: 0 blue, 0.25 cyan, 0.5 green, 0.75 yellow, 1 red. */
+internal fun weightHeatColor(weight: Float): Color {
+    val w = weight.coerceIn(0f, 1f)
+    val stops = WeightRamp
+    val scaled = w * (stops.size - 1)
+    val at = scaled.toInt().coerceAtMost(stops.size - 2)
+    val t = scaled - at
+    val a = stops[at]
+    val b = stops[at + 1]
+    return Color(a.red + (b.red - a.red) * t, a.green + (b.green - a.green) * t, a.blue + (b.blue - a.blue) * t)
+}
+
+private val WeightRamp = listOf(
+    Color(0xFF2A48E0), Color(0xFF22B8D8), Color(0xFF3CC84A), Color(0xFFE8D030), Color(0xFFE83A2A),
+)
+
+/** The ring and hover colour of each weight mode, so what a press will do shows before it is made. */
+private fun weightModeColor(mode: WeightPaintMode, colors: io.github.psd2live.ui.theme.ToolColors): Color = when (mode) {
+    WeightPaintMode.ADD -> Color.White
+    WeightPaintMode.SUBTRACT -> colors.error
+    WeightPaintMode.SET -> colors.accent
+    WeightPaintMode.SMOOTH -> Color(0xFF7FD4F0)
+}
+
+/**
+ * Washes a mesh in [weightHeatColor]: every vertex in its own colour, blended across the triangles, over
+ * the art like the other weight washes.
+ */
+private fun DrawScope.drawWeightHeat(pts: List<Offset>, indices: IntArray, weights: FloatArray) {
+    val vertexCount = pts.size
+    if (vertexCount == 0 || indices.isEmpty()) return
+    val positions = FloatArray(vertexCount * 2)
+    val vertexColors = IntArray(vertexCount)
+    val alpha = 0.58f
+    for (i in 0 until vertexCount) {
+        positions[i * 2] = pts[i].x
+        positions[i * 2 + 1] = pts[i].y
+        val c = weightHeatColor(weights.getOrElse(i) { 0f })
+        val a = (alpha * 255f).toInt()
+        vertexColors[i] = (a shl 24) or ((c.red * a).toInt() shl 16) or ((c.green * a).toInt() shl 8) or (c.blue * a).toInt()
+    }
+    val corners = ArrayList<Short>()
+    for (tri in 0 until indices.size / 3) {
+        val a = indices[tri * 3]
+        val b = indices[tri * 3 + 1]
+        val c = indices[tri * 3 + 2]
+        if (a >= vertexCount || b >= vertexCount || c >= vertexCount) continue
+        corners += a.toShort(); corners += b.toShort(); corners += c.toShort()
+    }
+    if (corners.isEmpty()) return
+    drawIntoCanvas { canvas ->
+        val paint = SkiaPaint().apply { isAntiAlias = true }
+        try {
+            canvas.skiaCanvas.drawVertices(
+                SkiaVertexMode.TRIANGLES,
+                positions,
+                vertexColors,
+                null,
+                ShortArray(corners.size) { corners[it] },
+                SkiaBlendMode.DST,
+                paint,
+            )
+        } finally {
+            paint.close()
+        }
+    }
+}
 
 /**
  * The tip's own falloff fill while Alt + right-drag retunes a deform brush. Kept faint, so the wash of

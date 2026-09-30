@@ -491,6 +491,31 @@ interface AgentWorkspace {
     /** Scales group [id]'s outputs so a standard head sway swings each to [target] of its parameter's end. */
     suspend fun fitPhysics(id: String, target: Float, expectedHead: String): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Physics scale fitting is unavailable")
+    fun listSimulations(): List<io.github.psd2live.core.sim.RigSimEdit> = emptyList()
+    /**
+     * [arguments] are a `simulation` put request, laid over the simulation with that ID. A simulation that
+     * bakes on its own is baked again in the same step; the second value reports that bake or why it failed.
+     */
+    suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?):
+        Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
+        throw UnsupportedOperationException("Simulation editing is unavailable")
+    suspend fun deleteSimulation(id: String, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation deletion is unavailable")
+    /**
+     * Bakes simulation [id] into parameters, keyforms and pendulums on the current rig; slow. The second
+     * value summarizes the bake (modes, pendulum fit, error).
+     */
+    suspend fun bakeSimulation(id: String, expectedHead: String): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
+        throw UnsupportedOperationException("Simulation baking is unavailable")
+    /** Stores [bake] as simulation [id]'s bake (null clears it) and turns physics on for a bake. */
+    suspend fun putSimulationBake(id: String, bake: io.github.psd2live.core.sim.SimBakeResult?, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation baking is unavailable")
+    /** Stores several simulations' bakes (null clears one) as one history node. */
+    suspend fun putSimulationBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult?>, expectedHead: String): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Simulation baking is unavailable")
+    /** Runs simulation [id] on the current rig and reports how it moves; read-only. */
+    fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject =
+        throw UnsupportedOperationException("Simulation is unavailable")
     fun listSwings(): List<io.github.psd2live.core.RigSwingEdit> = emptyList()
     /** [estimatePhysics] sizes the pendulum from the first target instead of taking the edit's. */
     suspend fun putSwing(edit: io.github.psd2live.core.RigSwingEdit, estimatePhysics: Boolean, expectedHead: String, taskId: String?,

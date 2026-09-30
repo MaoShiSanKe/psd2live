@@ -71,6 +71,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.math.abs
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
@@ -356,6 +358,260 @@ class PSD2LiveViewModel : AutoCloseable {
             }
         }
     }
+    // Simulation: the panel's edits commit through the workspace like swings; the live preview runs here.
+
+    private val simPreview = io.github.psd2live.core.sim.SimPreview()
+    private val _simulationFrames = MutableStateFlow<io.github.psd2live.core.sim.SimulatedFrame?>(null)
+    /** The live simulation's latest frame, for the canvas; null while none runs or it is still preparing. */
+    val simulationFrames: StateFlow<io.github.psd2live.core.sim.SimulatedFrame?> = _simulationFrames.asStateFlow()
+    private val _simulationStatus = MutableStateFlow<SimulationStatus>(SimulationStatus.Idle)
+    val simulationStatus: StateFlow<SimulationStatus> = _simulationStatus.asStateFlow()
+    private var simPreparing: kotlinx.coroutines.Job? = null
+
+    /** What the simulation panel shows under the list. */
+    sealed interface SimulationStatus {
+        data object Idle : SimulationStatus
+        data object Preparing : SimulationStatus
+        data class Running(val notes: List<String>) : SimulationStatus
+        data class Failed(val message: String) : SimulationStatus
+    }
+
+    /**
+     * The simulation being baked and how far along, 0..1; null while none is. A batch bakes [count]
+     * simulations one after another, [index] of them done.
+     */
+    data class SimulationBaking(val id: String, val progress: Float, val index: Int = 0, val count: Int = 1) {
+        val overall: Float get() = (index + progress) / count
+    }
+
+    private val _simulationBaking = MutableStateFlow<SimulationBaking?>(null)
+    val simulationBaking: StateFlow<SimulationBaking?> = _simulationBaking.asStateFlow()
+    private var simBaking: kotlinx.coroutines.Job? = null
+
+    /**
+     * Bakes simulation [id] off the frame thread into parameters, keyforms and pendulums, then commits it
+     * as one history node. Progress arrives in [simulationBaking], a failure in [simulationStatus].
+     */
+    internal fun bakeSimulation(id: String) {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        if (simBaking?.isActive == true || current.rigEdits.simEdits.none { it.id == id }) return
+        _simulationBaking.value = SimulationBaking(id, 0f)
+        simBaking = scope.launch {
+            try {
+                val bake = withContext(Dispatchers.Default) {
+                    val job = coroutineContext[kotlinx.coroutines.Job]
+                    io.github.psd2live.core.sim.SimAuthoring.bake(current.rigEdits, model.baseRig.puppet, id,
+                        progress = { _simulationBaking.value = SimulationBaking(id, it) },
+                        cancelled = { job?.isCancelled == true },
+                    )
+                }
+                runSimulationMutation("Baked simulation $id") { workspace, head -> workspace.putSimulationBake(id, bake, head) }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
+            } finally {
+                _simulationBaking.value = null
+            }
+        }
+    }
+
+    /** The enabled simulations a bake would change: unbaked or stale ones, or every one when all are up to date. */
+    internal fun simulationsToBake(current: PSD2LiveState = _state.value): List<String> {
+        val puppet = current.previewModel?.rig?.puppet ?: return emptyList()
+        val enabled = current.rigEdits.simEdits.filter { it.enabled }
+        val outdated = enabled.filter { it.bake == null || io.github.psd2live.core.sim.SimBake.stale(puppet, it) }
+        return (outdated.ifEmpty { enabled }).map { it.id }
+    }
+
+    /**
+     * Bakes [simulationsToBake] one after another, each on the rig with the bakes before it, and commits
+     * them together as one history node. A simulation that fails keeps its old bake and is reported.
+     */
+    internal fun bakeAllSimulations() {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val ids = simulationsToBake(current)
+        if (simBaking?.isActive == true || ids.isEmpty()) return
+        _simulationBaking.value = SimulationBaking(ids.first(), 0f, 0, ids.size)
+        simBaking = scope.launch {
+            try {
+                val (bakes, failures) = withContext(Dispatchers.Default) {
+                    val job = coroutineContext[kotlinx.coroutines.Job]
+                    var overlay = current.rigEdits
+                    val bakes = LinkedHashMap<String, io.github.psd2live.core.sim.SimBakeResult?>()
+                    val failures = ArrayList<String>()
+                    ids.forEachIndexed { index, id ->
+                        try {
+                            val bake = io.github.psd2live.core.sim.SimAuthoring.bake(overlay, model.baseRig.puppet, id,
+                                progress = { _simulationBaking.value = SimulationBaking(id, it, index, ids.size) },
+                                cancelled = { job?.isCancelled == true },
+                            )
+                            overlay = io.github.psd2live.core.sim.SimAuthoring.withBake(overlay, id, bake)
+                            bakes[id] = bake
+                        } catch (failure: IllegalArgumentException) {
+                            failures += "$id: ${failure.message ?: failure}"
+                        }
+                        if (job?.isCancelled == true) throw kotlinx.coroutines.CancellationException("Bake cancelled")
+                    }
+                    bakes to failures
+                }
+                if (bakes.isNotEmpty()) runSimulationMutation("Baked simulations ${bakes.keys.joinToString()}") { workspace, head ->
+                    workspace.putSimulationBakes(bakes, head)
+                }
+                if (failures.isNotEmpty()) _simulationStatus.value = SimulationStatus.Failed(failures.joinToString("\n"))
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
+            } finally {
+                _simulationBaking.value = null
+            }
+        }
+    }
+
+    /** Removes every simulation's bake as one history node. */
+    internal fun clearAllSimulationBakes() {
+        val ids = _state.value.rigEdits.simEdits.filter { it.bake != null }.map { it.id }
+        if (ids.isEmpty()) return
+        runSimulationMutation("Cleared simulation bakes") { workspace, head -> workspace.putSimulationBakes(ids.associateWith { null }, head) }
+    }
+
+    internal fun cancelSimulationBake() {
+        simBakeCancelled = true
+        simBaking?.cancel()
+        simBaking = null
+        _simulationBaking.value = null
+    }
+
+    @Volatile private var simBakeCancelled = false
+
+    /**
+     * Runs [bake] for simulation [id] with its progress shown in [simulationBaking] and the panel's Cancel
+     * wired to its second argument; for bakes that run inside a workspace edit.
+     */
+    internal fun <T> trackSimulationBake(id: String, bake: (progress: (Float) -> Unit, cancelled: () -> Boolean) -> T): T {
+        simBakeCancelled = false
+        _simulationBaking.value = SimulationBaking(id, 0f)
+        try {
+            return bake({ _simulationBaking.value = SimulationBaking(id, it) }, { simBakeCancelled })
+        } finally {
+            _simulationBaking.value = null
+        }
+    }
+
+    /** Removes simulation [id]'s bake: its parameters, keys and pendulums go with it. */
+    internal fun clearSimulationBake(id: String) =
+        runSimulationMutation("Cleared simulation bake $id") { workspace, head -> workspace.putSimulationBake(id, null, head) }
+
+    /** Runs simulation [id] live in the preview, or stops it with null. */
+    internal fun setSimulationPreview(id: String?) {
+        if (_state.value.simulationPreviewId == id) return
+        simPreparing?.cancel()
+        simPreview.clear()
+        _simulationFrames.value = null
+        _simulationStatus.value = SimulationStatus.Idle
+        updateState { it.copy(simulationPreviewId = id) }
+    }
+
+    /** Puts the live simulation back at rest. */
+    internal fun restartSimulationPreview() {
+        val model = _state.value.previewModel ?: return
+        simPreview.restart(model.rig.puppet, simulationPose(_state.value, model))
+    }
+
+    /** Creates or replaces [edit] as one history node. */
+    internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) =
+        runSimulationMutation("Set simulation ${edit.id}") { workspace, head ->
+            val (result, report) = workspace.putSimulation(edit.toJson(), head, null)
+            report["bake_error"]?.jsonPrimitive?.contentOrNull?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
+            result
+        }
+
+    internal fun deleteSimulation(id: String) {
+        if (_state.value.simulationPreviewId == id) setSimulationPreview(null)
+        runSimulationMutation("Deleted simulation $id") { workspace, head -> workspace.deleteSimulation(id, head) }
+    }
+
+    /** A new simulation of the meshes of the selected layers; returns its ID, or null with nothing selected. */
+    internal fun createSimulationFromSelection(kind: io.github.psd2live.core.sim.SimKind): String? {
+        val current = _state.value
+        val model = current.previewModel ?: return null
+        val layers = current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) }
+        val meshes = model.rig.layerIdByDrawableId.filter { (drawable, layer) ->
+            layer in layers && model.rig.puppet.drawables.any { it.id.raw == drawable && it.mesh != null }
+        }.keys.sorted()
+        if (meshes.isEmpty()) return null
+        val id = io.github.psd2live.core.sim.SimAuthoring.nextId(current.rigEdits, meshes)
+        putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes))
+        return id
+    }
+
+    /** Opens the weight brush on [drawableId]'s group of [kind]: selects the mesh's layer and puts the canvas in Edit. */
+    internal fun beginVertexGroupPaint(drawableId: String, kind: org.umamo.runtime.model.VertexGroupKind) {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val layer = model.rig.layerIdByDrawableId[drawableId] ?: return
+        selectLayer(layer)
+        setCanvasMode(current.activeCanvas.id, CanvasMode.EDIT)
+        canvasEditor.weightGroupKind = kind
+        canvasEditor.activateTool(io.github.psd2live.ui.CanvasTool.WEIGHT_PAINT)
+    }
+
+    private fun runSimulationMutation(
+        summary: String,
+        mutation: suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult,
+    ) {
+        if (_state.value.canvasEditBusy) return
+        updateState { it.copy(canvasEditBusy = true) }
+        scope.launch {
+            try {
+                val workspace = requireNotNull(agentWorkspace) { "Project workspace unavailable" }
+                val head = requireNotNull(workspace.snapshot().historyHeadNodeId) { "Project history unavailable" }
+                withContext(Dispatchers.Default) { mutation(workspace, head) }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: summary)
+            } finally {
+                updateState { it.copy(canvasEditBusy = false) }
+            }
+        }
+    }
+
+    /** The pose the live simulation follows: the playing preview's, or the paused edit pose with its physics. */
+    private fun simulationPose(current: PSD2LiveState, model: RigPreviewModel): Map<ParameterId, Float> =
+        if (current.previewLive && current.animationEnabled && !current.meshOnly && latestLiveParameters.isNotEmpty()) latestLiveParameters
+        else parameterScrubPose(current, current.previewPanelState().parameterValues) + pausedPhysics
+
+    private fun stepSimulationPreview(current: PSD2LiveState, model: RigPreviewModel?, dt: Float) {
+        val id = current.simulationPreviewId ?: return
+        val edit = current.rigEdits.simEdits.firstOrNull { it.id == id }
+        if (model == null || edit == null) {
+            _simulationFrames.value = null
+            return
+        }
+        val puppet = model.rig.puppet
+        // The live body replaces what its own bake would add, so the baked modes stay at rest under it.
+        val pose = io.github.psd2live.core.sim.SimGenerator.withoutModes(simulationPose(current, model), edit)
+        if (simPreview.needs(puppet, edit)) {
+            simPreparing?.cancel()
+            simPreview.begin(puppet, edit)
+            _simulationStatus.value = SimulationStatus.Preparing
+            simPreparing = scope.launch {
+                _simulationStatus.value = try {
+                    SimulationStatus.Running(withContext(Dispatchers.Default) { simPreview.prepare(puppet, edit, pose) })
+                } catch (failure: Exception) {
+                    if (failure is kotlinx.coroutines.CancellationException) throw failure
+                    SimulationStatus.Failed(failure.message ?: failure.toString())
+                }
+            }
+            return
+        }
+        simPreview.step(puppet, edit, pose, dt)?.let { _simulationFrames.value = it }
+    }
+
+    /** False while a live simulation needs frames, so the paused preview keeps pumping. */
+    val previewSettled: Boolean get() = pausedPhysicsSettled && _state.value.simulationPreviewId == null
+
     private val meshSplitQueue = ArrayDeque<String>()
     private val manualMeshSplitRequests = mutableSetOf<String>()
     private var meshSplitChecking = false
@@ -4944,6 +5200,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		// 5. Paused, physics still runs, on the pose the user sets: a slider or the pointer's look swings it.
 		stepPausedPhysics(current, model, inPreview && !anim && current.generatePhysics && !isMeshOnly, tracking, dt)
+		// 6. The live simulation follows whichever pose the preview now shows.
+		if (inPreview) stepSimulationPreview(current, model, dt)
 	}
 
 	/** What the software physics is stepping for; switching starts it from rest, as a fresh Cubism model would. */

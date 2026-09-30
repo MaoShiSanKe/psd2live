@@ -1320,6 +1320,69 @@ class ViewModelAgentWorkspace(
 
     override fun listSwings() = viewModel.state.value.rigEdits.swingEdits
 
+    override fun listSimulations() = viewModel.state.value.rigEdits.simEdits
+
+    override suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?):
+        Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> {
+        val id = arguments["id"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("id is required")
+        val base = viewModel.state.value.previewModel?.baseRig?.puppet
+        var report = kotlinx.serialization.json.JsonObject(emptyMap())
+        val result = mutateRigKeyform(expectedHead, taskId, "Set simulation $id", id) { document, puppet ->
+            val put = io.github.psd2live.core.sim.SimAuthoring.put(document.rigEdits, puppet, arguments)
+            if (base == null) return@mutateRigKeyform document.copy(rigEdits = put)
+            val (rigEdits, failure) = viewModel.trackSimulationBake(id) { progress, cancelled ->
+                io.github.psd2live.core.sim.SimAuthoring.rebaked(put, base, id, progress, cancelled)
+            }
+            val bake = rigEdits.simEdits.single { it.id == id }.bake
+            report = kotlinx.serialization.json.buildJsonObject {
+                if (failure != null) put("bake_error", failure)
+                else if (bake !== put.simEdits.single { it.id == id }.bake && bake != null) put("bake", bake.summary())
+            }
+            document.copy(rigEdits = rigEdits, settings = if (bake == null) document.settings else kotlinx.serialization.json.JsonObject(document.settings +
+                ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
+        }
+        return result to report
+    }
+
+    override suspend fun deleteSimulation(id: String, expectedHead: String) =
+        mutateRigKeyform(expectedHead, null, "Deleted simulation $id", id) { document, _ ->
+            document.copy(rigEdits = io.github.psd2live.core.sim.SimAuthoring.remove(document.rigEdits, id))
+        }
+
+    override suspend fun bakeSimulation(id: String, expectedHead: String): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> {
+        val state = viewModel.state.value
+        val model = state.previewModel ?: throw IllegalStateException("No rig preview is available")
+        val bake = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            viewModel.trackSimulationBake(id) { progress, cancelled ->
+                io.github.psd2live.core.sim.SimAuthoring.bake(state.rigEdits, model.baseRig.puppet, id, progress, cancelled)
+            }
+        }
+        return putSimulationBake(id, bake, expectedHead) to bake.summary()
+    }
+
+    override suspend fun putSimulationBake(id: String, bake: io.github.psd2live.core.sim.SimBakeResult?, expectedHead: String) =
+        putSimulationBakes(mapOf(id to bake), expectedHead, if (bake != null) "Baked simulation $id" else "Cleared simulation bake $id", id)
+
+    override suspend fun putSimulationBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult?>, expectedHead: String) =
+        putSimulationBakes(bakes, expectedHead,
+            if (bakes.values.any { it != null }) "Baked simulations ${bakes.keys.joinToString()}" else "Cleared simulation bakes ${bakes.keys.joinToString()}",
+            bakes.keys.firstOrNull() ?: "simulation")
+
+    private suspend fun putSimulationBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult?>, expectedHead: String, summary: String, affected: String) =
+        mutateRigKeyform(expectedHead, null, summary, affected) { document, _ ->
+            val rigEdits = bakes.entries.fold(document.rigEdits) { edits, (id, bake) -> io.github.psd2live.core.sim.SimAuthoring.withBake(edits, id, bake) }
+            // A bake is a pendulum group, so exporting it needs physics on.
+            document.copy(rigEdits = rigEdits, settings = if (bakes.values.all { it == null }) document.settings else kotlinx.serialization.json.JsonObject(document.settings +
+                ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
+        }
+
+    override fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?): kotlinx.serialization.json.JsonObject {
+        val state = viewModel.state.value
+        val model = state.previewModel ?: throw IllegalStateException("No rig preview is available")
+        val edit = requireNotNull(state.rigEdits.simEdits.firstOrNull { it.id == id }) { "Simulation not found: $id" }
+        return io.github.psd2live.core.sim.SimAuthoring.report(model.rig.puppet, edit, hold, release, wind)
+    }
+
     override suspend fun putSwing(edit: io.github.psd2live.core.RigSwingEdit, estimatePhysics: Boolean, expectedHead: String,
         taskId: String?, author: MutationAuthor) =
         mutateRigKeyform(expectedHead, taskId, "Set swing ${edit.id}", edit.id, author) { document, puppet ->

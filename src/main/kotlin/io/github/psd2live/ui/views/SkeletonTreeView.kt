@@ -114,7 +114,8 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 			}
 		} else null
 	}
-	val posing = editor.skeletonSelected && editor.hierarchyMode == EditHierarchyMode.DEFORM
+	val posing = editor.skeletonSelected && editor.hierarchyMode == EditHierarchyMode.SKELETON &&
+		editor.tool == io.github.psd2live.ui.CanvasTool.SKELETON_POSE
 	val rig = state.previewModel?.rig
 	// Meshes are listed by their layer's name - what the layers panel and a split named them - rather than
 	// the drawable id a split piece is given internally.

@@ -911,6 +911,50 @@ internal fun ToolDetailsView(
                     )
                 }
             }
+            CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT -> {
+                val brush = editor.tool == CanvasTool.WEIGHT_PAINT
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(tr("editor.weightKind"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                        // Wind moves nothing the editor bakes or previews, so it is not offered.
+                        CompactDropdown(io.github.psd2live.ui.PAINTED_GROUP_KINDS.let { if (editor.weightGroupKind in it) it else it + editor.weightGroupKind },
+                            editor.weightGroupKind, { editor.weightGroupKind = it },
+                            Modifier.weight(1f), itemLabel = { tr("sim.group.${it.jsonName}") }, height = 24.dp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        io.github.psd2live.ui.WeightPaintMode.entries.forEach { mode ->
+                            CompactButton(
+                                text = tr(mode.labelKey),
+                                onClick = { editor.weightPaintMode = mode },
+                                isPrimary = editor.weightPaintMode == mode,
+                                modifier = Modifier.weight(1f),
+                                height = 24.dp,
+                            )
+                        }
+                    }
+                    if (brush) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                            CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = 500.0, unit = "px", height = 24.dp)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(tr("editor.hardness"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                            CompactNumberSpinner(value = (editor.hardness * 100).toDouble(), onValueChange = { editor.hardness = (it.toFloat() / 100f).coerceIn(0f, 0.95f) }, min = 0.0, max = 95.0, unit = "%", height = 24.dp)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(tr("editor.strength"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                        CompactNumberSpinner(value = (editor.strength * 100).toDouble(), onValueChange = { editor.strength = it.toFloat() / 100f }, min = 1.0, max = 100.0, unit = "%", height = 24.dp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CompactButton(text = tr("editor.weightFill"), onClick = { editor.fillVertexGroup(1f) }, enabled = editor.editable, height = 24.dp)
+                        CompactButton(text = tr("editor.weightClear"), onClick = { editor.fillVertexGroup(0f) }, enabled = editor.editable, height = 24.dp)
+                        CompactButton(text = tr("editor.weightInvert"), onClick = { editor.invertVertexGroup() }, enabled = editor.editable, height = 24.dp)
+                        CompactButton(text = tr("editor.weightDelete"), onClick = { editor.deleteVertexGroup() }, enabled = editor.editable, danger = true, height = 24.dp)
+                    }
+                    Text(tr(if (brush) "editor.weightHint" else "editor.weightGradientHint"), style = typography.caption.copy(fontSize = 10.5.sp), color = colors.textMuted)
+                }
+            }
             CanvasTool.SUBDIVIDE -> {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = 500.0, unit = "px", height = 24.dp)
