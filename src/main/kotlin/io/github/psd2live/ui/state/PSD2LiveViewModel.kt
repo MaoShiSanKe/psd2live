@@ -541,15 +541,12 @@ class PSD2LiveViewModel : AutoCloseable {
             layer in layers && model.rig.puppet.drawables.any { it.id.raw == drawable && it.mesh != null }
         }.keys.sorted()
         if (meshes.isEmpty()) return null
-        val id = io.github.psd2live.core.sim.SimAuthoring.nextId(current.rigEdits)
+        val id = io.github.psd2live.core.sim.SimAuthoring.nextId(current.rigEdits, meshes)
         putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes))
         return id
     }
 
-    /**
-     * Opens the weight brush on [drawableId] for a group of [kind]: selects the mesh's layer, puts the
-     * canvas in Edit and names the group after the kind unless the mesh already has one of that kind.
-     */
+    /** Opens the weight brush on [drawableId]'s group of [kind]: selects the mesh's layer and puts the canvas in Edit. */
     internal fun beginVertexGroupPaint(drawableId: String, kind: org.umamo.runtime.model.VertexGroupKind) {
         val current = _state.value
         val model = current.previewModel ?: return
@@ -557,8 +554,6 @@ class PSD2LiveViewModel : AutoCloseable {
         selectLayer(layer)
         setCanvasMode(current.activeCanvas.id, CanvasMode.EDIT)
         canvasEditor.weightGroupKind = kind
-        canvasEditor.weightGroupName = model.rig.puppet.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.kind == kind }?.name
-            ?: kind.jsonName
         canvasEditor.activateTool(io.github.psd2live.ui.CanvasTool.WEIGHT_PAINT)
     }
 

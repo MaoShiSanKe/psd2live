@@ -26,6 +26,7 @@ import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
 import io.github.psd2live.ui.components.drawBoneIcon
+import org.umamo.runtime.model.VertexGroupKind
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -608,5 +609,117 @@ private fun IconPen.paintShape(shape: PaintShape) {
         PaintShape.RECTANGLE -> box(2.6f, 4.2f, 12.8f, 9.6f, 1.2f)
         PaintShape.ELLIPSE ->
             scope.drawOval(color, p(2.2f, 4f), Size(13.6f * s, 10f * s), style = stroke())
+    }
+}
+
+/** What each kind of vertex group does to a simulated mesh, drawn on the tool grid. */
+@Composable
+internal fun VertexGroupKindIcon(kind: VertexGroupKind, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) { drawVertexGroupKindIcon(kind, color) }
+}
+
+internal fun DrawScope.drawVertexGroupKindIcon(kind: VertexGroupKind, color: Color) {
+    val pen = IconPen(this, color)
+    when (kind) {
+        // A pushpin: the head, and the needle into the mesh.
+        VertexGroupKind.PIN -> {
+            pen.dot(9f, 6f, 3.6f, pen.soft)
+            pen.ring(9f, 6f, 3.6f)
+            pen.line(9f, 9.6f, 9f, 15.4f)
+        }
+        // A vertex meeting a surface and turned back.
+        VertexGroupKind.COLLIDE -> {
+            pen.line(14.6f, 3f, 14.6f, 15f)
+            pen.dot(6f, 9f, 2.2f)
+            pen.line(9.2f, 9f, 12f, 9f)
+            pen.chevron(12f, 9f, 1f, 0f, 2.6f)
+        }
+        // A solid that pushes what lands on it away.
+        VertexGroupKind.COLLIDER -> {
+            pen.fillBox(3f, 10f, 12f, 5.4f, 1.2f, pen.soft)
+            pen.box(3f, 10f, 12f, 5.4f, 1.2f)
+            pen.line(9f, 7.6f, 9f, 2.8f)
+            pen.chevron(9f, 2.8f, 0f, -1f, 2.6f)
+        }
+        // A spring.
+        VertexGroupKind.STIFFNESS -> pen.outline(pen.path {
+            m(2.4f, 9f); l(4.4f, 9f); l(6f, 4f); l(8.4f, 14f); l(10.8f, 4f); l(13.2f, 14f); l(14.4f, 9f); l(15.6f, 9f)
+        })
+        // A weight with its handle.
+        VertexGroupKind.MASS -> {
+            val body = pen.path { m(5.4f, 7.4f); l(12.6f, 7.4f); l(15f, 15.2f); l(3f, 15.2f); z() }
+            pen.fill(body, pen.soft)
+            pen.outline(body)
+            pen.ring(9f, 4.8f, 2.1f)
+        }
+        // A swing that dies out.
+        VertexGroupKind.DAMPING -> pen.outline(pen.path {
+            m(2f, 9f); q(3.6f, 1.6f, 5.2f, 9f); q(6.6f, 15f, 8f, 9f); q(9.2f, 5.2f, 10.4f, 9f); q(11.4f, 11.6f, 12.4f, 9f); l(16f, 9f)
+        })
+        // Gusts.
+        VertexGroupKind.WIND -> {
+            pen.outline(pen.path { m(2.4f, 6f); l(11.6f, 6f); q(14.4f, 6f, 14.4f, 3.8f); q(14.4f, 2f, 12.6f, 2.2f) })
+            pen.outline(pen.path { m(2.4f, 10f); l(13.8f, 10f); q(16.2f, 10f, 16.2f, 12.2f); q(16.2f, 14f, 14.4f, 13.8f) })
+            pen.line(2.4f, 14f, 8.4f, 14f)
+        }
+        // The drawn shape, and the way back to it.
+        VertexGroupKind.GOAL -> {
+            pen.fillBox(9f, 9f, 6.4f, 6.4f, 1.2f, pen.soft)
+            pen.box(9f, 9f, 6.4f, 6.4f, 1.2f)
+            pen.outline(pen.path { m(3.4f, 13.6f); q(3.4f, 4f, 12.2f, 4f) })
+            pen.chevron(12.2f, 4f, 1f, 0f, 2.6f)
+        }
+    }
+}
+
+/** The simulation panel's sections. */
+internal enum class SimSectionIcon { BAKE, MATERIAL, INPUTS, COLLIDERS, GLUE, GROUPS }
+
+@Composable
+internal fun SimSectionIconView(icon: SimSectionIcon, color: Color, size: Dp = 12.dp) {
+    Canvas(Modifier.size(size)) { drawSimSectionIcon(icon, color) }
+}
+
+internal fun DrawScope.drawSimSectionIcon(icon: SimSectionIcon, color: Color) {
+    val pen = IconPen(this, color)
+    when (icon) {
+        // Motion caught into keys: a swing over a keyframe.
+        SimSectionIcon.BAKE -> {
+            pen.outline(pen.path { m(2.4f, 5.4f); q(5.6f, 0.6f, 9f, 5.4f); q(12.4f, 10.2f, 15.6f, 5.4f) })
+            val key = pen.path { m(9f, 9.4f); l(13f, 13.2f); l(9f, 17f); l(5f, 13.2f); z() }
+            pen.fill(key, pen.soft)
+            pen.outline(key)
+        }
+        // A hanging cloth, like the Simulate mode.
+        SimSectionIcon.MATERIAL -> {
+            val cloth = pen.path {
+                m(3.4f, 3.4f); l(14.6f, 3.4f)
+                c(15.2f, 7.6f, 16.2f, 11.4f, 15.2f, 14.8f)
+                c(13.4f, 13.2f, 11.4f, 16.4f, 9f, 14.6f)
+                c(6.8f, 16.4f, 4.6f, 13.2f, 2.8f, 14.8f)
+                c(2f, 10.6f, 3.4f, 7f, 3.4f, 3.4f)
+                z()
+            }
+            pen.fill(cloth, pen.soft)
+            pen.outline(cloth)
+        }
+        // Two parameter sliders.
+        SimSectionIcon.INPUTS -> {
+            pen.line(2.6f, 5.6f, 15.4f, 5.6f)
+            pen.dot(6.4f, 5.6f, 2.2f)
+            pen.line(2.6f, 12.4f, 15.4f, 12.4f)
+            pen.dot(11.8f, 12.4f, 2.2f)
+        }
+        SimSectionIcon.COLLIDERS -> pen.scope.drawVertexGroupKindIcon(VertexGroupKind.COLLIDER, color)
+        SimSectionIcon.GLUE -> pen.glue()
+        // Three vertices, each weighted differently.
+        SimSectionIcon.GROUPS -> {
+            val tri = pen.path { m(9f, 3.6f); l(15f, 14.4f); l(3f, 14.4f); z() }
+            pen.fill(tri, pen.soft)
+            pen.outline(tri)
+            pen.dot(9f, 3.6f, 2.3f)
+            pen.dot(15f, 14.4f, 1.6f)
+            pen.dot(3f, 14.4f, 1.1f)
+        }
     }
 }

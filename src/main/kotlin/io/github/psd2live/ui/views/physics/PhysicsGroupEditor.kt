@@ -188,10 +188,11 @@ internal fun PhysicsSection(
 	open: Boolean,
 	onToggle: () -> Unit,
 	count: Int? = null,
+	icon: (@Composable () -> Unit)? = null,
 	trailing: (@Composable RowScope.() -> Unit)? = null,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
-	PanelSectionRow(title, open, onToggle, count = count, icon = null, trailing = trailing?.let { t -> { Spacer(Modifier.width(6.dp)); t() } })
+	PanelSectionRow(title, open, onToggle, count = count, icon = icon, trailing = trailing?.let { t -> { Spacer(Modifier.width(6.dp)); t() } })
 	PhysicsRowDivider()
 	if (open) SectionBody(content)
 }

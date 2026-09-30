@@ -2209,6 +2209,44 @@ private fun BoxScope.CanvasToolBar(
                 }
             }
         }
+
+        // The kinds of vertex group the weight tools paint sit under them the way the brush shapes do:
+        // picking one is picking which group of the mesh the strokes write.
+        AnimatedVisibility(
+            visible = editor.hierarchyMode == EditHierarchyMode.SIMULATE,
+            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .height(1.dp)
+                        .background(colors.border.copy(alpha = 0.45f))
+                )
+
+                io.github.psd2live.ui.PAINTED_GROUP_KINDS.forEach { kind ->
+                    ShapeItemRow(
+                        label = tr("sim.group.${kind.jsonName}"),
+                        isSelected = editor.weightGroupKind == kind,
+                        isToolbarExpanded = animatedWidth > 42.dp,
+                        textAlpha = textAlpha,
+                        textOffset = textOffset,
+                        isBusy = editor.busy,
+                        icon = { _ -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
+                        onClick = {
+                            editor.weightGroupKind = kind
+                            if (editor.tool !in io.github.psd2live.ui.WEIGHT_TOOLS) editor.activateTool(CanvasTool.WEIGHT_PAINT)
+                            focus()
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -2815,9 +2853,9 @@ private fun SimulateModeExtras(editor: CanvasEditor, focus: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         ModeBarDivider()
-        Box(Modifier.size(7.dp).clip(androidx.compose.foundation.shape.CircleShape).background(vertexGroupKindColor(editor.weightGroupKind)))
+        VertexGroupKindIcon(editor.weightGroupKind, vertexGroupKindColor(editor.weightGroupKind), size = 12.dp)
         Text(
-            text = "${editor.weightGroupName.ifBlank { editor.weightGroupKind.jsonName }} · ${tr("sim.group.${editor.weightGroupKind.jsonName}")}",
+            text = tr("sim.group.${editor.weightGroupKind.jsonName}"),
             fontSize = 10.5.sp,
             color = colors.textMuted,
             maxLines = 1,

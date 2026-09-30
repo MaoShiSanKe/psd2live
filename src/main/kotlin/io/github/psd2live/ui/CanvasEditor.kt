@@ -327,8 +327,17 @@ internal fun toolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = wh
     )
 }
 
-/** The simulation weight tools: both write the vertex group named in the tool options. */
+/** The simulation weight tools: both write the mesh's vertex group of the kind picked in the toolbar. */
 internal val WEIGHT_TOOLS = setOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT)
+
+/**
+ * The kinds the weight tools paint, in the order a simulation is usually set up. Wind moves nothing the
+ * editor bakes or previews, so it is not offered.
+ */
+internal val PAINTED_GROUP_KINDS = listOf(
+    VertexGroupKind.PIN, VertexGroupKind.COLLIDE, VertexGroupKind.COLLIDER, VertexGroupKind.STIFFNESS,
+    VertexGroupKind.GOAL, VertexGroupKind.MASS, VertexGroupKind.DAMPING,
+)
 
 /** The two tools of Skeleton mode. */
 internal val SKELETON_TOOLS = setOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT)
@@ -926,10 +935,7 @@ internal class CanvasEditor(
     private var glueStroking = false
     private var glueErasing = false
 
-    /** The vertex group the weight brush paints, by name, and the kind a new group of that name gets. */
-    var weightGroupName by mutableStateOf("pin")
-    /** The name strokes write to: a blank field falls back to the kind's own name. */
-    private val paintedGroupName: String get() = weightGroupName.trim().ifBlank { weightGroupKind.jsonName }
+    /** The kind of vertex group the weight brush paints; each mesh has one group of each kind. */
     var weightGroupKind by mutableStateOf(VertexGroupKind.PIN)
     /** How strokes and gradients combine with the group; Alt swaps adding and subtracting for one stroke. */
     var weightPaintMode by mutableStateOf(WeightPaintMode.ADD)
@@ -4726,11 +4732,21 @@ internal class CanvasEditor(
     internal fun layerIdForDrawable(drawableId: String): String? =
         state.previewModel?.rig?.layerIdByDrawableId[drawableId]
 
+    /** [drawableId]'s group of the brushed kind: the first one, as the simulation reads it. */
+    private fun paintedGroup(drawableId: String): VertexGroup? =
+        model.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.kind == weightGroupKind }
+
+    /** The name [drawableId]'s group of the brushed kind has, or gets: the kind's own, numbered past other kinds' groups. */
+    private fun paintedGroupName(drawableId: String): String = paintedGroup(drawableId)?.name ?: run {
+        val taken = model.vertexGroups.filter { it.drawableId.raw == drawableId }.mapTo(HashSet()) { it.name }
+        val stem = weightGroupKind.jsonName
+        if (stem !in taken) stem else generateSequence(2) { it + 1 }.map { "$stem$it" }.first { it !in taken }
+    }
+
     /** [drawableId]'s current weights in the brushed group, or null when it has no such group. */
     fun vertexGroupWeights(drawableId: String): FloatArray? {
         val mesh = model.drawables.firstOrNull { it.id.raw == drawableId }?.mesh ?: return null
-        return model.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.name == paintedGroupName }
-            ?.weights?.takeIf { it.size == mesh.vertexCount }
+        return paintedGroup(drawableId)?.weights?.takeIf { it.size == mesh.vertexCount }
     }
 
     /** What [drawableId]'s group becomes when the current stroke or gradient is released; its current weights between them. */
@@ -4832,8 +4848,7 @@ internal class CanvasEditor(
         val painted = weightStroke.keys.mapNotNull { id ->
             val weights = paintedWeights(id) ?: return@mapNotNull null
             if (vertexGroupWeights(id)?.contentEquals(weights) == true) return@mapNotNull null
-            val kind = model.vertexGroups.firstOrNull { it.drawableId.raw == id && it.name == paintedGroupName }?.kind ?: weightGroupKind
-            VertexGroupJournal.encode(VertexGroup(paintedGroupName, DrawableId(id), kind, weights))
+            VertexGroupJournal.encode(VertexGroup(paintedGroupName(id), DrawableId(id), weightGroupKind, weights))
         }
         weightStroke = emptyMap()
         weightGradient = null
@@ -4846,8 +4861,7 @@ internal class CanvasEditor(
     fun fillVertexGroup(value: Float) {
         val commands = editMeshTargets().mapNotNull { t ->
             val mesh = model.drawables.firstOrNull { it.id.raw == t.id }?.mesh ?: return@mapNotNull null
-            val kind = model.vertexGroups.firstOrNull { it.drawableId.raw == t.id && it.name == paintedGroupName }?.kind ?: weightGroupKind
-            VertexGroupJournal.encode(VertexGroup(paintedGroupName, DrawableId(t.id), kind, FloatArray(mesh.vertexCount) { value.coerceIn(0f, 1f) }))
+            VertexGroupJournal.encode(VertexGroup(paintedGroupName(t.id), DrawableId(t.id), weightGroupKind, FloatArray(mesh.vertexCount) { value.coerceIn(0f, 1f) }))
         }
         if (commands.isEmpty()) return
         head = null
@@ -4857,7 +4871,7 @@ internal class CanvasEditor(
     /** Flips the brushed group (w -> 1 - w) on every edited mesh that has it. */
     fun invertVertexGroup() {
         val commands = editMeshTargets().mapNotNull { t ->
-            val group = model.vertexGroups.firstOrNull { it.drawableId.raw == t.id && it.name == paintedGroupName } ?: return@mapNotNull null
+            val group = paintedGroup(t.id) ?: return@mapNotNull null
             VertexGroupJournal.encode(group.copy(weights = FloatArray(group.weights.size) { 1f - group.weights[it] }))
         }
         if (commands.isEmpty()) return
@@ -4867,8 +4881,7 @@ internal class CanvasEditor(
 
     /** Removes the brushed group from every edited mesh that has it. */
     fun deleteVertexGroup() {
-        val commands = editMeshTargets().filter { t -> model.vertexGroups.any { it.drawableId.raw == t.id && it.name == paintedGroupName } }
-            .map { VertexGroupJournal.delete(it.id, paintedGroupName) }
+        val commands = editMeshTargets().mapNotNull { t -> paintedGroup(t.id)?.let { VertexGroupJournal.delete(t.id, it.name) } }
         if (commands.isEmpty()) return
         head = null
         commitBatch(commands)

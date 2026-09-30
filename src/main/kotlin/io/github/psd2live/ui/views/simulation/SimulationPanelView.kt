@@ -74,6 +74,9 @@ import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.views.PanelSectionRow
 import io.github.psd2live.ui.views.PanelToolButton
+import io.github.psd2live.ui.views.SimSectionIcon
+import io.github.psd2live.ui.views.SimSectionIconView
+import io.github.psd2live.ui.views.VertexGroupKindIcon
 import io.github.psd2live.ui.views.physics.FieldLabel
 import io.github.psd2live.ui.views.physics.Hint
 import io.github.psd2live.ui.views.physics.PhysicsRowDivider
@@ -334,11 +337,11 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 			CompactDropdown(SimKind.entries, sim.kind, { commit(sim.copy(kind = it, material = SimMaterial.preset(it))) },
 				Modifier.width(88.dp), itemLabel = { tr("sim.kind.${it.jsonName}") }, height = 22.dp)
 		}
-		Text(tr("sim.targets", sim.targets.joinToString()), style = caption, color = colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
 	}
 	PhysicsRowDivider()
 
-	PhysicsSection(tr("sim.bake"), section("bake"), { toggle("bake") }) {
+	@Composable fun icon(icon: SimSectionIcon): @Composable () -> Unit = { SimSectionIconView(icon, colors.accent) }
+	PhysicsSection(tr("sim.bake"), section("bake"), { toggle("bake") }, icon = icon(SimSectionIcon.BAKE)) {
 		BakeEditor(viewModel, state, puppet, sim, bakeState, ::commit)
 	}
 
@@ -348,11 +351,11 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 			IconReset(modifier = Modifier.size(11.dp), tint = colors.textMuted)
 		}
 	}
-	PhysicsSection(tr("sim.material"), section("material"), { toggle("material") }, trailing = resetMaterial.takeIf { sim.material != preset }) {
+	PhysicsSection(tr("sim.material"), section("material"), { toggle("material") }, icon = icon(SimSectionIcon.MATERIAL), trailing = resetMaterial.takeIf { sim.material != preset }) {
 		MaterialEditor(sim.material) { commit(sim.copy(material = it)) }
 	}
 
-	PhysicsSection(tr("sim.inputs"), section("inputs"), { toggle("inputs") }, count = sim.inputs.size) {
+	PhysicsSection(tr("sim.inputs"), section("inputs"), { toggle("inputs") }, count = sim.inputs.size, icon = icon(SimSectionIcon.INPUTS)) {
 		if (sim.inputs.isEmpty()) Text(tr("sim.inputsDefault"), style = caption, color = colors.textMuted)
 		for (input in sim.inputs) RemovableRow(input.parameter) { commit(sim.copy(inputs = sim.inputs - input)) }
 		val available = puppet.parameters.map { it.id.raw }.filter { id -> sim.inputs.none { it.parameter == id } }
@@ -361,7 +364,7 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 		}, Modifier.fillMaxWidth(), itemLabel = { it ?: tr("sim.addInput") }, height = 22.dp)
 	}
 
-	PhysicsSection(tr("sim.colliders"), section("colliders"), { toggle("colliders") }, count = sim.colliders.size) {
+	PhysicsSection(tr("sim.colliders"), section("colliders"), { toggle("colliders") }, count = sim.colliders.size, icon = icon(SimSectionIcon.COLLIDERS)) {
 		for (collider in sim.colliders) {
 			val groups = puppet.vertexGroups.filter { it.drawableId.raw == collider.drawableId && it.kind == VertexGroupKind.COLLIDER }.map { it.name }
 			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -382,7 +385,7 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 	}
 
 	val glues = puppet.glues.filter { it.meshA.raw in sim.targets || it.meshB.raw in sim.targets }
-	PhysicsSection(tr("sim.glue"), section("glue"), { toggle("glue") }, count = glues.size) {
+	PhysicsSection(tr("sim.glue"), section("glue"), { toggle("glue") }, count = glues.size, icon = icon(SimSectionIcon.GLUE)) {
 		if (glues.isEmpty()) Text(tr("sim.noGlue"), style = caption, color = colors.textMuted)
 		for (glue in glues) {
 			val key = glueKey(glue)
@@ -396,8 +399,8 @@ private fun SimulationEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState,
 		}
 	}
 
-	PhysicsSection(tr("sim.groups"), section("groups"), { toggle("groups") }) {
-		GroupsEditor(viewModel, puppet, sim, ::commit)
+	PhysicsSection(tr("sim.groups"), section("groups"), { toggle("groups") }, icon = icon(SimSectionIcon.GROUPS)) {
+		GroupsEditor(viewModel, puppet, sim)
 	}
 }
 
@@ -536,20 +539,18 @@ private fun DraftSlider(title: String, tooltip: String, value: Float, range: Clo
 private val SIM_GROUP_KINDS = listOf(VertexGroupKind.PIN, VertexGroupKind.COLLIDE, VertexGroupKind.STIFFNESS, VertexGroupKind.GOAL,
 	VertexGroupKind.MASS, VertexGroupKind.DAMPING)
 
-/** Which vertex group each kind reads, and Paint to open the weight brush on it; the choices are the targets' groups of that kind. */
+/** Whether the targets have each kind's group, and Paint to open the weight brush on it. */
 @Composable
-private fun GroupsEditor(viewModel: PSD2LiveViewModel, puppet: PuppetModel, sim: RigSimEdit, commit: (RigSimEdit) -> Unit) {
+private fun GroupsEditor(viewModel: PSD2LiveViewModel, puppet: PuppetModel, sim: RigSimEdit) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	for (kind in SIM_GROUP_KINDS) {
-		val names = puppet.vertexGroups.filter { it.drawableId.raw in sim.targets && it.kind == kind }.map { it.name }.distinct()
+		val painted = puppet.vertexGroups.any { it.drawableId.raw in sim.targets && it.kind == kind }
 		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-			Dot(vertexGroupKindColor(kind))
+			VertexGroupKindIcon(kind, vertexGroupKindColor(kind), size = 12.dp)
 			FieldLabel(tr("sim.group.${kind.jsonName}"), width = 52, tooltip = tr("sim.groupTip.${kind.jsonName}"))
-			if (names.isEmpty()) Text(tr("sim.noGroup"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted, modifier = Modifier.weight(1f))
-			else CompactDropdown(listOf<String?>(null) + names, sim.groups[kind], { name ->
-				commit(sim.copy(groups = if (name == null) sim.groups - kind else sim.groups + (kind to name)))
-			}, Modifier.weight(1f), itemLabel = { it ?: tr("sim.firstGroup") }, height = 22.dp)
+			Text(tr(if (painted) "sim.painted" else "sim.noGroup"), style = typography.caption.copy(fontSize = 9.5.sp),
+				color = if (painted) colors.textPrimary else colors.textMuted, modifier = Modifier.weight(1f))
 			CompactButton(tr("sim.paint"), { viewModel.beginVertexGroupPaint(sim.targets.first(), kind) }, height = 22.dp)
 		}
 	}

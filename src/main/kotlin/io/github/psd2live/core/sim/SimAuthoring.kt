@@ -31,10 +31,12 @@ object SimAuthoring {
         return overlay.copy(simEdits = overlay.simEdits.filterNot { it.id == id })
     }
 
-    /** A fresh ID for a simulation on [targets]. */
-    fun nextId(overlay: RigEditOverlay, stem: String = "Sim"): String {
+    /** A fresh ID for a simulation on [targets]: `sim` and the first mesh's name, numbered from 2 when taken. */
+    fun nextId(overlay: RigEditOverlay, targets: List<String>): String {
         val used = overlay.simEdits.mapTo(HashSet()) { it.id }
-        return generateSequence(1) { it + 1 }.map { "$stem$it" }.first { it !in used }
+        val stem = "sim" + (targets.firstOrNull()?.removePrefix("ArtMesh")?.ifBlank { null } ?: "")
+        if (stem != "sim" && stem !in used) return stem
+        return generateSequence(2) { it + 1 }.map { "$stem$it" }.first { it !in used }
     }
 
     /** Throws when [edit] cannot run on [model]: missing meshes, parameters or glue keys. */
