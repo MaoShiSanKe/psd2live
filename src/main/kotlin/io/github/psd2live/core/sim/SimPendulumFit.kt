@@ -14,16 +14,16 @@ import kotlin.math.sqrt
 
 /**
  * Fits a Cubism pendulum to a recorded motion. The pendulum's last [outputs] vertices each drive one mode
- * parameter; the simulated motion (as coordinates in a few principal directions) is explained as a mix of
+ * parameter; the simulated motion (as coordinates in a few principal directions) is read out as a mix of
  * their angles.
  *
- * The search is split where it can be solved outright. For small swings the pendulum responds to each
- * input in proportion to its weight, so for given segment values the angles are a weighted sum of each
- * input's own response, as a translation (X) and as a turn (Angle). The weights and the readout then come
- * from alternating least squares, and only the segment values - length, mobility, delay, acceleration -
- * are searched, with every candidate run through [PhysicsEngine], the evaluation the exported model gets.
- * Each input keeps the type that moves the body more. A multi-segment pendulum lags each vertex behind the
- * one above, so a whip-like strand is not squeezed into one in-phase swing.
+ * The pendulum is judged the way the exported model is watched, not by fit alone: every candidate plays the
+ * whole training motion through [PhysicsEngine] at its real amplitude, and its score adds to the motion it
+ * misses how badly it misses the body settling after a move (the follow-through) and how much jerkier it
+ * is than the simulation. A first guess at the input weights and types comes from small-swing
+ * superposition (alternating least squares over each input's own response); from there Nelder-Mead
+ * searches the segments and the weights together. A multi-segment pendulum lags each vertex behind the one
+ * above, so a whip-like strand is not squeezed into one in-phase swing.
  */
 internal object SimPendulumFit {
     class Result(
@@ -36,17 +36,22 @@ internal object SimPendulumFit {
         val r2: Float,
     )
 
-    /** How far past the largest swing seen ±1 lies. */
-    private const val HEADROOM = 1.15f
+    /** How far past the largest swing of all the motion ±1 lies. */
+    private const val HEADROOM = 1.1f
     private const val RIDGE = 1e-2
     private const val ALS_ROUNDS = 6
     /**
-     * The weight (0..1) each input's own response is taken at: small enough that the pendulum answers in
-     * proportion, so the responses add up to what the inputs do together.
+     * The weight (0..1) each input's own response is taken at for the first guess: small enough that the
+     * pendulum answers in proportion, so the responses add up to what the inputs do together.
      */
     private const val NOMINAL = 0.25f
     /** Below this weight (0..1) an input is left out of the pendulum. */
     private const val MIN_WEIGHT = 0.005f
+    /** How much jerkier than the simulation the played motion may be before it costs. */
+    private const val JERK_ALLOWANCE = 1.2
+    private const val JERK_COST = 0.5
+    /** How much the motion missed while the inputs stand still - the swing-out and settle - counts on top. */
+    private const val SETTLE_COST = 0.5
     private val NORMALIZATION = PhysicsNormalization(angleMin = -30f, angleMax = 30f)
     private val TYPES = listOf(PhysicsSourceType.X, PhysicsSourceType.ANGLE)
 
@@ -67,7 +72,7 @@ internal object SimPendulumFit {
         dt: Float,
         fps: Float,
         segments: Int = outputs.size,
-        /** Runs the inputs' responses and the searches from each start on several cores. */
+        /** Runs the searches from each start on several cores. */
         parallel: Boolean = true,
         /** Frames where the track starts over from rest; the pendulum is reset there too. */
         starts: Set<Int> = emptySet(),
@@ -78,15 +83,9 @@ internal object SimPendulumFit {
         previous: RigPhysicsEdit? = null,
         /** Called between candidates; throw from it to stop. */
         check: () -> Unit = {},
-        /**
-         * The frames the pendulum is fitted to, from the start; later ones (hard motion) only set how far
-         * the parameters are scaled and are played in [Result.played].
-         */
-        fitted: Int = motion.size,
+        /** How much each frame of [motion] counts, so each kind of motion counts alike however large; null is 1. */
+        weights: FloatArray? = null,
     ): Result {
-        val allTrack = track
-        val track = if (fitted == motion.size) track else track.map { it.copyOf(fitted) }
-        val motion = if (fitted == motion.size) motion else motion.subList(0, fitted)
         val frames = motion.size
         require(heldOutMotion.isEmpty() || heldOutTrack.size == inputs.size && heldOutTrack.all { it.size == heldOutMotion.size })
         val m = motion.firstOrNull()?.size ?: 0
@@ -95,11 +94,10 @@ internal object SimPendulumFit {
             track.all { it.size == frames } && m > 0)
         // Fitting reads raw angles: unit scale, and ranges wide enough that nothing clamps.
         val open = ranges + outputs.associateWith { PhysicsEngine.Range(-1e6f, 1e6f, 0f) }
-        val total = motion.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
         val first = segments - n + 1
 
-        // The search vector: length, mobility, delay and acceleration of the first segment, then each later
-        // segment's length and delay as ratios to it.
+        // The segment part of the search: length, mobility, delay and acceleration of the first segment,
+        // then each later segment's length and delay as ratios to it.
         val size = 4 + 2 * (segments - 1)
         fun segmentsOf(p: DoubleArray): List<PhysicsSegment> {
             val length = exp(p[0]).toFloat().coerceIn(0.5f, 60f)
@@ -111,6 +109,18 @@ internal object SimPendulumFit {
                 else PhysicsSegment((length * exp(p[4 + 2 * (k - 1)]).toFloat()).coerceIn(0.5f, 60f), mobility,
                     (delay * exp(p[5 + 2 * (k - 1)]).toFloat()).coerceIn(0.05f, 5f), acceleration)
             }
+        }
+        fun segmentVector(chain: List<PhysicsSegment>): DoubleArray {
+            val p = DoubleArray(size)
+            val s0 = chain.first()
+            val mobility = s0.mobility.coerceIn(0.02f, 0.98f).toDouble()
+            p[0] = ln(s0.length.toDouble()); p[1] = ln(mobility / (1 - mobility))
+            p[2] = ln(s0.delay.toDouble()); p[3] = ln(s0.acceleration.toDouble())
+            for (k in 1 until segments) {
+                p[4 + 2 * (k - 1)] = ln(chain[k].length.toDouble() / s0.length)
+                p[5 + 2 * (k - 1)] = ln(chain[k].delay.toDouble() / s0.delay)
+            }
+            return p
         }
         fun setting(chain: List<PhysicsSegment>, links: List<PhysicsInput>, scales: FloatArray) = RigPhysicsEdit(
             id, name, inputs = links,
@@ -134,7 +144,8 @@ internal object SimPendulumFit {
             return out
         }
 
-        class Candidate(val chain: List<PhysicsSegment>, val links: List<PhysicsInput>, val error: Double)
+        val training = Judge(track, motion, starts, n, m, weights)
+        val judged = if (heldOutMotion.isEmpty()) null else Judge(heldOutTrack, heldOutMotion, setOf(0), n, m, null)
 
         /** [coefficients] on the nominal responses as pendulum inputs of [types]. */
         fun links(coefficients: FloatArray, types: List<PhysicsSourceType>) = inputs.indices.mapNotNull { i ->
@@ -142,19 +153,14 @@ internal object SimPendulumFit {
             if (abs(w) < MIN_WEIGHT) null else PhysicsInput(inputs[i], (abs(w) * 100f).coerceIn(0f, 100f), types[i], reflect = w < 0f)
         }.ifEmpty { listOf(PhysicsInput(inputs.first(), 100f * NOMINAL, types.first())) }
 
-        /**
-         * Inputs for [chain], each at its better type, and the error the real pendulum with them leaves.
-         * [warm] holds the last coefficients of this search, both types per input, and is updated.
-         */
-        fun solve(chain: List<PhysicsSegment>, warm: FloatArray): Candidate {
-            // Each input alone at the nominal weight, as both types.
+        /** A first guess at the inputs for [chain]: each input's small-swing response, both types, mixed by least squares. */
+        fun guess(chain: List<PhysicsSegment>): List<PhysicsInput> {
             val jobs = inputs.flatMap { parameter -> TYPES.map { type -> PhysicsInput(parameter, 100f * NOMINAL, type) } }
-            val channels = if (parallel) jobs.parallelStream().map { run(chain, listOf(it)) }.toList() else jobs.map { run(chain, listOf(it)) }
+            val channels = jobs.map { run(chain, listOf(it)) }
             val both = Gram(channels, motion)
-            val weights = warm.copyOf()
+            val weights = FloatArray(inputs.size * TYPES.size) { if (it % 2 == 0) 0.5f else 0.2f }
             both.als(weights)
-            weights.copyInto(warm)
-            // Keep one type per input, the one that does more, and settle the weights on that.
+            // One type per input, the one that does more.
             val types = inputs.indices.map { i ->
                 if (abs(weights[i * 2]) * sqrt(both.energy(i * 2)) >= abs(weights[i * 2 + 1]) * sqrt(both.energy(i * 2 + 1))) PhysicsSourceType.X
                 else PhysicsSourceType.ANGLE
@@ -162,70 +168,60 @@ internal object SimPendulumFit {
             val picked = inputs.indices.map { i -> i * 2 + TYPES.indexOf(types[i]) }
             val single = FloatArray(inputs.size) { weights[picked[it]] }
             Gram(picked.map { channels[it] }, motion).als(single)
-            // The sum of the responses only proposes the weights; the real pendulum is what gets scored.
-            val links = links(single, types)
-            return Candidate(chain, links, regress(run(chain, links).toList(), motion, n, m).second)
+            return links(single, types)
         }
 
-        fun fresh() = FloatArray(inputs.size * TYPES.size) { if (it % 2 == 0) 0.5f else 0.2f }
-        /** A Nelder-Mead search from [start] with the coefficients from [warm]; returns where it ended. */
-        fun search(start: DoubleArray, warm: FloatArray, step: Double, iterations: Int): Candidate {
+        class Candidate(val chain: List<PhysicsSegment>, val links: List<PhysicsInput>, val score: Double)
+
+        /**
+         * Nelder-Mead over [chain]'s segments and [links]' weights together (their types and directions
+         * stay), each point played for real and scored; returns the best point it saw.
+         */
+        fun search(chain: List<PhysicsSegment>, links: List<PhysicsInput>, step: Double, iterations: Int): Candidate {
+            fun linksOf(p: DoubleArray) = links.mapIndexed { i, link ->
+                link.copy(weight = (100.0 / (1.0 + exp(-p[size + i]))).toFloat().coerceIn(0.1f, 100f))
+            }
+            val start = segmentVector(chain) + DoubleArray(links.size) { i ->
+                val w = (links[i].weight / 100.0).coerceIn(0.01, 0.99); ln(w / (1 - w))
+            }
             var best: Candidate? = null
             val cost = { p: DoubleArray ->
                 check()
-                solve(segmentsOf(p), warm).also { if (best == null || it.error < best!!.error) best = it }.error
+                val c = segmentsOf(p); val l = linksOf(p)
+                val score = training.score(run(c, l), null).first
+                if (best == null || score < best!!.score) best = Candidate(c, l, score)
+                score
             }
             NelderMead.minimize(start, step, cost, iterations = iterations, tolerance = 1e-4)
             return requireNotNull(best)
         }
+
         // Where to search from: the previous bake's pendulum, closely, when it fits this one; otherwise a few
-        // spread-out pendulums, each later segment a copy of the first.
-        val reuse = previous?.takeIf { p -> p.segments.size == segments && p.inputs.all { it.parameter in inputs } }
-        val jobs: List<() -> Candidate> = if (reuse != null) {
-            val p = DoubleArray(size)
-            val s0 = reuse.segments.first()
-            p[0] = ln(s0.length.toDouble()); p[1] = ln(s0.mobility.coerceIn(0.02f, 0.98f).toDouble() / (1 - s0.mobility.coerceIn(0.02f, 0.98f)))
-            p[2] = ln(s0.delay.toDouble()); p[3] = ln(s0.acceleration.toDouble())
-            for (k in 1 until segments) {
-                p[4 + 2 * (k - 1)] = ln(reuse.segments[k].length.toDouble() / s0.length)
-                p[5 + 2 * (k - 1)] = ln(reuse.segments[k].delay.toDouble() / s0.delay)
-            }
-            val warm = fresh()
-            for (input in reuse.inputs) {
-                val i = inputs.indexOf(input.parameter)
-                val sign = if (input.reflect) -1f else 1f
-                warm[i * 2 + TYPES.indexOf(input.type)] = sign * input.weight / 100f / NOMINAL
-                warm[i * 2 + 1 - TYPES.indexOf(input.type)] = 0f
-            }
-            listOf({ search(p, warm, 0.25, 12 * size) })
-        } else listOf(
+        // spread-out pendulums, each later segment a copy of the first, with the first guess at the inputs.
+        val reuse = previous?.takeIf { p -> p.segments.size == segments && p.inputs.isNotEmpty() && p.inputs.all { it.parameter in inputs } }
+        val jobs: List<() -> Candidate> = if (reuse != null) listOf({ search(reuse.segments, reuse.inputs, 0.25, 12 * (size + reuse.inputs.size)) })
+        else listOf(
             doubleArrayOf(ln(10.0), 2.2, ln(0.9), ln(1.2)),
             doubleArrayOf(ln(20.0), 1.5, ln(1.5), ln(0.6)),
             doubleArrayOf(ln(5.0), 3.0, ln(0.5), ln(2.0)),
-        ).map { start -> { search(start + DoubleArray(size - 4), fresh(), 0.6, 30 * size) } }
+        ).map { start -> {
+            val chain = segmentsOf(start + DoubleArray(size - 4))
+            val links = guess(chain)
+            search(chain, links, 0.5, 25 * (size + links.size))
+        } }
         val found = if (parallel) jobs.parallelStream().map { it() }.toList() else jobs.map { it() }
 
-        // The candidate that does best on the held-out motion: a pendulum that only fits the training by
-        // riding an unstable whip does badly there.
-        val heldOutTotal = heldOutMotion.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
-        fun heldOutError(candidate: Candidate): Double {
-            if (heldOutMotion.isEmpty()) return candidate.error
-            val readout = regress(run(candidate.chain, candidate.links).toList(), motion, n, m).first
-            val angles = run(candidate.chain, candidate.links, heldOutTrack, setOf(0))
-            var error = 0.0
-            for (f in heldOutMotion.indices) for (d in 0 until m) {
-                var predicted = 0.0
-                for (k in 0 until n) predicted += angles[k][f] * readout[k][d]
-                val e = heldOutMotion[f][d] - predicted
-                error += e * e
-            }
-            return error
+        // The candidate that does best on the held-out motion, read out as on the training.
+        fun heldOutScore(candidate: Candidate): Double {
+            judged ?: return candidate.score
+            val readout = training.score(run(candidate.chain, candidate.links), null).second
+            return judged.score(run(candidate.chain, candidate.links, heldOutTrack, setOf(0)), readout).first
         }
-        val chosen = found.minBy(::heldOutError)
-        val raw = run(chosen.chain, chosen.links, allTrack)
-        val rawHeldOut = if (heldOutMotion.isEmpty()) null else run(chosen.chain, chosen.links, heldOutTrack, setOf(0))
-        // Each parameter spans its vertex's whole swing over the hardest motion, with room to spare: a
-        // parameter that hits ±1 holds the body still while the pendulum still swings, which reads as a stall.
+        val chosen = found.minBy(::heldOutScore)
+        val raw = run(chosen.chain, chosen.links)
+        val rawHeldOut = if (judged == null) null else run(chosen.chain, chosen.links, heldOutTrack, setOf(0))
+        // Each parameter spans its vertex's whole swing over all the motion, the hardest shaking included, with
+        // room to spare: a parameter held at ±1 holds the body still while it should swing.
         val scales = FloatArray(n) { k ->
             var peak = raw[k].maxOf(::abs)
             rawHeldOut?.let { peak = maxOf(peak, it[k].maxOf(::abs)) }
@@ -233,9 +229,69 @@ internal object SimPendulumFit {
         }
         fun clamp(angles: Array<FloatArray>) = angles.mapIndexed { k, angle -> FloatArray(angle.size) { (angle[it] * scales[k]).coerceIn(-1f, 1f) } }
         val played = clamp(raw)
-        val error = regress(played.map { it.copyOf(fitted) }, motion, n, m).second
-        val heldOut = rawHeldOut?.let(::clamp) ?: emptyList()
-        return Result(setting(chosen.chain, chosen.links, scales), played, heldOut, (1.0 - error / total).toFloat())
+        val total = motion.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
+        val error = regress(played, motion, n, m).second
+        return Result(setting(chosen.chain, chosen.links, scales), played, rawHeldOut?.let(::clamp) ?: emptyList(), (1.0 - error / total).toFloat())
+    }
+
+    /**
+     * Scores played angles against [motion] over [track]: the share of the motion missed, the share missed
+     * while every input stands still counted again by [SETTLE_COST], and each piece's jerk past
+     * [JERK_ALLOWANCE] times the simulation's.
+     */
+    private class Judge(track: List<FloatArray>, val motion: List<FloatArray>, val starts: Set<Int>, val n: Int, val m: Int, val weights: FloatArray?) {
+        private val frames = motion.size
+        private fun w(f: Int) = weights?.get(f)?.toDouble() ?: 1.0
+        private val total = (0 until frames).sumOf { f -> w(f) * motion[f].sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
+        /** Frames where no input has moved for a tenth of a second or more. */
+        private val still = BooleanArray(frames).also { still ->
+            var run = 0
+            for (f in 0 until frames) {
+                val moving = f > 0 && f !in starts && track.any { abs(it[f] - it[f - 1]) > 1e-5f }
+                run = if (moving || f in starts) 0 else run + 1
+                still[f] = run >= 6
+            }
+        }
+        private val stillTotal = (0 until frames).sumOf { f -> if (still[f]) w(f) * motion[f].sumOf { (it * it).toDouble() } else 0.0 }
+        /** Each piece's first frame and the frame past its last. */
+        private val pieces = (starts.filter { it in 0 until frames } + 0).distinct().sorted().let { at -> at.zip(at.drop(1) + frames) }
+        private val targetJerk = pieces.map { (from, to) -> jerk(from, to) { f, d -> motion[f][d].toDouble() } }
+
+        /** The energy of the third differences within [from] until [to]. */
+        private fun jerk(from: Int, to: Int, value: (Int, Int) -> Double): Double {
+            var sum = 0.0
+            for (f in from + 3 until to) for (d in 0 until m) {
+                val j = value(f, d) - 3 * value(f - 1, d) + 3 * value(f - 2, d) - value(f - 3, d)
+                sum += j * j
+            }
+            return sum
+        }
+
+        /** The score of [angles] with [readout] (fitted by least squares when null), and the readout. */
+        fun score(angles: Array<FloatArray>, readout: List<FloatArray>?): Pair<Double, List<FloatArray>> {
+            val b = readout ?: regress(angles.toList(), motion, n, m, weights).first
+            val predicted = Array(frames) { f -> DoubleArray(m) { d -> var s = 0.0; for (k in 0 until n) s += angles[k][f] * b[k][d]; s } }
+            var missed = 0.0; var stillMissed = 0.0
+            for (f in 0 until frames) {
+                val wf = w(f)
+                for (d in 0 until m) {
+                    val e = motion[f][d] - predicted[f][d]
+                    missed += wf * e * e
+                    if (still[f]) stillMissed += wf * e * e
+                }
+            }
+            // Jerk is judged piece by piece: a pendulum that trembles through small swaying must not hide
+            // behind the large swings of another piece.
+            var jerky = 0.0
+            for ((p, piece) in pieces.withIndex()) {
+                if (targetJerk[p] <= 1e-12) continue
+                val ratio = sqrt(jerk(piece.first, piece.second) { f, d -> predicted[f][d] } / targetJerk[p])
+                val excess = maxOf(0.0, ratio - JERK_ALLOWANCE)
+                jerky += excess * excess / pieces.size
+            }
+            val settle = if (stillTotal > total * 1e-3) SETTLE_COST * stillMissed / stillTotal else 0.0
+            return missed / total + settle + JERK_COST * jerky to b
+        }
     }
 
     /**
@@ -334,14 +390,14 @@ internal object SimPendulumFit {
     }
 
     /** The ridge least-squares readout of [signals] onto the motion and the error it leaves. */
-    internal fun regress(signals: List<FloatArray>, motion: List<FloatArray>, n: Int, m: Int): Pair<List<FloatArray>, Double> {
+    internal fun regress(signals: List<FloatArray>, motion: List<FloatArray>, n: Int, m: Int, weights: FloatArray? = null): Pair<List<FloatArray>, Double> {
         val frames = motion.size
-        val total = motion.sumOf { row -> row.sumOf { (it * it).toDouble() } }
-        // Normal equations (SᵀS + λI) B = SᵀY, n ≤ 3.
+        val total = (0 until frames).sumOf { f -> (weights?.get(f)?.toDouble() ?: 1.0) * motion[f].sumOf { (it * it).toDouble() } }
+        // Normal equations (SᵀWS + λI) B = SᵀWY, n ≤ 3.
         val a = Array(n) { DoubleArray(n) }
         val b = Array(n) { DoubleArray(m) }
         for (f in 0 until frames) for (k in 0 until n) {
-            val sk = signals[k][f].toDouble()
+            val sk = signals[k][f].toDouble() * (weights?.get(f)?.toDouble() ?: 1.0)
             if (sk == 0.0) continue
             for (j in 0 until n) a[k][j] += sk * signals[j][f]
             val row = motion[f]

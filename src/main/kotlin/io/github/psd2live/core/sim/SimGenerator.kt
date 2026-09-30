@@ -23,6 +23,12 @@ import org.umamo.runtime.model.*
 object SimGenerator {
     /** Past this many cells a mesh's keyform grid is left alone. */
     private const val MAX_CELLS = 200_000
+    /**
+     * The mode parameters span -[MODE_RANGE]..[MODE_RANGE]. Wide on purpose: a keyform axis snaps a value
+     * within 0.001 of a key onto it (Cubism does too), and over -1..1 that is a visible jolt on a large body
+     * each time a mode swings through rest.
+     */
+    const val MODE_RANGE = 30f
     /** Past this many keyforms on a target, a simulation left to choose writes its modes as blend shapes. */
     const val AUTO_BLEND_CELLS = 64L
 
@@ -81,12 +87,14 @@ object SimGenerator {
             if (current.parameters.any { it.id == id }) continue
             val name = if (bake.modes.size == 1) sim.name else "${sim.name} ${k + 1}"
             current = current.withParameterCreated(id, name, if (blend) ParameterKind.BLEND_SHAPE else ParameterKind.NORMAL)
-            if (blend) current = current.copy(parameters = current.parameters.map {
-                if (it.id == id) it.copy(min = mode.axis.keys.first(), max = mode.axis.keys.last(), default = 0f, keys = mode.axis.keys.toList()) else it
+            current = current.copy(parameters = current.parameters.map {
+                if (it.id != id) it
+                else it.copy(min = mode.axis.keys.first(), max = mode.axis.keys.last(), default = 0f, keys = if (blend) mode.axis.keys.toList() else it.keys)
             })
         }
-        // Static corrections first: blend shapes add to the grid as it is at the default pose.
-        for (axis in bake.statics + bake.modes.map { it.axis }) {
+        // Static corrections first: blend shapes add to the grid as it is at the default pose. The modes
+        // swing as far as the simulation times the exaggeration; the statics stay exact.
+        for (axis in bake.statics + bake.modes.map { exaggerated(it.axis, sim.exaggeration) }) {
             val parameter = current.parameters.firstOrNull { it.id.raw == axis.parameter }
             if (parameter == null) { issues += "${sim.id}: parameter ${axis.parameter} no longer exists"; continue }
             val asBlend = blend && axis !in bake.statics
@@ -115,6 +123,10 @@ object SimGenerator {
         }
         return current to issues.distinct()
     }
+
+    /** [axis] with every offset scaled by [gain]. */
+    internal fun exaggerated(axis: SimBakedAxis, gain: Float): SimBakedAxis = if (gain == 1f) axis else
+        SimBakedAxis(axis.parameter, axis.keys, axis.offsets.mapValues { (_, per) -> per.map { form -> FloatArray(form.size) { form[it] * gain } } })
 
     /**
      * [axis]'s offsets as a blend shape on [drawable]: each key's form is the grid at the default pose plus

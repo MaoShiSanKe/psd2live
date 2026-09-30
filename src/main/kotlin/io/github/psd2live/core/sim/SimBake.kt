@@ -80,6 +80,12 @@ class SimBakeResult(
     val fit: Float = 0f,
     /** How far, in px, the baked result strays from the simulation on that motion (95th percentile of frames). */
     val maxErrorPx: Float = 0f,
+    /** How much of its range the busiest mode parameter uses on that motion, 0..1 (1 = it reaches ±1). */
+    val peak: Float = 0f,
+    /** Share of frames where a mode parameter sits at ±1 on that motion; the body stalls there. */
+    val clipped: Float = 0f,
+    /** How jerky the baked motion is against the simulation's (third differences, 1 = as smooth). */
+    val jerk: Float = 0f,
 ) {
     val parameters: List<String> get() = modes.map { it.axis.parameter }
 
@@ -90,6 +96,7 @@ class SimBakeResult(
         putJsonArray("modes") { modes.forEach { add(it.toJson()) } }
         physics?.let { put("physics", it.toJson()) }
         put("fit", fit); put("max_error_px", maxErrorPx)
+        put("peak", peak); put("clipped", clipped); put("jerk", jerk)
     }
 
     /** What the panel and MCP show: no arrays. */
@@ -100,8 +107,9 @@ class SimBakeResult(
         modes.firstOrNull()?.let { put("keys", it.axis.keys.size) }
         physics?.let { put("pendulum", it.id); put("segments", it.segments.size) }
         if (statics.isNotEmpty()) putJsonArray("static_inputs") { statics.forEach { add(it.parameter) } }
-        // Both measured on held-out motion the fit never saw.
+        // All measured on held-out motion the fit never saw.
         put("fit_r2", fit); put("error_p95_px", maxErrorPx)
+        put("parameter_peak", peak); put("clipped_frames", clipped); put("jerk_ratio", jerk)
     }
 
     private val canonical: String by lazy { toJson().toString() }
@@ -120,6 +128,9 @@ class SimBakeResult(
             o["physics"]?.jsonObject?.let(RigPhysicsEdit::fromJson),
             o["fit"]?.jsonPrimitive?.floatOrNull ?: 0f,
             o["max_error_px"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            o["peak"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            o["clipped"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            o["jerk"]?.jsonPrimitive?.floatOrNull ?: 0f,
         )
     }
 }
@@ -132,7 +143,7 @@ object SimBake {
      */
     fun fingerprint(model: PuppetModel, edit: RigSimEdit): String {
         val text = StringBuilder()
-        val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake")
+        val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake" - "exaggeration")
         text.append(settings.toString())
         val meshes = edit.targets + edit.colliders.map { it.drawableId }
         for (raw in meshes) {

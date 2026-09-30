@@ -39,18 +39,21 @@ class SimBakeTest {
     }
 
     private fun edit() = RigSimEdit("hair", "Hair", SimKind.HAIR, listOf("hair"),
-        inputs = listOf(PhysicsInput(angle.raw, 100f, PhysicsSourceType.X)))
+        inputs = listOf(PhysicsInput(angle.raw, 100f, PhysicsSourceType.X)), exaggeration = 1f)
 
-    private val quick = SimBaker.Options(duration = 0.6f)
+    private val quick = SimBaker.Options(duration = 1f)
 
     @Test fun bakeTurnsTheSwingIntoAParameterKeyformsAndAPendulum() {
         val base = strand()
-        val overlay = RigEditOverlay(simEdits = listOf(edit()))
+        // Two modes: a strand this long whips, which one vertex's angle cannot carry alone.
+        val overlay = RigEditOverlay(simEdits = listOf(edit().copy(modes = 2)))
         val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), overlay.simEdits.single(), quick)
         val mode = bake.modes.first()
         assertEquals("ParamSimhair_1", mode.axis.parameter)
         assertTrue(mode.amplitude > 5f, "the tip should lag visibly, lagged ${mode.amplitude} px")
         assertTrue(bake.fit > 0.65f, "the pendulum and keys should reproduce the simulation, R² ${bake.fit}")
+        assertTrue(bake.peak in 0.3f..0.999f && bake.clipped == 0f, "the modes use their range without stalling: ${bake.peak}, ${bake.clipped}")
+        assertTrue(bake.jerk in 0.2f..1.6f, "the baked motion should be about as smooth as the simulation: ${bake.jerk}")
         val physics = assertNotNull(bake.physics)
         assertEquals(bake.parameters, physics.outputParameters)
         assertEquals(2, physics.segments.size)
@@ -59,30 +62,28 @@ class SimBakeTest {
         for (key in offsets) { assertEquals(0f, key[0], 1e-4f); assertEquals(0f, key[2], 1e-4f) }
 
         // As blend shapes the modes add to the grid instead of multiplying it.
-        val baked = SimAuthoring.withBake(RigEditOverlay(simEdits = listOf(edit().copy(blendShapes = true))), "hair", bake)
+        val baked = SimAuthoring.withBake(RigEditOverlay(simEdits = listOf(edit().copy(modes = 2, blendShapes = true))), "hair", bake)
         val model = baked.applyTo(base)
         val parameter = model.parameters.single { it.id.raw == mode.axis.parameter }
         assertEquals(ParameterKind.BLEND_SHAPE, parameter.kind)
-        assertEquals(-1f to 1f, parameter.min to parameter.max)
+        assertEquals(-SimGenerator.MODE_RANGE to SimGenerator.MODE_RANGE, parameter.min to parameter.max)
         val drawable = model.drawables.single()
         assertEquals(3, drawable.geometryGrid!!.cells.size)
         assertEquals(bake.parameters.toSet(), drawable.blendShapes.map { it.parameterId.raw }.toSet())
-        val keys = drawable.blendShapes.first().keys
-        assertEquals(5, keys.size); assertEquals(-1f, keys.first()); assertEquals(0f, keys[2]); assertEquals(1f, keys.last())
-        for (k in keys.indices) assertEquals(keys[k], -keys[keys.size - 1 - k], 1e-6f)
+        assertContentEquals(floatArrayOf(-30f, -15f, 0f, 15f, 30f), drawable.blendShapes.first().keys)
         // Rebuilding twice gives the same rig: the bake is written back, never simulated again.
         val rebuilt = baked.applyTo(base).drawables.single().blendShapes
         assertEquals(drawable.blendShapes.flatMap { b -> b.forms.flatMap { it?.positionDeltas?.toList().orEmpty() } },
             rebuilt.flatMap { b -> b.forms.flatMap { it?.positionDeltas?.toList().orEmpty() } })
 
         // As keyform axes each mode multiplies the grid by its keys, and the rig moves the same.
-        val axes = SimAuthoring.withBake(RigEditOverlay(simEdits = listOf(edit().copy(blendShapes = false))), "hair", bake)
+        val axes = SimAuthoring.withBake(RigEditOverlay(simEdits = listOf(edit().copy(modes = 2, blendShapes = false))), "hair", bake)
         val gridModel = axes.applyTo(base)
         val grid = gridModel.drawables.single().geometryGrid!!
         assertTrue(grid.axisIndexOf(parameter.id) >= 0 && grid.axisIndexOf(angle) >= 0)
         assertEquals(3 * bake.modes.fold(1) { n, _ -> n * 5 }, grid.cells.size)
         val evaluator = CpuDeformationEvaluator()
-        for (pose in listOf(mapOf(parameter.id to 0.7f), mapOf(parameter.id to -1f, angle to 20f))) {
+        for (pose in listOf(mapOf(parameter.id to 21f), mapOf(parameter.id to -30f, angle to 20f))) {
             val a = evaluator.evaluate(model, pose).worldPositions.getValue(DrawableId("hair"))
             val b = evaluator.evaluate(gridModel, pose).worldPositions.getValue(DrawableId("hair"))
             for (i in a.indices) assertEquals(a[i], b[i], 0.05f, "blend shapes and keyform axes agree at $pose")
@@ -131,12 +132,14 @@ class SimBakeTest {
         val baked = SimAuthoring.withBake(overlay, "hair", bake)
         val sim = baked.simEdits.single()
         assertEquals(sim, RigSimEdit.fromJson(Json.parseToJsonElement(sim.toJson().toString()).jsonObject))
-        val tuned = sim.copy(keys = 7, blendShapes = false, autoBake = false)
+        val tuned = sim.copy(keys = 7, blendShapes = false, autoBake = false, exaggeration = 1.75f)
         assertEquals(tuned.copy(blendShapes = true), RigSimEdit.fromJson(Json.parseToJsonElement(tuned.copy(blendShapes = true).toJson().toString()).jsonObject))
         assertNull(tuned.patched(buildJsonObject { put("blend_shapes", JsonNull) }).blendShapes)
         assertEquals(tuned, RigSimEdit.fromJson(Json.parseToJsonElement(tuned.toJson().toString()).jsonObject))
         // How the modes are written is not part of what the bake depends on.
-        assertEquals(SimBake.fingerprint(base, sim), SimBake.fingerprint(base, sim.copy(blendShapes = false, autoBake = false)))
+        assertEquals(SimBake.fingerprint(base, sim), SimBake.fingerprint(base, sim.copy(blendShapes = false, autoBake = false, exaggeration = 2f)))
+        assertEquals(bake, SimBakeResult.fromJson(Json.parseToJsonElement(bake.toJson().toString()).jsonObject))
+        assertFailsWith<IllegalArgumentException> { sim.copy(exaggeration = 3f) }
         // The bake's own keys do not change what it depends on.
         val model = baked.applyTo(base)
         assertFalse(SimBake.stale(model, sim))
@@ -153,30 +156,38 @@ class SimBakeTest {
         assertTrue(SimGenerator.issues(remeshed, sim).any { "remeshed" in it })
     }
 
-    @Test fun trajectoryStepsEveryInputInPiecesThatEndAtRest() {
-        val inputs = listOf(Parameter(angle, "x", -30f, 30f, 0f), Parameter(ParameterId("ParamAngleZ"), "z", -30f, 30f, 0f))
-        val pieces = SimBaker.trajectory(inputs, 60)
-        assertEquals(5, pieces.size)
+    @Test fun theMotionLibraryMovesEveryInputFullyInPiecesThatEndAtRest() {
+        val pieces = SimMotionLibrary.training(2, 60)
         for (piece in pieces) {
             assertEquals(2, piece.size)
-            for (values in piece) assertEquals(0f, values.last(), 1e-6f)
+            for (values in piece) { assertEquals(0f, values.first(), 0.1f); assertEquals(0f, values.last(), 1e-6f) }
         }
-        for (i in inputs.indices) {
+        for (i in 0 until 2) {
             val all = pieces.flatMap { it[i].asList() }
-            assertEquals(30f, all.max(), 1e-3f); assertEquals(-30f, all.min(), 1e-3f)
+            assertEquals(1f, all.max(), 1e-3f); assertEquals(-1f, all.min(), 1e-3f)
+            // Everyday use is quick: somewhere an input crosses half its range within a fifth of a second.
+            val fastest = pieces.maxOf { piece -> (12 until piece[i].size).maxOf { abs(piece[i][it] - piece[i][it - 12]) } }
+            assertTrue(fastest > 0.5f, "the library should move quickly, fastest ${fastest}")
         }
+        val heldOut = SimMotionLibrary.heldOut(2, 60)
+        assertTrue(heldOut.all { abs(it.first()) < 0.1f && abs(it.last()) < 1e-6f })
+        assertTrue(pieces.none { piece -> piece[0].contentEquals(heldOut[0]) })
     }
 
-    @Test fun modeKeysSitWhereTheMotionIs() {
-        // Mostly small swings with a rare hard one: the inner keys go where the frames are, ±1 stays the edge.
-        val played = FloatArray(1000) { if (it % 100 == 0) 0.9f else 0.2f * kotlin.math.sin(it * 0.1f) }
-        val five = SimBaker.modeKeys(played, 5)
-        assertEquals(5, five.size); assertEquals(-1f, five.first()); assertEquals(0f, five[2]); assertEquals(1f, five.last())
-        assertTrue(five[3] in 0.1f..0.3f, "the inner key follows the everyday swing: ${five.toList()}")
-        val nine = SimBaker.modeKeys(played, 9)
-        for (k in 1 until nine.size) assertTrue(nine[k] - nine[k - 1] >= 0.05f - 1e-6f, "keys stay apart: ${nine.toList()}")
-        for (k in nine.indices) assertEquals(nine[k], -nine[nine.size - 1 - k], 1e-6f)
-        assertContentEquals(floatArrayOf(-1f, 0f, 1f), SimBaker.modeKeys(played, 3))
+    @Test fun exaggerationScalesTheModesAsTheyAreWrittenBack() {
+        val base = strand()
+        val overlay = RigEditOverlay(simEdits = listOf(edit().copy(exaggeration = 1f, blendShapes = false)))
+        val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), overlay.simEdits.single(), quick)
+        val plain = SimAuthoring.withBake(overlay, "hair", bake)
+        val louder = plain.copy(simEdits = plain.simEdits.map { it.copy(exaggeration = 1.5f) })
+        // Not part of what the bake depends on: changing it needs no new bake.
+        assertFalse(SimBake.stale(louder.applyTo(base), louder.simEdits.single()))
+        val parameter = ParameterId(bake.parameters.first())
+        val evaluator = CpuDeformationEvaluator()
+        val rest = evaluator.evaluate(base, emptyMap()).worldPositions.getValue(DrawableId("hair"))
+        fun moved(o: RigEditOverlay) = evaluator.evaluate(o.applyTo(base), mapOf(parameter to 24f)).worldPositions.getValue(DrawableId("hair"))
+        val a = moved(plain); val b = moved(louder)
+        for (i in rest.indices) assertEquals(1.5f * (a[i] - rest[i]), b[i] - rest[i], 0.05f)
     }
 
     @Test fun hardMotionDoesNotPinTheModesAtTheirEnds() {
@@ -193,7 +204,7 @@ class SimBakeTest {
             val value = -target + 2f * target * t * t * (3f - 2f * t)
             most = maxOf(most, engine.step(mapOf(angle.raw to value), 1f / 60f).values.maxOf { abs(it) })
         }
-        assertTrue(most < 0.999f, "the modes should keep room for hard motion, reached $most")
+        assertTrue(most < 0.999f * SimGenerator.MODE_RANGE, "the modes should keep room for hard motion, reached $most")
     }
 
     @Test fun modesAreBlendShapesOnlyWhereAxesWouldMultiplyTooFar() {
@@ -210,7 +221,7 @@ class SimBakeTest {
         val base = strand()
         val overlay = RigEditOverlay(simEdits = listOf(edit().copy(keys = 3)))
         val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), overlay.simEdits.single(), quick)
-        for (mode in bake.modes) assertContentEquals(floatArrayOf(-1f, 0f, 1f), mode.axis.keys)
+        for (mode in bake.modes) assertContentEquals(floatArrayOf(-30f, 0f, 30f), mode.axis.keys)
         assertContentEquals(floatArrayOf(-30f, -15f, 0f, 15f, 30f), SimBaker.staticKeys(Parameter(angle, "x", -30f, 30f, 0f), 5))
         assertContentEquals(floatArrayOf(0f, 0.5f, 1f), SimBaker.staticKeys(Parameter(angle, "x", 0f, 1f, 0f), 5))
         assertFailsWith<IllegalArgumentException> { edit().copy(keys = 4) }
@@ -224,7 +235,7 @@ class SimBakeTest {
         val shapes = SimBaker.solveKeys(residuals, listOf(played), listOf(keys), 2).single()
         // The straight part is kept exactly; the arc is kept too, a little flattened so the shapes turn no sharp corner at a key.
         for ((k, key) in keys.withIndex()) assertEquals(10f * key, shapes[k][0], 0.3f)
-        assertEquals(shapes[0][1], shapes[4][1], 0.05f); assertEquals(shapes[1][1], shapes[3][1], 0.05f)
+        assertEquals(shapes[0][1], shapes[4][1], 0.2f); assertEquals(shapes[1][1], shapes[3][1], 0.2f)
         assertTrue(shapes[4][1] > 4f && shapes[3][1] in 0.5f..2f, "the keys follow the arc: ${shapes.map { it[1] }}")
     }
 

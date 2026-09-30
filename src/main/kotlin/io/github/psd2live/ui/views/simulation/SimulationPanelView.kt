@@ -273,6 +273,11 @@ private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppe
 			itemLabel = { "$it" }, height = 22.dp)
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.exaggeration"), tooltip = tr("sim.exaggerationTip"))
+		CompactDropdown((listOf(1f, 1.15f, 1.3f, 1.5f, 1.75f, 2f) + sim.exaggeration).distinct().sorted(), sim.exaggeration,
+			{ commit(sim.copy(exaggeration = it)) }, Modifier.weight(1f), itemLabel = { "×" + String.format(Locale.US, "%.2f", it).trimEnd('0').trimEnd('.') }, height = 22.dp)
+	}
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		FieldLabel(tr("sim.blendShapes"), tooltip = tr("sim.blendShapesTip"))
 		CompactDropdown(listOf(null, true, false), sim.blendShapes, { commit(sim.copy(blendShapes = it)) }, Modifier.weight(1f),
 			itemLabel = { tr(when (it) { null -> "sim.blendShapesAuto"; true -> "sim.blendShapesOn"; false -> "sim.blendShapesOff" }) }, height = 22.dp)
@@ -323,6 +328,9 @@ private fun BakeEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, puppe
 				style = caption, color = colors.textMuted)
 			if (bake.statics.isNotEmpty()) Text(tr("sim.bakedStatics", bake.statics.joinToString { it.parameter }), style = caption, color = colors.textPrimary)
 			Text(tr("sim.bakedError", String.format(Locale.US, "%.1f", bake.maxErrorPx)), style = caption, color = colors.textMuted)
+			if (bake.modes.isNotEmpty()) Text(tr("sim.bakedMotion", (bake.peak * 100f).toInt(), String.format(Locale.US, "%.1f", bake.clipped * 100f),
+				String.format(Locale.US, "%.2f", bake.jerk)), style = caption,
+				color = if (bake.clipped > 0f || bake.jerk > 1.5f) colors.warning else colors.textMuted)
 			issues.forEach { Hint(it) }
 		}
 	}

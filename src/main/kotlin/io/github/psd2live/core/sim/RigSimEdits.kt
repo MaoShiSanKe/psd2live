@@ -114,7 +114,7 @@ data class RigSimEdit(
     val inputs: List<PhysicsInput> = emptyList(),
     val enabled: Boolean = true,
     /** Dynamic modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum each. */
-    val modes: Int = 2,
+    val modes: Int = 1,
     /**
      * Parameters whose pose is baked exactly, as corrections on their own axes (a leg pushing the skirt).
      * Null picks the parameters that move a collider.
@@ -129,6 +129,11 @@ data class RigSimEdit(
     val blendShapes: Boolean? = null,
     /** Bakes again with every change made in the simulation panel or through MCP, in the same history step. */
     val autoBake: Boolean = true,
+    /**
+     * How much larger than simulated the modes swing, within [EXAGGERATIONS]: the key shapes are scaled as
+     * they are written back, so it applies without baking again and never pushes the parameters to ±1.
+     */
+    val exaggeration: Float = DEFAULT_EXAGGERATION,
     /** The materialized bake; the rebuild writes it back without simulating. */
     val bake: SimBakeResult? = null,
 ) {
@@ -142,9 +147,10 @@ data class RigSimEdit(
             "At most $MAX_STATIC_INPUTS distinct static inputs"
         }
         require(keys in KEY_COUNTS && keys % 2 == 1) { "A simulation bakes an odd number of keys within $KEY_COUNTS" }
+        require(exaggeration in EXAGGERATIONS) { "Exaggeration is within $EXAGGERATIONS" }
     }
 
-    /** The mode parameters' keys: [keys] values evenly spread over -1..1. */
+    /** The mode parameters' keys as the bake solves them: [keys] values evenly spread over -1..1, written out times [SimGenerator.MODE_RANGE]. */
     val modeKeys: FloatArray get() = FloatArray(keys) { -1f + 2f * it / (keys - 1) }
 
     fun toJson() = buildJsonObject {
@@ -156,11 +162,12 @@ data class RigSimEdit(
         if (colliders.isNotEmpty()) putJsonArray("colliders") { colliders.forEach { add(it.toJson()) } }
         if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
         if (!enabled) put("enabled", false)
-        if (modes != 2) put("modes", modes)
+        if (modes != 1) put("modes", modes)
         staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
         if (keys != 5) put("keys", keys)
         blendShapes?.let { put("blend_shapes", it) }
         if (!autoBake) put("auto_bake", false)
+        if (exaggeration != DEFAULT_EXAGGERATION) put("exaggeration", exaggeration)
         bake?.let { put("bake", it.toJson()) }
     }
 
@@ -194,6 +201,7 @@ data class RigSimEdit(
                 else -> value.jsonPrimitive.booleanOrNull ?: blendShapes
             },
             autoBake = o["auto_bake"]?.jsonPrimitive?.booleanOrNull ?: autoBake,
+            exaggeration = o["exaggeration"]?.jsonPrimitive?.floatOrNull ?: exaggeration,
             bake = when (val value = o["bake"]) {
                 null -> bake
                 is JsonNull -> null
@@ -206,6 +214,8 @@ data class RigSimEdit(
         const val MAX_MODES = 3
         const val MAX_STATIC_INPUTS = 4
         val KEY_COUNTS = 3..9
+        val EXAGGERATIONS = 1f..2f
+        const val DEFAULT_EXAGGERATION = 1.3f
 
         fun fromJson(o: JsonObject): RigSimEdit {
             val kind = o.string("kind")?.let(SimKind::parse) ?: SimKind.CLOTH

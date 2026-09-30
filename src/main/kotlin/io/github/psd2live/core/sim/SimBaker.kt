@@ -12,11 +12,8 @@ import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.ParameterKind
 import org.umamo.runtime.model.PuppetModel
 import java.util.concurrent.CancellationException
-import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.roundToInt
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -25,15 +22,17 @@ import kotlin.math.sqrt
  * 1. Static response: for each static input's keys the rig is posed, the body settles against its
  *    colliders, and what is left against the rig becomes corrections on that parameter's own axis, so the
  *    exported model is pushed exactly as far as the pose asks.
- * 2. Training: the dynamic inputs run steps, sweeps and a mixed stretch, each piece from rest and all of
- *    them at once on separate copies of the body; each frame records how far the body is from the rig
- *    (minus the static correction) in each mesh's local keyform space.
+ * 2. Training: the dynamic inputs play [SimMotionLibrary]'s motion - the model dragged, shaken, nodded
+ *    and swaying over the inputs' full ranges - each piece from rest and all of them at once on separate
+ *    copies of the body; each frame records how far the body is from the rig (minus the static
+ *    correction) in each mesh's local keyform space.
  * 3. Subspace: the few principal directions of that residual, measured in px at the default pose.
- * 4. Pendulum: [SimPendulumFit] finds the Cubism pendulum whose driven vertices' angles best explain the
- *    motion, each vertex driving one -1..1 parameter.
- * 5. Keys: the key shapes of all mode parameters are solved together, by least squares over every frame
- *    as the pendulum plays it, so what is exported is the closest those keys can come to the simulation -
- *    arcs and one-sided pushes included.
+ * 4. Pendulum: [SimPendulumFit] finds the Cubism pendulum whose driven vertices' angles play the motion
+ *    best - following it, settling like it and no jerkier - each vertex driving one -1..1 parameter that
+ *    spans the vertex's whole swing over that motion, so it does not stall at ±1.
+ * 5. Keys: evenly spread over -1..1, their shapes solved for all mode parameters together by least
+ *    squares over every frame as the pendulum plays it - arcs and one-sided pushes included - and kept on
+ *    a smooth curve so the body's speed does not jump at a key.
  *
  * [model] must not carry this simulation's own bake.
  */
@@ -64,10 +63,8 @@ object SimBaker {
     private const val KEY_RIDGE = 1e-3
     /** How strongly the key shapes of a mode are kept on a smooth curve rather than turning corners at keys. */
     private const val KEY_BEND = 0.3
-    /** How much a frame of hard motion counts in the key shapes against a frame of everyday motion. */
-    private const val EXTREME_WEIGHT = 0.2f
-    /** The closest two mode keys come. */
-    private const val MIN_KEY_GAP = 0.05f
+    /** How much more a corner at the rest key costs than one at another key. */
+    private const val CENTER_BEND = 10.0
     private const val SETTLE_SECONDS = 2.5f
 
     fun bake(model: PuppetModel, edit: RigSimEdit, options: Options = Options()): SimBakeResult {
@@ -103,9 +100,14 @@ object SimBaker {
         val inputs = edit.inputs.map { it.parameter }.ifEmpty { PhysicsGenerator.headAndBodyInputs(parameters.keys).map { it.parameter } }
             .filter { input -> parameters[input]?.let { it.kind == ParameterKind.NORMAL && it.max > it.min } == true }
         require(inputs.isNotEmpty() || statics.isNotEmpty()) { "No input parameter moves ${edit.id}; add inputs to bake it" }
-        val fitted = trajectory(inputs.map { parameters.getValue(it) }, options.fps, options.duration)
-        val pieces = fitted + extremes(inputs.map { parameters.getValue(it) }, options.fps, options.duration)
-        val heldOutPiece = heldOut(inputs.map { parameters.getValue(it) }, options.fps, options.duration)
+        val ranged = inputs.map { parameters.getValue(it) }
+        /** Library values (-1..1 about the default) as parameter values. */
+        fun values(piece: List<FloatArray>) = ranged.indices.map { i ->
+            val p = ranged[i]
+            FloatArray(piece[i].size) { f -> val u = piece[i][f]; if (u >= 0f) p.default + u * (p.max - p.default) else p.default + u * (p.default - p.min) }
+        }
+        val pieces = SimMotionLibrary.training(inputs.size, options.fps, options.duration).map(::values)
+        val heldOutPiece = values(SimMotionLibrary.heldOut(inputs.size, options.fps, options.duration))
         val all = each(pieces + listOf(heldOutPiece)) { piece ->
             val scene = body()
             scene.reset(model, emptyMap())
@@ -143,6 +145,24 @@ object SimBaker {
             return SimBakeResult(fingerprint, space.counts, statics, emptyList())
         }
         val motion = metric.map { row -> FloatArray(directions.size) { dot(row, directions[it]) } }
+        // Each piece counts alike: shaking the body through its resonance moves it far more than a drag, and
+        // would otherwise decide the pendulum and the keys on its own.
+        val weights = FloatArray(residuals.size)
+        run {
+            var at = 0
+            val means = recorded.map { piece ->
+                val energy = (at until at + piece.size).sumOf { f -> metric[f].sumOf { (it * it).toDouble() } } / piece.size.coerceAtLeast(1)
+                at += piece.size
+                energy
+            }
+            val overall = total / residuals.size
+            at = 0
+            for ((p, piece) in recorded.withIndex()) {
+                val w = if (means[p] > 1e-12) (overall / means[p]).coerceIn(0.1, 10.0).toFloat() else 1f
+                for (f in at until at + piece.size) weights[f] = w
+                at += piece.size
+            }
+        }
         val heldOutMetric = heldOutResiduals.map(space::toPx)
         val heldOutMotion = heldOutMetric.map { row -> FloatArray(directions.size) { dot(row, directions[it]) } }
 
@@ -151,25 +171,21 @@ object SimBaker {
         val outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) }
         val fit = SimPendulumFit.fit(SimGenerator.physicsId(edit), edit.name, outputs, inputs, PhysicsEngine.ranges(model.parameters),
             track, motion, dt, options.physicsFps.toFloat(), segments = edit.modes + options.extraSegments, starts = starts,
-            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, previous = options.previous, check = ::check,
-            fitted = fitted.sumOf { it.firstOrNull()?.size ?: 0 })
+            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, previous = options.previous, check = ::check, weights = weights)
 
         // 5. Key shapes for every mode at once; a mode that ends up moving nothing is dropped and the rest solved again.
         options.progress(0.95f)
-        val fittedFrames = fitted.sumOf { it.firstOrNull()?.size ?: 0 }
-        val modeKeys = outputs.indices.map { modeKeys(fit.played[it], edit.keys) }
-        // Hard motion counts for less: it is there to shape the outer keys, not to outweigh everyday motion.
-        val frameWeights = FloatArray(residuals.size) { if (it < fittedFrames) 1f else EXTREME_WEIGHT }
+        val keys = edit.modeKeys
         var kept = outputs.indices.toList()
-        var shapes = solveKeys(residuals, kept.map { fit.played[it] }, kept.map { modeKeys[it] }, space.size, frameWeights)
+        var shapes = solveKeys(residuals, kept.map { fit.played[it] }, kept.map { keys }, space.size, weights)
         while (kept.isNotEmpty()) {
             val moving = kept.filterIndexed { place, _ -> shapes[place].maxOf { space.motionPx(it) } >= MIN_MOTION_PX }
             if (moving.size == kept.size) break
             kept = moving
-            shapes = if (kept.isEmpty()) emptyList() else solveKeys(residuals, kept.map { fit.played[it] }, kept.map { modeKeys[it] }, space.size, frameWeights)
+            shapes = if (kept.isEmpty()) emptyList() else solveKeys(residuals, kept.map { fit.played[it] }, kept.map { keys }, space.size, weights)
         }
         require(kept.isNotEmpty() || statics.isNotEmpty()) { "The fitted pendulum does not move ${edit.id}; nothing to bake" }
-        val axes = kept.mapIndexed { place, k -> SimBakedAxis(outputs[k], modeKeys[k], space.split(shapes[place])) }
+        val axes = kept.mapIndexed { place, k -> SimBakedAxis(outputs[k], keys.copyOf(), space.split(shapes[place])) }
 
         // What each mode moves over the training.
         val contributions = DoubleArray(kept.size)
@@ -186,20 +202,32 @@ object SimBaker {
         val (checkResiduals, checkPlayed) = if (judged) heldOutResiduals to fit.heldOut else residuals to fit.played
         val checkTotal = if (judged) heldOutMetric.sumOf { row -> row.sumOf { (it * it).toDouble() } } else total
         var missed = 0.0
+        val simulated = ArrayList<FloatArray>(checkResiduals.size); val baked = ArrayList<FloatArray>(checkResiduals.size)
         val errors = FloatArray(checkResiduals.size) { f ->
-            val r = checkResiduals[f].copyOf()
+            val played = FloatArray(space.size)
             for ((place, k) in kept.withIndex()) {
                 val offsets = space.join(axes[place], checkPlayed[k][f])
-                for (i in r.indices) r[i] -= offsets[i]
+                for (i in played.indices) played[i] += offsets[i]
             }
-            val px = space.toPx(r)
+            simulated += space.toPx(checkResiduals[f]); baked += space.toPx(played)
+            val px = FloatArray(space.size) { simulated[f][it] - baked[f][it] }
             missed += px.sumOf { (it * it).toDouble() }
             maxDistance(px)
         }
-        val physics = fit.setting.copy(outputs = fit.setting.outputs.filterIndexed { k, _ -> k in kept })
+        // How far the parameters reach, how often they sit at ±1, and how smooth the baked motion is.
+        val peak = kept.maxOf { k -> checkPlayed[k].maxOf(::abs) }
+        val clipped = checkPlayed.first().indices.count { f -> kept.any { k -> abs(checkPlayed[k][f]) >= 0.999f } }.toFloat() / checkPlayed.first().size
+        val jerk = sqrt(jerkEnergy(baked) / jerkEnergy(simulated).coerceAtLeast(1e-12)).toFloat()
+        // Out to the parameters' own span: a keyform axis snaps a value within 0.001 of a key onto it, which
+        // over -1..1 would jolt a large body every time a mode swings through rest.
+        val range = SimGenerator.MODE_RANGE
+        val physics = fit.setting.copy(outputs = fit.setting.outputs.filterIndexed { k, _ -> k in kept }.map { it.copy(scale = it.scale * range) })
+        val spanned = modes.map { mode ->
+            SimBakedMode(SimBakedAxis(mode.axis.parameter, FloatArray(mode.axis.keys.size) { mode.axis.keys[it] * range }, mode.axis.offsets), mode.amplitude, mode.energy)
+        }
         options.progress(1f)
-        return SimBakeResult(fingerprint, space.counts, statics, modes, physics,
-            (1.0 - missed / checkTotal).toFloat(), percentile(errors.toList(), 0.95f))
+        return SimBakeResult(fingerprint, space.counts, statics, spanned, physics,
+            (1.0 - missed / checkTotal).toFloat(), percentile(errors.toList(), 0.95f), peak, clipped, jerk)
     }
 
     /** [edit]'s static inputs, or when it names none, the parameters that move a collider most (at most four). */
@@ -230,137 +258,6 @@ object SimBaker {
         val below = if (parameter.default > parameter.min) List(side) { parameter.min + (parameter.default - parameter.min) * it / side } else emptyList()
         val above = if (parameter.max > parameter.default) List(side) { parameter.max - (parameter.max - parameter.default) * it / side }.reversed() else emptyList()
         return (below + parameter.default + above).distinct().toFloatArray()
-    }
-
-    /**
-     * The training run as pieces that each start and end at rest, each piece one array of values per input:
-     * for each input a step to its maximum and back and to its minimum and back, then a sweep from slow to
-     * fast; then all of them together.
-     */
-    internal fun trajectory(inputs: List<Parameter>, fps: Int, duration: Float = 1f): List<List<FloatArray>> {
-        if (inputs.isEmpty()) return emptyList()
-        fun value(p: Parameter, u: Float) = if (u >= 0f) p.default + u * (p.max - p.default) else p.default + u * (p.default - p.min)
-        fun frames(seconds: Float) = (seconds * duration * fps).toInt().coerceAtLeast(1)
-        fun piece(build: (here: FloatArray, emit: () -> Unit) -> Unit): List<FloatArray> {
-            val frames = ArrayList<FloatArray>()
-            val here = FloatArray(inputs.size)
-            build(here) { frames += FloatArray(inputs.size) { value(inputs[it], here[it]) } }
-            return inputs.indices.map { i -> FloatArray(frames.size) { frames[it][i] } }
-        }
-        fun ramp(here: FloatArray, emit: () -> Unit, i: Int, to: Float, seconds: Float) {
-            val from = here[i]; val n = frames(seconds)
-            for (f in 1..n) { val t = f.toFloat() / n; here[i] = from + (to - from) * t * t * (3f - 2f * t); emit() }
-        }
-        fun hold(emit: () -> Unit, seconds: Float) = repeat(frames(seconds)) { emit() }
-        val pieces = ArrayList<List<FloatArray>>()
-        for (i in inputs.indices) {
-            pieces += piece { here, emit ->
-                ramp(here, emit, i, 1f, 0.2f); hold(emit, 1.1f); ramp(here, emit, i, 0f, 0.2f); hold(emit, 1.1f)
-                ramp(here, emit, i, -1f, 0.2f); hold(emit, 1.1f); ramp(here, emit, i, 0f, 0.2f); hold(emit, 1.1f)
-            }
-            // A sweep from 0.3 Hz to 1.5 Hz at half the range: faster, fuller sweeps only excite resonance a head never drives.
-            pieces += piece { here, emit ->
-                val n = frames(4f); var phase = 0.0
-                for (f in 0 until n) {
-                    val hz = 0.3 + 1.2 * f / n
-                    phase += 2 * PI * hz / fps / duration
-                    here[i] = (0.5 * sin(phase)).toFloat() * minOf(1f, f / (fps * 0.3f * duration))
-                    emit()
-                }
-                ramp(here, emit, i, 0f, 0.3f); hold(emit, 1f)
-            }
-        }
-        // Everything at once: a few incommensurate sines per input.
-        pieces += piece { here, emit ->
-            val n = frames(6f)
-            val random = java.util.Random(7L)
-            val waves = inputs.indices.map { List(3) { Triple(0.3 + random.nextDouble() * 1.5, random.nextDouble() * 2 * PI, 0.2 + random.nextDouble() * 0.2) } }
-            for (f in 0 until n) {
-                val t = f.toDouble() / fps / duration
-                val fade = minOf(1f, f / (fps * 0.5f * duration), (n - f) / (fps * 0.5f * duration))
-                for (i in inputs.indices) here[i] = (waves[i].sumOf { (hz, phase, a) -> a * sin(2 * PI * hz * t + phase) }.toFloat() * fade).coerceIn(-1f, 1f)
-                emit()
-            }
-            here.fill(0f)
-            hold(emit, 1.5f)
-        }
-        return pieces
-    }
-
-    /**
-     * Hard motion as a piece from rest: a dragged head jumping between random poses. The pendulum is not
-     * fitted to it - the body swings far outside the small-swing range there - but its full swing sets how
-     * the parameters are scaled, so they take it without hitting ±1, and it gives the outer keys their shapes.
-     */
-    internal fun extremes(inputs: List<Parameter>, fps: Int, duration: Float = 1f): List<List<FloatArray>> {
-        if (inputs.isEmpty()) return emptyList()
-        val moves = quickMoves(inputs.size, fps, 7f, duration, 13L)
-        return listOf(inputs.indices.map { i ->
-            val p = inputs[i]
-            FloatArray(moves[i].size) { val v = moves[i][it]; if (v >= 0f) p.default + v * (p.max - p.default) else p.default + v * (p.default - p.min) }
-        })
-    }
-
-    /**
-     * Per input, -1..1 values that jump to a new random target every 0.35-1 s over 0.12 s, for [seconds],
-     * then return to 0 and hold for a second and a half.
-     */
-    private fun quickMoves(count: Int, fps: Int, seconds: Float, duration: Float, seed: Long): List<FloatArray> {
-        val random = java.util.Random(seed)
-        val n = (seconds * duration * fps).toInt().coerceAtLeast(1)
-        val tail = (1.5f * duration * fps).toInt().coerceAtLeast(1)
-        val ramp = (0.12f * duration * fps).coerceAtLeast(1f)
-        return List(count) {
-            val out = FloatArray(n + tail)
-            var from = 0f; var to = 0f; var at = 0; var next = (random.nextFloat() * 0.3f * duration * fps).toInt()
-            for (f in out.indices) {
-                if (f == n) { from = out[f - 1]; to = 0f; at = f }
-                else if (f < n && f == next) {
-                    from = if (f > 0) out[f - 1] else 0f; to = random.nextFloat() * 2f - 1f; at = f
-                    next = f + ((0.35f + random.nextFloat() * 0.65f) * duration * fps).toInt().coerceAtLeast(1)
-                }
-                val t = ((f + 1 - at) / ramp).coerceIn(0f, 1f)
-                out[f] = from + (to - from) * t * t * (3f - 2f * t)
-            }
-            out
-        }
-    }
-
-    /** A stretch of mixed motion unlike the training's, from rest to rest, for judging the fit. */
-    internal fun heldOut(inputs: List<Parameter>, fps: Int, duration: Float = 1f): List<FloatArray> {
-        val n = (5f * duration * fps).toInt().coerceAtLeast(1)
-        val hold = (1f * duration * fps).toInt().coerceAtLeast(1)
-        val random = java.util.Random(11L)
-        val waves = inputs.indices.map { List(3) { Triple(0.25 + random.nextDouble() * 1.4, random.nextDouble() * 2 * PI, 0.15 + random.nextDouble() * 0.25) } }
-        return inputs.mapIndexed { i, p ->
-            FloatArray(n + hold) { f ->
-                if (f >= n) return@FloatArray p.default
-                val t = f.toDouble() / fps / duration
-                val fade = minOf(1f, f / (fps * 0.4f * duration), (n - f) / (fps * 0.4f * duration))
-                val u = (waves[i].sumOf { (hz, phase, a) -> a * sin(2 * PI * hz * t + phase) }.toFloat() * fade).coerceIn(-1f, 1f)
-                if (u >= 0f) p.default + u * (p.max - p.default) else p.default + u * (p.default - p.min)
-            }
-        }
-    }
-
-    /**
-     * [count] keys over -1..1 for a mode played as [played], symmetric about 0, placed where the frames
-     * are: each interval out from 0 holds about as many frames as the next, so the everyday small swings
-     * get as many keys as the rare large ones, which still have the outer key at ±1.
-     */
-    internal fun modeKeys(played: FloatArray, count: Int): FloatArray {
-        val side = (count - 1) / 2
-        // Frames at rest say nothing about where the swings are.
-        val sorted = played.map(::abs).filter { it > 0.01f }.sorted()
-        val inner = FloatArray(side) { j ->
-            if (j == side - 1) return@FloatArray 1f
-            val at = sorted.getOrElse(((sorted.size - 1) * (j + 1f) / side).toInt()) { 0f }
-            // Never far below an even spread, so the keys stay apart where there are few frames.
-            (maxOf(at, 0.35f * (j + 1f) / side) * 100f).roundToInt() / 100f
-        }
-        for (j in 1 until side) inner[j] = maxOf(inner[j], inner[j - 1] + MIN_KEY_GAP)
-        for (j in side - 2 downTo 0) inner[j] = minOf(inner[j], inner[j + 1] - MIN_KEY_GAP)
-        return (inner.reversed().map { -it } + 0f + inner.asList()).toFloatArray()
     }
 
     /**
@@ -400,7 +297,7 @@ object SimBaker {
             }
             for (p in 0 until active) {
                 for (q in 0 until active) a[columns[p]][columns[q]] += w * values[p] * values[q]
-                val bp = columns[p].let { b[it] }; val v = w * values[p]
+                val bp = b[columns[p]]; val v = w * values[p]
                 for (i in 0 until size) bp[i] += v * r[i]
             }
         }
@@ -423,7 +320,10 @@ object SimBaker {
                 val h0 = (ks[j] - ks[j - 1]).toDouble(); val h1 = (ks[j + 1] - ks[j]).toDouble()
                 val span = (h0 + h1) / 2
                 val terms = listOf(j - 1 to span / h0, j to -span / h0 - span / h1, j + 1 to span / h1).filter { it.first != zeros[k] }
-                for ((p, cp) in terms) for ((q, cq) in terms) a[column(k, p)][column(k, q)] += bend * cp * cq
+                // The rest key is crossed at every swing, small ones most of all: a corner there is a hitch
+                // each time, so the shapes go straight through it.
+                val weight = if (j == zeros[k]) bend * CENTER_BEND else bend
+                for ((p, cp) in terms) for ((q, cq) in terms) a[column(k, p)][column(k, q)] += weight * cp * cq
             }
         }
         val solved = SimPendulumFit.solve(a, b) ?: Array(unknowns) { c ->
@@ -535,6 +435,16 @@ object SimBaker {
             for (id in meshes) axis.at(id.raw, value)?.copyInto(out, offsets.getValue(id) * 2)
             return out
         }
+    }
+
+    /** The energy of the third differences of [frames]: how much the motion's acceleration jumps. */
+    private fun jerkEnergy(frames: List<FloatArray>): Double {
+        var sum = 0.0
+        for (f in 3 until frames.size) {
+            val a = frames[f]; val b = frames[f - 1]; val c = frames[f - 2]; val d = frames[f - 3]
+            for (i in a.indices) { val j = (a[i] - 3 * b[i] + 3 * c[i] - d[i]).toDouble(); sum += j * j }
+        }
+        return sum
     }
 
     private fun maxDistance(px: FloatArray): Float {
