@@ -342,6 +342,9 @@ internal fun DockWorkspaceView(
                 }
             }
         }
+        key(state.projectOpenGeneration, workspace.id) {
+            WorkspaceEditPanels(state, viewModel, Modifier.align(Alignment.BottomStart).padding(10.dp))
+        }
         val pendingPaint = viewModel.canvasAwaitingMeshRebuild()
         if (pendingPaint != null) {
             io.github.psd2live.ui.components.RebuildMeshPromptDialog(

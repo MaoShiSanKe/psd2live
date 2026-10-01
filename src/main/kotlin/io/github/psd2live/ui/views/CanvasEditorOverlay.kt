@@ -1472,70 +1472,6 @@ internal fun BoxScope.CanvasEditorOverlay(
     // Left Animated Hover Toolbar (edit / deform / paint tools)
     CanvasToolBar(editor = editor, keymap = keymap, focus = focus)
 
-    // Bottom-left placement panel (Blender-style confirm with smooth animation)
-    val currentPlacement = editor.placement
-    var lastPlacement by remember { mutableStateOf<CreatePlacement?>(null) }
-    if (currentPlacement != null) {
-        lastPlacement = currentPlacement
-    }
-    val activePlacement = currentPlacement ?: lastPlacement
-
-    AnimatedVisibility(
-        visible = skeleton == null && currentPlacement != null && activePlacement != null,
-        enter = slideInVertically(
-            initialOffsetY = { it / 3 },
-            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-        ) + fadeIn(
-            animationSpec = tween(durationMillis = 180),
-        ) + scaleIn(
-            initialScale = 0.95f,
-            transformOrigin = TransformOrigin(0f, 1f),
-            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-        ),
-        exit = slideOutVertically(
-            targetOffsetY = { it / 3 },
-            animationSpec = tween(durationMillis = 180, easing = FastOutLinearInEasing),
-        ) + fadeOut(
-            animationSpec = tween(durationMillis = 140),
-        ) + scaleOut(
-            targetScale = 0.95f,
-            transformOrigin = TransformOrigin(0f, 1f),
-            animationSpec = tween(durationMillis = 180, easing = FastOutLinearInEasing),
-        ),
-        modifier = Modifier
-            .align(Alignment.BottomStart)
-            .padding(start = 10.dp, bottom = 10.dp),
-    ) {
-        if (activePlacement != null) {
-            PlacementSettingsPanel(
-                editor = editor,
-                place = activePlacement,
-                isClosing = currentPlacement == null,
-                keymap = keymap,
-                focus = focus,
-            )
-        }
-    }
-
-    // Bottom-left swing session panel; the canvas stays visible, the handles do the shaping.
-    viewModel.swingSession?.let { session ->
-        // The handles follow the pose on screen; the swing's own parameters are left out, they only play.
-        val poseKey = editor.state.parameterValues.filterKeys { it.raw !in session.draft.parameterIds }
-        LaunchedEffect(session, poseKey) { viewModel.refreshSwingGizmo() }
-        Box(Modifier.align(Alignment.BottomStart).padding(start = 10.dp, bottom = 10.dp)) {
-            SwingSessionPanel(
-                viewModel = viewModel,
-                session = session,
-                targetLabel = { id ->
-                    editor.model.deformers.firstOrNull { it.id.raw == id }?.name
-                        ?: editor.model.drawables.firstOrNull { it.id.raw == id }?.name ?: id
-                },
-                selectionTargets = editor::swingTargets,
-                focus = focus,
-            )
-        }
-    }
-
     // Top Left Hierarchy / Layer Mode Toolbar
     HierarchyModeBar(
         editor = editor,
@@ -1547,12 +1483,14 @@ internal fun BoxScope.CanvasEditorOverlay(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun PlacementSettingsPanel(
+internal fun PlacementSettingsPanel(
     editor: CanvasEditor,
     place: CreatePlacement,
     isClosing: Boolean,
     keymap: Keymap,
     focus: () -> Unit,
+    titleModifier: Modifier = Modifier,
+    windowActions: @Composable () -> Unit = {},
 ) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
@@ -1594,10 +1532,11 @@ private fun PlacementSettingsPanel(
                 },
                 color = colors.textPrimary,
                 style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).then(titleModifier),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            windowActions()
             CompactIconButton(
                 onClick = { if (!isClosing) { editor.cancelPlacement(); focus() } },
                 size = 18.dp,
