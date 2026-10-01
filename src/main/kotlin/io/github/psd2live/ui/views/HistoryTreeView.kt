@@ -53,7 +53,6 @@ import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconRedo
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.IconUndo
 import io.github.psd2live.ui.state.HistoryAnnotation
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -382,7 +381,7 @@ fun HistoryTreeView(
 	}
 }
 
-/** Toolbar in the log and parameters panels' style: 22dp icon buttons whose labels show when there is room. */
+/** Search, the operation list, undo and redo, and whether hidden nodes show. */
 @Composable
 private fun HistoryToolbar(
 	operationListOpen: Boolean,
@@ -395,70 +394,43 @@ private fun HistoryToolbar(
 	onRedo: () -> Unit,
 ) {
 	val colors = LocalToolColors.current
-	BoxWithConstraints(
-		Modifier
-			.fillMaxWidth()
-			.height(28.dp)
-			.background(colors.panelElevated)
-			.border(BorderStroke(1.dp, colors.divider))
-			.padding(horizontal = 4.dp),
-	) {
-		val searchWidth = if (maxWidth < 260.dp) 88.dp else 132.dp
-		// Labels appear in this order as the panel widens, each only once everything before it fits.
-		val labels = listOf(tr("history.operations"), tr("project.historyShow"))
-		val labelsShown = shownToolLabels(labels, 4, maxWidth - searchWidth - 6.dp)
-		Row(
-			modifier = Modifier.fillMaxSize(),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(3.dp),
+	// Labels appear in this order as the panel widens, each only once everything before it fits.
+	val labels = listOf(tr("history.operations"), tr("project.historyShow"))
+	PanelToolbar(
+		labels = labels,
+		iconCount = 4,
+		search = PanelSearch(searchQuery, onSearchChange, tr("history.search")),
+	) { labelsShown ->
+		PanelToolButton(
+			label = labels[0],
+			showLabel = labelsShown > 0,
+			onClick = onToggleOperationList,
+			enabled = true,
+			active = operationListOpen,
+			tooltip = tr("history.operations"),
 		) {
-			PanelToolButton(
-				label = labels[0],
-				showLabel = labelsShown > 0,
-				onClick = onToggleOperationList,
-				enabled = true,
-				active = operationListOpen,
-				tooltip = tr("history.operations"),
-			) {
-				IconOperationList(tint = if (operationListOpen) colors.accent else colors.textPrimary)
-			}
-			PanelToolbarSeparator()
-			CompactIconButton(onClick = onUndo, size = 22.dp, tooltip = tr("project.undo")) {
-				IconUndo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-			}
-			CompactIconButton(onClick = onRedo, size = 22.dp, tooltip = tr("project.redo")) {
-				IconRedo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-			}
-			PanelToolbarSeparator()
-			PanelToolButton(
-				label = labels[1],
-				showLabel = labelsShown > 1,
-				onClick = onToggleHidden,
-				enabled = true,
-				active = showHidden,
-				tooltip = tr("project.historyShow"),
-			) {
-				IconEye(
-					visible = showHidden,
-					modifier = Modifier.size(12.dp),
-					tint = if (showHidden) colors.accent else colors.textPrimary,
-				)
-			}
-			Spacer(Modifier.weight(1f))
-			CompactTextField(
-				value = searchQuery,
-				onValueChange = onSearchChange,
-				placeholder = tr("history.search"),
-				leadingIcon = { IconSearch(tint = colors.textMuted) },
-				trailingIcon = if (searchQuery.isEmpty()) null else {
-					{
-						CompactIconButton(onClick = { onSearchChange("") }, size = 16.dp, tooltip = tr("parameters.clearSearch")) {
-							IconClose(modifier = Modifier.size(8.dp), tint = colors.textMuted)
-						}
-					}
-				},
-				modifier = Modifier.width(searchWidth),
-				height = 22.dp,
+			IconOperationList(tint = if (operationListOpen) colors.accent else colors.textPrimary)
+		}
+		PanelToolbarSeparator()
+		PanelIconButton(onClick = onUndo, tooltip = tr("project.undo")) {
+			IconUndo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+		}
+		PanelIconButton(onClick = onRedo, tooltip = tr("project.redo")) {
+			IconRedo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+		}
+		PanelToolbarSeparator()
+		PanelToolButton(
+			label = labels[1],
+			showLabel = labelsShown > 1,
+			onClick = onToggleHidden,
+			enabled = true,
+			active = showHidden,
+			tooltip = tr("project.historyShow"),
+		) {
+			IconEye(
+				visible = showHidden,
+				modifier = Modifier.size(12.dp),
+				tint = if (showHidden) colors.accent else colors.textPrimary,
 			)
 		}
 	}

@@ -85,21 +85,16 @@ import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CreatePlacementKind
 import io.github.psd2live.ui.CreateRelation
 import io.github.psd2live.ui.ComponentPalette
-import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuHeader
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
-import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
 import io.github.psd2live.ui.components.IconCollapseBranch
 import io.github.psd2live.ui.components.IconDeformPath
 import io.github.psd2live.ui.components.IconDrawOrder
-import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconExpandBranch
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconMoveToRoot
@@ -107,7 +102,6 @@ import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconRotationDeformer
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.IconSelectionBounds
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.components.IconWarpDeformer
@@ -663,64 +657,19 @@ private fun HierarchyTreeList(
 	}
 
 	Column(modifier = Modifier.fillMaxSize()) {
-		// Search & Expand/Collapse toolbar
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.height(26.dp)
-				.background(colors.panelElevated)
-				.border(BorderStroke(1.dp, colors.divider))
-				.padding(horizontal = 6.dp, vertical = 2.dp)
-				.tutorialTarget(TutorialTargetId.HIERARCHY_TOOLBAR),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(4.dp),
+		// Search, the canvas the tree belongs to, expand and collapse.
+		PanelToolbar(
+			modifier = Modifier.tutorialTarget(TutorialTargetId.HIERARCHY_TOOLBAR),
+			search = PanelSearch(searchQuery, viewModel::setHierarchySearch, tr("canvas.hierarchy.search")),
 		) {
+			Spacer(Modifier.weight(1f))
 			if (state.activeWorkspace.canvases.size > 1) {
-				Text(
-					text = viewModel.canvasTitle(state.activeCanvas),
-					color = colors.textMuted,
-					fontSize = 10.sp,
-					maxLines = 1,
-					overflow = TextOverflow.Ellipsis,
-					modifier = Modifier.widthIn(max = 108.dp),
-				)
+				PanelToolbarText(viewModel.canvasTitle(state.activeCanvas), modifier = Modifier.widthIn(max = 108.dp))
 			}
-			CompactTextField(
-				value = searchQuery,
-				onValueChange = { viewModel.setHierarchySearch(it) },
-				placeholder = tr("canvas.hierarchy.search"),
-				modifier = Modifier.weight(1f),
-				height = 20.dp,
-				leadingIcon = { IconSearch(modifier = Modifier.size(10.dp), tint = colors.textMuted) },
-				trailingIcon = if (searchQuery.isNotEmpty()) {
-					{
-						Box(
-							modifier = Modifier
-								.size(14.dp)
-								.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-								.clickable { viewModel.setHierarchySearch("") },
-							contentAlignment = Alignment.Center,
-						) {
-							IconClose(modifier = Modifier.size(8.dp), tint = colors.textMuted)
-						}
-					}
-				} else null,
+			PanelExpandCollapseButtons(
+				onExpandAll = { deformers.forEach { expandedMap[it.id.raw] = true } },
+				onCollapseAll = { deformers.forEach { expandedMap[it.id.raw] = false } },
 			)
-
-			CompactIconButton(
-				onClick = { deformers.forEach { expandedMap[it.id.raw] = true } },
-				size = 20.dp,
-				tooltip = tr("canvas.hierarchy.expandAll"),
-			) {
-				IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-			}
-			CompactIconButton(
-				onClick = { deformers.forEach { expandedMap[it.id.raw] = false } },
-				size = 20.dp,
-				tooltip = tr("canvas.hierarchy.collapseAll"),
-			) {
-				IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-			}
 		}
 
 		// Tree Body with Container Hit-Testing & Overlay and Draw Order Ruler

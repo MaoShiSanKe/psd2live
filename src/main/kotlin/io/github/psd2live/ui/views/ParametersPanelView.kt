@@ -1,10 +1,5 @@
 package io.github.psd2live.ui.views
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.drawWithContent
@@ -26,10 +21,8 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -124,17 +117,13 @@ import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
 import io.github.psd2live.ui.components.IconDragHandle
-import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconLock
 import io.github.psd2live.ui.components.IconMeshWireframe
 import io.github.psd2live.ui.components.IconParameterLink
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconRotationDeformer
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.IconSelectedOnly
 import io.github.psd2live.ui.components.IconWarpDeformer
 import io.github.psd2live.ui.components.InlineEditorRegions
@@ -440,12 +429,6 @@ internal fun ParametersListView(
 	var renameOriginal by remember { mutableStateOf("") }
 	var renameSettled by remember { mutableStateOf(false) }
 	var renamingSnapshotId by remember { mutableStateOf<String?>(null) }
-	var searchOpen by remember { mutableStateOf(state.parameterSearchQuery.isNotEmpty()) }
-	val searchFocus = remember { FocusRequester() }
-	fun closeSearch() {
-		viewModel.setParameterSearchQuery("")
-		searchOpen = false
-	}
 	var folderMenuFor by remember { mutableStateOf<String?>(null) }
 	var folderMenuOffset by remember { mutableStateOf(Offset.Zero) }
 	val focusManager = LocalFocusManager.current
@@ -535,145 +518,73 @@ internal fun ParametersListView(
 				}
 			},
 	) {
-		Column(
-			modifier = Modifier
-				.fillMaxWidth()
-				.background(colors.panelElevated)
-				.padding(horizontal = 4.dp, vertical = 3.dp),
-			verticalArrangement = Arrangement.spacedBy(3.dp),
-		) {
-			val editable = puppet != null && state.historySnapshot != null && !state.canvasEditBusy
-			BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
-			// Labels appear in this order as the panel widens, each only once everything before it fits.
-			val labels = listOf(tr("parameters.relatedOnly"), tr("parameters.newParameterShort"), tr("parameters.newFolderShort"))
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 8 else 7, maxWidth)
-			Row(
-				modifier = Modifier.fillMaxSize(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
+		val editable = puppet != null && state.historySnapshot != null && !state.canvasEditBusy
+		// Labels appear in this order as the panel widens, each only once everything before it fits.
+		val labels = listOf(tr("parameters.newParameterShort"), tr("parameters.newFolderShort"), tr("parameters.relatedOnly"))
+		PanelToolbar(
+			labels = labels,
+			iconCount = if (state.previewLive) 7 else 6,
+			search = PanelSearch(state.parameterSearchQuery, viewModel::setParameterSearchQuery, tr("parameters.search")),
+			secondary = { ParameterSnapshotBar(state, viewModel, renamingSnapshotId) { renamingSnapshotId = it } },
+		) { labelsShown ->
+			PanelToolButton(
+				label = labels[0],
+				showLabel = labelsShown > 0,
+				onClick = {
+					creatingUnderGroupId = null
+					creatingParameter = true
+				},
+				enabled = editable,
+				tooltip = tr("parameters.create"),
 			) {
-				if (searchOpen) {
-					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
-					CompactTextField(
-						value = state.parameterSearchQuery,
-						onValueChange = { viewModel.setParameterSearchQuery(it) },
-						placeholder = tr("parameters.search"),
-						leadingIcon = { IconSearch(tint = colors.textMuted) },
-						trailingIcon = {
-							CompactIconButton(
-								onClick = { closeSearch() },
-								tooltip = tr("parameters.clearSearch"), size = 16.dp,
-							) { IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
-						},
-						modifier = Modifier
-							.weight(1f)
-							.focusRequester(searchFocus)
-							.onPreviewKeyEvent { event ->
-								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-									closeSearch()
-									true
-								} else false
-							},
-						height = 22.dp,
-					)
-				} else {
-					CompactIconButton(
-						onClick = { searchOpen = true },
-						size = 22.dp,
-						tooltip = tr("parameters.search"),
-					) {
-						IconSearch(tint = colors.textMuted)
-					}
-					PanelToolButton(
-						label = labels[0],
-						showLabel = labelsShown > 0,
-						onClick = { relatedOnly = !relatedOnly },
-						enabled = owner != null,
-						active = activeRelatedFilter,
-						tooltip = if (owner != null) tr("parameters.relatedOnly") + " · " + tr("parameters.relatedCount", relatedIds.size)
-						else tr("parameters.relatedOnly"),
-					) {
-						IconSelectedOnly(
-							tint = when {
-								owner == null -> colors.textDisabled
-								activeRelatedFilter -> colors.accent
-								else -> colors.textMuted
-							},
-							modifier = Modifier.size(12.dp),
-						)
-					}
-					PanelToolbarSeparator()
-					PanelToolButton(
-						label = labels[1],
-						showLabel = labelsShown > 1,
-						onClick = {
-							creatingUnderGroupId = null
-							creatingParameter = true
-						},
-						enabled = editable,
-						tooltip = tr("parameters.create"),
-					) {
-						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-					}
-					PanelToolButton(
-						label = labels[2],
-						showLabel = labelsShown > 2,
-						onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
-						enabled = puppet != null,
-						tooltip = tr("parameters.newFolder"),
-					) {
-						IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-					}
-					Spacer(Modifier.weight(1f))
-					CompactIconButton(
-						onClick = {
-							for (id in collectParameterGroupIds(puppet)) {
-								openOverrides[id] = true
-							}
-						},
-						enabled = puppet != null,
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.expandAll"),
-					) {
-						IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					CompactIconButton(
-						onClick = {
-							for (id in collectParameterGroupIds(puppet)) {
-								openOverrides[id] = false
-							}
-						},
-						enabled = puppet != null,
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.collapseAll"),
-					) {
-						IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					if (state.previewLive) {
-						CompactIconButton(
-							onClick = { viewModel.unlockAllParameters() },
-							enabled = state.lockedParameters.isNotEmpty(),
-							size = 22.dp,
-							tooltip = tr("parameters.unlockAll") +
-								if (state.lockedParameters.isNotEmpty()) " (${state.lockedParameters.size})" else "",
-						) {
-							IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-						}
-					}
-					CompactIconButton(
-						onClick = { viewModel.resetAllParameters() },
-						enabled = allParameters.isNotEmpty(),
-						size = 22.dp,
-						tooltip = tr("parameters.resetAll"),
-					) {
-						IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-					}
+				IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+			}
+			PanelToolButton(
+				label = labels[1],
+				showLabel = labelsShown > 1,
+				onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
+				enabled = puppet != null,
+				tooltip = tr("parameters.newFolder"),
+			) {
+				IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+			}
+			PanelToolbarSeparator()
+			PanelToolButton(
+				label = labels[2],
+				showLabel = labelsShown > 2,
+				onClick = { relatedOnly = !relatedOnly },
+				enabled = owner != null,
+				active = activeRelatedFilter,
+				tooltip = if (owner != null) tr("parameters.relatedOnly") + " · " + tr("parameters.relatedCount", relatedIds.size)
+				else tr("parameters.relatedOnly"),
+			) {
+				IconSelectedOnly(
+					tint = when {
+						owner == null -> colors.textDisabled
+						activeRelatedFilter -> colors.accent
+						else -> colors.textMuted
+					},
+					modifier = Modifier.size(12.dp),
+				)
+			}
+			Spacer(Modifier.weight(1f))
+			PanelExpandCollapseButtons(
+				onExpandAll = { for (id in collectParameterGroupIds(puppet)) openOverrides[id] = true },
+				onCollapseAll = { for (id in collectParameterGroupIds(puppet)) openOverrides[id] = false },
+				enabled = puppet != null,
+			)
+			if (state.previewLive) {
+				PanelIconButton(
+					onClick = { viewModel.unlockAllParameters() },
+					enabled = state.lockedParameters.isNotEmpty(),
+					tooltip = tr("parameters.unlockAll") +
+						if (state.lockedParameters.isNotEmpty()) " (${state.lockedParameters.size})" else "",
+				) {
+					IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
 				}
 			}
-			}
-			ParameterSnapshotBar(state, viewModel, renamingSnapshotId) { renamingSnapshotId = it }
+			PanelResetButton(onClick = { viewModel.resetAllParameters() }, enabled = allParameters.isNotEmpty(), tooltip = tr("parameters.resetAll"))
 		}
-		Divider(color = colors.divider)
 
 		if (rows.isEmpty()) {
 			Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1651,83 +1562,6 @@ private fun ParameterLinkSlot(
 		tooltip = { ParameterTooltip(tooltip) },
 		delayMillis = 400,
 	) { content() }
-}
-
-internal val PanelToolLabelGap = 8.dp
-
-/** Icon button that slides its text label in beside the icon when the toolbar has room. */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-internal fun PanelToolButton(
-	label: String,
-	showLabel: Boolean,
-	onClick: () -> Unit,
-	enabled: Boolean,
-	tooltip: String,
-	active: Boolean = false,
-	icon: @Composable () -> Unit,
-) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val interaction = remember { MutableInteractionSource() }
-	val hovered by interaction.collectIsHoveredAsState()
-	val pressed by interaction.collectIsPressedAsState()
-	TooltipArea(tooltip = { ParameterTooltip(tooltip) }, delayMillis = 400) {
-		Row(
-			modifier = Modifier
-				.height(22.dp)
-				.widthIn(min = 22.dp)
-				.background(
-					when {
-						!enabled -> Color.Transparent
-						pressed -> colors.controlActive
-						hovered -> colors.controlHover
-						else -> colors.controlBackground
-					},
-					RoundedCornerShape(2.dp),
-				)
-				.border(
-					BorderStroke(1.dp, if (active) colors.accent else if (hovered && enabled) colors.borderHover else colors.border),
-					RoundedCornerShape(2.dp),
-				)
-				.hoverable(interaction)
-				.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
-				.pointerHoverIcon(if (enabled) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
-				.padding(horizontal = 5.dp),
-			verticalAlignment = Alignment.CenterVertically,
-		) {
-			Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) { icon() }
-			AnimatedVisibility(
-				visible = showLabel,
-				enter = expandHorizontally(tween(160)) + fadeIn(tween(160)),
-				exit = shrinkHorizontally(tween(160)) + fadeOut(tween(120)),
-			) {
-				Text(
-					text = label,
-					style = typography.caption.copy(fontSize = 10.5.sp),
-					color = when {
-						!enabled -> colors.textDisabled
-						active -> colors.accent
-						else -> colors.textPrimary
-					},
-					maxLines = 1,
-					softWrap = false,
-					modifier = Modifier.padding(start = 4.dp),
-				)
-			}
-		}
-	}
-}
-
-@Composable
-internal fun PanelToolbarSeparator() {
-	Box(
-		Modifier
-			.padding(horizontal = 2.dp)
-			.width(1.dp)
-			.height(14.dp)
-			.background(LocalToolColors.current.divider),
-	)
 }
 
 @Composable

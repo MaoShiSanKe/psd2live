@@ -25,9 +25,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Divider
-import io.github.psd2live.ui.components.IconCollapseAll
-import io.github.psd2live.ui.components.IconExpandAll
-import io.github.psd2live.ui.components.CompactIconButton
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,7 +61,6 @@ import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.Side
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.ColorPickerSwatch
-import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactNumberSpinner
@@ -72,7 +68,6 @@ import io.github.psd2live.ui.components.CompactSectionHeader
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.localizedName
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -82,6 +77,9 @@ import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
 import kotlin.math.roundToInt
+import io.github.psd2live.ui.components.IconEye
+import io.github.psd2live.ui.components.IconPaintColorSwap
+import io.github.psd2live.ui.components.IconUndo
 
 @Composable
 private fun MotionItemWithPlay(
@@ -138,34 +136,12 @@ internal fun ModelPresetsSection(
 	}
 
 	Column(modifier = Modifier.fillMaxWidth()) {
-		// Toolbar, as in the parameter panel: reset every preset, and open or close every group.
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.background(colors.panelElevated)
-				.padding(horizontal = 4.dp, vertical = 3.dp)
-				.height(22.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(3.dp),
-		) {
-			PanelToolButton(
-				label = tr("settings.reset"),
-				showLabel = true,
-				onClick = { viewModel.resetModelPresetsToDefault() },
-				enabled = !isBusy,
-				tooltip = tr("settings.resetHint"),
-			) {
-				IconReset(modifier = Modifier.size(11.dp), tint = if (!isBusy) colors.textPrimary else colors.textDisabled)
-			}
+		// Open or close every group, and reset every preset.
+		PanelToolbar {
 			Spacer(Modifier.weight(1f))
-			CompactIconButton(onClick = { expandAll(true) }, enabled = !state.meshOnly, size = 22.dp, tooltip = tr("canvas.hierarchy.expandAll")) {
-				IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-			}
-			CompactIconButton(onClick = { expandAll(false) }, enabled = !state.meshOnly, size = 22.dp, tooltip = tr("canvas.hierarchy.collapseAll")) {
-				IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-			}
+			PanelExpandCollapseButtons(onExpandAll = { expandAll(true) }, onCollapseAll = { expandAll(false) }, enabled = !state.meshOnly)
+			PanelResetButton(onClick = { viewModel.resetModelPresetsToDefault() }, enabled = !isBusy, tooltip = tr("settings.resetHint"))
 		}
-		Divider(color = colors.divider)
 
 		val mouthSummary = if (state.mouthOutlineEnabled) " · ${tr("mouth.outline")}" else ""
 		PresetFolderRow(
@@ -554,51 +530,36 @@ internal fun LayersTableView(
 	}
 
 	Column(modifier = Modifier.fillMaxSize()) {
-		// Quick Actions Bar
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.height(26.dp)
-				.background(colors.panelElevated)
-				.border(BorderStroke(1.dp, colors.divider))
-				.padding(horizontal = 6.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(4.dp),
-		) {
-			val canvasPrefix = if (state.activeWorkspace.canvases.size > 1) "${viewModel.canvasTitle(state.activeCanvas)} · " else ""
-			Text(
-				text = canvasPrefix + if (analysis != null) tr("layers.summary", visibleCount, layers.size, recognized, unknown) else tr("layers.title"),
-				style = typography.caption.copy(fontSize = 10.5.sp),
-				color = colors.textMuted,
-				modifier = Modifier.weight(1f),
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-			)
-			CompactButton(
-				text = tr("layers.popup.showAll"),
-				onClick = { viewModel.setAllLayersVisibility(true) },
-				enabled = layers.isNotEmpty(),
-				height = 20.dp,
-			)
-			CompactButton(
-				text = tr("layers.popup.hideAll"),
-				onClick = { viewModel.setAllLayersVisibility(false) },
-				enabled = layers.isNotEmpty(),
-				height = 20.dp,
-			)
-			CompactButton(
-				text = tr("layers.popup.invertVisibility"),
-				onClick = { viewModel.invertLayerVisibility() },
-				enabled = layers.isNotEmpty(),
-				height = 20.dp,
-			)
-			if (state.deletedLayerIds.isNotEmpty()) {
-				CompactButton(
-					text = tr("layers.restoreAll", state.deletedLayerIds.size),
-					onClick = { viewModel.restoreAllDeletedLayers() },
-					height = 20.dp,
-				)
+		// Visibility for every layer at once, then what the panel lists.
+		val restoreLabel = tr("layers.restoreAll", state.deletedLayerIds.size)
+		val labels = listOf(tr("layers.popup.showAll"), tr("layers.popup.hideAll"), tr("layers.popup.invertVisibility")) +
+			if (state.deletedLayerIds.isNotEmpty()) listOf(restoreLabel) else emptyList()
+		PanelToolbar(labels = labels, iconCount = labels.size, reservedWidth = 120.dp) { labelsShown ->
+			PanelToolButton(labels[0], showLabel = labelsShown > 0, onClick = { viewModel.setAllLayersVisibility(true) },
+				enabled = layers.isNotEmpty(), tooltip = labels[0]) {
+				IconEye(visible = true, modifier = Modifier.size(12.dp), tint = colors.textPrimary)
 			}
+			PanelToolButton(labels[1], showLabel = labelsShown > 1, onClick = { viewModel.setAllLayersVisibility(false) },
+				enabled = layers.isNotEmpty(), tooltip = labels[1]) {
+				IconEye(visible = false, modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+			}
+			PanelToolButton(labels[2], showLabel = labelsShown > 2, onClick = { viewModel.invertLayerVisibility() },
+				enabled = layers.isNotEmpty(), tooltip = labels[2]) {
+				IconPaintColorSwap(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+			}
+			if (state.deletedLayerIds.isNotEmpty()) {
+				PanelToolbarSeparator()
+				PanelToolButton(restoreLabel, showLabel = labelsShown > 3, onClick = { viewModel.restoreAllDeletedLayers() },
+					enabled = true, tooltip = restoreLabel) {
+					IconUndo(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+				}
+			}
+			val canvasPrefix = if (state.activeWorkspace.canvases.size > 1) "${viewModel.canvasTitle(state.activeCanvas)} · " else ""
+			PanelToolbarText(
+				canvasPrefix + if (analysis != null) tr("layers.summary", visibleCount, layers.size, recognized, unknown) else tr("layers.title"),
+				modifier = Modifier.weight(1f),
+				textAlign = TextAlign.End,
+			)
 		}
 
 		// Table Header Row

@@ -14,7 +14,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -81,13 +80,7 @@ import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
-import io.github.psd2live.ui.components.IconExpandAll
-import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconPlay
-import io.github.psd2live.ui.components.IconReset
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -141,13 +134,7 @@ internal fun AnimationPanelView(
 	val typography = LocalToolTypography.current
 	val previewState = state.previewPanelState()
 	val skeleton = state.rigEdits.skeleton
-	var searchOpen by remember { mutableStateOf(false) }
 	var query by remember { mutableStateOf("") }
-	val searchFocus = remember { FocusRequester() }
-	fun closeSearch() {
-		query = ""
-		searchOpen = false
-	}
 	val openSections = remember { mutableStateMapOf(BUILTIN_SECTION to true, CUSTOM_SECTION to true) }
 	val openSettings = remember { mutableStateMapOf<String, Boolean>() }
 	var newMenuOpen by remember { mutableStateOf(false) }
@@ -163,100 +150,35 @@ internal fun AnimationPanelView(
 	}
 
 	Column(modifier.fillMaxSize().background(colors.panelBackground)) {
-		BoxWithConstraints(
-			Modifier
-				.fillMaxWidth()
-				.background(colors.panelElevated)
-				.padding(horizontal = 4.dp, vertical = 3.dp)
-				.height(22.dp),
-		) {
-			// Labels appear in this order as the panel widens, each only once everything before it fits.
-			val labels = listOf(tr("animation.new"))
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 5 else 6, maxWidth)
-			Row(
-				modifier = Modifier.fillMaxSize(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
-			) {
-				if (searchOpen) {
-					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
-					CompactTextField(
-						value = query,
-						onValueChange = { query = it },
-						placeholder = tr("animation.search"),
-						leadingIcon = { IconSearch(tint = colors.textMuted) },
-						trailingIcon = {
-							CompactIconButton(
-								onClick = { closeSearch() },
-								tooltip = tr("parameters.clearSearch"), size = 16.dp,
-							) { IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
-						},
-						modifier = Modifier
-							.weight(1f)
-							.focusRequester(searchFocus)
-							.onPreviewKeyEvent { event ->
-								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-									closeSearch()
-									true
-								} else false
-							},
-						height = 22.dp,
-					)
-				} else {
-					CompactIconButton(onClick = { searchOpen = true }, size = 22.dp, tooltip = tr("animation.search")) {
-						IconSearch(tint = colors.textMuted)
-					}
-					Box {
-						PanelToolButton(
-							label = labels[0],
-							showLabel = labelsShown > 0,
-							onClick = { newMenuOpen = true },
-							enabled = state.previewModel != null,
-							tooltip = tr("animation.new"),
-						) {
-							IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-						}
-						NewMotionMenu(viewModel, skeleton, newMenuOpen) { newMenuOpen = false }
-					}
-					Spacer(Modifier.weight(1f))
-					if (!state.previewLive) {
-						CompactIconButton(
-							onClick = { viewModel.ensurePreviewCanvas(focus = true) },
-							size = 22.dp,
-							tooltip = tr("window.showPreview"),
-						) {
-							IconEye(visible = true, modifier = Modifier.size(12.dp), tint = colors.textMuted)
-						}
-					}
-					CompactIconButton(
-						onClick = { openSections.keys.toList().forEach { openSections[it] = true } },
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.expandAll"),
-					) {
-						IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					CompactIconButton(
-						onClick = {
-							openSections.keys.toList().forEach { openSections[it] = false }
-							openSettings.clear()
-						},
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.collapseAll"),
-					) {
-						IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					CompactIconButton(
-						onClick = { viewModel.resetPreviewParameters() },
-						enabled = state.previewModel != null,
-						size = 22.dp,
-						tooltip = tr("animation.resetPose"),
-					) {
-						IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-					}
+		val labels = listOf(tr("animation.new"))
+		PanelToolbar(
+			labels = labels,
+			iconCount = if (state.previewLive) 4 else 5,
+			search = PanelSearch(query, { query = it }, tr("animation.search")),
+		) { labelsShown ->
+			Box {
+				PanelToolButton(
+					label = labels[0],
+					showLabel = labelsShown > 0,
+					onClick = { newMenuOpen = true },
+					enabled = state.previewModel != null,
+					tooltip = tr("animation.new"),
+				) {
+					IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 				}
+				NewMotionMenu(viewModel, skeleton, newMenuOpen) { newMenuOpen = false }
 			}
+			Spacer(Modifier.weight(1f))
+			PanelShowPreviewButton(state, viewModel)
+			PanelExpandCollapseButtons(
+				onExpandAll = { openSections.keys.toList().forEach { openSections[it] = true } },
+				onCollapseAll = {
+					openSections.keys.toList().forEach { openSections[it] = false }
+					openSettings.clear()
+				},
+			)
+			PanelResetButton(onClick = { viewModel.resetPreviewParameters() }, enabled = state.previewModel != null, tooltip = tr("animation.resetPose"))
 		}
-		Divider(color = colors.divider)
 
 		if (state.previewModel == null || (needle.isNotEmpty() && shownBuiltins.isEmpty() && shownCustoms.isEmpty())) {
 			Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

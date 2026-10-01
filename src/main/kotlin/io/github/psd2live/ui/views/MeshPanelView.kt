@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Divider
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -28,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.MeshEdgeMode
@@ -40,7 +38,6 @@ import io.github.psd2live.ui.ComponentPalette
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactDropdown
-import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.IconInfo
@@ -108,13 +105,16 @@ private fun MeshPanelInfoToggle(
 	onToggle: () -> Unit,
 ) {
 	val colors = LocalToolColors.current
-	CompactIconButton(
+	PanelToolButton(
+		label = "",
+		showLabel = false,
 		onClick = onToggle,
-		size = 18.dp,
+		enabled = true,
+		active = showHints,
 		tooltip = tr(if (showHints) "mesh.panel.hideHints" else "mesh.panel.showHints"),
 	) {
 		IconInfo(
-			modifier = Modifier.size(10.dp),
+			modifier = Modifier.size(11.dp),
 			tint = if (showHints) colors.accent else colors.textMuted,
 		)
 	}
@@ -142,33 +142,20 @@ private fun GlobalMeshSettingsEditor(
 	)
 
 	Column(modifier = Modifier.fillMaxSize()) {
-		Column(
-			modifier = Modifier
-				.fillMaxWidth()
-				.padding(horizontal = 8.dp, vertical = 6.dp),
-			verticalArrangement = Arrangement.spacedBy(4.dp),
+		PanelToolbar(
+			secondary = if (showHints) {
+				{
+					Text(
+						text = tr("mesh.panel.globalHint"),
+						style = typography.caption.copy(fontSize = 9.5.sp),
+						color = colors.textMuted,
+						modifier = Modifier.padding(horizontal = 4.dp),
+					)
+				}
+			} else null,
 		) {
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(6.dp),
-			) {
-				Text(
-					text = tr("mesh.panel.globalTitle"),
-					style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-					color = colors.textPrimary,
-					modifier = Modifier.weight(1f, fill = false),
-				)
-				MeshPanelInfoToggle(showHints = showHints, onToggle = onToggleHints)
-			}
-			if (showHints) {
-				Text(
-					text = tr("mesh.panel.globalHint"),
-					style = typography.caption.copy(fontSize = 9.5.sp),
-					color = colors.textMuted,
-				)
-			}
-			Divider(color = colors.textPrimary.copy(alpha = 0.6f), thickness = 1.5.dp)
+			PanelToolbarTitle(tr("mesh.panel.globalTitle"), modifier = Modifier.padding(start = 4.dp).weight(1f))
+			MeshPanelInfoToggle(showHints = showHints, onToggle = onToggleHints)
 		}
 		Column(
 			modifier = Modifier
@@ -214,41 +201,28 @@ private fun SelectedMeshSettingsEditor(
 	}
 
 	Column(modifier = Modifier.fillMaxSize()) {
-		Column(
-			modifier = Modifier
-				.fillMaxWidth()
-				.padding(horizontal = 8.dp, vertical = 6.dp),
-			verticalArrangement = Arrangement.spacedBy(4.dp),
-		) {
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(6.dp),
-			) {
-				val awtColor = ComponentPalette.strong(layerId)
-				Box(
-					modifier = Modifier
-						.size(8.dp)
-						.background(Color(awtColor.red, awtColor.green, awtColor.blue), RoundedCornerShape(2.dp)),
-				)
-				Text(
-					text = drawableName,
-					style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-					color = colors.textPrimary,
-					maxLines = 1,
-					overflow = TextOverflow.Ellipsis,
-					modifier = Modifier.weight(1f, fill = false),
-				)
-				MeshPanelInfoToggle(showHints = showHints, onToggle = onToggleHints)
-			}
+		PanelToolbar {
+			val awtColor = ComponentPalette.strong(layerId)
+			Box(
+				modifier = Modifier
+					.padding(start = 4.dp)
+					.size(8.dp)
+					.background(Color(awtColor.red, awtColor.green, awtColor.blue), RoundedCornerShape(2.dp)),
+			)
+			PanelToolbarTitle(drawableName, modifier = Modifier.weight(1f, fill = false))
+			if (isOverridden) PanelToolbarText(tr("mesh.settings.overridden"), color = colors.accent)
+			Spacer(Modifier.weight(1f))
+			MeshPanelInfoToggle(showHints = showHints, onToggle = onToggleHints)
 			if (isOverridden) {
-				Text(
-					text = tr("mesh.settings.overridden"),
-					style = typography.caption.copy(fontSize = 9.5.sp),
-					color = colors.accent,
+				PanelResetButton(
+					onClick = {
+						viewModel.resetPartMeshSettings(layerId)
+						draft = defaultSettings
+					},
+					enabled = !isBusy,
+					tooltip = tr("canvas.hierarchy.resetItem"),
 				)
 			}
-			Divider(color = colors.textPrimary.copy(alpha = 0.6f), thickness = 1.5.dp)
 		}
 
 		Column(
@@ -275,21 +249,8 @@ private fun SelectedMeshSettingsEditor(
 				.fillMaxWidth()
 				.padding(horizontal = 8.dp, vertical = 8.dp),
 			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.SpaceBetween,
+			horizontalArrangement = Arrangement.End,
 		) {
-			if (isOverridden) {
-				CompactButton(
-					text = tr("canvas.hierarchy.resetItem"),
-					onClick = {
-						viewModel.resetPartMeshSettings(layerId)
-						draft = defaultSettings
-					},
-					enabled = !isBusy,
-					height = 24.dp,
-				)
-			} else {
-				Spacer(Modifier.width(1.dp))
-			}
 			Row(
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.spacedBy(6.dp),

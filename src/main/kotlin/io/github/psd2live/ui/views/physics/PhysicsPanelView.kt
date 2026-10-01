@@ -8,7 +8,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -30,7 +29,6 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -38,16 +36,9 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -61,15 +52,9 @@ import io.github.psd2live.core.PhysicsIssue
 import io.github.psd2live.core.PhysicsOrigin
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactCheckbox
-import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
-import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconEye
-import io.github.psd2live.ui.components.IconReset
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -80,7 +65,12 @@ import io.github.psd2live.ui.utils.NativeFilePicker
 import io.github.psd2live.ui.views.IconArrowVertical
 import io.github.psd2live.ui.views.PanelSectionRow
 import io.github.psd2live.ui.views.PanelToolButton
-import io.github.psd2live.ui.views.shownToolLabels
+import io.github.psd2live.ui.views.PanelToolbar
+import io.github.psd2live.ui.views.PanelSearch
+import io.github.psd2live.ui.views.PanelToolbarSeparator
+import io.github.psd2live.ui.views.PanelIconButton
+import io.github.psd2live.ui.views.PanelShowPreviewButton
+import io.github.psd2live.ui.views.PanelResetButton
 
 /**
  * Physics: every pendulum the model exports, generated or the user's, in one list in evaluation order.
@@ -107,7 +97,6 @@ internal fun PhysicsPanelView(
 
 	Column(modifier.fillMaxSize().background(colors.panelBackground)) {
 		PhysicsToolbar(viewModel, state, previewState, groups, selected, query, { query = it }) { id -> selectedId = id }
-		Divider(color = colors.divider)
 		if (state.previewModel == null) {
 			Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
 				Text(tr("physics.noModel"), style = typography.caption.copy(fontSize = 11.sp), color = colors.textMuted, modifier = Modifier.padding(12.dp))
@@ -155,117 +144,67 @@ private fun PhysicsToolbar(
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val on = previewState.generatePhysics && !previewState.meshOnly
-	var searchOpen by remember { mutableStateOf(query.isNotEmpty()) }
-	val searchFocus = remember { FocusRequester() }
 	var newMenuOpen by remember { mutableStateOf(false) }
-	fun closeSearch() {
-		onQuery("")
-		searchOpen = false
-	}
-	Column(
-		Modifier.fillMaxWidth().background(colors.panelElevated).padding(horizontal = 4.dp, vertical = 3.dp),
-		verticalArrangement = Arrangement.spacedBy(3.dp),
-	) {
-		BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
-			val labels = listOf(tr("physics.new"))
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 5 else 6, maxWidth)
+	val labels = listOf(tr("physics.new"))
+	PanelToolbar(
+		labels = labels,
+		iconCount = if (state.previewLive) 4 else 5,
+		search = PanelSearch(query, onQuery, tr("physics.search")),
+		secondary = {
 			Row(
-				modifier = Modifier.fillMaxSize(),
+				Modifier.fillMaxWidth().padding(horizontal = 4.dp),
 				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
+				horizontalArrangement = Arrangement.spacedBy(6.dp),
 			) {
-				if (searchOpen) {
-					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
-					CompactTextField(
-						value = query,
-						onValueChange = onQuery,
-						placeholder = tr("physics.search"),
-						leadingIcon = { IconSearch(tint = colors.textMuted) },
-						trailingIcon = {
-							CompactIconButton(onClick = { closeSearch() }, tooltip = tr("parameters.clearSearch"), size = 16.dp) {
-								IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-							}
-						},
-						modifier = Modifier
-							.weight(1f)
-							.focusRequester(searchFocus)
-							.onPreviewKeyEvent { event ->
-								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-									closeSearch()
-									true
-								} else false
-							},
-						height = 22.dp,
-					)
-					return@Row
-				}
-				CompactIconButton(onClick = { searchOpen = true }, size = 22.dp, tooltip = tr("physics.search")) {
-					IconSearch(tint = colors.textMuted)
-				}
-				Box {
-					PanelToolButton(
-						label = labels[0],
-						showLabel = labelsShown > 0,
-						onClick = { newMenuOpen = true },
-						enabled = state.previewModel != null,
-						tooltip = tr("physics.new"),
-					) {
-						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-					}
-					NewPhysicsMenu(viewModel, selected, newMenuOpen, { newMenuOpen = false }, onCreated)
-				}
-				Spacer(Modifier.weight(1f))
-				// Cubism runs groups top to bottom; a later group reads an earlier one's outputs.
-				val index = groups.indexOfFirst { it.id == selected?.id }
-				CompactIconButton(
-					onClick = { selected?.let { viewModel.movePhysicsGroup(it.id, -1) } },
-					enabled = index > 0,
-					size = 22.dp,
-					tooltip = tr("physics.moveUp"),
-				) { IconArrowVertical(up = true, tint = colors.textMuted) }
-				CompactIconButton(
-					onClick = { selected?.let { viewModel.movePhysicsGroup(it.id, 1) } },
-					enabled = index in 0 until groups.size - 1,
-					size = 22.dp,
-					tooltip = tr("physics.moveDown"),
-				) { IconArrowVertical(up = false, tint = colors.textMuted) }
-				if (!state.previewLive) {
-					CompactIconButton(onClick = { viewModel.ensurePreviewCanvas(focus = true) }, size = 22.dp, tooltip = tr("window.showPreview")) {
-						IconEye(visible = true, modifier = Modifier.size(12.dp), tint = colors.textMuted)
-					}
-				}
-				CompactIconButton(
-					onClick = { viewModel.resetPreviewParameters() },
-					enabled = state.previewModel != null,
-					size = 22.dp,
-					tooltip = tr("animation.resetPose"),
-				) { IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary) }
+				Box(Modifier.size(6.dp).clip(CircleShape).background(if (on) colors.accent else colors.textDisabled))
+				Text(
+					tr(if (on) "physics.status.on" else "physics.status.off", fpsText(previewState.rigEdits.physicsFps)),
+					style = typography.caption.copy(fontSize = 10.sp),
+					color = if (on) colors.textPrimary else colors.textMuted,
+					maxLines = 1,
+					overflow = TextOverflow.Ellipsis,
+					modifier = Modifier.weight(1f),
+				)
+				Text(
+					tr("physics.activeCount", groups.count { it.active }, groups.size),
+					style = typography.caption.copy(fontSize = 10.sp),
+					color = if (on) colors.accent else colors.textMuted,
+					maxLines = 1,
+				)
 			}
+			if (previewState.meshOnly) {
+				Text(tr("physics.meshOnly"), style = typography.caption.copy(fontSize = 10.sp), color = colors.warning, modifier = Modifier.padding(horizontal = 4.dp))
+			}
+		},
+	) { labelsShown ->
+		Box {
+			PanelToolButton(
+				label = labels[0],
+				showLabel = labelsShown > 0,
+				onClick = { newMenuOpen = true },
+				enabled = state.previewModel != null,
+				tooltip = tr("physics.new"),
+			) {
+				IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+			}
+			NewPhysicsMenu(viewModel, selected, newMenuOpen, { newMenuOpen = false }, onCreated)
 		}
-		Row(
-			Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(6.dp),
-		) {
-			Box(Modifier.size(6.dp).clip(CircleShape).background(if (on) colors.accent else colors.textDisabled))
-			Text(
-				tr(if (on) "physics.status.on" else "physics.status.off", fpsText(previewState.rigEdits.physicsFps)),
-				style = typography.caption.copy(fontSize = 10.sp),
-				color = if (on) colors.textPrimary else colors.textMuted,
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-				modifier = Modifier.weight(1f),
-			)
-			Text(
-				tr("physics.activeCount", groups.count { it.active }, groups.size),
-				style = typography.caption.copy(fontSize = 10.sp),
-				color = if (on) colors.accent else colors.textMuted,
-				maxLines = 1,
-			)
-		}
-		if (previewState.meshOnly) {
-			Text(tr("physics.meshOnly"), style = typography.caption.copy(fontSize = 10.sp), color = colors.warning, modifier = Modifier.padding(horizontal = 4.dp))
-		}
+		// Cubism runs groups top to bottom; a later group reads an earlier one's outputs.
+		val index = groups.indexOfFirst { it.id == selected?.id }
+		PanelToolbarSeparator()
+		PanelIconButton(
+			onClick = { selected?.let { viewModel.movePhysicsGroup(it.id, -1) } },
+			enabled = index > 0,
+			tooltip = tr("physics.moveUp"),
+		) { IconArrowVertical(up = true, tint = colors.textMuted) }
+		PanelIconButton(
+			onClick = { selected?.let { viewModel.movePhysicsGroup(it.id, 1) } },
+			enabled = index in 0 until groups.size - 1,
+			tooltip = tr("physics.moveDown"),
+		) { IconArrowVertical(up = false, tint = colors.textMuted) }
+		Spacer(Modifier.weight(1f))
+		PanelShowPreviewButton(state, viewModel)
+		PanelResetButton(onClick = { viewModel.resetPreviewParameters() }, enabled = state.previewModel != null, tooltip = tr("animation.resetPose"))
 	}
 }
 

@@ -8,7 +8,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Divider
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -64,8 +62,6 @@ import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
-import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
@@ -76,7 +72,6 @@ import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.views.PanelSectionRow
 import io.github.psd2live.ui.views.PanelToolButton
-import io.github.psd2live.ui.views.shownToolLabels
 import io.github.psd2live.ui.views.SimSectionIcon
 import io.github.psd2live.ui.views.SimSectionIconView
 import io.github.psd2live.ui.views.VertexGroupKindIcon
@@ -91,6 +86,10 @@ import org.umamo.runtime.model.PuppetModel
 import org.umamo.runtime.model.RuntimeFeature
 import org.umamo.runtime.model.VertexGroupKind
 import java.util.Locale
+import io.github.psd2live.ui.views.PanelToolbar
+import io.github.psd2live.ui.views.PanelToolbarSeparator
+import io.github.psd2live.ui.views.PanelExpandCollapseButtons
+import io.github.psd2live.ui.views.PanelResetButton
 
 /** The panel's foldable sections: the body list and the selected body's editor sections. */
 private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "glue", "groups")
@@ -135,7 +134,6 @@ internal fun SimulationPanelView(
 
 	Column(modifier.fillMaxSize().background(colors.panelBackground)) {
 		SimulationToolbar(viewModel, state, sims, selected, bakeStates, { open = it }) { selectedId = it }
-		Divider(color = colors.divider)
 		if (puppet == null) {
 			Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
 				Text(tr("sim.noModel"), style = typography.caption.copy(fontSize = 11.sp), color = colors.textMuted, modifier = Modifier.padding(12.dp))
@@ -197,54 +195,45 @@ private fun SimulationToolbar(
 	val baking by viewModel.simulationBaking.collectAsState()
 	val outdated = states.values.any { it == BakeState.UNBAKED || it == BakeState.STALE }
 	val live = selected != null && state.simulationPreviewId == selected.id
-	Column(
-		Modifier.fillMaxWidth().background(colors.panelElevated).padding(horizontal = 4.dp, vertical = 3.dp),
-		verticalArrangement = Arrangement.spacedBy(3.dp),
-	) {
-		BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
-			val labels = listOf(tr("sim.new"), tr("sim.bakeAll"), tr("sim.previewExport"), tr("sim.previewReference"))
-			val labelsShown = shownToolLabels(labels, if (live) 7 else 6, maxWidth)
-			Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-				Box {
-					PanelToolButton(labels[0], showLabel = labelsShown > 0, onClick = { newMenuOpen = true }, enabled = ready && !state.canvasEditBusy,
-						tooltip = tr("sim.newTip")) {
-						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-					}
-					TreeContextMenu(expanded = newMenuOpen, onDismissRequest = { newMenuOpen = false }, minWidth = 140.dp) {
-						for (kind in SimKind.entries) CompactMenuItem(tr("sim.kind.${kind.jsonName}"), {
-							newMenuOpen = false
-							viewModel.createSimulationFromSelection(kind)?.let(onCreated)
-						})
-					}
-				}
-				PanelToolButton(labels[1], showLabel = labelsShown > 1, onClick = viewModel::bakeAllSimulations,
-					enabled = sims.any { it.enabled } && baking == null && !state.canvasEditBusy,
-					tooltip = tr(if (outdated) "sim.bakeAllTip" else "sim.rebakeAllTip")) {
-					SimSectionIconView(SimSectionIcon.BAKE, if (outdated) colors.warning else colors.textPrimary, size = 11.dp)
-				}
-				Spacer(Modifier.weight(1f))
-				PanelToolButton(labels[2], showLabel = labelsShown > 2, onClick = { viewModel.setSimulationPreview(null) },
-					enabled = selected != null, active = !live, tooltip = tr("sim.previewExportTip")) {
-					IconEye(visible = true, modifier = Modifier.size(12.dp), tint = if (!live) colors.accent else colors.textMuted)
-				}
-				PanelToolButton(labels[3], showLabel = labelsShown > 3, onClick = { viewModel.setSimulationPreview(selected?.id) },
-					enabled = selected != null, active = live, tooltip = tr("sim.previewReferenceTip")) {
-					IconPlay(modifier = Modifier.size(12.dp), tint = if (live) colors.accent else colors.textMuted)
-				}
-				if (live) CompactIconButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"), size = 22.dp) {
-					IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-				}
-				CompactIconButton(onClick = { onOpenSections(SECTIONS) }, size = 22.dp, tooltip = tr("canvas.hierarchy.expandAll")) {
-					IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-				}
-				CompactIconButton(onClick = { onOpenSections(emptySet()) }, size = 22.dp, tooltip = tr("canvas.hierarchy.collapseAll")) {
-					IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-				}
+	val labels = listOf(tr("sim.new"), tr("sim.bakeAll"), tr("sim.previewExport"), tr("sim.previewReference"))
+	PanelToolbar(
+		labels = labels,
+		iconCount = if (live) 7 else 6,
+		secondary = {
+			Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+				BakeAllStatus(viewModel, sims, states, Modifier.weight(1f))
+			}
+		},
+	) { labelsShown ->
+		Box {
+			PanelToolButton(labels[0], showLabel = labelsShown > 0, onClick = { newMenuOpen = true }, enabled = ready && !state.canvasEditBusy,
+				tooltip = tr("sim.newTip")) {
+				IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+			}
+			TreeContextMenu(expanded = newMenuOpen, onDismissRequest = { newMenuOpen = false }, minWidth = 140.dp) {
+				for (kind in SimKind.entries) CompactMenuItem(tr("sim.kind.${kind.jsonName}"), {
+					newMenuOpen = false
+					viewModel.createSimulationFromSelection(kind)?.let(onCreated)
+				})
 			}
 		}
-		Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-			BakeAllStatus(viewModel, sims, states, Modifier.weight(1f))
+		PanelToolButton(labels[1], showLabel = labelsShown > 1, onClick = viewModel::bakeAllSimulations,
+			enabled = sims.any { it.enabled } && baking == null && !state.canvasEditBusy,
+			tooltip = tr(if (outdated) "sim.bakeAllTip" else "sim.rebakeAllTip")) {
+			SimSectionIconView(SimSectionIcon.BAKE, if (outdated) colors.warning else colors.textPrimary, size = 11.dp)
 		}
+		PanelToolbarSeparator()
+		PanelToolButton(labels[2], showLabel = labelsShown > 2, onClick = { viewModel.setSimulationPreview(null) },
+			enabled = selected != null, active = !live, tooltip = tr("sim.previewExportTip")) {
+			IconEye(visible = true, modifier = Modifier.size(12.dp), tint = if (!live) colors.accent else colors.textMuted)
+		}
+		PanelToolButton(labels[3], showLabel = labelsShown > 3, onClick = { viewModel.setSimulationPreview(selected?.id) },
+			enabled = selected != null, active = live, tooltip = tr("sim.previewReferenceTip")) {
+			IconPlay(modifier = Modifier.size(12.dp), tint = if (live) colors.accent else colors.textMuted)
+		}
+		Spacer(Modifier.weight(1f))
+		PanelExpandCollapseButtons(onExpandAll = { onOpenSections(SECTIONS) }, onCollapseAll = { onOpenSections(emptySet()) })
+		if (live) PanelResetButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"))
 	}
 }
 

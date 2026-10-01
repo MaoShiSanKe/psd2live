@@ -44,8 +44,6 @@ import androidx.compose.ui.window.PopupProperties
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.AppMenuItem
 import io.github.psd2live.ui.components.CheckerboardBackground
-import io.github.psd2live.ui.components.CompactIconButton
-import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.state.*
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -179,73 +177,43 @@ fun BottomLogDock(
 			)
 		}
 
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.height(28.dp)
-				.background(colors.panelElevated)
-				.border(BorderStroke(1.dp, colors.divider))
-				.padding(start = if (fillDock) 4.dp else 6.dp, end = 4.dp),
-			verticalAlignment = Alignment.CenterVertically,
+		PanelToolbar(
+			iconCount = 3,
+			search = if (expanded) PanelSearch(searchQuery, { searchQuery = it }, tr("log.dock.search")) else null,
 		) {
 			if (!fillDock) {
-				CompactIconButton(
+				PanelIconButton(
 					onClick = { viewModel.setLogPanelExpanded(!state.logPanelExpanded) },
-					size = 20.dp,
+					tooltip = tr("log.dock.title"),
 				) {
-					IconChevron(
-						expanded = state.logPanelExpanded,
-						tint = colors.textPrimary,
-					)
+					IconChevron(expanded = state.logPanelExpanded, tint = colors.textPrimary)
 				}
-				Spacer(Modifier.width(6.dp))
-				Text(
-					text = tr("log.dock.title"),
-					style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-					color = colors.textPrimary,
-					maxLines = 1,
-				)
+				PanelToolbarTitle(tr("log.dock.title"))
 			}
-
 			if (expanded) {
 				OverflowFilterTabs(
 					items = filterTabs,
 					selected = currentFilter,
 					onSelect = { currentFilter = it },
-					modifier = Modifier
-						.weight(1f)
-						.fillMaxHeight()
-						.padding(start = if (fillDock) 0.dp else 8.dp, end = 6.dp),
+					modifier = Modifier.weight(1f).fillMaxHeight(),
 				)
-
-				CompactTextField(
-					value = searchQuery,
-					onValueChange = { searchQuery = it },
-					placeholder = tr("log.dock.search"),
-					modifier = Modifier.width(96.dp).height(20.dp),
-				)
-				Spacer(Modifier.width(2.dp))
-				LogHeaderIcon(
-					tooltip = tr("log.dock.autoScroll"),
-					active = autoScroll,
+				PanelToolButton(
+					label = tr("log.dock.autoScroll"),
+					showLabel = false,
 					onClick = { autoScroll = !autoScroll },
-				) { tint ->
-					IconLogAutoScroll(tint = tint)
+					enabled = true,
+					active = autoScroll,
+					tooltip = tr("log.dock.autoScroll"),
+				) {
+					IconLogAutoScroll(tint = if (autoScroll) colors.accent else colors.textMuted)
 				}
-				LogHeaderIcon(
-					tooltip = tr("log.dock.clear"),
-					onClick = { viewModel.clearLogs() },
-				) { tint ->
-					IconLogClear(tint = tint)
+				PanelToolbarSeparator()
+				PanelIconButton(onClick = { viewModel.clearLogs() }, tooltip = tr("log.dock.clear")) {
+					IconLogClear(tint = colors.textPrimary)
 				}
-				LogHeaderIcon(
-					tooltip = tr("log.dock.copy"),
-					onClick = { copyLogs() },
-				) { tint ->
-					IconLogCopy(tint = tint)
+				PanelIconButton(onClick = { copyLogs() }, tooltip = tr("log.dock.copy")) {
+					IconLogCopy(tint = colors.textPrimary)
 				}
-			} else {
-				Spacer(Modifier.weight(1f))
 			}
 		}
 
@@ -481,64 +449,6 @@ private fun OverflowEllipsis(
 					}
 				}
 			}
-		}
-	}
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun LogHeaderIcon(
-	tooltip: String,
-	onClick: () -> Unit,
-	active: Boolean = false,
-	content: @Composable (Color) -> Unit,
-) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val interactionSource = remember { MutableInteractionSource() }
-	val hovered by interactionSource.collectIsHoveredAsState()
-	val tint = when {
-		active -> colors.accent
-		hovered -> colors.textPrimary
-		else -> colors.textMuted
-	}
-
-	TooltipArea(
-		tooltip = {
-			Surface(
-				color = colors.panelElevated,
-				shape = RoundedCornerShape(3.dp),
-				border = BorderStroke(1.dp, colors.border),
-				elevation = 4.dp,
-			) {
-				Text(
-					text = tooltip,
-					style = typography.caption.copy(fontSize = 10.sp),
-					color = colors.textPrimary,
-					modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-				)
-			}
-		},
-		delayMillis = 400,
-	) {
-		Box(
-			modifier = Modifier
-				.size(22.dp)
-				.hoverable(interactionSource)
-				.clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-				.background(
-					when {
-						active && hovered -> colors.accent.copy(alpha = 0.22f)
-						active -> colors.accent.copy(alpha = 0.14f)
-						hovered -> colors.controlHover
-						else -> Color.Transparent
-					},
-					RoundedCornerShape(3.dp),
-				),
-			contentAlignment = Alignment.Center,
-		) {
-			content(tint)
 		}
 	}
 }

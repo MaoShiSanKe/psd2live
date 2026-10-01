@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -103,89 +104,92 @@ internal fun InspectorPanelView(
     val selectedDeformer = puppet?.deformers?.firstOrNull { it.id.raw == selectedDeformerId }
     val selectedDrawable = puppet?.drawables?.firstOrNull { it.id.raw == layerDrawableId || it.id.raw == selectedLayerId }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(colors.panelBackground)
-            .verticalScroll(rememberScrollState())
-            .padding(vertical = 4.dp, horizontal = 6.dp),
-    ) {
-        // Tab Header bar matching screenshots
-        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-            Text(
-                text = tr("tab.inspector") + if (state.activeWorkspace.canvases.size > 1) " · ${viewModel.canvasTitle(state.activeCanvas)}" else "",
-                style = typography.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-                color = colors.textPrimary,
-                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-            )
-            Divider(color = colors.textPrimary.copy(alpha = 0.6f), thickness = 1.5.dp)
+    Column(modifier = modifier.fillMaxSize().background(colors.panelBackground)) {
+        // What is being inspected, and on which canvas when there are several.
+        PanelToolbar {
+            val selectedName = selectedDeformer?.name ?: selectedDrawable?.name
+            if (selectedName != null) {
+                PanelToolbarTitle(selectedName, modifier = Modifier.padding(start = 4.dp).weight(1f))
+            } else {
+                PanelToolbarText(tr("tab.inspector"), modifier = Modifier.padding(start = 4.dp).weight(1f))
+            }
+            if (state.activeWorkspace.canvases.size > 1) {
+                PanelToolbarText(viewModel.canvasTitle(state.activeCanvas), modifier = Modifier.widthIn(max = 108.dp))
+            }
         }
-
-        when {
-            selectedDeformer is Deformer.Warp -> {
-                WarpDeformerInspector(
-                    warp = selectedDeformer,
-                    allParts = puppet.parts.map { it.id.raw to it.name },
-                    allDeformers = puppet.deformers.map { it.id.raw to it.name },
-                    editor = editor,
-                    viewModel = viewModel,
-                )
-            }
-            selectedDeformer is Deformer.Rotation -> {
-                RotationDeformerInspector(
-                    rotation = selectedDeformer,
-                    allParts = puppet.parts.map { it.id.raw to it.name },
-                    allDeformers = puppet.deformers.map { it.id.raw to it.name },
-                    editor = editor,
-                    viewModel = viewModel,
-                )
-            }
-            selectedDrawable != null -> {
-                val activePath = editor.selectedPath()?.takeIf { it.drawableId == selectedDrawable.id }
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (activePath != null) {
-                        DeformPathInspector(
-                            path = activePath,
-                            drawable = selectedDrawable,
-                            editor = editor,
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Divider(color = colors.border.copy(alpha = 0.55f), thickness = 1.dp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                    ArtMeshInspector(
-                        drawable = selectedDrawable,
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 6.dp, horizontal = 6.dp),
+        ) {
+            when {
+                selectedDeformer is Deformer.Warp -> {
+                    WarpDeformerInspector(
+                        warp = selectedDeformer,
                         allParts = puppet.parts.map { it.id.raw to it.name },
                         allDeformers = puppet.deformers.map { it.id.raw to it.name },
-                        allDrawables = puppet.drawables.map { it.id.raw to it.name },
                         editor = editor,
                         viewModel = viewModel,
-                        state = state,
                     )
                 }
-            }
-            else -> {
-                // Empty state
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(top = 48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                selectedDeformer is Deformer.Rotation -> {
+                    RotationDeformerInspector(
+                        rotation = selectedDeformer,
+                        allParts = puppet.parts.map { it.id.raw to it.name },
+                        allDeformers = puppet.deformers.map { it.id.raw to it.name },
+                        editor = editor,
+                        viewModel = viewModel,
+                    )
+                }
+                selectedDrawable != null -> {
+                    val activePath = editor.selectedPath()?.takeIf { it.drawableId == selectedDrawable.id }
+                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (activePath != null) {
+                            DeformPathInspector(
+                                path = activePath,
+                                drawable = selectedDrawable,
+                                editor = editor,
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Divider(color = colors.border.copy(alpha = 0.55f), thickness = 1.dp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                        ArtMeshInspector(
+                            drawable = selectedDrawable,
+                            allParts = puppet.parts.map { it.id.raw to it.name },
+                            allDeformers = puppet.deformers.map { it.id.raw to it.name },
+                            allDrawables = puppet.drawables.map { it.id.raw to it.name },
+                            editor = editor,
+                            viewModel = viewModel,
+                            state = state,
+                        )
+                    }
+                }
+                else -> {
+                    // Empty state
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(top = 48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = tr("inspector.noSelection"),
-                            style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                            color = colors.textMuted,
-                        )
-                        Text(
-                            text = tr("inspector.noSelectionHint"),
-                            style = typography.caption.copy(fontSize = 10.5.sp),
-                            color = colors.textDisabled,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = tr("inspector.noSelection"),
+                                style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                                color = colors.textMuted,
+                            )
+                            Text(
+                                text = tr("inspector.noSelectionHint"),
+                                style = typography.caption.copy(fontSize = 10.5.sp),
+                                color = colors.textDisabled,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
                     }
                 }
             }

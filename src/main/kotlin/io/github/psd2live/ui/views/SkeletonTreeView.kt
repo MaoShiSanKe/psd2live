@@ -59,16 +59,12 @@ import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.CompactDropdown
-import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconBone
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
-import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconMeshWireframe
-import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -78,6 +74,7 @@ import io.github.psd2live.ui.theme.LocalToolTypography
 import java.awt.Cursor
 import org.umamo.runtime.model.ParameterId
 import kotlin.math.roundToInt
+import io.github.psd2live.ui.components.IconAdd
 
 // Same geometry as the hierarchy tree, so the two tabs read as one tree control.
 private const val ROW_HEIGHT_DP = 20
@@ -142,48 +139,40 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 	}
 
 	Column(Modifier.fillMaxSize()) {
-		Toolbar {
+		val addLabel = tr("skeleton.panel.add")
+		PanelToolbar(labels = if (draft != null) listOf(addLabel) else emptyList(), iconCount = 4, reservedWidth = 96.dp) { labelsShown ->
 			if (draft != null) {
-				CompactButton(text = tr("skeleton.panel.add"), onClick = { editor.addBone() },
-					enabled = editor.selectedBoneId != null, height = 20.dp)
-				CompactIconButton(
+				PanelToolButton(addLabel, showLabel = labelsShown > 0, onClick = { editor.addBone() },
+					enabled = editor.selectedBoneId != null, tooltip = addLabel) {
+					IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+				}
+				PanelIconButton(
 					onClick = { editor.removeSelectedBone() },
 					enabled = draft.bone(editor.selectedBoneId ?: "")?.role?.let { !it.anchor && !it.body } == true,
-					size = 20.dp,
 					tooltip = tr("skeleton.panel.delete"),
 				) { IconTrash(Modifier.size(11.dp)) }
-				ToolbarSeparator()
+				PanelToolbarSeparator()
 				for (role in listOf(BoneRole.TAIL, BoneRole.WING)) {
 					val present = draft.bones.any { it.role == role }
 					CompactToggleChip(
 						text = tr(if (role == BoneRole.TAIL) "skeleton.chain.tail" else "skeleton.chain.wing"),
 						selected = present,
 						onToggle = { editor.setOptionalSkeletonChain(role, !present) },
-						height = 20.dp,
+						height = PanelToolHeight,
 					)
 				}
-			} else {
-				if (committed == null) {
-					CompactButton(text = tr("skeleton.tree.create"), onClick = { editor.beginSkeletonEdit() }, isPrimary = true, height = 20.dp)
-				}
-				if (committed != null && enabled) {
-					CompactIconButton(onClick = { editor.resetSkeletonPose() }, size = 20.dp, tooltip = tr("animation.resetPose")) {
-						IconReset(Modifier.size(11.dp), tint = colors.textMuted)
-					}
-				}
+			} else if (committed == null) {
+				CompactButton(text = tr("skeleton.tree.create"), onClick = { editor.beginSkeletonEdit() }, isPrimary = true, height = PanelToolHeight)
 			}
 			Spacer(Modifier.weight(1f))
 			if (shown != null) {
-				CompactIconButton(onClick = { collapsed.clear() }, size = 20.dp, tooltip = tr("canvas.hierarchy.expandAll")) {
-					IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-				}
-				CompactIconButton(
-					onClick = { shown.bones.forEach { collapsed[it.id] = true } },
-					size = 20.dp,
-					tooltip = tr("canvas.hierarchy.collapseAll"),
-				) {
-					IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-				}
+				PanelExpandCollapseButtons(
+					onExpandAll = { collapsed.clear() },
+					onCollapseAll = { shown.bones.forEach { collapsed[it.id] = true } },
+				)
+			}
+			if (draft == null && committed != null && enabled) {
+				PanelResetButton(onClick = { editor.resetSkeletonPose() }, tooltip = tr("animation.resetPose"))
 			}
 		}
 
@@ -285,23 +274,6 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 			)
 		}
 	}
-}
-
-/** The strip above the tree, styled like the hierarchy's search toolbar. */
-@Composable
-private fun Toolbar(content: @Composable () -> Unit) {
-	val colors = LocalToolColors.current
-	Row(
-		Modifier.fillMaxWidth().height(26.dp).background(colors.panelElevated)
-			.border(BorderStroke(1.dp, colors.divider)).padding(horizontal = 6.dp, vertical = 2.dp),
-		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.spacedBy(4.dp),
-	) { content() }
-}
-
-@Composable
-private fun ToolbarSeparator() {
-	Box(Modifier.width(1.dp).height(14.dp).background(LocalToolColors.current.divider))
 }
 
 /** Every ancestor of [bone], nearest first. */
