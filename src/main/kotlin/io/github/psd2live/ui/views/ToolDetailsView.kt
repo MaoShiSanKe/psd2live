@@ -53,6 +53,7 @@ import io.github.psd2live.ui.GLUE_WEIGHT_MODE_LABELS
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.SelectionStyle
 import io.github.psd2live.ui.SkeletonEditSubTool
+import io.github.psd2live.ui.SkeletonPoseSubTool
 import io.github.psd2live.ui.WarpAddTo
 import io.github.psd2live.ui.WarpSizeStrategy
 import io.github.psd2live.ui.components.CompactButton
@@ -990,6 +991,12 @@ internal fun ToolDetailsView(
             }
             CanvasTool.SKELETON_POSE -> {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        SkeletonPoseSubTool.entries.forEach { sub ->
+                            CompactToggleChip(tr(sub.labelKey), selected = editor.skeletonPoseSubTool == sub,
+                                onToggle = { editor.skeletonPoseSubTool = sub }, modifier = Modifier.weight(1f))
+                        }
+                    }
                     Text(
                         text = tr("editor.tool.skeleton_pose"),
                         style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
@@ -1031,6 +1038,7 @@ internal fun ToolDetailsView(
                         style = typography.caption.copy(fontSize = 10.5.sp),
                         color = colors.textMuted,
                     )
+                    SkeletonTransformControls(editor)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         CompactButton(text = tr("skeleton.panel.cancel"), onClick = { editor.cancelSkeletonEdit() },
                             enabled = editor.skeletonDraft != null, modifier = Modifier.weight(1f), height = 24.dp)

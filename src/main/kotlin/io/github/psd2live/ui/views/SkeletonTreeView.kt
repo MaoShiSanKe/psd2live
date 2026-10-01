@@ -28,12 +28,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -243,12 +247,12 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 					spec = shown,
 					bone = bone,
 					expanded = expanded,
-					selected = editor.skeletonSelected && bone.id == editor.selectedBoneId,
+					selected = editor.skeletonSelected && bone.id in editor.selectedBoneIds,
 					pointCount = pointCounts?.get(bone.parameterId),
 					countPending = shown.enabled && pointCounts == null,
 					editable = true,
 					onToggle = { collapsed[bone.id] = expanded },
-					onSelect = { if (draft != null) editor.selectBone(bone.id) else editor.selectSkeleton(bone.id) },
+					onSelect = { additive -> if (draft != null) editor.selectBone(bone.id, additive) else editor.selectSkeleton(bone.id) },
 				)
 				// Anchor bones are skinned by the body rig, not by bones; their meshes stay out of the tree.
 				if (!expanded || bone.role.anchor) continue
@@ -352,6 +356,7 @@ private fun Modifier.treeGuides(depth: Int, openLevels: List<Boolean>, isLast: B
 
 /** One bone of the tree: bone icon in its color, fold chevron, name, and the parameter it drives. */
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun BoneRow(
 	spec: SkeletonSpec,
 	bone: SkeletonBone,
@@ -361,7 +366,7 @@ private fun BoneRow(
 	countPending: Boolean,
 	editable: Boolean,
 	onToggle: () -> Unit,
-	onSelect: () -> Unit,
+	onSelect: (Boolean) -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -373,7 +378,8 @@ private fun BoneRow(
 	val hasChildren = meshCount > 0 || spec.children(bone.id).isNotEmpty()
 	val interaction = remember { MutableInteractionSource() }
 	val hovered by interaction.collectIsHoveredAsState()
-	val clickable = editable && !bone.role.anchor
+	val clickable = editable
+	var additive by remember { mutableStateOf(false) }
 	val textColor = when {
 		selected -> colors.selectionText
 		bone.role.anchor -> colors.textMuted
@@ -391,7 +397,8 @@ private fun BoneRow(
 			)
 			.treeGuides(depth, openLevels, !hasNextSibling(spec, bone), expanded && hasChildren, guideColor(colors.textMuted))
 			.hoverable(interaction)
-			.clickable(enabled = clickable, interactionSource = interaction, indication = null, onClick = onSelect)
+			.onPointerEvent(PointerEventType.Press) { additive = it.keyboardModifiers.isShiftPressed }
+			.clickable(enabled = clickable, interactionSource = interaction, indication = null, onClick = { onSelect(additive) })
 			.padding(start = (BASE_PADDING_DP + depth * INDENT_STEP_DP).dp, end = 6.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {

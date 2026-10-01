@@ -272,6 +272,49 @@ data class SkeletonSpec(
 		})
 	}
 
+	/** Selected bones transform as a unit; external connected endpoints follow without transforming twice. */
+	fun withBonesTransformed(ids: Set<String>, dx: Float = 0f, dy: Float = 0f, degrees: Float = 0f,
+		scale: Float = 1f, includeDescendants: Boolean = false): SkeletonSpec {
+		require(listOf(dx, dy, degrees, scale).all(Float::isFinite) && scale > 0f)
+		val selected = (ids + if (includeDescendants) ids.flatMap(::descendants) else emptyList()).intersect(bones.map { it.id }.toSet())
+		if (selected.isEmpty()) return this
+		val group = bones.filter { it.id in selected }
+		val cx = group.sumOf { (it.headX + it.tailX).toDouble() }.toFloat() / (group.size * 2)
+		val cy = group.sumOf { (it.headY + it.tailY).toDouble() }.toFloat() / (group.size * 2)
+		val angle = Math.toRadians(degrees.toDouble())
+		val c = kotlin.math.cos(angle).toFloat(); val s = kotlin.math.sin(angle).toFloat()
+		fun point(x: Float, y: Float): Pair<Float, Float> =
+			(cx + ((x - cx) * c - (y - cy) * s) * scale + dx) to
+			(cy + ((x - cx) * s + (y - cy) * c) * scale + dy)
+		val heads = mutableMapOf<String, Pair<Float, Float>>()
+		val tails = mutableMapOf<String, Pair<Float, Float>>()
+		for (b in group) { heads[b.id] = point(b.headX, b.headY); tails[b.id] = point(b.tailX, b.tailY) }
+		for (child in bones.filter { isConnected(it.id) }) {
+			val parent = child.parentId!!
+			if (child.id in selected && parent !in selected) tails[parent] = heads.getValue(child.id)
+		}
+		for (child in bones.filter { isConnected(it.id) }) tails[child.parentId]?.let { heads[child.id] = it }
+		return copy(bones = bones.map { b -> b.copy(headX = heads[b.id]?.first ?: b.headX, headY = heads[b.id]?.second ?: b.headY,
+			tailX = tails[b.id]?.first ?: b.tailX, tailY = tails[b.id]?.second ?: b.tailY) })
+	}
+
+	/** Segment/rectangle intersection, including bones which cross the box with both endpoints outside. */
+	fun bonesInBox(x1: Float, y1: Float, x2: Float, y2: Float): Set<String> {
+		val left = minOf(x1, x2); val right = maxOf(x1, x2)
+		val top = minOf(y1, y2); val bottom = maxOf(y1, y2)
+		return bones.filter { b ->
+			val dx = b.tailX - b.headX; val dy = b.tailY - b.headY
+			var from = 0f; var to = 1f
+			fun clip(p: Float, q: Float): Boolean {
+				if (p == 0f) return q >= 0f
+				val r = q / p
+				if (p < 0f) from = maxOf(from, r) else to = minOf(to, r)
+				return from <= to
+			}
+			clip(-dx, b.headX - left) && clip(dx, right - b.headX) && clip(-dy, b.headY - top) && clip(dy, bottom - b.headY)
+		}.mapTo(linkedSetOf()) { it.id }
+	}
+
 	/** Parents before children. */
 	fun topological(): List<SkeletonBone> {
 		val out = ArrayList<SkeletonBone>(bones.size)

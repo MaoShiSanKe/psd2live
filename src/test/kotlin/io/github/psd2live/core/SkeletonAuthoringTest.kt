@@ -11,6 +11,43 @@ class SkeletonAuthoringTest {
         .withCustomBone(10f, 20f, 30f, 40f, "custom_1")
         .withCustomBone(30f, 40f, 50f, 60f, "custom_2")
 
+    @Test fun selectingAChainTransformsEveryBoneOnlyOnce() {
+        val original = chain()
+        val moved = original.withBonesTransformed(setOf("custom_1", "custom_2"), 7f, -5f, includeDescendants = true)
+        original.bones.zip(moved.bones).forEach { (a, b) ->
+            assertEquals(a.headX + 7f, b.headX); assertEquals(a.tailY - 5f, b.tailY)
+            assertEquals(a.parameterId, b.parameterId)
+        }
+        assertEquals(original, original.withBonesTransformed(emptySet(), 7f))
+    }
+
+    @Test fun connectedExternalEndpointsFollowSelectionIncludingSiblings() {
+        val original = chain().withCustomBone(10f, 20f, -20f, 50f, "custom_1")
+        val moved = original.withBonesTransformed(setOf("custom_2"), 7f, 8f)
+        assertEquals(17f, moved.bone("custom_1")!!.tailX)
+        assertEquals(17f, moved.bone("custom_4")!!.headX)
+        assertEquals(-20f, moved.bone("custom_4")!!.tailX)
+        assertTrue(moved.isConnected("custom_3"))
+        val detached = original.withBoneParent("custom_4", "custom_1", false).withBonesTransformed(setOf("custom_2"), 7f, 8f)
+        assertEquals(10f, detached.bone("custom_4")!!.headX)
+    }
+
+    @Test fun rotationAndScalingUseTheSelectionCenter() {
+        val original = SkeletonSpec().withCustomBone(-10f, 0f, 10f, 0f)
+        val moved = original.withBonesTransformed(setOf("custom_1"), degrees = 90f, scale = 2f)
+        assertTrue(kotlin.math.abs(moved.bones.single().headX) < 0.001f)
+        assertEquals(-20f, moved.bones.single().headY)
+        assertEquals(20f, moved.bones.single().tailY)
+        assertFailsWith<IllegalArgumentException> { original.withBonesTransformed(setOf("custom_1"), scale = 0f) }
+    }
+
+    @Test fun boxSelectionFindsCrossingSegmentsAndExcludesNearMisses() {
+        val spec = SkeletonSpec().withCustomBone(-10f, 0f, 10f, 0f).withCustomBone(-10f, 10f, 10f, 10f)
+        assertEquals(setOf("custom_1"), spec.bonesInBox(-1f, -1f, 1f, 1f))
+        assertEquals(setOf("custom_1"), spec.bonesInBox(1f, 1f, -1f, -1f))
+        assertTrue(spec.bonesInBox(30f, 30f, 40f, 40f).isEmpty())
+    }
+
     @Test fun renameKeepsIdentityParametersAndBindings() {
         val original = chain()
         val renamed = original.withBoneRenamed("custom_2", " elbow ")

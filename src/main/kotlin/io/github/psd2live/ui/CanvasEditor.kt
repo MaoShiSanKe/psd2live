@@ -133,6 +133,10 @@ internal enum class SkeletonEditSubTool(val labelKey: String, val hintKey: Strin
     EXTRUDE("skeleton.tool.extrude", "skeleton.tool.extrude.hint"),
 }
 
+internal enum class SkeletonPoseSubTool(val labelKey: String) {
+    AUTO("skeleton.pose.auto"), FK("skeleton.pose.fk"), IK("skeleton.pose.ik"),
+}
+
 internal enum class GlueWeightMode { BALANCE, A, B }
 
 /** Glue's sub-tools and weight sides with the labels every picker shows them under. */
@@ -444,9 +448,15 @@ internal class CanvasEditor(
 	/** The Skeleton Edit tool's working copy of the armature. Leaving the tool writes it back as one history entry. */
 	var skeletonDraft by mutableStateOf<io.github.psd2live.core.SkeletonSpec?>(null)
 		private set
-	var selectedBoneId by mutableStateOf<String?>(null)
+	var selectedBoneIds by mutableStateOf<Set<String>>(emptySet())
 		private set
+	private var selectedBoneIdState by mutableStateOf<String?>(null)
+	var selectedBoneId: String?
+		get() = selectedBoneIdState
+		private set(value) { selectedBoneIdState = value; selectedBoneIds = setOfNotNull(value) }
 	var skeletonEditSubTool by mutableStateOf(SkeletonEditSubTool.EDIT)
+	var skeletonPoseSubTool by mutableStateOf(SkeletonPoseSubTool.AUTO)
+	var transformBoneDescendants by mutableStateOf(false)
 
 	/** The authored armature, enabled or not, once it has bones. */
 	val committedSkeleton: io.github.psd2live.core.SkeletonSpec?
@@ -577,7 +587,25 @@ internal class CanvasEditor(
 		if (committed.enabled != enabled) viewModel.setSkeleton(committed.copy(enabled = enabled))
 	}
 
-	fun selectBone(id: String?) { selectedBoneId = id }
+	fun selectBone(id: String?, additive: Boolean = false) {
+		if (!additive || id == null) { selectedBoneId = id; return }
+		val next = if (id in selectedBoneIds) selectedBoneIds - id else selectedBoneIds + id
+		selectedBoneId = id.takeIf { it in next } ?: next.lastOrNull()
+		selectedBoneIds = next
+	}
+
+	fun selectBones(ids: Set<String>, additive: Boolean = false) {
+		val valid = ids.filterTo(linkedSetOf()) { skeletonDraft?.bone(it) != null }
+		val next = if (additive) selectedBoneIds + valid else valid
+		selectedBoneId = next.lastOrNull()
+		selectedBoneIds = next
+	}
+
+	fun transformSelectedBones(dx: Float = 0f, dy: Float = 0f, degrees: Float = 0f, scale: Float = 1f) {
+		skeletonDraft = skeletonDraft?.withBonesTransformed(selectedBoneIds, dx, dy, degrees, scale, transformBoneDescendants)
+	}
+
+	fun restoreSkeletonDraft(spec: io.github.psd2live.core.SkeletonSpec) { if (skeletonDraft != null) skeletonDraft = spec }
 
 	fun renameBone(id: String, name: String) {
 		if (name.isBlank() || name.any(Char::isISOControl)) return
@@ -630,6 +658,7 @@ internal class CanvasEditor(
 
 	fun beginPose(pos: Offset, viewport: CanvasViewport): Boolean {
 		poseDrag = SkeletonPoseTool.hit(posedBones(), pos, viewport)
+		poseDrag?.let { selectedBoneId = it.boneId }
 		if (poseDrag != null) viewModel.beginEditorGesture()
 		return poseDrag != null
 	}
@@ -637,7 +666,8 @@ internal class CanvasEditor(
 	fun dragPose(pos: Offset, viewport: CanvasViewport, ik: Boolean) {
 		val hit = poseDrag ?: return
 		val spec = bakedSkeleton ?: return
-		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), state.parameterValues, ik)
+		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), state.parameterValues,
+			ik = ik, mode = skeletonPoseSubTool)
 		if (values.isNotEmpty()) viewModel.setParameterValues(values)
 	}
 

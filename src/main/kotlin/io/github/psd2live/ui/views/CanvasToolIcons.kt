@@ -26,6 +26,7 @@ import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
 import io.github.psd2live.ui.SkeletonEditSubTool
+import io.github.psd2live.ui.SkeletonPoseSubTool
 import io.github.psd2live.ui.components.drawSingleBoneIcon
 import io.github.psd2live.ui.components.drawBoneIcon
 import org.umamo.runtime.model.VertexGroupKind
@@ -137,6 +138,16 @@ internal fun GlueSubToolIcon(subTool: GlueSubTool, color: Color, size: Dp = 14.d
 @Composable
 internal fun SkeletonEditSubToolIcon(subTool: SkeletonEditSubTool, color: Color, size: Dp = 14.dp) {
     Canvas(Modifier.size(size)) { IconPen(this, color).skeletonEditSubTool(subTool) }
+}
+
+@Composable
+internal fun SkeletonPoseSubToolIcon(subTool: SkeletonPoseSubTool, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) {
+        val pen = IconPen(this, color)
+        if (subTool == SkeletonPoseSubTool.IK) pen.skeletonEditSubTool(SkeletonEditSubTool.EXTRUDE)
+        else if (subTool == SkeletonPoseSubTool.FK) pen.skeletonPose()
+        else { pen.skeletonPose(); pen.dot(14f, 14f, 2f) }
+    }
 }
 
 internal fun DrawScope.drawToolIcon(
