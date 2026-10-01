@@ -1,10 +1,16 @@
-package io.github.psd2live.core.sim
+package io.github.psd2live.tools
 
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PhysicsEngine
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.VertexGroupJournal
-import org.junit.jupiter.api.Assumptions.assumeTrue
+import io.github.psd2live.core.sim.RigSimEdit
+import io.github.psd2live.core.sim.SimAuthoring
+import io.github.psd2live.core.sim.SimBakeResult
+import io.github.psd2live.core.sim.SimBaker
+import io.github.psd2live.core.sim.SimGenerator
+import io.github.psd2live.core.sim.SimKind
+import io.github.psd2live.core.sim.SimScene
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.DrawableId
 import org.umamo.runtime.model.ParameterId
@@ -22,12 +28,12 @@ import kotlin.test.Test
  * Bakes the tml example's back hair (top tenth pinned) at a few settings and plays the reference
  * simulation and the exported model (pendulum + keys) side by side on motion neither the fit nor its
  * held-out check saw: how closely the baked model follows, whether its parameters stall at ±1, and how
- * smooth it is. Slow, so it runs only with PSD2LIVE_BENCH=1; BAKE_CONFIGS picks settings as
+ * smooth it is. Slow, so it runs only with PSD2LIVE_TOOLS=1; PSD2LIVE_BAKE_CONFIGS picks settings as
  * modes:keys,... (default 2:5,2:7,1:5). Results go to standard output.
  */
 class SimBakeBenchmark {
     @Test fun backHair() {
-        assumeTrue(System.getenv("PSD2LIVE_BENCH") == "1", "Set PSD2LIVE_BENCH=1 to run the bake benchmark")
+        requireTools()
         val initial = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
         val puppet = initial.rig.puppet
         val layers = initial.analysis.layers.associateBy { it.source.id.raw }
@@ -40,7 +46,7 @@ class SimBakeBenchmark {
         val pin = VertexGroup("pin", back.id, VertexGroupKind.PIN, FloatArray(world.size / 2) { if (world[it * 2 + 1] > top - (top - bottom) * 0.1f) 1f else 0f })
         val overlay = initial.config.rigEdits.copy(authoringJournal = initial.config.rigEdits.authoringJournal + VertexGroupJournal.encode(pin))
         val grouped = overlay.applyTo(initial.baseRig.puppet)
-        val configs = (System.getenv("BAKE_CONFIGS") ?: "2:5,2:7,1:5").split(",").map { c -> c.split(":").map(String::toInt) }
+        val configs = setting("PSD2LIVE_BAKE_CONFIGS", "2:5,2:7,1:5").split(",").map { c -> c.split(":").map(String::toInt) }
         for ((modes, keys) in configs) {
             val o = SimAuthoring.put(overlay, grouped, RigSimEdit("back", "Back hair", SimKind.HAIR, listOf(back.id.raw), modes = modes, keys = keys, exaggeration = 1f))
             val model = SimAuthoring.unbakedModel(o, initial.baseRig.puppet, "back")

@@ -67,6 +67,36 @@ Notes:
 - On Linux, `./native/package_linux.sh` builds a local launcher package that needs a system JDK 21 (written to `dist/linux-<timestamp>/`); see [native/README.md](../../../native/README.md).
 - There is no separate lint task; code style is `kotlin.code.style=official`.
 
+## Development tools
+
+`src/test/kotlin/io/github/psd2live/tools/` holds development tools for checking results by eye and measuring them. They are written as tests so they can reach the pipeline's internals, and run only with `PSD2LIVE_TOOLS=1`; a plain `./gradlew test` skips them. Outputs go to `build/tools/`.
+
+```bash
+PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.tools.MotionSheetTool.body"
+```
+
+| Tool | What it produces | Output |
+| --- | --- | --- |
+| `MotionSheetTool.motions` | Every preset motion laid out over time, the idle loop, a breath with its difference image, body Z | `motion-sheet/<sample>-*.png` |
+| `MotionSheetTool.body` | Body X × body Y, close-ups of the legs and the upper body, lean, proportion and leg poses, without a skeleton and on the auto skeleton | `motion-sheet/<sample>-{stance,lean,size,legposes}*.png` |
+| `MotionSheetTool.tracking` | Twelve seconds of the pointer circling the canvas slowly, the head and body following with the preview's gains and rates | `motion-frames/<sample>-track/` |
+| `MotionSheetTool.idle` | Twelve seconds of the idle, frame by frame | `motion-frames/<sample>-idle/` |
+| `ModelProfileTool.cmo3` | A `.cmo3`'s parameters, deformer tree (grid axes and bounds), drawables, band motion profile and per-drawable motion under the body parameters, silhouettes over body X × body Y, and its physics groups | `model-profile/<name>.txt`, `.png`, `-physics.txt` |
+| `ModelProfileTool.sample` | The band motion profile of a generated model (without a skeleton and on the auto skeleton), its body layers and auto bones | `model-profile/<sample>.txt` |
+| `SimBakeBenchmark` | Bakes the `tml` back hair at a few settings and compares the simulation with the export on motion the fit never saw | standard output |
+
+| Variable | Effect |
+| --- | --- |
+| `PSD2LIVE_SAMPLE` | Example name (`tml`, `ds`) or a PSD path; `tml` by default |
+| `PSD2LIVE_CMO3` | Input of `ModelProfileTool.cmo3`: a `.cmo3` file or a directory of them |
+| `PSD2LIVE_PROBES` | Parameters the band profile probes, `id=value,...`; the ends of body X, Y and Z by default |
+| `PSD2LIVE_SHEET_PARAM` | Lay the silhouettes out along this parameter instead of body X × body Y |
+| `PSD2LIVE_BONES` | Bone positions correcting the auto skeleton in `MotionSheetTool.body`, `id=headX,headY,tailX,tailY;...` in canvas pixels |
+| `PSD2LIVE_BIND_LEGS` | `1` binds the leg and shoe meshes to the first thigh bone |
+| `PSD2LIVE_ZOOM` | Frame of the leg close-up, `left,top,right,bottom` as shares of the canvas |
+| `PSD2LIVE_VERBOSE` | `1` makes `motions` also print every curve |
+| `PSD2LIVE_BAKE_CONFIGS` | Settings of `SimBakeBenchmark`, `modes:keys,...`; `2:5,2:7,1:5` by default |
+
 ## Code layout
 
 Sources live in `src/main/kotlin/` under two top-level packages:

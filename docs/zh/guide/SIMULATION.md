@@ -114,7 +114,7 @@ tml 示例后发（792 个顶点，顶部十分之一固定），夸张 ×1，�
 - 单元测试里的细长发束（会甩出鞭梢）上，2 模态比 1 模态的 R² 高 0.03 以上（测试下限）；旧求解器上测得一起拟合为 0.66、逐个拟合为 0.60。
 - 拖动时导出的摆幅约为模拟的六成，默认的夸张 ×1.3 把它补回大部分。
 
-耗时在 32 线程的台式机上测得；训练与拟合在多核上并行，核数少时会更慢。上表由 `SimBakeBenchmark` 生成：`PSD2LIVE_BENCH=1 ./gradlew test --tests "*SimBakeBenchmark"`，`BAKE_CONFIGS=1:5,2:5` 指定设置，并输出每个模态的摆幅、占比与压缩边。
+耗时在 32 线程的台式机上测得；训练与拟合在多核上并行，核数少时会更慢。上表由开发工具 `SimBakeBenchmark` 生成：`PSD2LIVE_TOOLS=1 ./gradlew test --tests "*SimBakeBenchmark"`，`PSD2LIVE_BAKE_CONFIGS=1:5,2:5` 指定设置（见[开发工具](DEVELOPMENT.md#开发工具)），并输出每个模态的摆幅、占比与压缩边。
 
 ### 过期
 
