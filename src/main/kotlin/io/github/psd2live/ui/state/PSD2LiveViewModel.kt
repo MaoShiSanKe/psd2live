@@ -5256,6 +5256,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (!pointerActive && kotlin.math.abs(bodyFollowY - followY) < 0.001f) bodyFollowY = followY
 
 		val model = current.previewModel
+		val pausedPhysicsOn = inPreview && !anim && current.generatePhysics && !isMeshOnly &&
+			current.activeWorkspace.pose?.authoringPose != true
 		if (model != null && inPreview && (anim || tracking)) {
 			val liveParams = if (isMeshOnly) {
 				model.rig.puppet.parameters.associate { it.id to it.default }
@@ -5271,7 +5273,9 @@ class PSD2LiveViewModel : AutoCloseable {
 			}
 			val boundedLiveParams = io.github.psd2live.core.boundedPreviewPose(liveParams, model.rig.puppet.parameters)
 			latestLiveParameters = boundedLiveParams
-			if (current.sdkStatus != "ready") {
+			// Paused physics publishes the complete pose below. Publishing the bare pose here
+			// first lets the software canvas alternate between resting and swinging parts.
+			if (current.sdkStatus != "ready" && !pausedPhysicsOn) {
 				updateState { latest ->
 					if (!latest.previewLive) latest
 					else {
@@ -5289,7 +5293,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			}
 		}
 		// 5. Paused, physics still runs, on the pose the user sets: a slider or the pointer's look swings it.
-		stepPausedPhysics(current, model, inPreview && !anim && current.generatePhysics && !isMeshOnly, tracking, dt)
+		stepPausedPhysics(current, model, pausedPhysicsOn, tracking, dt)
 		// 6. The live simulation follows whichever pose the preview now shows.
 		if (inPreview) stepSimulationPreview(current, model, dt)
 	}
