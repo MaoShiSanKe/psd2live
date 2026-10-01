@@ -2890,8 +2890,6 @@ private fun SimulateModeExtras(editor: CanvasEditor, focus: () -> Unit) {
 /** One colour per vertex group kind, shared by the mode strip and the canvas. */
 internal fun vertexGroupKindColor(kind: org.umamo.runtime.model.VertexGroupKind): Color = when (kind) {
     org.umamo.runtime.model.VertexGroupKind.PIN -> Color(0xFFE0564B)
-    org.umamo.runtime.model.VertexGroupKind.COLLIDE -> Color(0xFFE5A23A)
-    org.umamo.runtime.model.VertexGroupKind.COLLIDER -> Color(0xFFD9C640)
     org.umamo.runtime.model.VertexGroupKind.STIFFNESS -> Color(0xFF5B8DEF)
     org.umamo.runtime.model.VertexGroupKind.MASS -> Color(0xFFB07BE0)
     org.umamo.runtime.model.VertexGroupKind.DAMPING -> Color(0xFF3FBCD6)

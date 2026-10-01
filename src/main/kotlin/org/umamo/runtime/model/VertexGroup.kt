@@ -7,10 +7,6 @@ package org.umamo.runtime.model
 enum class VertexGroupKind(val jsonName: String) {
 	/** Held to an anchor that follows the rig; the weight is how firmly, below 1 a soft hold. */
 	PIN("pin"),
-	/** Simulated vertices that collide (a skirt's side edges, hair tips). */
-	COLLIDE("collide"),
-	/** Vertices whose triangles push simulated vertices away, following the rig as it deforms (legs, face). */
-	COLLIDER("collider"),
 	/** Stretch and bend stiffness multiplier. */
 	STIFFNESS("stiffness"),
 	/** Mass multiplier: heavier hems and tips lag and overshoot more. */
@@ -23,6 +19,9 @@ enum class VertexGroupKind(val jsonName: String) {
 	GOAL("goal");
 
 	companion object {
+		/** Kinds older projects may still name; their groups are dropped on load. */
+		val RETIRED = setOf("collide", "collider")
+
 		fun parse(text: String): VertexGroupKind = entries.firstOrNull { it.jsonName.equals(text, ignoreCase = true) || it.name.equals(text, ignoreCase = true) }
 			?: throw IllegalArgumentException("Unknown vertex group kind: $text (${entries.joinToString { it.jsonName }})")
 	}

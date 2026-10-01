@@ -17,8 +17,7 @@ import kotlin.math.pow
  * - every vertex's own evaluated position is its goal (the rest shape carried by the rig);
  * - a PIN-group vertex is anchored on that same position;
  * - a vertex glued with role PIN is anchored on its partner's evaluated position, the other mesh's
- *   actual deformation;
- * - collider meshes take their evaluated vertices.
+ *   actual deformation.
  */
 
 /** Where particle anchors come from: the particle's own rig position, or another mesh's vertex. */
@@ -31,7 +30,6 @@ class SimScene private constructor(
     val offsets: Map<DrawableId, Int>,
     val vertexCounts: Map<DrawableId, Int>,
     private val anchors: Array<Anchor?>,
-    private val colliderMeshes: List<Pair<DrawableId, TriangleRegionCollider>>,
     /** Why a part of the setup was skipped; shown in the panel. */
     val notes: List<String>,
 ) {
@@ -49,7 +47,6 @@ class SimScene private constructor(
     fun drive(model: PuppetModel, pose: Map<ParameterId, Float>, dt: Float): Boolean {
         val world = evaluator.evaluate(model, pose).worldPositions
         if (!place(world)) return false
-        for ((id, collider) in colliderMeshes) world[id]?.let { collider.update(it, dt) }
         solver.step(dt)
         return true
     }
@@ -67,7 +64,6 @@ class SimScene private constructor(
         frameRest = FloatArray(frameParticles.size * 2) { if (it % 2 == 0) state.anchorX[frameParticles[it / 2]] else state.anchorY[frameParticles[it / 2]] }
         state.frameAngle = 0f
         state.settle()
-        for ((id, collider) in colliderMeshes) world[id]?.let { collider.update(it, 1f) }
     }
 
     /**
@@ -218,8 +214,6 @@ class SimScene private constructor(
             val stiffnessWeight = perVertex(VertexGroupKind.STIFFNESS, 1f)
             val goalWeight = perVertex(VertexGroupKind.GOAL, 1f)
             val pin = perVertex(VertexGroupKind.PIN, 0f)
-            val collideGroup = offsets.keys.any { group(it, VertexGroupKind.COLLIDE) != null }
-            val collide = perVertex(VertexGroupKind.COLLIDE, if (collideGroup) 0f else 1f)
             for (i in 0 until total) {
                 state.invMass[i] = 1f / (m.mass * massWeight[i].coerceAtLeast(0.1f))
                 state.damping[i] = m.damping * dampingWeight[i]
@@ -317,22 +311,6 @@ class SimScene private constructor(
             }
 
             val goal = FloatArray(total) { goalCompliance(m.goal * goalWeight[it]) }
-            val colliderMeshes = edit.colliders.mapNotNull { ref ->
-                val drawable = model.drawables.firstOrNull { it.id.raw == ref.drawableId }
-                val mesh = drawable?.mesh
-                if (mesh == null) { notes += "Collider ${ref.drawableId} not found"; return@mapNotNull null }
-                val weights = ref.group?.let { name ->
-                    model.vertexGroups.firstOrNull { it.drawableId == drawable.id && it.name == name }?.weights
-                        ?: run { notes += "Collider group $name not found on ${ref.drawableId}"; return@mapNotNull null }
-                }
-                val triangles = if (weights == null) mesh.indices else {
-                    (0 until mesh.indices.size / 3).filter { t -> (0..2).all { weights.getOrElse(mesh.indices[t * 3 + it]) { 0f } >= 0.5f } }
-                        .flatMap { t -> listOf(mesh.indices[t * 3], mesh.indices[t * 3 + 1], mesh.indices[t * 3 + 2]) }.toIntArray()
-                }
-                if (triangles.isEmpty()) { notes += "Collider ${ref.drawableId} has no triangle fully in its group"; null }
-                else drawable.id to TriangleRegionCollider(triangles, ref.margin)
-            }
-
             state.reset(rest)
             val solver = XpbdSolver(
                 state,
@@ -342,11 +320,9 @@ class SimScene private constructor(
                 longRange = LongRangeConstraints(lraParticle.toIntArray(), lraRoot.toIntArray(), lraDistance.toFloatArray()),
                 pinWeight = pin,
                 goalCompliance = goal,
-                colliding = BooleanArray(total) { collide[it] >= 0.5f },
-                colliders = colliderMeshes.map { it.second },
                 settings = settings,
             )
-            return SimScene(edit, solver, offsets, counts, anchors, colliderMeshes, notes)
+            return SimScene(edit, solver, offsets, counts, anchors, notes)
         }
     }
 }

@@ -6,7 +6,6 @@ import io.github.psd2live.core.RigAuthoringJournal
 import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.VertexGroupJournal
-import io.github.psd2live.core.outlineEdges
 import io.github.psd2live.i18n.tr
 import kotlinx.serialization.json.*
 import org.umamo.format.art.LayerRaster
@@ -48,7 +47,6 @@ object ModelPresets {
     /** The group each preset writes for a kind, unless the simulation already names one of its own. */
     val GROUP_NAMES = mapOf(
         VertexGroupKind.PIN to "preset_pin",
-        VertexGroupKind.COLLIDE to "preset_collide",
         VertexGroupKind.MASS to "preset_mass",
         VertexGroupKind.WIND to "preset_wind",
     )
@@ -182,26 +180,23 @@ object ModelPresets {
     }
 
     /** Per-vertex weights of one mesh; a null group is not written. */
-    class PresetWeights(val pin: FloatArray, val collide: FloatArray? = null, val mass: FloatArray? = null, val wind: FloatArray? = null) {
+    class PresetWeights(val pin: FloatArray, val mass: FloatArray? = null, val wind: FloatArray? = null) {
         fun groups(): Map<VertexGroupKind, FloatArray> = buildMap {
-            put(VertexGroupKind.PIN, pin); collide?.let { put(VertexGroupKind.COLLIDE, it) }
+            put(VertexGroupKind.PIN, pin)
             mass?.let { put(VertexGroupKind.MASS, it) }; wind?.let { put(VertexGroupKind.WIND, it) }
         }
     }
 
     /**
      * Garment weights from [profile], with [canvas] the mesh's rest vertices in canvas px.
-     * - Skirt: pinned above the waist and released over the next 30% toward the hem; only the side edges
-     *   of the lower half collide, so the waistband never fights the legs and the open hem lets them move
-     *   freely inside; mass and wind grow to the hem.
+     * - Skirt: pinned above the waist and released over the next 30% toward the hem; mass and wind grow
+     *   to the hem.
      * - Trousers: the hips hold (pin 1 to 0.6 at the crotch); below it each leg, split at the seam, releases
-     *   over its own length, and the sides of its lower part collide and swing on their own.
+     *   over its own length and swings on its own.
      */
     fun garmentWeights(mesh: DrawableMesh, canvas: FloatArray, profile: GarmentProfile): PresetWeights {
         val n = mesh.vertexCount
-        val outline = sideVertices(mesh, canvas, (profile.hem - profile.waist) * 0.2f)
         val pin = FloatArray(n)
-        val collide = FloatArray(n)
         val mass = FloatArray(n)
         val wind = FloatArray(n)
         val crotch = profile.crotch
@@ -210,11 +205,10 @@ object ModelPresets {
             for (v in 0 until n) {
                 val d = (canvas[v * 2 + 1] - profile.waist) / span
                 pin[v] = 1f - smoothstep(0.02f, 0.3f, d)
-                collide[v] = outline[v] * smoothstep(0.25f, 0.6f, d)
                 mass[v] = 0.6f + 0.4f * smoothstep(0f, 1f, d)
                 wind[v] = smoothstep(0.1f, 1f, d)
             }
-            return PresetWeights(pin, collide, mass, wind)
+            return PresetWeights(pin, mass, wind)
         }
         val leg = IntArray(n) { v -> if (canvas[v * 2 + 1] < crotch) -1 else if (canvas[v * 2] < profile.seamX(canvas[v * 2 + 1])) 0 else 1 }
         val legHem = FloatArray(2) { side -> (0 until n).filter { leg[it] == side }.maxOfOrNull { canvas[it * 2 + 1] } ?: profile.hem }
@@ -228,48 +222,10 @@ object ModelPresets {
             }
             val t = (y - crotch) / (legHem[leg[v]] - crotch).coerceAtLeast(1f)
             pin[v] = 0.6f * (1f - smoothstep(0f, 0.7f, t))
-            collide[v] = outline[v] * smoothstep(0.5f, 0.9f, t)
             mass[v] = 0.6f + 0.4f * smoothstep(0f, 1f, t)
             wind[v] = 0.6f * smoothstep(0.2f, 1f, t)
         }
-        return PresetWeights(pin, collide, mass, wind)
-    }
-
-    /**
-     * How much each vertex lies on a side of the mesh outline: 1 on an outline edge running up and down,
-     * 0 on one running across like the hem or the waistband, and 0 off the outline. A side is a chain of
-     * such edges at least [minSpan] px tall; the short upright bits of a scalloped or pleated hem are hem.
-     */
-    internal fun sideVertices(mesh: DrawableMesh, canvas: FloatArray, minSpan: Float): FloatArray {
-        val edges = outlineEdges(mesh.indices).mapNotNull { edge ->
-            val a = edge.endpointLow
-            val b = edge.endpointHigh
-            val dx = canvas[b * 2] - canvas[a * 2]
-            val dy = canvas[b * 2 + 1] - canvas[a * 2 + 1]
-            val length = kotlin.math.hypot(dx, dy)
-            if (length <= 0f) null else Triple(a, b, smoothstep(0.35f, 0.7f, kotlin.math.abs(dy) / length))
-        }
-        val parent = IntArray(mesh.vertexCount) { it }
-        fun root(v: Int): Int {
-            var r = v
-            while (parent[r] != r) { parent[r] = parent[parent[r]]; r = parent[r] }
-            return r
-        }
-        val upright = BooleanArray(mesh.vertexCount)
-        for ((a, b, s) in edges) if (s >= 0.5f) { upright[a] = true; upright[b] = true; parent[root(a)] = root(b) }
-        val top = HashMap<Int, Float>()
-        val bottom = HashMap<Int, Float>()
-        for (v in 0 until mesh.vertexCount) if (upright[v]) {
-            val y = canvas[v * 2 + 1]
-            top.merge(root(v), y, ::minOf); bottom.merge(root(v), y, ::maxOf)
-        }
-        fun onSide(v: Int) = upright[v] && bottom.getValue(root(v)) - top.getValue(root(v)) >= minSpan
-        val side = FloatArray(mesh.vertexCount)
-        for ((a, b, s) in edges) if (onSide(a) || onSide(b)) {
-            side[a] = maxOf(side[a], s)
-            side[b] = maxOf(side[b], s)
-        }
-        return side
+        return PresetWeights(pin, mass, wind)
     }
 
     /**
@@ -342,37 +298,23 @@ object ModelPresets {
                 val id = if (front) FRONT_HAIR_SIM else BACK_HAIR_SIM
                 for (drawable in targets) writer.weights(drawable, id, hairWeights(drawable, canvas, front))
                 writer.simulation(id, tr(if (front) "presets.sim.frontHair" else "presets.sim.backHair"), SimKind.HAIR,
-                    targets.map { it.id.raw }, emptyList(), SimMaterial.preset(SimKind.HAIR), keepOthers = layers.isNotEmpty())
+                    targets.map { it.id.raw }, SimMaterial.preset(SimKind.HAIR), keepOthers = layers.isNotEmpty())
             }
             Preset.CLOTHING -> {
                 val targets = candidates.filter { it.second.semantic.tag == SemanticTag.BOTTOMWEAR }
                 require(targets.isNotEmpty()) { "No bottomwear meshes" }
-                val legs = model.drawables.filter { drawable ->
-                    val tag = layerById[layerIdByDrawableId[drawable.id.raw] ?: drawable.id.raw]?.semantic?.tag
-                    drawable.mesh != null && canvas[drawable.id.raw] != null && tag in setOf(SemanticTag.LEGWEAR, SemanticTag.FOOTWEAR)
-                }
                 for ((garment, members) in targets.groupBy { profileOf(it.second).garment }) {
                     val skirt = garment == Garment.SKIRT
                     val id = if (skirt) SKIRT_SIM else TROUSERS_SIM
-                    val reached = HashSet<String>()
                     for ((drawable, layer) in members) {
                         val profile = profileOf(layer)
                         garments[drawable.id.raw] = profile
-                        val positions = canvas.getValue(drawable.id.raw)
-                        val weights = garmentWeights(drawable.mesh!!, positions, profile)
-                        if (skirt) weights.collide?.let { collide ->
-                            clearInside(collide, positions, legs, canvas)
-                            reached += enclosed(collide, positions, legs, canvas)
-                        }
-                        writer.weights(drawable, id, weights)
+                        writer.weights(drawable, id, garmentWeights(drawable.mesh!!, canvas.getValue(drawable.id.raw), profile))
                     }
-                    // A leg outside the skirt only costs the bake static axes; it could never push.
-                    val colliders = legs.filter { it.id.raw in reached }.map { SimColliderRef(it.id.raw) }
-                    // Trousers wrap the legs, so leg colliders would only push them apart from inside.
                     val material = if (skirt) SimMaterial.preset(SimKind.CLOTH)
                         else SimMaterial.preset(SimKind.CLOTH).copy(bend = 0.5f, goal = 0.25f, slack = 0.015f)
                     writer.simulation(id, tr(if (skirt) "presets.sim.skirt" else "presets.sim.trousers"), SimKind.CLOTH,
-                        members.map { it.first.id.raw }, if (skirt) colliders else emptyList(), material, keepOthers = layers.isNotEmpty())
+                        members.map { it.first.id.raw }, material, keepOthers = layers.isNotEmpty())
                 }
             }
             Preset.AUTO_WEIGHTS -> {
@@ -395,49 +337,6 @@ object ModelPresets {
             }
         }
         return Applied(writer.overlay, writer.simulationIds.toList(), garments)
-    }
-
-    /**
-     * Zeroes [collide] for vertices that already lie inside a collider at rest. In 2D the legs are drawn
-     * under the skirt, so its hem overlaps them from the start and would be shoved out at the first step;
-     * only the sides that hang clear of the legs can meet them.
-     */
-    internal fun clearInside(collide: FloatArray, positions: FloatArray, colliders: List<Drawable>, canvas: Map<String, FloatArray>) {
-        for (collider in colliders) {
-            val mesh = collider.mesh ?: continue
-            val points = canvas[collider.id.raw] ?: continue
-            for (v in collide.indices) {
-                if (collide[v] == 0f) continue
-                val x = positions[v * 2]
-                val y = positions[v * 2 + 1]
-                for (t in 0 until mesh.indices.size / 3) {
-                    if (inTriangle(points, mesh.indices[t * 3], mesh.indices[t * 3 + 1], mesh.indices[t * 3 + 2], x, y)) { collide[v] = 0f; break }
-                }
-            }
-        }
-    }
-
-    /**
-     * The [colliders] that reach in between a garment's colliding sides at rest: the legs inside a skirt's
-     * opening, which its sides close on when they swing in.
-     */
-    private fun enclosed(collide: FloatArray, positions: FloatArray, colliders: List<Drawable>, canvas: Map<String, FloatArray>): Set<String> {
-        val sides = collide.indices.filter { collide[it] > 0f }
-        if (sides.isEmpty()) return emptySet()
-        val left = sides.minOf { positions[it * 2] }
-        val right = sides.maxOf { positions[it * 2] }
-        val top = sides.minOf { positions[it * 2 + 1] }
-        val bottom = sides.maxOf { positions[it * 2 + 1] }
-        return colliders.filter { collider ->
-            val points = canvas.getValue(collider.id.raw)
-            (0 until points.size / 2).any { u -> points[u * 2] in left..right && points[u * 2 + 1] in top..bottom }
-        }.mapTo(LinkedHashSet()) { it.id.raw }
-    }
-
-    private fun inTriangle(p: FloatArray, a: Int, b: Int, c: Int, x: Float, y: Float): Boolean {
-        fun side(i: Int, j: Int) = (p[j * 2] - p[i * 2]) * (y - p[i * 2 + 1]) - (p[j * 2 + 1] - p[i * 2 + 1]) * (x - p[i * 2])
-        val d1 = side(a, b); val d2 = side(b, c); val d3 = side(c, a)
-        return !((d1 < 0f || d2 < 0f || d3 < 0f) && (d1 > 0f || d2 > 0f || d3 > 0f))
     }
 
     private fun hairWeights(drawable: Drawable, canvas: Map<String, FloatArray>, front: Boolean) =
@@ -473,7 +372,7 @@ object ModelPresets {
          * Creates or updates preset simulation [id] on [targets]. A target in another preset simulation moves
          * here (a garment now read as the other type); one in a simulation of the user's own is refused.
          */
-        fun simulation(id: String, name: String, kind: SimKind, targets: List<String>, colliders: List<SimColliderRef>,
+        fun simulation(id: String, name: String, kind: SimKind, targets: List<String>,
             material: SimMaterial, keepOthers: Boolean) {
             for (other in overlay.simEdits.filter { it.id != id }) {
                 val shared = other.targets.filter { it in targets }
@@ -486,9 +385,8 @@ object ModelPresets {
             val previous = overlay.simEdits.firstOrNull { it.id == id }
             val allTargets = if (keepOthers && previous != null) (previous.targets + targets).distinct() else targets
             val groups = previous?.groups.orEmpty() + written[id].orEmpty()
-            val allColliders = ((previous?.colliders.orEmpty()) + colliders).distinctBy { it.drawableId }.filter { it.drawableId !in allTargets }
-            val edit = previous?.copy(targets = allTargets, groups = groups, colliders = allColliders, enabled = true)
-                ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups, colliders = allColliders)
+            val edit = previous?.copy(targets = allTargets, groups = groups, enabled = true)
+                ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups)
             overlay = SimAuthoring.put(overlay, model, edit)
             simulationIds += id
         }

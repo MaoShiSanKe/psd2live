@@ -360,7 +360,6 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         }))
         put("groups", buildJsonObject { put("type", "object"); put("additionalProperties", string()) })
         put("glue_roles", buildJsonObject { put("type", "object"); put("additionalProperties", choices("ignore", "pin", "constraint")) })
-        put("colliders", arraySchema(objectSchema(buildJsonObject { put("mesh", string()); put("group", string()); put("margin", number()) }, listOf("mesh")), 0, 32))
         put("inputs", arraySchema(objectSchema(buildJsonObject {
             put("parameter", string()); put("weight", number()); put("type", choices("x", "angle")); put("reflect", boolean())
         }, listOf("parameter")), 0, 16))
@@ -370,9 +369,9 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         put("hold", number()); put("release", number()); put("wind", vector(2))
     }
     tool("simulation", "2D cloth and hair simulation on ArtMeshes. It runs in the editor only; bake is what exports. put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend, goal = spring back to the drawn shape, slack = long-range give) except mass and damping (1/s). " +
-        "Pins come from the PIN vertex group; a glue is never a pin unless glue_roles sets its key (meshA|meshB from inspect scope=simulations) to pin (follow the other mesh) or constraint (both sides simulated). groups names the vertex group to use per kind. colliders are meshes whose COLLIDER group (or whole mesh) pushes COLLIDE vertices out, following the rig. " +
+        "Pins come from the PIN vertex group; a glue is never a pin unless glue_roles sets its key (meshA|meshB from inspect scope=simulations) to pin (follow the other mesh) or constraint (both sides simulated). groups names the vertex group to use per kind. " +
         "inputs are the parameters that shake it (empty: head and body angles). simulate runs it (settle, each input held at max for hold s then released, optional wind [x, y] px/s² with y up) and reports peaks, rest drift, stretch and setup notes. " +
-        "bake (2-5 s) reduces it to what Cubism plays: static_inputs (default: parameters that move a collider) get exact corrections on their own axes, and the remaining motion becomes modes (1..3, default 2: the swing, then the bend and compression it leaves, each fitted over what the ones above leave) parameters ParamSim<id>_<k> (-30..30) with keys (3..9) each, driven by one pendulum PhysicsSim_<id> fitted over dragging, shaking and flinging the inputs; " +
+        "bake (2-5 s) reduces it to what Cubism plays: static_inputs (default none) get exact corrections on their own axes, and the remaining motion becomes modes (1..3, default 2: the swing, then the bend and compression it leaves, each fitted over what the ones above leave) parameters ParamSim<id>_<k> (-30..30) with keys (3..9) each, driven by one pendulum PhysicsSim_<id> fitted over dragging, shaking and flinging the inputs; " +
         "the parameters span the hardest of that without reaching their ends. It reports, on motion the fit never saw, R², the 95th-percentile error in px, how much of their range the modes use, the share of frames at an end and the jerk against the simulation (1 = as smooth). " +
         "exaggeration (1..2, default 1.3) scales the mode swings as they are written back, without baking again. blend_shapes true writes the modes as blend shapes where the Cubism target has them (their keys add to the keyforms instead of multiplying them), false as keyform axes; null (default) uses blend shapes only past 64 keyforms on a target. " +
         "With auto_bake (default true) every put bakes again in the same step and reports the bake or bake_error; otherwise, or after changing meshes or weights, the bake stays in place but stale (inspect shows it): bake again. clear_bake removes it. delete removes the simulation.",
@@ -390,8 +389,8 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
     tool("model_preset", "Model presets, each one undoable step that ends baked. front_hair / back_hair: one hair simulation (preset_front_hair / preset_back_hair) over every hair mesh of that kind, " +
         "each strand pinned at its own root; the legacy hair sway (ParamHairFront/Back, its warp and pendulum) is removed for that hair. classic_front_hair / classic_back_hair undo that: the preset simulation goes and the legacy sway returns. " +
         "clothing: reads each bottomwear layer as a skirt or trousers (name first, then the alpha silhouette: a gap between legs from the crotch to the hem), finds the waist, crotch and hem, " +
-        "and writes preset_pin (waist held, hem free; trousers per leg), preset_collide (skirt sides and hem; trouser hems), preset_mass and preset_wind (growing to the hem); " +
-        "skirts become preset_skirt with the leg and foot meshes as colliders, trousers preset_trousers. auto_weights recomputes those groups for the given layers, or every simulated mesh, and bakes the simulations they feed. " +
+        "and writes preset_pin (waist held, hem free; trousers per leg), preset_mass and preset_wind (growing to the hem); " +
+        "skirts become preset_skirt, trousers preset_trousers. auto_weights recomputes those groups for the given layers, or every simulated mesh, and bakes the simulations they feed. " +
         "layers narrows a preset to those layer ids; omitted applies it to every recognized part. A mesh in a simulation of the user's own is refused. Reports the garments read and each bake.",
         buildJsonObject {
             put("preset", choices("front_hair", "back_hair", "clothing", "auto_weights", "classic_front_hair", "classic_back_hair")); put("state", string())
@@ -404,11 +403,11 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                 .let { (result, report) -> JsonObject(result.compact() + report) }
         }
     }
-    tool("vertex_group", "Editor-only per-vertex 0..1 weights on an ArtMesh that the simulation reads (never exported). kind: pin, collide, collider, stiffness, mass, damping, wind, goal. " +
+    tool("vertex_group", "Editor-only per-vertex 0..1 weights on an ArtMesh that the simulation reads (never exported). kind: pin, stiffness, mass, damping, wind, goal. " +
         "rule: fill (every vertex value), outline (outline vertices value), gradient (along from->to canvas px, start at from to end at to), glue (vertices glued to another mesh take their glue weight x value), region (inside rect [x0, y0, x1, y1] canvas px). " +
         "mode combines with the existing group: replace (default), max, min, add, subtract. delete=true removes the group. inspect scope=vertex_groups lists groups.",
         buildJsonObject {
-            put("state", string()); put("target", string()); put("name", string()); put("kind", choices("pin", "collide", "collider", "stiffness", "mass", "damping", "wind", "goal"))
+            put("state", string()); put("target", string()); put("name", string()); put("kind", choices("pin", "stiffness", "mass", "damping", "wind", "goal"))
             put("rule", choices("fill", "outline", "gradient", "glue", "region")); put("value", number())
             put("from", vector(2)); put("to", vector(2)); put("start", number()); put("end", number()); put("rect", vector(4))
             put("mode", choices("replace", "max", "min", "add", "subtract")); put("delete", boolean())

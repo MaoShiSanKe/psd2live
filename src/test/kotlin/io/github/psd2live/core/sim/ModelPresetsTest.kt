@@ -100,14 +100,6 @@ class ModelPresetsTest {
         val hemRow = (0 until n).filter { canvas[it * 2 + 1] == 120f }
         assertTrue(topRow.all { weights.pin[it] == 1f }, "waist pinned")
         assertTrue(hemRow.all { weights.pin[it] == 0f }, "hem free")
-        val collide = assertNotNull(weights.collide)
-        assertTrue(topRow.all { collide[it] == 0f }, "the waistband never collides")
-        val lowerSides = (0 until n).filter { (canvas[it * 2] == 5f || canvas[it * 2] == 115f) && canvas[it * 2 + 1] >= 80f }
-        assertTrue(lowerSides.isNotEmpty() && lowerSides.all { collide[it] > 0.9f }, "the lower sides collide")
-        val openHem = hemRow.filter { canvas[it * 2] in 6f..114f }
-        assertTrue(openHem.isNotEmpty() && openHem.all { collide[it] == 0f }, "the hem stays open for the legs")
-        val interior = (0 until n).filter { canvas[it * 2] in 6f..114f && canvas[it * 2 + 1] in 1f..119f }
-        assertTrue(interior.isNotEmpty() && interior.all { collide[it] == 0f }, "only outline vertices collide")
         assertTrue(hemRow.all { weights.wind!![it] == 1f && weights.mass!![it] == 1f })
         assertTrue(topRow.all { weights.wind!![it] == 0f && weights.mass!![it] == 0.6f })
     }
@@ -129,7 +121,7 @@ class ModelPresetsTest {
             assertTrue(hem.all { weights.pin[it] == 0f && abs(weights.wind!![it] - 0.6f) < 1e-4f && weights.mass!![it] == 1f }, "each leg's own hem is free")
         }
         val hips = (0 until n).filter { canvas[it * 2 + 1] < 40f }
-        assertTrue(hips.all { weights.pin[it] >= 0.6f && weights.collide!![it] == 0f }, "the hips hold")
+        assertTrue(hips.all { weights.pin[it] >= 0.6f }, "the hips hold")
     }
 
     @Test fun eachStrandIsRootedAtItsOwnTop() {

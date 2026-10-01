@@ -29,13 +29,15 @@ internal object VertexGroupJournal {
         val drawableId = meshTarget(command)
         val name = command.getValue("name").jsonPrimitive.content
         if (command.getValue("op").jsonPrimitive.content == DELETE) {
-            require(model.vertexGroups.any { it.drawableId == drawableId && it.name == name }) { "Vertex group not found: $name" }
+            // A retired group was never loaded, so its delete has nothing to remove.
             return model.copy(vertexGroups = model.vertexGroups.filterNot { it.drawableId == drawableId && it.name == name })
         }
+        val kindName = command.getValue("kind").jsonPrimitive.content
+        if (kindName.lowercase() in VertexGroupKind.RETIRED) return model
         val mesh = requireNotNull(model.drawables.singleOrNull { it.id == drawableId }?.mesh) { "Mesh not found: ${drawableId.raw}" }
         val weights = command.getValue("weights").jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
         require(weights.size == mesh.vertexCount) { "Vertex group has ${weights.size} weights for ${mesh.vertexCount} vertices" }
-        val kind = VertexGroupKind.parse(command.getValue("kind").jsonPrimitive.content)
+        val kind = VertexGroupKind.parse(kindName)
         val group = VertexGroup(name, drawableId, kind, weights)
         val others = model.vertexGroups.filterNot { it.drawableId == drawableId && it.name == name }
         return model.copy(vertexGroups = others + group)
