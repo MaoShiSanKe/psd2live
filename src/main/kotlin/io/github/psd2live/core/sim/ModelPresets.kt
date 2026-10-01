@@ -6,7 +6,7 @@ import io.github.psd2live.core.RigAuthoringJournal
 import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.VertexGroupJournal
-import io.github.psd2live.core.outlineVertices
+import io.github.psd2live.core.outlineEdges
 import io.github.psd2live.i18n.tr
 import kotlinx.serialization.json.*
 import org.umamo.format.art.LayerRaster
@@ -191,14 +191,15 @@ object ModelPresets {
 
     /**
      * Garment weights from [profile], with [canvas] the mesh's rest vertices in canvas px.
-     * - Skirt: pinned above the waist and released over the next 30% toward the hem; only outline vertices
-     *   of the lower half collide, so the waistband never fights the legs; mass and wind grow to the hem.
+     * - Skirt: pinned above the waist and released over the next 30% toward the hem; only the side edges
+     *   of the lower half collide, so the waistband never fights the legs and the open hem lets them move
+     *   freely inside; mass and wind grow to the hem.
      * - Trousers: the hips hold (pin 1 to 0.6 at the crotch); below it each leg, split at the seam, releases
-     *   over its own length, and its hem collides and swings on its own.
+     *   over its own length, and the sides of its lower part collide and swing on their own.
      */
     fun garmentWeights(mesh: DrawableMesh, canvas: FloatArray, profile: GarmentProfile): PresetWeights {
         val n = mesh.vertexCount
-        val outline = outlineVertices(mesh.indices, n)
+        val outline = sideVertices(mesh, canvas, (profile.hem - profile.waist) * 0.2f)
         val pin = FloatArray(n)
         val collide = FloatArray(n)
         val mass = FloatArray(n)
@@ -209,7 +210,7 @@ object ModelPresets {
             for (v in 0 until n) {
                 val d = (canvas[v * 2 + 1] - profile.waist) / span
                 pin[v] = 1f - smoothstep(0.02f, 0.3f, d)
-                collide[v] = if (v in outline) smoothstep(0.25f, 0.6f, d) else 0f
+                collide[v] = outline[v] * smoothstep(0.25f, 0.6f, d)
                 mass[v] = 0.6f + 0.4f * smoothstep(0f, 1f, d)
                 wind[v] = smoothstep(0.1f, 1f, d)
             }
@@ -227,11 +228,48 @@ object ModelPresets {
             }
             val t = (y - crotch) / (legHem[leg[v]] - crotch).coerceAtLeast(1f)
             pin[v] = 0.6f * (1f - smoothstep(0f, 0.7f, t))
-            collide[v] = if (v in outline) smoothstep(0.5f, 0.9f, t) else 0f
+            collide[v] = outline[v] * smoothstep(0.5f, 0.9f, t)
             mass[v] = 0.6f + 0.4f * smoothstep(0f, 1f, t)
             wind[v] = 0.6f * smoothstep(0.2f, 1f, t)
         }
         return PresetWeights(pin, collide, mass, wind)
+    }
+
+    /**
+     * How much each vertex lies on a side of the mesh outline: 1 on an outline edge running up and down,
+     * 0 on one running across like the hem or the waistband, and 0 off the outline. A side is a chain of
+     * such edges at least [minSpan] px tall; the short upright bits of a scalloped or pleated hem are hem.
+     */
+    internal fun sideVertices(mesh: DrawableMesh, canvas: FloatArray, minSpan: Float): FloatArray {
+        val edges = outlineEdges(mesh.indices).mapNotNull { edge ->
+            val a = edge.endpointLow
+            val b = edge.endpointHigh
+            val dx = canvas[b * 2] - canvas[a * 2]
+            val dy = canvas[b * 2 + 1] - canvas[a * 2 + 1]
+            val length = kotlin.math.hypot(dx, dy)
+            if (length <= 0f) null else Triple(a, b, smoothstep(0.35f, 0.7f, kotlin.math.abs(dy) / length))
+        }
+        val parent = IntArray(mesh.vertexCount) { it }
+        fun root(v: Int): Int {
+            var r = v
+            while (parent[r] != r) { parent[r] = parent[parent[r]]; r = parent[r] }
+            return r
+        }
+        val upright = BooleanArray(mesh.vertexCount)
+        for ((a, b, s) in edges) if (s >= 0.5f) { upright[a] = true; upright[b] = true; parent[root(a)] = root(b) }
+        val top = HashMap<Int, Float>()
+        val bottom = HashMap<Int, Float>()
+        for (v in 0 until mesh.vertexCount) if (upright[v]) {
+            val y = canvas[v * 2 + 1]
+            top.merge(root(v), y, ::minOf); bottom.merge(root(v), y, ::maxOf)
+        }
+        fun onSide(v: Int) = upright[v] && bottom.getValue(root(v)) - top.getValue(root(v)) >= minSpan
+        val side = FloatArray(mesh.vertexCount)
+        for ((a, b, s) in edges) if (onSide(a) || onSide(b)) {
+            side[a] = maxOf(side[a], s)
+            side[b] = maxOf(side[b], s)
+        }
+        return side
     }
 
     /**
@@ -324,11 +362,11 @@ object ModelPresets {
                         val weights = garmentWeights(drawable.mesh!!, positions, profile)
                         if (skirt) weights.collide?.let { collide ->
                             clearInside(collide, positions, legs, canvas)
-                            reached += reachable(collide, positions, legs, canvas, (profile.hem - profile.top) * 0.15f)
+                            reached += enclosed(collide, positions, legs, canvas)
                         }
                         writer.weights(drawable, id, weights)
                     }
-                    // A leg out of the skirt's reach only costs the bake static axes; it could never push.
+                    // A leg outside the skirt only costs the bake static axes; it could never push.
                     val colliders = legs.filter { it.id.raw in reached }.map { SimColliderRef(it.id.raw) }
                     // Trousers wrap the legs, so leg colliders would only push them apart from inside.
                     val material = if (skirt) SimMaterial.preset(SimKind.CLOTH)
@@ -379,16 +417,22 @@ object ModelPresets {
         }
     }
 
-    /** The [colliders] some colliding vertex of a garment comes within [reach] px of, at rest. */
-    private fun reachable(collide: FloatArray, positions: FloatArray, colliders: List<Drawable>, canvas: Map<String, FloatArray>, reach: Float): Set<String> =
-        colliders.filterTo(LinkedHashSet()) { collider ->
+    /**
+     * The [colliders] that reach in between a garment's colliding sides at rest: the legs inside a skirt's
+     * opening, which its sides close on when they swing in.
+     */
+    private fun enclosed(collide: FloatArray, positions: FloatArray, colliders: List<Drawable>, canvas: Map<String, FloatArray>): Set<String> {
+        val sides = collide.indices.filter { collide[it] > 0f }
+        if (sides.isEmpty()) return emptySet()
+        val left = sides.minOf { positions[it * 2] }
+        val right = sides.maxOf { positions[it * 2] }
+        val top = sides.minOf { positions[it * 2 + 1] }
+        val bottom = sides.maxOf { positions[it * 2 + 1] }
+        return colliders.filter { collider ->
             val points = canvas.getValue(collider.id.raw)
-            collide.indices.any { v ->
-                collide[v] > 0f && (0 until points.size / 2).any { u ->
-                    kotlin.math.hypot(positions[v * 2] - points[u * 2], positions[v * 2 + 1] - points[u * 2 + 1]) <= reach
-                }
-            }
+            (0 until points.size / 2).any { u -> points[u * 2] in left..right && points[u * 2 + 1] in top..bottom }
         }.mapTo(LinkedHashSet()) { it.id.raw }
+    }
 
     private fun inTriangle(p: FloatArray, a: Int, b: Int, c: Int, x: Float, y: Float): Boolean {
         fun side(i: Int, j: Int) = (p[j * 2] - p[i * 2]) * (y - p[i * 2 + 1]) - (p[j * 2 + 1] - p[i * 2 + 1]) * (x - p[i * 2])
