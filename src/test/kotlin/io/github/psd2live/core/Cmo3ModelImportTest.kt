@@ -1,5 +1,7 @@
 package io.github.psd2live.core
 
+import org.umamo.edit.withParametersSyncedFromTree
+
 import io.github.psd2live.agent.AgentWorkspaceDocument
 import io.github.psd2live.agent.AgentWorkspaceStore
 import io.github.psd2live.agent.ViewModelAgentWorkspace
@@ -127,7 +129,7 @@ class Cmo3ModelImportTest {
             val input = Files.readAllBytes(Path.of("examples/$name/moc3-cmo3-output/$name.cmo3"))
             val expected = Cmo3ModelImport.read(input).puppet
             val imported = preview(input)
-            assertEquals(expected.parameters.map { it.id }, imported.rig.puppet.parameters.map { it.id })
+            assertEquals(expected.withParametersSyncedFromTree().parameters, imported.rig.puppet.parameters)
             assertEquals(expected.parts.map { it.id }, imported.rig.puppet.parts.map { it.id })
             assertEquals(expected.deformers.map { it.id }, imported.rig.puppet.deformers.map { it.id })
             assertEquals(expected.drawables.map { it.id }, imported.rig.puppet.drawables.map { it.id })
