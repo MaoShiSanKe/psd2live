@@ -6,7 +6,10 @@ import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.PhysicsInput
 import io.github.psd2live.core.PhysicsOrigin
 import io.github.psd2live.core.PhysicsSourceType
+import io.github.psd2live.core.PhysicsOutput
+import io.github.psd2live.core.PhysicsSegment
 import io.github.psd2live.core.RigEditOverlay
+import io.github.psd2live.core.RigPhysicsEdit
 import kotlinx.serialization.json.*
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.keyform.axisIndexOf
@@ -60,8 +63,10 @@ class SimBakeTest {
         assertTrue(bake.peak in 0.3f..0.999f && bake.clipped == 0f, "the modes use their range without stalling: ${bake.peak}, ${bake.clipped}")
         assertTrue(bake.jerk in 0.2f..1.6f, "the baked motion should be about as smooth as the simulation: ${bake.jerk}")
         val physics = assertNotNull(bake.physics)
-        assertEquals(bake.parameters, physics.outputParameters)
-        assertEquals(2, physics.segments.size)
+        // Each mode is driven once: by a vertex of the pendulum, or by a pendulum of its own.
+        assertEquals(bake.parameters.toSet(), bake.pendulums.flatMap { it.outputParameters }.toSet())
+        assertEquals(bake.parameters.size, bake.pendulums.sumOf { it.outputParameters.size })
+        assertEquals(2 - bake.extraPhysics.size, physics.segments.size)
         // The root is pinned: nothing is keyed there.
         val offsets = mode.axis.offsets.getValue("hair")
         for (key in offsets) { assertEquals(0f, key[0], 1e-4f); assertEquals(0f, key[2], 1e-4f) }
@@ -97,7 +102,7 @@ class SimBakeTest {
         val groups = PhysicsCatalog.groups(PhysicsGenerator.Presets(false, false, false), PhysicsGenerator.Presets(false, false, false), baked, model.parameters.mapTo(HashSet()) { it.id.raw })
         val group = groups.single { it.origin == PhysicsOrigin.SIMULATION }
         assertTrue(group.active, "the fitted pendulum exports: ${group.issue?.message}")
-        assertEquals(bake.parameters, group.setting.outputParameters)
+        assertEquals(physics.outputParameters, group.setting.outputParameters)
         assertEquals("hair", SimGenerator.simulationOf(group.id, baked.simEdits)?.id)
     }
 
@@ -106,8 +111,7 @@ class SimBakeTest {
         val overlay = RigEditOverlay(simEdits = listOf(edit()))
         val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), overlay.simEdits.single(), quick)
         val model = SimAuthoring.withBake(overlay, "hair", bake).applyTo(base)
-        val physics = listOfNotNull(bake.physics)
-        val engine = PhysicsEngine(physics, PhysicsEngine.ranges(model.parameters))
+        val engine = PhysicsEngine(bake.pendulums, PhysicsEngine.ranges(model.parameters))
         val scene = SimScene.build(base, edit()).also { it.calibrate(base); it.reset(base, emptyMap()) }
         val evaluator = CpuDeformationEvaluator()
         val tip = 17
@@ -273,6 +277,39 @@ class SimBakeTest {
         val (kept, reason) = SimAuthoring.rebaked(broken, base, "hair")
         assertEquals(bake, kept.simEdits.single().bake)
         assertNotNull(reason)
+    }
+
+    @Test fun aLaterModeWithAPendulumOfItsOwnRoundTripsAndExports() {
+        fun pendulum(id: String, output: String) = RigPhysicsEdit(id, "Hair", inputs = listOf(PhysicsInput(angle.raw, 50f, PhysicsSourceType.ANGLE)),
+            outputs = listOf(PhysicsOutput(output, 1, 1f)), segments = listOf(PhysicsSegment(10f, 0.9f, 0.8f, 1f)))
+        val axis = { parameter: String -> SimBakedAxis(parameter, floatArrayOf(-30f, 0f, 30f), mapOf("hair" to List(3) { FloatArray(4) })) }
+        val bake = SimBakeResult("f", mapOf("hair" to 2), emptyList(),
+            listOf(SimBakedMode(axis("ParamSimhair_1"), 5f, 0.5f), SimBakedMode(axis("ParamSimhair_2"), 2f, 0.1f)),
+            physics = pendulum("PhysicsSim_hair", "ParamSimhair_1"), extraPhysics = listOf(pendulum("PhysicsSim_hair_2", "ParamSimhair_2")))
+        assertEquals(bake, SimBakeResult.fromJson(bake.toJson()))
+        assertEquals(listOf("PhysicsSim_hair_2"), SimBakeResult.fromJson(bake.toJson()).extraPhysics.map { it.id })
+        // Older bakes carry none.
+        assertTrue(SimBakeResult.fromJson(JsonObject(bake.toJson() - "extra_physics")).extraPhysics.isEmpty())
+        val sims = listOf(edit().copy(bake = bake))
+        val rules = SimGenerator.physicsRules(sims, setOf(angle.raw, "ParamSimhair_1", "ParamSimhair_2"))
+        assertEquals(listOf("PhysicsSim_hair", "PhysicsSim_hair_2"), rules.map { it.id })
+        assertEquals("hair", SimGenerator.simulationOf("PhysicsSim_hair_2", sims)?.id)
+        assertTrue(SimGenerator.physicsRules(sims.map { it.copy(enabled = false) }, setOf(angle.raw, "ParamSimhair_1", "ParamSimhair_2")).isEmpty())
+    }
+
+    @Test fun backfittingTakesBackWhatTheFirstModeTookFromTheSecond() {
+        // Two modes playing nearly alike; solved one after the other, the first takes some of the second's share.
+        val first = FloatArray(600) { kotlin.math.sin(it * 0.05f) }
+        val second = FloatArray(600) { kotlin.math.sin(it * 0.05f + 0.6f) }
+        val residuals = first.indices.map { f -> floatArrayOf(10f * first[f] + 6f * second[f], 0f) }
+        val keys = floatArrayOf(-1f, 0f, 1f)
+        fun error(shapes: List<List<FloatArray>>) = residuals.indices.sumOf { f ->
+            val v = SimBaker.at(shapes[0], keys, first[f])[0] + SimBaker.at(shapes[1], keys, second[f])[0]
+            ((residuals[f][0] - v) * (residuals[f][0] - v)).toDouble()
+        }
+        val sequential = SimBaker.solveModes(residuals, listOf(first, second), keys, 2)
+        val refit = SimBaker.backfit(residuals, listOf(first, second), keys, sequential, 2)
+        assertTrue(error(refit) < error(sequential) * 0.8, "backfit ${error(refit)} against ${error(sequential)}")
     }
 
     @Test fun nelderMeadFindsAQuadraticMinimum() {

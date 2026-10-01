@@ -536,6 +536,8 @@ private fun MaterialEditor(material: SimMaterial, onCommit: (SimMaterial) -> Uni
 	var draft by remember(material) { mutableStateOf(material) }
 	DraftSlider(tr("sim.stretch"), tr("sim.stretchTip"), draft.stretch, 0f..1f, { draft = draft.copy(stretch = it) }) { onCommit(draft) }
 	DraftSlider(tr("sim.bend"), tr("sim.bendTip"), draft.bend, 0f..1f, { draft = draft.copy(bend = it) }) { onCommit(draft) }
+	DraftSlider(tr("sim.area"), tr("sim.areaTip"), draft.area, 0f..1f, { draft = draft.copy(area = it) }) { onCommit(draft) }
+	DraftSlider(tr("sim.anisotropy"), tr("sim.anisotropyTip"), draft.anisotropy, 0f..1f, { draft = draft.copy(anisotropy = it) }) { onCommit(draft) }
 	DraftSlider(tr("sim.goal"), tr("sim.goalTip"), draft.goal, 0f..1f, { draft = draft.copy(goal = it) }) { onCommit(draft) }
 	DraftSlider(tr("sim.damping"), tr("sim.dampingTip"), draft.damping, 0f..8f, { draft = draft.copy(damping = it) }) { onCommit(draft) }
 	DraftSlider(tr("sim.mass"), tr("sim.massTip"), draft.mass, 0.2f..4f, { draft = draft.copy(mass = it) }) { onCommit(draft) }

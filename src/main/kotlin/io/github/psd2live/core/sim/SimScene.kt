@@ -7,6 +7,7 @@ import org.umamo.runtime.model.PuppetModel
 import org.umamo.runtime.model.VertexGroup
 import org.umamo.runtime.model.VertexGroupKind
 import java.util.PriorityQueue
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.pow
 
@@ -32,6 +33,8 @@ class SimScene private constructor(
     private val anchors: Array<Anchor?>,
     /** Why a part of the setup was skipped; shown in the panel. */
     val notes: List<String>,
+    /** Per stretch edge, how much it runs along the grain, 0..1: for measuring how the body bunches up. */
+    internal val edgeAlong: FloatArray,
 ) {
     private val evaluator = CpuDeformationEvaluator()
     /** Pinned particles that define the body's frame, and where their anchors sit at rest. */
@@ -158,22 +161,53 @@ class SimScene private constructor(
     companion object {
         /** Pin weights at or above this hold the particle outright, and root the long-range limits. */
         private const val ROOT_PIN = 0.5f
+        /** The mesh scale the material values are tuned at: the default mesh spacing, and the area one vertex carries there. */
+        internal const val REFERENCE_LENGTH = 40f
+        internal const val REFERENCE_AREA = REFERENCE_LENGTH * REFERENCE_LENGTH
+        /** The least area a vertex is taken to carry, as a share of [REFERENCE_AREA], so a stray vertex is not weightless. */
+        private const val MIN_VERTEX_AREA = 0.05f
+        /** How much of the stretch and area stiffness is left across the grain at anisotropy 1. */
+        private const val ANISOTROPY_SOFTENING = 0.6f
+        /** How much more a fold along the grain gives than one across it at anisotropy 1. */
+        private const val GRAIN_FOLD = 8f
 
         /** Stretch compliance for a 0..1 stiffness: 1 is effectively inextensible, 0 rubbery. */
         internal fun compliance(stiffness: Float): Float = 1e-9f * 10f.pow(6f * (1f - stiffness.coerceIn(0f, 1f)))
 
+        /** Log-space mix of [along] and [across] by how much the edge runs along the grain. */
+        private fun blend(along: Float, across: Float, u: Float): Float = along.pow(u) * across.pow(1f - u)
+
+        /** The frequency a 0..1 stiffness springs back at per unit mass: 0.5 rad/s at 0 (limp), about 10 at 0.5, 200 at 1. */
+        private fun frequency(stiffness: Float): Float = 0.5f * 400f.pow(stiffness.coerceIn(0f, 1f))
+
         /**
-         * Bend compliance for a 0..1 stiffness, by the frequency the bend springs back at per unit mass:
-         * 0.5 rad/s at 0 (limp), about 10 at 0.5, 200 at 1 (a stiff card). Stretch is kept near rigid
-         * separately, so bending is what gravity and inertia actually work against.
+         * Compression compliance of an edge for a 0..1 area stiffness, by frequency: the edges give way
+         * softly as the sheet folds in depth, as firmly as it keeps its area.
          */
-        internal fun bendCompliance(stiffness: Float): Float {
-            val omega = 0.5f * 400f.pow(stiffness.coerceIn(0f, 1f))
-            return 1f / (omega * omega)
+        internal fun compressionCompliance(stiffness: Float): Float = frequency(stiffness).let { 1f / (it * it) }
+
+        /**
+         * Bend compliance for a 0..1 stiffness between two triangles whose centres lie [apart] px apart, so
+         * a curve costs alike however finely it is cut: by frequency at [REFERENCE_LENGTH], scaled by the
+         * spacing.
+         */
+        internal fun bendCompliance(stiffness: Float, apart: Float = REFERENCE_LENGTH): Float {
+            val omega = frequency(stiffness)
+            return apart / REFERENCE_LENGTH / (omega * omega * REFERENCE_AREA)
         }
 
         /**
-         * Goal compliance for a 0..1 strength; 0 is no goal at all. Per unit mass the spring's own frequency
+         * Area compliance for a 0..1 stiffness of a triangle of [area] px²; 0 keeps no area (only the
+         * guard against turning over). Scaled by the area, so a finer mesh holds alike.
+         */
+        internal fun areaCompliance(stiffness: Float, area: Float): Float {
+            if (stiffness <= 0f) return Float.POSITIVE_INFINITY
+            val omega = frequency(stiffness)
+            return 0.75f * REFERENCE_AREA / (omega * omega) * (area / REFERENCE_AREA)
+        }
+
+        /**
+         * Goal compliance per unit mass for a 0..1 strength; 0 is no goal at all. The spring's own frequency
          * is 1/sqrt(compliance): about 0.6 Hz at 0.1, 2 Hz at 0.5 and 10 Hz at 1, so a weak goal keeps the
          * drawn shape without damping the swing.
          */
@@ -182,6 +216,9 @@ class SimScene private constructor(
             val omega = 3f * 20f.pow(strength.coerceIn(0f, 1f))
             return 1f / (omega * omega)
         }
+
+        private fun centroid(rest: FloatArray, a: List<Int>, b: List<Int>, c: List<Int>, t: Int, axis: Int) =
+            (rest[a[t] * 2 + axis] + rest[b[t] * 2 + axis] + rest[c[t] * 2 + axis]) / 3f
 
         fun build(model: PuppetModel, edit: RigSimEdit, settings: SimSettings = SimSettings()): SimScene {
             val notes = ArrayList<String>()
@@ -214,8 +251,47 @@ class SimScene private constructor(
             val stiffnessWeight = perVertex(VertexGroupKind.STIFFNESS, 1f)
             val goalWeight = perVertex(VertexGroupKind.GOAL, 1f)
             val pin = perVertex(VertexGroupKind.PIN, 0f)
+
+            // The rest shape at the default pose: triangles, edges and, per edge, the triangles beside it.
+            val world = CpuDeformationEvaluator().evaluate(model, emptyMap()).worldPositions
+            val rest = FloatArray(total * 2)
+            val ta = ArrayList<Int>(); val tb = ArrayList<Int>(); val tc = ArrayList<Int>()
+            val edgeA = ArrayList<Int>(); val edgeB = ArrayList<Int>()
+            /** Per edge, the triangle on each side (-1 for an outline edge). */
+            val edgeLeft = ArrayList<Int>(); val edgeRight = ArrayList<Int>()
+            for ((id, mesh) in targets) {
+                val offset = offsets.getValue(id)
+                val positions = world[id] ?: mesh.positions.also { notes += "${id.raw} is hidden at the default pose; using its rest mesh" }
+                positions.copyInto(rest, offset * 2, 0, mesh.vertexCount * 2)
+                val edgeOf = HashMap<Long, Int>()
+                for (t in 0 until mesh.indices.size / 3) {
+                    val triangle = ta.size
+                    ta += offset + mesh.indices[t * 3]; tb += offset + mesh.indices[t * 3 + 1]; tc += offset + mesh.indices[t * 3 + 2]
+                    for (e in 0..2) {
+                        val a = mesh.indices[t * 3 + e]
+                        val b = mesh.indices[t * 3 + (e + 1) % 3]
+                        val key = minOf(a, b).toLong() shl 32 or maxOf(a, b).toLong()
+                        val edge = edgeOf[key]
+                        if (edge == null) {
+                            edgeOf[key] = edgeA.size
+                            edgeA += offset + a; edgeB += offset + b; edgeLeft += triangle; edgeRight += -1
+                        } else if (edgeRight[edge] < 0 && edgeLeft[edge] != triangle) edgeRight[edge] = triangle
+                    }
+                }
+            }
+            fun length(i: Int, j: Int) = hypot(rest[i * 2] - rest[j * 2], rest[i * 2 + 1] - rest[j * 2 + 1])
+            val triangleArea = FloatArray(ta.size) { t ->
+                val a = ta[t]; val b = tb[t]; val c = tc[t]
+                ((rest[b * 2] - rest[a * 2]) * (rest[c * 2 + 1] - rest[a * 2 + 1]) - (rest[c * 2] - rest[a * 2]) * (rest[b * 2 + 1] - rest[a * 2 + 1])) / 2f
+            }
+
+            // Mass by the area each vertex carries, a third of every triangle around it: a finer mesh gets
+            // more detail, not a heavier cloth.
+            val vertexArea = FloatArray(total)
+            for (t in ta.indices) { val third = abs(triangleArea[t]) / 3f; vertexArea[ta[t]] += third; vertexArea[tb[t]] += third; vertexArea[tc[t]] += third }
             for (i in 0 until total) {
-                state.invMass[i] = 1f / (m.mass * massWeight[i].coerceAtLeast(0.1f))
+                val carried = vertexArea[i].coerceAtLeast(MIN_VERTEX_AREA * REFERENCE_AREA)
+                state.invMass[i] = REFERENCE_AREA / (carried * m.mass * massWeight[i].coerceAtLeast(0.1f))
                 state.damping[i] = m.damping * dampingWeight[i]
                 state.windFactor[i] = windWeight[i]
             }
@@ -254,55 +330,27 @@ class SimScene private constructor(
                 }
             }
 
-            // Stretch along every mesh edge; bend across every inner edge (the two opposite corners).
-            val sa = ArrayList<Int>(); val sb = ArrayList<Int>(); val sr = ArrayList<Float>(); val sc = ArrayList<Float>(); val sq = ArrayList<Float>()
-            val ba = ArrayList<Int>(); val bb = ArrayList<Int>(); val br = ArrayList<Float>(); val bc = ArrayList<Float>()
-            val neighbours = Array(total) { ArrayList<Pair<Int, Float>>() }
-            val world = CpuDeformationEvaluator().evaluate(model, emptyMap()).worldPositions
-            val rest = FloatArray(total * 2)
-            for ((id, mesh) in targets) {
-                val offset = offsets.getValue(id)
-                val positions = world[id] ?: mesh.positions.also { notes += "${id.raw} is hidden at the default pose; using its rest mesh" }
-                positions.copyInto(rest, offset * 2, 0, mesh.vertexCount * 2)
-                val opposite = HashMap<Long, Int>()
-                for (t in 0 until mesh.indices.size / 3) for (e in 0..2) {
-                    val a = mesh.indices[t * 3 + e]
-                    val b = mesh.indices[t * 3 + (e + 1) % 3]
-                    val c = mesh.indices[t * 3 + (e + 2) % 3]
-                    val key = minOf(a, b).toLong() shl 32 or maxOf(a, b).toLong()
-                    val other = opposite.put(key, c)
-                    if (other == null) {
-                        val length = hypot(positions[a * 2] - positions[b * 2], positions[a * 2 + 1] - positions[b * 2 + 1])
-                        sa += offset + a; sb += offset + b; sr += length
-                        val stiffness = (stiffnessWeight[offset + a] + stiffnessWeight[offset + b]) / 2f
-                        sc += compliance(m.stretch * stiffness)
-                        sq += bendCompliance(m.bend * stiffness)
-                        neighbours[offset + a] += (offset + b) to length
-                        neighbours[offset + b] += (offset + a) to length
-                    } else if (other != c) {
-                        ba += offset + other; bb += offset + c
-                        br += hypot(positions[other * 2] - positions[c * 2], positions[other * 2 + 1] - positions[c * 2 + 1])
-                        bc += bendCompliance(m.bend * (stiffnessWeight[offset + other] + stiffnessWeight[offset + c]) / 2f)
-                    }
-                }
-            }
-
-            // Long-range limits from the nearest firmly pinned particle, by path length along the mesh.
+            // Path length along the mesh from the nearest firmly pinned particle: it roots the long-range
+            // limits and runs the grain away from the pins.
+            val neighbours = Array(total) { ArrayList<Int>() }
+            for (e in edgeA.indices) { neighbours[edgeA[e]] += edgeB[e]; neighbours[edgeB[e]] += edgeA[e] }
             val roots = (0 until total).filter { pin[it] >= ROOT_PIN }
-            val lraParticle = ArrayList<Int>(); val lraRoot = ArrayList<Int>(); val lraDistance = ArrayList<Float>()
-            if (roots.isNotEmpty() && m.slack < 1f) {
-                val distance = FloatArray(total) { Float.MAX_VALUE }
-                val root = IntArray(total) { -1 }
+            val distance = FloatArray(total) { Float.MAX_VALUE }
+            val root = IntArray(total) { -1 }
+            run {
                 val queue = PriorityQueue<Pair<Float, Int>>(compareBy({ it.first }, { it.second }))
                 for (r in roots) { distance[r] = 0f; root[r] = r; queue += 0f to r }
                 while (queue.isNotEmpty()) {
                     val (d, i) = queue.poll()
                     if (d > distance[i]) continue
-                    for ((j, length) in neighbours[i]) {
-                        val next = d + length
+                    for (j in neighbours[i]) {
+                        val next = d + length(i, j)
                         if (next < distance[j]) { distance[j] = next; root[j] = root[i]; queue += next to j }
                     }
                 }
+            }
+            val lraParticle = ArrayList<Int>(); val lraRoot = ArrayList<Int>(); val lraDistance = ArrayList<Float>()
+            if (roots.isNotEmpty() && m.slack < 1f) {
                 for (i in 0 until total) if (root[i] >= 0 && root[i] != i) {
                     lraParticle += i; lraRoot += root[i]; lraDistance += distance[i] * (1f + m.slack)
                 }
@@ -310,19 +358,78 @@ class SimScene private constructor(
                 notes += "Nothing is pinned: paint a PIN group or set a glue to pin, or the body falls away"
             }
 
-            val goal = FloatArray(total) { goalCompliance(m.goal * goalWeight[it]) }
+            // The grain per triangle: the way the path length grows across it, else straight down.
+            val grainX = FloatArray(ta.size); val grainY = FloatArray(ta.size) { -1f }
+            for (t in ta.indices) {
+                val a = ta[t]; val b = tb[t]; val c = tc[t]
+                if (distance[a] == Float.MAX_VALUE || distance[b] == Float.MAX_VALUE || distance[c] == Float.MAX_VALUE) continue
+                val e1x = rest[b * 2] - rest[a * 2]; val e1y = rest[b * 2 + 1] - rest[a * 2 + 1]
+                val e2x = rest[c * 2] - rest[a * 2]; val e2y = rest[c * 2 + 1] - rest[a * 2 + 1]
+                val det = e1x * e2y - e1y * e2x
+                if (abs(det) < 1e-6f) continue
+                val d1 = distance[b] - distance[a]; val d2 = distance[c] - distance[a]
+                val gx = (d1 * e2y - d2 * e1y) / det
+                val gy = (d2 * e1x - d1 * e2x) / det
+                val norm = hypot(gx, gy)
+                if (norm < 1e-3f) continue
+                grainX[t] = gx / norm; grainY[t] = gy / norm
+            }
+            /** How much edge [e] runs along the grain of the triangles beside it, 0..1. */
+            fun along(e: Int): Float {
+                var gx = grainX[edgeLeft[e]]; var gy = grainY[edgeLeft[e]]
+                val right = edgeRight[e]
+                if (right >= 0 && gx * grainX[right] + gy * grainY[right] > 0f) { gx += grainX[right]; gy += grainY[right] }
+                val g = hypot(gx, gy)
+                val l = length(edgeA[e], edgeB[e])
+                if (g < 1e-6f || l < 1e-6f) return 1f
+                val cos = ((rest[edgeB[e] * 2] - rest[edgeA[e] * 2]) * gx + (rest[edgeB[e] * 2 + 1] - rest[edgeA[e] * 2 + 1]) * gy) / (g * l)
+                return cos * cos
+            }
+
+            // Stretch and compression along every edge, softer across the grain; area per triangle; bend
+            // across every inner edge, softer where the sheet folds along the grain.
+            val sr = ArrayList<Float>(); val sc = ArrayList<Float>(); val sq = ArrayList<Float>()
+            val ba = ArrayList<Int>(); val bb = ArrayList<Int>(); val bc = ArrayList<Float>()
+            val across = 1f - ANISOTROPY_SOFTENING * m.anisotropy
+            val edgeAlong = FloatArray(edgeA.size)
+            for (e in edgeA.indices) {
+                val a = edgeA[e]; val b = edgeB[e]
+                val stiffness = (stiffnessWeight[a] + stiffnessWeight[b]) / 2f
+                val u = along(e)
+                edgeAlong[e] = u
+                sr += length(a, b)
+                sc += blend(compliance(m.stretch * stiffness), compliance(m.stretch * stiffness * across), u)
+                sq += blend(compressionCompliance(m.area * stiffness), compressionCompliance(m.area * stiffness * across), u)
+                val right = edgeRight[e]
+                if (right < 0) continue
+                val left = edgeLeft[e]
+                val apart = hypot(centroid(rest, ta, tb, tc, left, 0) - centroid(rest, ta, tb, tc, right, 0),
+                    centroid(rest, ta, tb, tc, left, 1) - centroid(rest, ta, tb, tc, right, 1))
+                // A fold line along the grain parts two strands; across it, it bends them.
+                ba += left; bb += right
+                bc += bendCompliance(m.bend * stiffness, apart) * (1f + GRAIN_FOLD * m.anisotropy * u)
+            }
+            val area = FloatArray(ta.size) { t ->
+                val stiffness = (stiffnessWeight[ta[t]] + stiffnessWeight[tb[t]] + stiffnessWeight[tc[t]]) / 3f
+                areaCompliance(m.area * stiffness, abs(triangleArea[t]))
+            }
+
+            // Goals per unit mass, so they spring back alike however finely the mesh is cut.
+            val goal = FloatArray(total) { goalCompliance(m.goal * goalWeight[it]) * state.invMass[it] }
+
             state.reset(rest)
             val solver = XpbdSolver(
                 state,
-                stretch = DistanceConstraints(sa.toIntArray(), sb.toIntArray(), sr.toFloatArray(), sc.toFloatArray(), sq.toFloatArray()),
-                bend = DistanceConstraints(ba.toIntArray(), bb.toIntArray(), br.toFloatArray(), bc.toFloatArray()),
+                stretch = DistanceConstraints(edgeA.toIntArray(), edgeB.toIntArray(), sr.toFloatArray(), sc.toFloatArray(), sq.toFloatArray()),
+                triangles = TriangleConstraints(ta.toIntArray(), tb.toIntArray(), tc.toIntArray(), area),
+                bends = BendConstraints(ba.toIntArray(), bb.toIntArray(), bc.toFloatArray()),
                 welds = WeldConstraints(weldA.toIntArray(), weldB.toIntArray(), weldWA.toFloatArray(), weldWB.toFloatArray(), FloatArray(weldA.size)),
                 longRange = LongRangeConstraints(lraParticle.toIntArray(), lraRoot.toIntArray(), lraDistance.toFloatArray()),
                 pinWeight = pin,
                 goalCompliance = goal,
                 settings = settings,
             )
-            return SimScene(edit, solver, offsets, counts, anchors, notes)
+            return SimScene(edit, solver, offsets, counts, anchors, notes, edgeAlong)
         }
     }
 }

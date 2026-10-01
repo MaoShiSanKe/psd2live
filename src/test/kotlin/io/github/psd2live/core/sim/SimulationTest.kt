@@ -163,6 +163,127 @@ class SimulationTest {
         assertTrue(distance <= 100f * 1.02f + 0.5f, "tip reached $distance px from the root, limit ${100f * 1.02f}")
     }
 
+    // Material model
+
+    /** The hem's mean sideways offset per frame as a gust blows a [columns] x [rows] cloth 40 x 120 px and lets it go. */
+    private fun gust(columns: Int, rows: Int, jitter: Float = 0f): FloatArray {
+        val mesh = grid(columns, rows, 40f / columns).let { m ->
+            if (jitter == 0f) m else {
+                // Inner vertices moved off the grid, the outline kept: an irregular cut of the same cloth.
+                val random = java.util.Random(3L)
+                val p = m.positions.copyOf()
+                for (r in 1 until rows) for (c in 1 until columns) {
+                    val v = r * (columns + 1) + c
+                    p[v * 2] += (random.nextFloat() - 0.5f) * jitter * 40f / columns
+                    p[v * 2 + 1] += (random.nextFloat() - 0.5f) * jitter * 40f / columns
+                }
+                DrawableMesh(p, m.uvs, m.indices)
+            }
+        }
+        val source = model(drawable("cloth", mesh), groups = listOf(topPin("cloth", mesh, columns)))
+        val scene = hangingScene(source)
+        scene.calibrate(source)
+        val hem = (0..columns).map { rows * (columns + 1) + it }
+        val rest = hem.sumOf { mesh.positions[it * 2].toDouble() } / hem.size
+        return FloatArray(150) { f ->
+            scene.solver.settings = scene.solver.settings.copy(windX = if (f < 20) 1500f else 0f)
+            scene.drive(source, emptyMap(), 1f / 60f)
+            (hem.sumOf { scene.state.x[it].toDouble() } / hem.size - rest).toFloat()
+        }
+    }
+
+    @Test fun aFinerOrIrregularMeshIsTheSameCloth() {
+        val coarse = gust(2, 6)
+        val peak = coarse.maxOf(::abs)
+        assertTrue(peak > 5f, "the gust should move the hem, moved $peak px")
+        for ((name, other) in listOf("fine" to gust(4, 12), "irregular" to gust(4, 12, jitter = 0.5f))) {
+            val rms = kotlin.math.sqrt(coarse.indices.sumOf { ((coarse[it] - other[it]) * (coarse[it] - other[it])).toDouble() } / coarse.size)
+            assertTrue(rms < 0.2f * peak, "the $name mesh moves differently: ${"%.2f".format(rms)} px RMS against a ${"%.1f".format(peak)} px swing")
+        }
+    }
+
+    @Test fun trianglesNeverTurnOverAndAreaHoldsAsMuchAsAsked() {
+        val mesh = grid(3, 6, 10f)
+        val source = model(drawable("cloth", mesh), groups = listOf(topPin("cloth", mesh, 3)))
+        fun squeeze(area: Float): Float {
+            val scene = hangingScene(source) { it.copy(material = it.material.copy(area = area, goal = 0f)) }
+            // Blown up into its own pins and across: the sheet folds hard on itself.
+            scene.solver.settings = scene.solver.settings.copy(windX = 4000f, windY = 6000f)
+            var least = 1f
+            repeat(60) { scene.drive(source, emptyMap(), 1f / 60f); least = minOf(least, scene.solver.minAreaRatio()) }
+            return least
+        }
+        val soft = squeeze(0f)
+        val firm = squeeze(0.9f)
+        assertTrue(soft > 0f, "a triangle turned over: area ratio $soft")
+        assertTrue(firm > soft, "keeping area should keep it: $firm against $soft")
+    }
+
+    @Test fun theRestShapeFollowsTheRig() {
+        // ParamScale stretches the strand to 1.3 times its length; hanging taut, it should just take that length.
+        val mesh = grid(1, 8, 10f)
+        val scale = ParameterId("ParamScale")
+        fun stretched(k: Float) = MeshDeltaForm(FloatArray(mesh.positions.size) { if (it % 2 == 1) mesh.positions[it] * (k - 1f) else 0f })
+        val keyed = Drawable(DrawableId("cloth"), "cloth", null, BlendMode.Normal, emptyList(), mesh,
+            KeyformGrid(listOf(KeyformAxis(scale, floatArrayOf(0f, 1f))), listOf(KeyformCell(intArrayOf(0), stretched(1f)), KeyformCell(intArrayOf(1), stretched(1.3f)))))
+        val source = PuppetModel(listOf(Parameter(scale, "Scale", 0f, 1f, 0f)), emptyList(), emptyList(), listOf(keyed),
+            listOf(OrgChild.Drawable(keyed.id)), null, vertexGroups = listOf(topPin("cloth", mesh, 1)))
+        val scene = hangingScene(source, SimKind.HAIR) { it.copy(material = it.material.copy(goal = 0f, slack = 0.5f)) }
+        val pose = mapOf(scale to 1f)
+        repeat(240) { scene.drive(source, pose, 1f / 60f) }
+        val worst = (0 until mesh.vertexCount).maxOf { hypot(scene.state.x[it] - scene.state.goalX[it], scene.state.y[it] - scene.state.goalY[it]) }
+        assertTrue(worst < 3f, "the strand should hang at the rig's length, $worst px off")
+    }
+
+    @Test fun bendGradientMatchesFiniteDifferences() {
+        val state = SimState(4)
+        state.reset(floatArrayOf(0f, 0f, 10f, 0f, 0f, 10f, 10f, 10f))
+        val solver = XpbdSolver(state, triangles = TriangleConstraints(intArrayOf(0, 1), intArrayOf(1, 3), intArrayOf(2, 2), floatArrayOf(1f, 1f)))
+        // Bent and squashed a little away from rest.
+        val moved = floatArrayOf(0.5f, -0.3f, 10.4f, 1.2f, -0.8f, 9.1f, 9.3f, 11.7f)
+        for (i in 0 until 4) { state.x[i] = moved[i * 2]; state.y[i] = moved[i * 2 + 1] }
+        for (t in 0..1) {
+            val (angle, grad) = solver.turnOf(t)
+            val corners = if (t == 0) intArrayOf(0, 1, 2) else intArrayOf(1, 3, 2)
+            for ((slot, v) in corners.withIndex()) for (axis in 0..1) {
+                val eps = 1e-2f
+                val coords = if (axis == 0) state.x else state.y
+                coords[v] += eps
+                val plus = solver.turnOf(t).first
+                coords[v] -= 2 * eps
+                val minus = solver.turnOf(t).first
+                coords[v] += eps
+                val numeric = (plus - minus) / (2 * eps)
+                assertEquals(numeric, grad[slot * 2 + axis], 2e-3f, "triangle $t corner $v axis $axis at angle $angle")
+            }
+        }
+    }
+
+    @Test fun theGrainIsStifferAlongThanAcross() {
+        val mesh = grid(3, 6, 10f)
+        val source = model(drawable("cloth", mesh), groups = listOf(topPin("cloth", mesh, 3)))
+        val scene = hangingScene(source) { it.copy(material = it.material.copy(anisotropy = 1f)) }
+        val stretch = scene.solver.stretch
+        val world = world(mesh)
+        fun mean(vertical: Boolean) = (0 until stretch.size).filter { k ->
+            val dx = abs(world[stretch.a[k] * 2] - world[stretch.b[k] * 2]); val dy = abs(world[stretch.a[k] * 2 + 1] - world[stretch.b[k] * 2 + 1])
+            if (vertical) dx < 1e-3f else dy < 1e-3f
+        }.map { stretch.compliance[it] }.average()
+        // The grain runs down from the pinned top: hanging edges keep their length, the ones across give.
+        assertTrue(mean(vertical = false) > 10 * mean(vertical = true), "across ${mean(false)}, along ${mean(true)}")
+    }
+
+    @Test fun anOlderMaterialTakesTheNewValuesFromItsKind() {
+        val old = buildJsonObject {
+            put("id", "h"); put("kind", "hair"); putJsonArray("targets") { add("a") }
+            putJsonObject("material") { put("mass", 1f); put("stretch", 1f); put("bend", 0.4f); put("damping", 2f); put("goal", 0.15f); put("slack", 0.01f) }
+        }
+        val material = RigSimEdit.fromJson(old).material
+        assertEquals(SimMaterial.preset(SimKind.HAIR).area, material.area)
+        assertEquals(SimMaterial.preset(SimKind.HAIR).anisotropy, material.anisotropy)
+        assertEquals(0.4f, material.bend)
+    }
+
     // Glue roles
 
     private fun gluedPair(role: GlueRole): Pair<PuppetModel, SimScene> {

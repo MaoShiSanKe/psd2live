@@ -28,7 +28,10 @@ import kotlin.math.sqrt
  */
 internal object SimPendulumFit {
     class Result(
+        /** The pendulum whose vertices drive the first mode and every later mode that hangs below it. */
         val setting: RigPhysicsEdit,
+        /** A pendulum of its own for each later mode that reacts apart from the swing, as `<id>_<k>`. */
+        val extra: List<RigPhysicsEdit>,
         /** Per output, its parameter value frame by frame as the pendulum plays it. */
         val played: List<FloatArray>,
         /** The same over the held-out track. */
@@ -55,12 +58,20 @@ internal object SimPendulumFit {
     private const val SETTLE_COST = 0.5
     private val NORMALIZATION = PhysicsNormalization(angleMin = -30f, angleMax = 30f)
     private val TYPES = listOf(PhysicsSourceType.X, PhysicsSourceType.ANGLE)
+    /** Up to this many inputs, every combination of their types is tried for the first guess. */
+    private const val MAX_TYPE_SEARCH = 6
+    /** Principal directions each later mode is fitted in, taken afresh over what the modes above leave. */
+    private const val SUBSPACE = 6
+    /** Below this share of what is left a principal direction is left out of a later mode's fit. */
+    private const val MIN_ENERGY = 0.01
+    /** Names the fit reads chain vertices out under; they never reach the model. */
+    private val PROBES = List(RigSimEdit.MAX_MODES + 8) { "__sim_fit_$it" }
 
     /**
      * [inputs] name the parameters; [track] holds their values per frame, one array per input; [motion] is
-     * the motion per frame as coordinates in a few principal directions. [outputs] names one parameter per
-     * driven vertex, the last of [segments]. Frames are [dt] apart; the pendulum steps at [fps] like the
-     * exported file.
+     * the motion per frame as coordinates in a few principal directions, and [metric] the same motion in full
+     * (px per particle coordinate), from which each later mode takes its own directions. [outputs] names
+     * one parameter per mode. Frames are [dt] apart; the pendulum steps at [fps] like the exported file.
      */
     fun fit(
         id: String,
@@ -70,6 +81,7 @@ internal object SimPendulumFit {
         ranges: Map<String, PhysicsEngine.Range>,
         track: List<FloatArray>,
         motion: List<FloatArray>,
+        metric: List<FloatArray>,
         dt: Float,
         fps: Float,
         segments: Int = outputs.size,
@@ -80,8 +92,11 @@ internal object SimPendulumFit {
         /** A stretch of motion kept out of the fit, from rest: among the candidates the one that does best on it wins. */
         heldOutTrack: List<FloatArray> = emptyList(),
         heldOutMotion: List<FloatArray> = emptyList(),
+        heldOutMetric: List<FloatArray> = emptyList(),
         /** The pendulum of an earlier bake of this simulation: searched from, closely, instead of from scratch. */
         previous: RigPhysicsEdit? = null,
+        /** The earlier bake's pendulums of their own, likewise. */
+        previousExtra: List<RigPhysicsEdit> = emptyList(),
         /** Called between candidates; throw from it to stop. */
         check: () -> Unit = {},
         /** How much each frame of [motion] counts, so each kind of motion counts alike however large; null is 1. */
@@ -89,12 +104,13 @@ internal object SimPendulumFit {
     ): Result {
         val frames = motion.size
         require(heldOutMotion.isEmpty() || heldOutTrack.size == inputs.size && heldOutTrack.all { it.size == heldOutMotion.size })
+        require(metric.size == frames && heldOutMetric.size == heldOutMotion.size)
         val m = motion.firstOrNull()?.size ?: 0
         val n = outputs.size
         require(n in 1..RigSimEdit.MAX_MODES && segments >= n && inputs.isNotEmpty() && track.size == inputs.size &&
             track.all { it.size == frames } && m > 0)
         // Fitting reads raw angles: unit scale, and ranges wide enough that nothing clamps.
-        val open = ranges + outputs.associateWith { PhysicsEngine.Range(-1e6f, 1e6f, 0f) }
+        val open = ranges + (outputs + PROBES).associateWith { PhysicsEngine.Range(-1e6f, 1e6f, 0f) }
         // The first output's vertex; the segments above it add lag without a parameter of their own.
         val first = segments - n + 1
 
@@ -128,16 +144,13 @@ internal object SimPendulumFit {
             }
             return p
         }
-        fun setting(chain: List<PhysicsSegment>, links: List<PhysicsInput>, scales: FloatArray) = RigPhysicsEdit(
-            id, name, inputs = links,
-            outputs = outputs.take(scales.size).mapIndexed { k, parameter -> PhysicsOutput(parameter, first + k, scales[k].coerceAtLeast(1e-4f)) },
-            segments = chain, normalization = NORMALIZATION,
-        )
 
-        /** The angles (radians) per frame of the driven vertices [chain] reaches as [links] play [values] through it. */
-        fun run(chain: List<PhysicsSegment>, links: List<PhysicsInput>, values: List<FloatArray> = track, restarts: Set<Int> = starts): Array<FloatArray> {
-            val count = chain.size - first + 1
-            val engine = PhysicsEngine(listOf(setting(chain, links, FloatArray(count) { 1f })), open, fps)
+        /** The angles (radians) per frame of vertices [from] to the last of [chain] as [links] play [values] through it. */
+        fun play(chain: List<PhysicsSegment>, links: List<PhysicsInput>, from: Int, values: List<FloatArray>, restarts: Set<Int>): Array<FloatArray> {
+            val count = chain.size - from + 1
+            val probe = RigPhysicsEdit(id, name, inputs = links, outputs = List(count) { PhysicsOutput(PROBES[it], from + it, 1f) },
+                segments = chain, normalization = NORMALIZATION)
+            val engine = PhysicsEngine(listOf(probe), open, fps)
             val pose = HashMap<String, Float>()
             val length = values.first().size
             val out = Array(count) { FloatArray(length) }
@@ -146,10 +159,13 @@ internal object SimPendulumFit {
                 if (f in restarts) engine.reset()
                 for ((i, link) in links.withIndex()) pose[link.parameter] = values[used[i]][f]
                 val driven = engine.step(pose, dt)
-                for (k in 0 until count) out[k][f] = driven[outputs[k]] ?: 0f
+                for (k in 0 until count) out[k][f] = driven[PROBES[k]] ?: 0f
             }
             return out
         }
+        /** The angles of the vertices [chain] reaches from the first output's down. */
+        fun run(chain: List<PhysicsSegment>, links: List<PhysicsInput>, values: List<FloatArray> = track, restarts: Set<Int> = starts) =
+            play(chain, links, first, values, restarts)
         fun runHeldOut(chain: List<PhysicsSegment>, links: List<PhysicsInput>) = run(chain, links, heldOutTrack, setOf(0))
 
         val training = Judge(track, motion, starts, m, weights)
@@ -161,21 +177,33 @@ internal object SimPendulumFit {
             if (abs(w) < MIN_WEIGHT) null else PhysicsInput(inputs[i], (abs(w) * 100f).coerceIn(0f, 100f), types[i], reflect = w < 0f)
         }.ifEmpty { listOf(PhysicsInput(inputs.first(), 100f * NOMINAL, types.first())) }
 
-        /** A first guess at the inputs for [chain]: each input's small-swing response, both types, mixed by least squares. */
-        fun guess(chain: List<PhysicsSegment>): List<PhysicsInput> {
+        /**
+         * A first guess at the inputs of a pendulum [played] as given: each input's small-swing response, both
+         * types, mixed by least squares onto [target].
+         */
+        fun guess(played: (List<PhysicsInput>) -> Array<FloatArray>, target: List<FloatArray>): List<PhysicsInput> {
             val jobs = inputs.flatMap { parameter -> TYPES.map { type -> PhysicsInput(parameter, 100f * NOMINAL, type) } }
-            val channels = jobs.map { run(chain, listOf(it)) }
-            val both = Gram(channels, motion)
+            val channels = jobs.map { played(listOf(it)) }
+            val both = Gram(channels, target)
             val weights = FloatArray(inputs.size * TYPES.size) { if (it % 2 == 0) 0.5f else 0.2f }
             both.als(weights)
-            // One type per input, the one that does more.
-            val types = inputs.indices.map { i ->
+            // One type per input. The one that does more in the mix is the first try; with few inputs every
+            // combination is tried and the one that leaves the least wins. An input held still - a tilted
+            // head - is answered for good only by an angle input, which a swing that does more may hide.
+            val leaning = inputs.indices.map { i ->
                 if (abs(weights[i * 2]) * sqrt(both.energy(i * 2)) >= abs(weights[i * 2 + 1]) * sqrt(both.energy(i * 2 + 1))) PhysicsSourceType.X
                 else PhysicsSourceType.ANGLE
             }
-            val picked = inputs.indices.map { i -> i * 2 + TYPES.indexOf(types[i]) }
-            val single = FloatArray(inputs.size) { weights[picked[it]] }
-            Gram(picked.map { channels[it] }, motion).als(single)
+            val combinations = if (inputs.size > MAX_TYPE_SEARCH) listOf(leaning)
+                else listOf(leaning) + (0 until (1 shl inputs.size)).map { bits -> inputs.indices.map { if (bits shr it and 1 == 0) PhysicsSourceType.X else PhysicsSourceType.ANGLE } }
+            var best: Triple<Double, List<PhysicsSourceType>, FloatArray>? = null
+            for (types in combinations.distinct()) {
+                val picked = inputs.indices.map { i -> i * 2 + TYPES.indexOf(types[i]) }
+                val single = FloatArray(inputs.size) { weights[picked[it]] }
+                val error = Gram(picked.map { channels[it] }, target).als(single)
+                if (best == null || error < best.first) best = Triple(error, types, single)
+            }
+            val (_, types, single) = requireNotNull(best)
             return links(single, types)
         }
 
@@ -208,7 +236,7 @@ internal object SimPendulumFit {
         // The first mode on its own. Where to search from: the previous bake's pendulum, closely, when it fits
         // this one; otherwise a few spread-out pendulums, each later segment a copy of the first, with the
         // first guess at the inputs.
-        val reuse = previous?.takeIf { p -> p.segments.size == segments && p.inputs.isNotEmpty() && p.inputs.all { it.parameter in inputs } }
+        val reuse = previous?.takeIf { p -> p.segments.size in first..segments && p.inputs.isNotEmpty() && p.inputs.all { it.parameter in inputs } }
         val jobs: List<() -> Candidate> = if (reuse != null) listOf({ search(reuse.segments.take(first), reuse.inputs, 0.25, 12 * (size + reuse.inputs.size)) })
         else listOf(
             doubleArrayOf(ln(10.0), 2.2, ln(0.9), ln(1.2)),
@@ -216,7 +244,7 @@ internal object SimPendulumFit {
             doubleArrayOf(ln(5.0), 3.0, ln(0.5), ln(2.0)),
         ).map { start -> {
             val chain = segmentsOf(start + DoubleArray(size - 4))
-            val links = guess(chain)
+            val links = guess({ run(chain, it) }, motion)
             search(chain, links, 0.5, 25 * (size + links.size))
         } }
         // The candidate that does best on the held-out motion, read out as on the training.
@@ -228,45 +256,113 @@ internal object SimPendulumFit {
         val chosen = all(jobs).minBy(::heldOutScore)
         var links = chosen.links
         var chain = chosen.chain
-        var readout = training.score(run(chain, links), null).second
 
-        // Each further mode is one more segment below, fitted over what the modes above leave unexplained
-        // with those modes kept as they are. Fitted together, two modes of neighbouring vertices swing
-        // nearly alike and their shapes grow large and cancel, which breaks on motion unlike the training;
-        // one after the other, a later mode only adds the bending and bunching the ones above cannot show.
-        // A vertex follows only the ones above it, so the modes above play the same whatever is added.
+        /** A later mode with a pendulum of its own: one segment and its own inputs, reacting apart from the swing. */
+        class Alone(val segment: PhysicsSegment, val links: List<PhysicsInput>)
+        val alone = arrayOfNulls<Alone>(n)
+        /** Per mode on the chain, its vertex. */
+        val vertexOf = IntArray(n).also { it[0] = first }
+        fun runAlone(a: Alone, values: List<FloatArray> = track, restarts: Set<Int> = starts): FloatArray =
+            play(listOf(a.segment), a.links, 1, values, restarts).single()
+        /** Mode [k]'s angles as the pendulums play [values]. */
+        fun anglesOf(k: Int, values: List<FloatArray> = track, restarts: Set<Int> = starts): FloatArray =
+            alone[k]?.let { runAlone(it, values, restarts) } ?: run(chain, links, values, restarts)[vertexOf[k] - first]
+
+        // What the modes fitted so far leave of the full motion, training and held out: each later mode is
+        // fitted in the principal directions of this, not of the whole motion, where most of what it has to
+        // add may not lie.
+        val width = metric.first().size
+        var left = metric
+        var leftHeld = heldOutMetric
+        fun peel(k: Int) {
+            val angle = anglesOf(k)
+            val b = regress(listOf(angle), left, 1, width, weights).first.single()
+            fun minus(rows: List<FloatArray>, a: FloatArray) = rows.mapIndexed { f, row -> FloatArray(width) { row[it] - a[f] * b[it] } }
+            left = minus(left, angle)
+            if (leftHeld.isNotEmpty()) leftHeld = minus(leftHeld, anglesOf(k, heldOutTrack, setOf(0)))
+        }
+        peel(0)
+        var fitted = 1
+
+        // Each further mode is fitted over what the modes above leave unexplained, with those modes kept as
+        // they are. Fitted together, two modes of neighbouring vertices swing nearly alike and their shapes
+        // grow large and cancel, which breaks on motion unlike the training; one after the other, a later
+        // mode only adds the bending and bunching the ones above cannot show. It is either one more segment
+        // below the chain - a vertex follows only the ones above it, so the modes above play the same - or a
+        // pendulum of its own with its own inputs, length and speed: bunching up answers a jolt faster and
+        // harder than the swing does. The held-out motion picks.
         for (k in 1 until n) {
-            fun predict(angles: Array<FloatArray>) = List(angles.first().size) { f ->
-                DoubleArray(m) { d -> var s = 0.0; for (j in readout.indices) s += angles[j][f] * readout[j][d]; s }
+            val sampled = left.filterIndexed { f, _ -> f % 2 == 0 }
+            val leftTotal = sampled.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
+            val directions = SimBaker.principal(sampled, SUBSPACE).filterIndexed { i, it -> i == 0 || it.second / leftTotal >= MIN_ENERGY }.map { it.first }
+            if (directions.isEmpty()) break
+            val d = directions.size
+            fun project(rows: List<FloatArray>) = rows.map { row -> FloatArray(d) { j -> var s = 0f; val v = directions[j]; for (i in row.indices) s += row[i] * v[i]; s } }
+            fun base(whole: List<FloatArray>, rest: List<FloatArray>) = whole.mapIndexed { f, row -> DoubleArray(d) { (row[it] - rest[f][it]).toDouble() } }
+            val stageMotion = project(metric)
+            val stageLeft = project(left)
+            val stage = Judge(track, stageMotion, starts, d, weights, base(stageMotion, stageLeft))
+            val stageHeldOut = if (heldOutMetric.isEmpty()) null else project(heldOutMetric).let { whole ->
+                Judge(heldOutTrack, whole, setOf(0), d, null, base(whole, project(leftHeld)))
             }
-            val stage = Judge(track, motion, starts, m, weights, predict(run(chain, links)))
-            val stageHeldOut = judged?.let { Judge(heldOutTrack, heldOutMotion, setOf(0), m, null, predict(runHeldOut(chain, links))) }
+
+            class Grown(val chain: List<PhysicsSegment>, val own: Alone?, val score: Double)
+            fun anglesOf(grown: Grown, values: List<FloatArray>, restarts: Set<Int>): FloatArray =
+                grown.own?.let { runAlone(it, values, restarts) } ?: run(grown.chain, links, values, restarts).last()
             val above = chain.last()
             val warm = reuse?.segments?.getOrNull(chain.size)
-            val tries = if (warm != null) listOf(warm to 0.25) else listOf(above to 0.5, above.copy(length = above.length * 0.5f, delay = above.delay * 0.7f) to 0.5)
-            val grown = all(tries.map { (start, step) -> {
-                var best: Candidate? = null
+            val tries = if (warm != null) listOf(warm to 0.25) else listOf(
+                above to 0.5,
+                above.copy(length = above.length * 0.5f, delay = above.delay * 0.7f) to 0.5,
+                above.copy(length = (above.length * 1.5f).coerceAtMost(60f)) to 0.5,
+                above.copy(acceleration = (above.acceleration * 2f).coerceAtMost(10f), delay = above.delay * 0.5f) to 0.5,
+            )
+            val below: List<() -> Grown> = tries.map { (start, step) -> {
+                var best: Grown? = null
                 val cost = { p: DoubleArray ->
                     check()
                     val c = chain + segmentOf(p)
                     val score = stage.score(arrayOf(run(c, links).last()), null).first
-                    if (best == null || score < best!!.score) best = Candidate(c, links, score)
+                    if (best == null || score < best!!.score) best = Grown(c, null, score)
                     score
                 }
                 NelderMead.minimize(vectorOf(start), step, cost, iterations = (if (warm != null) 12 else 25) * 4, tolerance = 1e-4)
                 requireNotNull(best)
-            } }).minBy { candidate ->
+            } }
+            // A pendulum of its own: from the earlier bake's when there is one, else a shorter, quicker
+            // segment with inputs guessed for what is left; its segment and input weights searched together.
+            val previousAlone = previousExtra.firstOrNull { e -> e.outputs.any { it.parameter == outputs[k] } }
+                ?.takeIf { e -> e.segments.size == 1 && e.inputs.isNotEmpty() && e.inputs.all { it.parameter in inputs } }
+            val own: () -> Grown = {
+                val segment = previousAlone?.segments?.single() ?: above.copy(length = (above.length * 0.5f).coerceAtLeast(0.5f), delay = above.delay * 0.5f)
+                val start = previousAlone?.inputs ?: guess({ arrayOf(runAlone(Alone(segment, it))) }, stageLeft)
+                fun linksOf(p: DoubleArray) = start.mapIndexed { i, link -> link.copy(weight = (100.0 / (1.0 + exp(-p[4 + i]))).toFloat().coerceIn(0.1f, 100f)) }
+                var best: Grown? = null
+                val cost = { p: DoubleArray ->
+                    check()
+                    val a = Alone(segmentOf(p), linksOf(p))
+                    val score = stage.score(arrayOf(runAlone(a)), null).first
+                    if (best == null || score < best!!.score) best = Grown(chain, a, score)
+                    score
+                }
+                val p0 = vectorOf(segment) + DoubleArray(start.size) { i -> val w = (start[i].weight / 100.0).coerceIn(0.01, 0.99); ln(w / (1 - w)) }
+                NelderMead.minimize(p0, if (previousAlone != null) 0.25 else 0.5, cost, iterations = (if (previousAlone != null) 12 else 25) * p0.size, tolerance = 1e-4)
+                requireNotNull(best)
+            }
+            val grown = all(below + own).minBy { candidate ->
                 if (stageHeldOut == null) candidate.score else {
-                    val own = stage.score(arrayOf(run(candidate.chain, links).last()), null).second
-                    stageHeldOut.score(arrayOf(runHeldOut(candidate.chain, links).last()), own).first
+                    val readout = stage.score(arrayOf(anglesOf(candidate, track, starts)), null).second
+                    stageHeldOut.score(arrayOf(anglesOf(candidate, heldOutTrack, setOf(0))), readout).first
                 }
             }
-            chain = grown.chain
-            readout = readout + stage.score(arrayOf(run(chain, links).last()), null).second
+            if (grown.own != null) alone[k] = grown.own else { chain = grown.chain; vertexOf[k] = chain.size }
+            peel(k)
+            fitted++
         }
-        // Then every segment and weight together, from there, still read out one mode after another: the
-        // upper segments may swing differently knowing the ones below take up the lag.
-        if (n > 1) {
+        // Then every segment and weight of the chain together, from there, still read out one mode after
+        // another: the upper segments may swing differently knowing the ones below take up the lag. Only when
+        // every mode hangs on the chain, which is all this pendulum plays.
+        if (fitted > 1 && alone.all { it == null }) {
             val grown = chain.drop(first)
             fun polished(p: DoubleArray) = segmentsOf(p) + grown.indices.map { segmentOf(p.copyOfRange(size + 4 * it, size + 4 * it + 4)) }
             fun linksOf(p: DoubleArray) = links.mapIndexed { i, link ->
@@ -286,11 +382,11 @@ internal object SimPendulumFit {
             if (best.chain !== chain && heldOutScore(best) < heldOutScore(Candidate(chain, links, 0.0))) { chain = best.chain; links = best.links }
         }
 
-        val raw = run(chain, links)
-        val rawHeldOut = if (judged == null) null else runHeldOut(chain, links)
+        val raw = Array(fitted) { anglesOf(it) }
+        val rawHeldOut = if (judged == null) null else Array(fitted) { anglesOf(it, heldOutTrack, setOf(0)) }
         // Each parameter spans its vertex's whole swing over all the motion, the hardest shaking included, with
         // room to spare: a parameter held at ±1 holds the body still while it should swing.
-        val scales = FloatArray(n) { k ->
+        val scales = FloatArray(fitted) { k ->
             var peak = raw[k].maxOf(::abs)
             rawHeldOut?.let { peak = maxOf(peak, it[k].maxOf(::abs)) }
             if (peak > 1e-6f) 1f / (peak * HEADROOM) else 1f
@@ -298,8 +394,16 @@ internal object SimPendulumFit {
         fun clamp(angles: Array<FloatArray>) = angles.mapIndexed { k, angle -> FloatArray(angle.size) { (angle[it] * scales[k]).coerceIn(-1f, 1f) } }
         val played = clamp(raw)
         val total = motion.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
-        val error = regress(played, motion, n, m).second
-        return Result(setting(chain, links, scales), played, rawHeldOut?.let(::clamp) ?: emptyList(), (1.0 - error / total).toFloat())
+        val error = regress(played, motion, fitted, m).second
+        val setting = RigPhysicsEdit(id, name, inputs = links,
+            outputs = (0 until fitted).filter { alone[it] == null }.map { k -> PhysicsOutput(outputs[k], vertexOf[k], scales[k].coerceAtLeast(1e-4f)) },
+            segments = chain, normalization = NORMALIZATION)
+        val extra = (0 until fitted).mapNotNull { k ->
+            val a = alone[k] ?: return@mapNotNull null
+            RigPhysicsEdit("${id}_${k + 1}", name, inputs = a.links, outputs = listOf(PhysicsOutput(outputs[k], 1, scales[k].coerceAtLeast(1e-4f))),
+                segments = listOf(a.segment), normalization = NORMALIZATION)
+        }
+        return Result(setting, extra, played, rawHeldOut?.let(::clamp) ?: emptyList(), (1.0 - error / total).toFloat())
     }
 
     /**

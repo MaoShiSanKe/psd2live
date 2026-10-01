@@ -1,20 +1,27 @@
 package io.github.psd2live.core.sim
 
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /*
  * A 2D XPBD solver ("small steps": many substeps, one constraint pass each, Macklin et al. 2019).
  *
  * Space is the evaluator's world space: canvas px with y negated, so y points up and gravity is -y. Everything is a flat
- * FloatArray / IntArray and every loop runs in index order: two runs from the same state are bit-identical,
- * which the bake relies on to replay.
+ * FloatArray / IntArray and every loop runs in a fixed order: two runs from the same state are bit-identical,
+ * which the bake relies on to replay. Each substep sweeps the coupled constraints the other way round from
+ * the one before, so Gauss-Seidel's order does not pull the body to one side.
  *
  * The rig moves the scene through two per-frame targets the caller writes before [XpbdSolver.step]:
  * - [SimState.anchorX]/[SimState.anchorY]: where each pinned particle's anchor is now (the pin follows it);
- * - [SimState.goalX]/[SimState.goalY]: the rest shape carried by the rig to this pose (the goal spring pulls
- *   toward it).
+ * - [SimState.goalX]/[SimState.goalY]: the rest shape carried by the rig to this pose. The goal spring pulls
+ *   toward it, and it is the rest shape of every edge, triangle and bend: what the rig reshapes on purpose
+ *   the material takes on, instead of fighting it with the default pose's lengths.
  * Both are interpolated across the substeps from the previous frame's values, so a fast rig motion does not
  * arrive as one jump.
  */
@@ -61,6 +68,7 @@ class SimState(val count: Int) {
             vx[i] = 0f; vy[i] = 0f
             anchorX[i] = x[i]; anchorY[i] = y[i]; goalX[i] = x[i]; goalY[i] = y[i]
             lastAnchorX[i] = x[i]; lastAnchorY[i] = y[i]; lastGoalX[i] = x[i]; lastGoalY[i] = y[i]
+            stepGoalX[i] = x[i]; stepGoalY[i] = y[i]
         }
         frameAngle = 0f; lastFrameAngle = 0f
     }
@@ -82,11 +90,12 @@ class SimState(val count: Int) {
 
 /**
  * Distance constraints `|a - b| = rest`, with one compliance when stretched and another when compressed
- * (XPBD compliance; 0 is rigid).
+ * (XPBD compliance; 0 is rigid). [rest] is the length at the default pose; the solver measures the live
+ * rest length on the goals.
  *
- * The split is what lets a 2D mesh bend at all: a triangulated sheet whose edges all keep their length is a
- * rigid truss. Seen from the front, cloth and hair fold and foreshorten in depth but never grow longer, so
- * edges resist stretching hard and compression only as much as the material's bend stiffness.
+ * The split is what lets a 2D mesh fold at all: seen from the front, cloth and hair fold and foreshorten in
+ * depth but never grow longer, so edges resist stretching hard and compression only softly. How far a
+ * triangle may shrink and how sharply the sheet may turn are [TriangleConstraints] and [BendConstraints].
  */
 class DistanceConstraints(
     val a: IntArray,
@@ -100,6 +109,38 @@ class DistanceConstraints(
 
     companion object {
         val Empty = DistanceConstraints(IntArray(0), IntArray(0), FloatArray(0), FloatArray(0))
+    }
+}
+
+/**
+ * Triangles of the mesh, wound as the mesh winds them. Each keeps its signed area from collapsing below
+ * [MIN_AREA] of the rest area, so it never turns over - always and nearly rigidly - and holds its area
+ * with [areaCompliance] ([Float.POSITIVE_INFINITY] is none): a heavy part keeps its shape, a light cloth
+ * may bunch up.
+ */
+class TriangleConstraints(val a: IntArray, val b: IntArray, val c: IntArray, val areaCompliance: FloatArray) {
+    init { require(a.size == b.size && b.size == c.size && c.size == areaCompliance.size) }
+    val size: Int get() = a.size
+
+    companion object {
+        /** Below this share of its rest area a triangle is pushed back out. */
+        const val MIN_AREA = 0.2f
+        val Empty = TriangleConstraints(IntArray(0), IntArray(0), IntArray(0), FloatArray(0))
+    }
+}
+
+/**
+ * Bending between two triangles [t1] and [t2] (indices into the solver's [TriangleConstraints]) that share
+ * an edge: how far each has turned from its rest shape, as the rotation of its deformation gradient, is
+ * kept alike. Shrinking or shearing turns neither, so this holds the sheet's curve without resisting the
+ * fold that [DistanceConstraints] lets it make.
+ */
+class BendConstraints(val t1: IntArray, val t2: IntArray, val compliance: FloatArray) {
+    init { require(t1.size == t2.size && t2.size == compliance.size) }
+    val size: Int get() = t1.size
+
+    companion object {
+        val Empty = BendConstraints(IntArray(0), IntArray(0), FloatArray(0))
     }
 }
 
@@ -139,7 +180,7 @@ data class SimSettings(
     val windX: Float = 0f,
     val windY: Float = 0f,
     val substeps: Int = 16,
-    /** Compliance of a pin with weight 1 is 0 (rigid); a softer pin scales this by (1 - w) / w. */
+    /** Compliance of a pin with weight 1 is 0 (rigid); a softer pin scales this by (1 - w) / w per unit mass. */
     val pinCompliance: Float = 1e-4f,
 ) {
     init {
@@ -150,13 +191,14 @@ data class SimSettings(
 }
 
 /**
- * The solver. [pinWeight] and [goalStrength] are per particle (0 = none). A pin weight of 1 makes the
- * particle kinematic on its anchor; below that the pin is a spring.
+ * The solver. [pinWeight] and [goalCompliance] are per particle (0 / [Float.POSITIVE_INFINITY] = none). A
+ * pin weight of 1 makes the particle kinematic on its anchor; below that the pin is a spring.
  */
 class XpbdSolver(
     val state: SimState,
     val stretch: DistanceConstraints = DistanceConstraints.Empty,
-    val bend: DistanceConstraints = DistanceConstraints.Empty,
+    val triangles: TriangleConstraints = TriangleConstraints.Empty,
+    val bends: BendConstraints = BendConstraints.Empty,
     val welds: WeldConstraints = WeldConstraints.Empty,
     val longRange: LongRangeConstraints = LongRangeConstraints.Empty,
     val pinWeight: FloatArray = FloatArray(state.count),
@@ -166,10 +208,22 @@ class XpbdSolver(
 ) {
     private val n = state.count
     private val stretchLambda = FloatArray(stretch.size)
-    private val bendLambda = FloatArray(bend.size)
+    private val areaLambda = FloatArray(triangles.size)
+    private val flipLambda = FloatArray(triangles.size)
+    private val bendLambda = FloatArray(bends.size)
     private val weldLambda = FloatArray(welds.size * 2)
     private val pinLambda = FloatArray(n * 2)
     private val goalLambda = FloatArray(n * 2)
+    /** The live rest shape, measured on the goals each substep. */
+    private val restLength = stretch.rest.copyOf()
+    private val restArea = FloatArray(triangles.size)
+    /** Per triangle, the inverse of its rest edge matrix, row-major (p, q, r, t). */
+    private val restInverse = FloatArray(triangles.size * 4)
+    /** Scratch for one bend: up to six corners, merged where the triangles share one. */
+    private val bendIndex = IntArray(6)
+    private val bendGx = FloatArray(6)
+    private val bendGy = FloatArray(6)
+    private val turnGrad = FloatArray(6)
 
     init {
         require(pinWeight.size == n && goalCompliance.size == n) { "Per-particle arrays must match the particle count" }
@@ -177,6 +231,8 @@ class XpbdSolver(
 
     /** Pinned particles are those with a full pin; they move only with their anchor. */
     private fun kinematic(i: Int) = pinWeight[i] >= 0.999f || state.invMass[i] == 0f
+
+    private fun mobility(i: Int) = if (kinematic(i)) 0f else state.invMass[i]
 
     /** Advances one frame of [dt] seconds. */
     fun step(dt: Float) {
@@ -193,17 +249,49 @@ class XpbdSolver(
                 s.stepGoalY[i] = s.lastGoalY[i] + (s.goalY[i] - s.lastGoalY[i]) * t
             }
             val angle = s.lastFrameAngle + (s.frameAngle - s.lastFrameAngle) * t
+            val reverse = sub % 2 == 0
+            measureRest()
             integrate(h)
-            stretchLambda.fill(0f); bendLambda.fill(0f); weldLambda.fill(0f); pinLambda.fill(0f); goalLambda.fill(0f)
+            stretchLambda.fill(0f); areaLambda.fill(0f); flipLambda.fill(0f); bendLambda.fill(0f)
+            weldLambda.fill(0f); pinLambda.fill(0f); goalLambda.fill(0f)
             solvePins(h)
-            solveDistances(stretch, stretchLambda, h)
-            solveDistances(bend, bendLambda, h)
-            solveWelds(h)
+            solveDistances(h, reverse)
+            solveTriangles(h, reverse)
+            solveBends(h, reverse)
+            solveWelds(h, reverse)
             solveGoals(h, angle)
-            solveLongRange()
+            solveLongRange(reverse)
+            // Goals and long-range limits pull particles after the edges are done: one more sweep the
+            // other way puts the length back, which is what keeps hair from stretching under a hard drag.
+            stretchLambda.fill(0f)
+            solveDistances(h, !reverse)
             updateVelocities(h)
         }
         s.settle()
+    }
+
+    /** The rest shape this substep: lengths, areas and edge matrices of the goals. */
+    private fun measureRest() {
+        val s = state
+        for (k in 0 until stretch.size) {
+            val dx = s.stepGoalX[stretch.a[k]] - s.stepGoalX[stretch.b[k]]
+            val dy = s.stepGoalY[stretch.a[k]] - s.stepGoalY[stretch.b[k]]
+            // What the rig lengthens the material takes on; what it shortens is the part turning away in
+            // depth, which the soft compression already gives. Taken as a new rest length instead, it would
+            // be pulled in at once by the stiff stretch and ring.
+            restLength[k] = maxOf(stretch.rest[k], sqrt(dx * dx + dy * dy))
+        }
+        for (k in 0 until triangles.size) {
+            val a = triangles.a[k]; val b = triangles.b[k]; val c = triangles.c[k]
+            val m00 = s.stepGoalX[b] - s.stepGoalX[a]; val m01 = s.stepGoalX[c] - s.stepGoalX[a]
+            val m10 = s.stepGoalY[b] - s.stepGoalY[a]; val m11 = s.stepGoalY[c] - s.stepGoalY[a]
+            val det = m00 * m11 - m01 * m10
+            restArea[k] = det / 2f
+            val o = k * 4
+            if (det * det < 1e-12f) { restInverse[o] = 0f; restInverse[o + 1] = 0f; restInverse[o + 2] = 0f; restInverse[o + 3] = 0f; continue }
+            restInverse[o] = m11 / det; restInverse[o + 1] = -m01 / det
+            restInverse[o + 2] = -m10 / det; restInverse[o + 3] = m00 / det
+        }
     }
 
     private fun integrate(h: Float) {
@@ -223,24 +311,26 @@ class XpbdSolver(
         }
     }
 
-    private fun solveDistances(c: DistanceConstraints, lambda: FloatArray, h: Float) {
+    private fun solveDistances(h: Float, reverse: Boolean) {
         val s = state
+        val c = stretch
         val h2 = h * h
-        for (k in 0 until c.size) {
+        for (step in 0 until c.size) {
+            val k = if (reverse) c.size - 1 - step else step
             val a = c.a[k]
             val b = c.b[k]
-            val wa = if (kinematic(a)) 0f else s.invMass[a]
-            val wb = if (kinematic(b)) 0f else s.invMass[b]
+            val wa = mobility(a)
+            val wb = mobility(b)
             val w = wa + wb
             if (w == 0f) continue
             val dx = s.x[a] - s.x[b]
             val dy = s.y[a] - s.y[b]
             val length = sqrt(dx * dx + dy * dy)
             if (length < 1e-9f) continue
-            val constraint = length - c.rest[k]
+            val constraint = length - restLength[k]
             val alpha = (if (constraint < 0f) c.compressionCompliance[k] else c.compliance[k]) / h2
-            val delta = (-constraint - alpha * lambda[k]) / (w + alpha)
-            lambda[k] += delta
+            val delta = (-constraint - alpha * stretchLambda[k]) / (w + alpha)
+            stretchLambda[k] += delta
             val nx = dx / length
             val ny = dy / length
             s.x[a] += wa * delta * nx; s.y[a] += wa * delta * ny
@@ -248,15 +338,115 @@ class XpbdSolver(
         }
     }
 
-    private fun solveWelds(h: Float) {
+    private fun solveTriangles(h: Float, reverse: Boolean) {
         val s = state
         val h2 = h * h
-        for (k in 0 until welds.size) {
+        for (step in 0 until triangles.size) {
+            val k = if (reverse) triangles.size - 1 - step else step
+            val rest = restArea[k]
+            if (rest * rest < 1e-8f) continue
+            val sign = if (rest > 0f) 1f else -1f
+            val a = triangles.a[k]; val b = triangles.b[k]; val c = triangles.c[k]
+            val wa = mobility(a); val wb = mobility(b); val wc = mobility(c)
+            if (wa + wb + wc == 0f) continue
+            val compliance = triangles.areaCompliance[k]
+            if (compliance.isFinite()) {
+                area(k, a, b, c, wa, wb, wc, sign, abs(rest), compliance / h2, areaLambda, unilateral = false)
+            }
+            area(k, a, b, c, wa, wb, wc, sign, abs(rest) * TriangleConstraints.MIN_AREA, 0f, flipLambda, unilateral = true)
+        }
+    }
+
+    /** Pulls triangle [k]'s area (signed by [sign]) toward [target]; [unilateral] only pushes it up to it. */
+    private fun area(k: Int, a: Int, b: Int, c: Int, wa: Float, wb: Float, wc: Float, sign: Float, target: Float, alpha: Float,
+                     lambda: FloatArray, unilateral: Boolean) {
+        val s = state
+        val xa = s.x[a]; val ya = s.y[a]; val xb = s.x[b]; val yb = s.y[b]; val xc = s.x[c]; val yc = s.y[c]
+        val value = sign * ((xb - xa) * (yc - ya) - (xc - xa) * (yb - ya)) / 2f
+        val constraint = value - target
+        if (unilateral && constraint >= 0f) return
+        // d(area)/d corner: half the opposite edge turned a quarter.
+        val gax = sign * (yb - yc) / 2f; val gay = sign * (xc - xb) / 2f
+        val gbx = sign * (yc - ya) / 2f; val gby = sign * (xa - xc) / 2f
+        val gcx = sign * (ya - yb) / 2f; val gcy = sign * (xb - xa) / 2f
+        val w = wa * (gax * gax + gay * gay) + wb * (gbx * gbx + gby * gby) + wc * (gcx * gcx + gcy * gcy)
+        if (w < 1e-12f) return
+        val delta = (-constraint - alpha * lambda[k]) / (w + alpha)
+        lambda[k] += delta
+        s.x[a] += wa * delta * gax; s.y[a] += wa * delta * gay
+        s.x[b] += wb * delta * gbx; s.y[b] += wb * delta * gby
+        s.x[c] += wc * delta * gcx; s.y[c] += wc * delta * gcy
+    }
+
+    /**
+     * How far triangle [k] has turned from its rest shape, radians, with its gradient over its corners a, b,
+     * c in [turnGrad] (x, y each); NaN when it has no rest shape.
+     */
+    private fun turn(k: Int): Float {
+        val s = state
+        val o = k * 4
+        val p = restInverse[o]; val q = restInverse[o + 1]; val r = restInverse[o + 2]; val t = restInverse[o + 3]
+        if (p == 0f && q == 0f && r == 0f && t == 0f) return Float.NaN
+        val a = triangles.a[k]; val b = triangles.b[k]; val c = triangles.c[k]
+        val e1x = s.x[b] - s.x[a]; val e1y = s.y[b] - s.y[a]
+        val e2x = s.x[c] - s.x[a]; val e2y = s.y[c] - s.y[a]
+        // F = [e1 e2]·Dm⁻¹; its rotation is atan2(F10 - F01, F00 + F11).
+        val cs = e1x * p + e2x * r + e1y * q + e2y * t
+        val sn = e1y * p + e2y * r - e1x * q - e2x * t
+        val norm = cs * cs + sn * sn
+        if (norm < 1e-12f) return Float.NaN
+        // dθ = (cs·d sn - sn·d cs) / (cs² + sn²), both linear in the corners.
+        val bx = (cs * -q - sn * p) / norm; val by = (cs * p - sn * q) / norm
+        val cx = (cs * -t - sn * r) / norm; val cy = (cs * r - sn * t) / norm
+        turnGrad[0] = -(bx + cx); turnGrad[1] = -(by + cy)
+        turnGrad[2] = bx; turnGrad[3] = by
+        turnGrad[4] = cx; turnGrad[5] = cy
+        return atan2(sn, cs)
+    }
+
+    private fun solveBends(h: Float, reverse: Boolean) {
+        val s = state
+        val h2 = h * h
+        for (step in 0 until bends.size) {
+            val k = if (reverse) bends.size - 1 - step else step
+            val t1 = bends.t1[k]; val t2 = bends.t2[k]
+            var count = 0
+            fun add(i: Int, gx: Float, gy: Float) {
+                for (j in 0 until count) if (bendIndex[j] == i) { bendGx[j] += gx; bendGy[j] += gy; return }
+                bendIndex[count] = i; bendGx[count] = gx; bendGy[count] = gy; count++
+            }
+            val first = turn(t1)
+            if (first.isNaN()) continue
+            add(triangles.a[t1], turnGrad[0], turnGrad[1]); add(triangles.b[t1], turnGrad[2], turnGrad[3]); add(triangles.c[t1], turnGrad[4], turnGrad[5])
+            val second = turn(t2)
+            if (second.isNaN()) continue
+            add(triangles.a[t2], -turnGrad[0], -turnGrad[1]); add(triangles.b[t2], -turnGrad[2], -turnGrad[3]); add(triangles.c[t2], -turnGrad[4], -turnGrad[5])
+            var constraint = first - second
+            if (constraint > PI.toFloat()) constraint -= 2f * PI.toFloat() else if (constraint < -PI.toFloat()) constraint += 2f * PI.toFloat()
+            var w = 0f
+            for (j in 0 until count) w += mobility(bendIndex[j]) * (bendGx[j] * bendGx[j] + bendGy[j] * bendGy[j])
+            if (w < 1e-12f) continue
+            val alpha = bends.compliance[k] / h2
+            val delta = (-constraint - alpha * bendLambda[k]) / (w + alpha)
+            bendLambda[k] += delta
+            for (j in 0 until count) {
+                val i = bendIndex[j]
+                val wi = mobility(i)
+                s.x[i] += wi * delta * bendGx[j]; s.y[i] += wi * delta * bendGy[j]
+            }
+        }
+    }
+
+    private fun solveWelds(h: Float, reverse: Boolean) {
+        val s = state
+        val h2 = h * h
+        for (step in 0 until welds.size) {
+            val k = if (reverse) welds.size - 1 - step else step
             val a = welds.a[k]
             val b = welds.b[k]
             // Each side's share of the pull, as Cubism weights it, limited by whether it can move at all.
-            val wa = if (kinematic(a)) 0f else s.invMass[a] * welds.weightA[k]
-            val wb = if (kinematic(b)) 0f else s.invMass[b] * welds.weightB[k]
+            val wa = mobility(a) * welds.weightA[k]
+            val wb = mobility(b) * welds.weightB[k]
             val w = wa + wb
             if (w == 0f) continue
             val alpha = welds.compliance[k] / h2
@@ -276,7 +466,8 @@ class XpbdSolver(
         for (i in 0 until n) {
             val weight = pinWeight[i]
             if (weight <= 0f || kinematic(i)) continue
-            val compliance = settings.pinCompliance * (1f - weight) / weight
+            // Per unit mass, so a soft pin springs back alike however finely the mesh is cut.
+            val compliance = settings.pinCompliance * (1f - weight) / weight * s.invMass[i]
             attach(i, s.stepAnchorX[i], s.stepAnchorY[i], compliance / h2, pinLambda)
         }
     }
@@ -284,13 +475,13 @@ class XpbdSolver(
     private fun solveGoals(h: Float, angle: Float) {
         val s = state
         val h2 = h * h
-        val cos = kotlin.math.cos(angle)
-        val sin = kotlin.math.sin(angle)
+        val cosA = cos(angle)
+        val sinA = sin(angle)
         for (i in 0 until n) {
             val compliance = goalCompliance[i]
             if (!compliance.isFinite() || kinematic(i)) continue
-            val ox = s.goalOffsetX[i] * cos - s.goalOffsetY[i] * sin
-            val oy = s.goalOffsetX[i] * sin + s.goalOffsetY[i] * cos
+            val ox = s.goalOffsetX[i] * cosA - s.goalOffsetY[i] * sinA
+            val oy = s.goalOffsetX[i] * sinA + s.goalOffsetY[i] * cosA
             attach(i, s.stepGoalX[i] + ox, s.stepGoalY[i] + oy, compliance / h2, goalLambda)
         }
     }
@@ -308,9 +499,10 @@ class XpbdSolver(
         s.y[i] += w * dyDelta
     }
 
-    private fun solveLongRange() {
+    private fun solveLongRange(reverse: Boolean) {
         val s = state
-        for (k in 0 until longRange.size) {
+        for (step in 0 until longRange.size) {
+            val k = if (reverse) longRange.size - 1 - step else step
             val i = longRange.particle[k]
             if (kinematic(i)) continue
             val r = longRange.root[k]
@@ -333,15 +525,32 @@ class XpbdSolver(
         }
     }
 
-    /** Largest relative stretch over [stretch] constraints, for tests and the bake report. */
+    /** Largest relative stretch over [stretch] constraints against their live rest length, for tests and the bake report. */
     fun maxStretch(): Float {
         var worst = 0f
         for (k in 0 until stretch.size) {
             val dx = state.x[stretch.a[k]] - state.x[stretch.b[k]]
             val dy = state.y[stretch.a[k]] - state.y[stretch.b[k]]
-            val rest = stretch.rest[k]
+            val rest = restLength[k]
             if (rest > 1e-6f) worst = max(worst, sqrt(dx * dx + dy * dy) / rest - 1f)
         }
         return worst
     }
+
+    /** The smallest signed area over [triangles] as a share of its rest area (below 0 is turned over), for tests. */
+    fun minAreaRatio(): Float {
+        var least = Float.MAX_VALUE
+        val s = state
+        for (k in 0 until triangles.size) {
+            val rest = restArea[k]
+            if (rest * rest < 1e-8f) continue
+            val a = triangles.a[k]; val b = triangles.b[k]; val c = triangles.c[k]
+            val value = ((s.x[b] - s.x[a]) * (s.y[c] - s.y[a]) - (s.x[c] - s.x[a]) * (s.y[b] - s.y[a])) / 2f
+            least = minOf(least, value / rest)
+        }
+        return if (least == Float.MAX_VALUE) 1f else least
+    }
+
+    /** Triangle [k]'s turn from rest and its gradient over corners a, b, c; for tests. */
+    internal fun turnOf(k: Int): Pair<Float, FloatArray> { measureRest(); val angle = turn(k); return angle to turnGrad.copyOf() }
 }

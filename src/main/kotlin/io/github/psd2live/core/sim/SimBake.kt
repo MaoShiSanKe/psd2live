@@ -86,7 +86,12 @@ class SimBakeResult(
     val clipped: Float = 0f,
     /** How jerky the baked motion is against the simulation's (third differences, 1 = as smooth). */
     val jerk: Float = 0f,
+    /** Pendulums of their own for later modes that react apart from the swing; [physics] drives the rest. */
+    val extraPhysics: List<RigPhysicsEdit> = emptyList(),
 ) {
+    /** Every pendulum the bake writes. */
+    val pendulums: List<RigPhysicsEdit> get() = listOfNotNull(physics) + extraPhysics
+
     val parameters: List<String> get() = modes.map { it.axis.parameter }
 
     fun toJson() = buildJsonObject {
@@ -95,6 +100,7 @@ class SimBakeResult(
         if (statics.isNotEmpty()) putJsonArray("statics") { statics.forEach { add(it.toJson()) } }
         putJsonArray("modes") { modes.forEach { add(it.toJson()) } }
         physics?.let { put("physics", it.toJson()) }
+        if (extraPhysics.isNotEmpty()) putJsonArray("extra_physics") { extraPhysics.forEach { add(it.toJson()) } }
         put("fit", fit); put("max_error_px", maxErrorPx)
         put("peak", peak); put("clipped", clipped); put("jerk", jerk)
     }
@@ -106,6 +112,7 @@ class SimBakeResult(
         }
         modes.firstOrNull()?.let { put("keys", it.axis.keys.size) }
         physics?.let { put("pendulum", it.id); put("segments", it.segments.size) }
+        if (extraPhysics.isNotEmpty()) putJsonArray("own_pendulums") { extraPhysics.forEach { add(it.id) } }
         if (statics.isNotEmpty()) putJsonArray("static_inputs") { statics.forEach { add(it.parameter) } }
         // All measured on held-out motion the fit never saw.
         put("fit_r2", fit); put("error_p95_px", maxErrorPx)
@@ -131,18 +138,25 @@ class SimBakeResult(
             o["peak"]?.jsonPrimitive?.floatOrNull ?: 0f,
             o["clipped"]?.jsonPrimitive?.floatOrNull ?: 0f,
             o["jerk"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            o["extra_physics"]?.jsonArray?.map { RigPhysicsEdit.fromJson(it.jsonObject) } ?: emptyList(),
         )
     }
 }
 
 object SimBake {
     /**
+     * Changes whenever the simulation itself moves differently for the same setup, so bakes made by an
+     * earlier solver read as stale and are made again.
+     */
+    private const val SOLVER_VERSION = "2"
+
+    /**
      * What a bake of [edit] depends on in [model]: the settings, the targets' rest meshes, their vertex
      * groups and the glues touching them. A bake's own keys change none of these,
      * so the model with or without them gives the same answer.
      */
     fun fingerprint(model: PuppetModel, edit: RigSimEdit): String {
-        val text = StringBuilder()
+        val text = StringBuilder("solver:").append(SOLVER_VERSION).append('|')
         val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake" - "exaggeration")
         text.append(settings.toString())
         for (raw in edit.targets) {

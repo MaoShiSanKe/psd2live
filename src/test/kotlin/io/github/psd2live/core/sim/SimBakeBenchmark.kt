@@ -50,13 +50,40 @@ class SimBakeBenchmark {
             println("=== $modes modes, $keys keys: %.1f s; held-out R² %.3f, p95 %.1f px, peak %.2f, clipped %.3f, jerk ×%.2f".format(
                 (System.nanoTime() - t) / 1e9, bake.fit, bake.maxErrorPx, bake.peak, bake.clipped, bake.jerk))
             println("    ${bake.physics}")
-            for (mode in bake.modes) println("    %s: swing %.1f px, %.0f%% of the motion".format(mode.axis.parameter, mode.amplitude, mode.energy * 100))
+            for (extra in bake.extraPhysics) println("    own pendulum $extra")
+            val written = SimAuthoring.withBake(o, "back", bake).applyTo(initial.baseRig.puppet)
+            for (mode in bake.modes) println("    %s: swing %.1f px, %.0f%% of the motion; %s".format(mode.axis.parameter, mode.amplitude, mode.energy * 100,
+                strain(model, edit, written, back.id, mode.axis.parameter)))
             for (blend in listOf(false, true)) {
                 val written = o.copy(simEdits = o.simEdits.map { it.copy(blendShapes = blend) })
                 val baked = SimAuthoring.withBake(written, "back", bake).applyTo(initial.baseRig.puppet)
                 println("  as ${if (blend) "blend shapes" else "keyform axes"}")
                 for (motion in Motion.entries) println("    %-6s %s".format(motion.name.lowercase(), play(model, edit, baked, bake, back.id, motion)))
             }
+        }
+    }
+
+    /**
+     * How much a mode bunches the body up: the edges along the grain, with the mode at either end of its
+     * range against rest - their mean shortening and the share shortened by more than 2%.
+     */
+    private fun strain(model: PuppetModel, edit: RigSimEdit, baked: PuppetModel, id: DrawableId, parameter: String): String {
+        val scene = SimScene.build(model, edit)
+        val stretch = scene.solver.stretch
+        val evaluator = CpuDeformationEvaluator()
+        val rest = evaluator.evaluate(baked, emptyMap()).worldPositions.getValue(id)
+        val offset = scene.offsets.getValue(id)
+        val along = (0 until stretch.size).filter { scene.edgeAlong[it] > 0.5f }
+        fun length(p: FloatArray, k: Int): Float {
+            val a = stretch.a[k] - offset; val b = stretch.b[k] - offset
+            return kotlin.math.hypot(p[a * 2] - p[b * 2], p[a * 2 + 1] - p[b * 2 + 1])
+        }
+        return listOf(-1f, 1f).joinToString(", ") { end ->
+            val posed = evaluator.evaluate(baked, mapOf(ParameterId(parameter) to end * SimGenerator.MODE_RANGE)).worldPositions.getValue(id)
+            val strains = along.map { k -> length(posed, k) / length(rest, k).coerceAtLeast(1e-3f) - 1f }
+            val shortened = strains.filter { it < 0f }
+            "at %+.0f: shortening %.1f%%, %.0f%% of grain edges past 2%%".format(end, -shortened.average().takeIf { !it.isNaN() }.let { it ?: 0.0 } * 100,
+                strains.count { it < -0.02f } * 100.0 / strains.size.coerceAtLeast(1))
         }
     }
 

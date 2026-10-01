@@ -148,7 +148,7 @@ object SimAuthoring {
         val model = unbakedModel(overlay, base, id)
         if (edit.bake != null && edit.bake.fingerprint == SimBake.fingerprint(model, edit)) return overlay to null
         return try {
-            withBake(overlay, id, SimBaker.bake(model, edit, SimBaker.Options(physicsFps = overlay.physicsFps, previous = edit.bake?.physics,
+            withBake(overlay, id, SimBaker.bake(model, edit, SimBaker.Options(physicsFps = overlay.physicsFps, previous = edit.bake?.physics, previousExtra = edit.bake?.extraPhysics.orEmpty(),
                 progress = progress, cancelled = cancelled))) to null
         } catch (failure: java.util.concurrent.CancellationException) {
             overlay to "Bake cancelled"

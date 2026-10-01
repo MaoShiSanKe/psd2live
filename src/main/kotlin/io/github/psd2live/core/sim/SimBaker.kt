@@ -50,6 +50,8 @@ object SimBaker {
         val extraSegments: Int = 0,
         /** The pendulum of the bake being replaced: the fit starts from it and searches close by, which is quicker. */
         val previous: io.github.psd2live.core.RigPhysicsEdit? = null,
+        /** That bake's pendulums of their own, likewise. */
+        val previousExtra: List<io.github.psd2live.core.RigPhysicsEdit> = emptyList(),
         val progress: (Float) -> Unit = {},
         val cancelled: () -> Boolean = { false },
     )
@@ -66,6 +68,11 @@ object SimBaker {
     private const val KEY_BEND = 0.3
     /** How much more a corner at the rest key costs than one at another key. */
     private const val CENTER_BEND = 10.0
+    /** The gains a later mode's shapes are tried at on the held-out motion, besides its full fit. */
+    private val LATER_GAINS = floatArrayOf(0.25f, 0.5f, 0.75f)
+    /** As in the pendulum fit: how much jerkier than the simulation the baked motion may be before it costs. */
+    private const val JERK_ALLOWANCE = 1.2
+    private const val JERK_COST = 0.5
     private const val SETTLE_SECONDS = 2.5f
 
     fun bake(model: PuppetModel, edit: RigSimEdit, options: Options = Options()): SimBakeResult {
@@ -171,13 +178,14 @@ object SimBaker {
         options.progress(0.65f)
         val outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) }
         val fit = SimPendulumFit.fit(SimGenerator.physicsId(edit), edit.name, outputs, inputs, PhysicsEngine.ranges(model.parameters),
-            track, motion, dt, options.physicsFps.toFloat(), segments = edit.modes + options.extraSegments, starts = starts,
-            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, previous = options.previous, check = ::check, weights = weights)
+            track, motion, metric, dt, options.physicsFps.toFloat(), segments = edit.modes + options.extraSegments, starts = starts,
+            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, heldOutMetric = heldOutMetric, previous = options.previous,
+            previousExtra = options.previousExtra, check = ::check, weights = weights)
 
         // 5. Key shapes for every mode at once; a mode that ends up moving nothing is dropped and the rest solved again.
         options.progress(0.95f)
         val keys = edit.modeKeys
-        var kept = outputs.indices.toList()
+        var kept = fit.played.indices.toList()
         var shapes = solveModes(residuals, kept.map { fit.played[it] }, keys, space.size, weights)
         while (kept.isNotEmpty()) {
             val moving = kept.filterIndexed { place, _ -> shapes[place].maxOf { space.motionPx(it) } >= MIN_MOTION_PX }
@@ -186,6 +194,39 @@ object SimBaker {
             shapes = if (kept.isEmpty()) emptyList() else solveModes(residuals, kept.map { fit.played[it] }, keys, space.size, weights)
         }
         require(kept.isNotEmpty() || statics.isNotEmpty()) { "The fitted pendulum does not move ${edit.id}; nothing to bake" }
+        val judged = heldOutMetric.sumOf { row -> row.sumOf { (it * it).toDouble() } } > total * 1e-3
+        if (kept.size > 1 && judged) {
+            // On the motion the fit never saw: each mode's keys solved once more over what the others leave
+            // (closer to solving them together, without their cancelling), then each later mode's gain. Each
+            // is kept only where the baked motion follows better without growing jerkier: a later mode that
+            // helps in large motion may only tremble in small.
+            val heldPlayed = kept.map { fit.heldOut[it] }
+            val simulatedPx = heldOutResiduals.map(space::toPx)
+            val simulatedJerk = jerkEnergy(simulatedPx).coerceAtLeast(1e-12)
+            val heldTotal = simulatedPx.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
+            fun heldOutScore(candidate: List<List<FloatArray>>): Double {
+                var missed = 0.0
+                val baked = heldOutResiduals.indices.map { f ->
+                    val sum = FloatArray(space.size)
+                    for (place in candidate.indices) { val o = at(candidate[place], keys, heldPlayed[place][f]); for (i in sum.indices) sum[i] += o[i] }
+                    val px = space.toPx(sum)
+                    for (i in px.indices) { val e = (simulatedPx[f][i] - px[i]).toDouble(); missed += e * e }
+                    px
+                }
+                val excess = maxOf(0.0, sqrt(jerkEnergy(baked) / simulatedJerk) - JERK_ALLOWANCE)
+                return missed / heldTotal + JERK_COST * excess * excess
+            }
+            var best = heldOutScore(shapes)
+            val refit = backfit(residuals, kept.map { fit.played[it] }, keys, shapes, space.size, weights)
+            heldOutScore(refit).let { if (it < best) { best = it; shapes = refit } }
+            for (place in 1 until kept.size) {
+                val full = shapes
+                for (gain in LATER_GAINS) {
+                    val trial = full.mapIndexed { p, mode -> if (p != place) mode else mode.map { o -> FloatArray(o.size) { o[it] * gain } } }
+                    heldOutScore(trial).let { if (it < best) { best = it; shapes = trial } }
+                }
+            }
+        }
         val axes = kept.mapIndexed { place, k -> SimBakedAxis(outputs[k], keys.copyOf(), space.split(shapes[place])) }
 
         // What each mode moves over the training.
@@ -199,7 +240,6 @@ object SimBaker {
         val modes = kept.indices.map { place -> SimBakedMode(axes[place], percentile(swings[place], 0.98f), (contributions[place] / total).toFloat()) }
 
         // How well the baked keys, played by the pendulum, reproduce the simulation on the motion the fit never saw.
-        val judged = heldOutMetric.sumOf { row -> row.sumOf { (it * it).toDouble() } } > total * 1e-3
         val (checkResiduals, checkPlayed) = if (judged) heldOutResiduals to fit.heldOut else residuals to fit.played
         val checkTotal = if (judged) heldOutMetric.sumOf { row -> row.sumOf { (it * it).toDouble() } } else total
         var missed = 0.0
@@ -222,13 +262,17 @@ object SimBaker {
         // Out to the parameters' own span: a keyform axis snaps a value within 0.001 of a key onto it, which
         // over -1..1 would jolt a large body every time a mode swings through rest.
         val range = SimGenerator.MODE_RANGE
-        val physics = fit.setting.copy(outputs = fit.setting.outputs.filterIndexed { k, _ -> k in kept }.map { it.copy(scale = it.scale * range) })
-        val spanned = modes.map { mode ->
+        val keptParameters = kept.map { outputs[it] }.toSet()
+        fun spanned(setting: io.github.psd2live.core.RigPhysicsEdit) =
+            setting.copy(outputs = setting.outputs.filter { it.parameter in keptParameters }.map { it.copy(scale = it.scale * range) })
+        val physics = spanned(fit.setting)
+        val extraPhysics = fit.extra.map(::spanned).filter { it.outputs.isNotEmpty() }
+        val spannedModes = modes.map { mode ->
             SimBakedMode(SimBakedAxis(mode.axis.parameter, FloatArray(mode.axis.keys.size) { mode.axis.keys[it] * range }, mode.axis.offsets), mode.amplitude, mode.energy)
         }
         options.progress(1f)
-        return SimBakeResult(fingerprint, space.counts, statics, spanned, physics,
-            (1.0 - missed / checkTotal).toFloat(), percentile(errors.toList(), 0.95f), peak, clipped, jerk)
+        return SimBakeResult(fingerprint, space.counts, statics, spannedModes, physics,
+            (1.0 - missed / checkTotal).toFloat(), percentile(errors.toList(), 0.95f), peak, clipped, jerk, extraPhysics)
     }
 
     /** [count] keys over [parameter]'s range, half on each side of its default (the default itself is one). */
@@ -249,16 +293,37 @@ object SimBaker {
         var left = residuals
         return played.mapIndexed { k, values ->
             val shapes = solveKeys(left, listOf(values), listOf(keys), size, weights).single()
-            if (k < played.lastIndex) left = left.mapIndexed { f, r ->
-                val u = values[f].coerceIn(keys.first(), keys.last())
-                var j = 0
-                while (j < keys.size - 2 && u > keys[j + 1]) j++
-                val t = (u - keys[j]) / (keys[j + 1] - keys[j])
-                val a = shapes[j]; val b = shapes[j + 1]
-                FloatArray(size) { r[it] - (a[it] * (1f - t) + b[it] * t) }
-            }
+            if (k < played.lastIndex) left = left.mapIndexed { f, r -> val o = at(shapes, keys, values[f]); FloatArray(size) { r[it] - o[it] } }
             shapes
         }
+    }
+
+    /** [shapes] (per key) at [value], linearly between the keys around it. */
+    internal fun at(shapes: List<FloatArray>, keys: FloatArray, value: Float): FloatArray {
+        val u = value.coerceIn(keys.first(), keys.last())
+        var j = 0
+        while (j < keys.size - 2 && u > keys[j + 1]) j++
+        val t = (u - keys[j]) / (keys[j + 1] - keys[j])
+        val a = shapes[j]; val b = shapes[j + 1]
+        return FloatArray(a.size) { a[it] * (1f - t) + b[it] * t }
+    }
+
+    /**
+     * One round of backfitting over [shapes] (per mode, per key): each mode's keys solved again, first to
+     * last, over [residuals] less what every other mode plays as it stands.
+     */
+    internal fun backfit(residuals: List<FloatArray>, played: List<FloatArray>, keys: FloatArray, shapes: List<List<FloatArray>>, size: Int,
+                         weights: FloatArray? = null): List<List<FloatArray>> {
+        val out = shapes.toMutableList()
+        for (k in played.indices) {
+            val left = residuals.mapIndexed { f, r ->
+                val rest = r.copyOf()
+                for (j in played.indices) if (j != k) { val o = at(out[j], keys, played[j][f]); for (i in 0 until size) rest[i] -= o[i] }
+                rest
+            }
+            out[k] = solveKeys(left, listOf(played[k]), listOf(keys), size, weights).single()
+        }
+        return out
     }
 
     /**

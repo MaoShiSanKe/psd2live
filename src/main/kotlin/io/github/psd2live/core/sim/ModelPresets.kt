@@ -362,13 +362,13 @@ object ModelPresets {
         return Applied(writer.overlay, writer.simulationIds.toList(), garments)
     }
 
-    /** Cloth on a limb or legs bends less and keeps closer to its drawn shape than a skirt or coat. */
+    /** Cloth on a limb or legs bends and bunches less and keeps closer to its drawn shape than a skirt or coat. */
     private fun clothMaterial(wear: ClothFit.Wear): SimMaterial {
         val cloth = SimMaterial.preset(SimKind.CLOTH)
         return when (wear) {
             ClothFit.Wear.TOP, ClothFit.Wear.SKIRT -> cloth
-            ClothFit.Wear.NECKWEAR -> cloth.copy(bend = 0.4f)
-            ClothFit.Wear.TROUSERS, ClothFit.Wear.SLEEVE, ClothFit.Wear.LEGWEAR -> cloth.copy(bend = 0.5f, goal = 0.25f, slack = 0.015f)
+            ClothFit.Wear.NECKWEAR -> cloth.copy(bend = 0.4f, area = 0.4f)
+            ClothFit.Wear.TROUSERS, ClothFit.Wear.SLEEVE, ClothFit.Wear.LEGWEAR -> cloth.copy(bend = 0.5f, area = 0.5f, goal = 0.25f, slack = 0.015f)
         }
     }
 

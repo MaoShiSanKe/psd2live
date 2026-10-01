@@ -53,27 +53,37 @@ data class SimMaterial(
     val goal: Float = 0.1f,
     /** How far a vertex may drift from its pinned root beyond the rest path, as a fraction (long-range limit). */
     val slack: Float = 0.03f,
+    /** Resistance to bunching up: how firmly each triangle keeps its area. Light cloth low, heavy parts high. */
+    val area: Float = 0.3f,
+    /**
+     * How much softer the material is across its grain than along it, the grain running away from the
+     * pins: 0 is alike every way, 1 lets strands part and fold lengthwise while they keep their length.
+     */
+    val anisotropy: Float = 0.3f,
 ) {
     init {
-        require(listOf(mass, stretch, bend, damping, goal, slack).all(Float::isFinite)) { "Material values must be finite" }
-        require(mass > 0f && stretch in 0f..1f && bend in 0f..1f && damping >= 0f && goal in 0f..1f && slack in 0f..1f) {
-            "Material out of range: mass > 0, stretch/bend/goal/slack 0..1, damping >= 0"
+        require(listOf(mass, stretch, bend, damping, goal, slack, area, anisotropy).all(Float::isFinite)) { "Material values must be finite" }
+        require(mass > 0f && stretch in 0f..1f && bend in 0f..1f && damping >= 0f && goal in 0f..1f && slack in 0f..1f &&
+            area in 0f..1f && anisotropy in 0f..1f) {
+            "Material out of range: mass > 0, stretch/bend/goal/slack/area/anisotropy 0..1, damping >= 0"
         }
     }
 
     fun toJson() = buildJsonObject {
         put("mass", mass); put("stretch", stretch); put("bend", bend); put("damping", damping); put("goal", goal); put("slack", slack)
+        put("area", area); put("anisotropy", anisotropy)
     }
 
     companion object {
         fun fromJson(o: JsonObject, base: SimMaterial = SimMaterial()) = SimMaterial(
             o.number("mass") ?: base.mass, o.number("stretch") ?: base.stretch, o.number("bend") ?: base.bend,
             o.number("damping") ?: base.damping, o.number("goal") ?: base.goal, o.number("slack") ?: base.slack,
+            o.number("area") ?: base.area, o.number("anisotropy") ?: base.anisotropy,
         )
 
         fun preset(kind: SimKind) = when (kind) {
-            SimKind.CLOTH -> SimMaterial(stretch = 0.98f, bend = 0.3f, damping = 1.5f, goal = 0.1f)
-            SimKind.HAIR -> SimMaterial(stretch = 1f, bend = 0.45f, damping = 2f, goal = 0.15f, slack = 0.01f)
+            SimKind.CLOTH -> SimMaterial(stretch = 0.98f, bend = 0.3f, damping = 1.5f, goal = 0.1f, area = 0.3f, anisotropy = 0.3f)
+            SimKind.HAIR -> SimMaterial(stretch = 1f, bend = 0.45f, damping = 2f, goal = 0.15f, slack = 0.01f, area = 0.5f, anisotropy = 0.7f)
         }
     }
 }

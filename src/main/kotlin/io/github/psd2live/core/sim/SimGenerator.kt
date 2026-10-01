@@ -40,18 +40,19 @@ object SimGenerator {
     /** `ParamSim<id>_<k>` for mode [k] (1-based). */
     fun parameterId(sim: RigSimEdit, k: Int) = "ParamSim${SwingAuthoring.asciiStem(sim.id)}_$k"
 
-    /** `PhysicsSim_<id>`: the one pendulum of a baked simulation. */
+    /** `PhysicsSim_<id>`: the pendulum of a baked simulation; a later mode with one of its own adds `_<k>`. */
     fun physicsId(sim: RigSimEdit) = "PhysicsSim_${sim.id}"
 
-    /** The pendulum of every enabled baked simulation whose parameters exist. */
-    fun physicsRules(sims: List<RigSimEdit>, available: Set<String>): List<RigPhysicsEdit> = sims.mapNotNull { sim ->
-        val rule = sim.bake?.physics?.takeIf { sim.enabled } ?: return@mapNotNull null
-        rule.copy(inputs = rule.inputs.filter { it.parameter in available }, outputs = rule.outputs.filter { it.parameter in available })
-            .takeIf { it.inputs.isNotEmpty() && it.outputs.isNotEmpty() }
+    /** The pendulums of every enabled baked simulation whose parameters exist. */
+    fun physicsRules(sims: List<RigSimEdit>, available: Set<String>): List<RigPhysicsEdit> = sims.filter { it.enabled }.flatMap { sim ->
+        sim.bake?.pendulums.orEmpty().mapNotNull { rule ->
+            rule.copy(inputs = rule.inputs.filter { it.parameter in available }, outputs = rule.outputs.filter { it.parameter in available })
+                .takeIf { it.inputs.isNotEmpty() && it.outputs.isNotEmpty() }
+        }
     }
 
     /** The simulation a generated pendulum belongs to. */
-    fun simulationOf(groupId: String, sims: List<RigSimEdit>): RigSimEdit? = sims.firstOrNull { it.bake?.physics?.id == groupId }
+    fun simulationOf(groupId: String, sims: List<RigSimEdit>): RigSimEdit? = sims.firstOrNull { sim -> sim.bake?.pendulums.orEmpty().any { it.id == groupId } }
 
     /** [pose] without the parameters [sim]'s bake drives, so they sit at their defaults under the live simulation. */
     fun withoutModes(pose: Map<ParameterId, Float>, sim: RigSimEdit): Map<ParameterId, Float> {
