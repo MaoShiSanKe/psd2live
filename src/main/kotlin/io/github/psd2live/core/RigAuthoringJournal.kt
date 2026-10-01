@@ -81,7 +81,7 @@ internal object RigAuthoringJournal {
                             else -> error("Moved point must be [x, y] or {x, y}")
                         }
                     }
-                    val deformed = DeformPathTools.deform(geometry.base, current.deformPaths, pathId, movedPoints)
+                    val deformed = DeformPathTools.deform(geometry.base, current.deformPaths, pathId, movedPoints, org.umamo.render.eval.DeformPathMetrics.canvasScale(current, current.drawables.single { it.id.raw == ref.id }))
                     buildJsonObject {
                         put("op", "set"); put("target", command.getValue("target")); put("key", command.getValue("key"))
                         putJsonObject("geometry") {
@@ -96,9 +96,8 @@ internal object RigAuthoringJournal {
                     require(targetRef.kind == RigTargetKind.ART_MESH) { "Deform paths require an ArtMesh" }
                     val drawable = current.drawables.singleOrNull { it.id.raw == targetRef.id } ?: error("Mesh not found: ${targetRef.id}")
                     val mesh = requireNotNull(drawable.mesh) { "Drawable has no mesh" }
-                    val extent = RigGeometryTools.bounds(mesh.positions).let { kotlin.math.max(it[2], it[3]) }
-                    val width = command["width"]?.jsonPrimitive?.float ?: (extent * 0.12f)
-                    val hardness = command["hardness"]?.jsonPrimitive?.float ?: 0.5f
+                    val width = command["width"]?.jsonPrimitive?.float ?: org.umamo.runtime.model.DeformPath.DEFAULT_WIDTH
+                    val hardness = command["hardness"]?.jsonPrimitive?.float ?: org.umamo.runtime.model.DeformPath.DEFAULT_HARDNESS
                     val closed = command["closed"]?.jsonPrimitive?.boolean ?: false
                     val level = command["level"]?.jsonPrimitive?.int ?: 2
                     val points = if (needsBinding) {
@@ -119,7 +118,7 @@ internal object RigAuthoringJournal {
                         rawPoints.map { it.jsonObject }
                     }
                     buildJsonObject {
-                        put("op", "path_put")
+                        put("op", "path_put"); put("path_units", "cubism")
                         put("id", command.text("id"))
                         put("target", command.text("target"))
                         put("width", width)

@@ -1168,15 +1168,11 @@ internal fun BoxScope.CanvasEditorOverlay(
                     )
                 }
                 val draftScreen = editor.screen(editor.draft.flatMap { listOf(it.first, it.second) }.toFloatArray(), target, viewport)
-                val extent = RigGeometryTools.bounds(target.geometry.points).let { maxOf(it[2], it[3]).coerceAtLeast(1e-6f) }
-                val localWidth = extent * editor.pathWidth.coerceAtLeast(0f)
+                val canvasWidth = (extending?.width ?: editor.pathWidth).coerceAtLeast(0f)
                 drawDeformPathInfluencePreview(
                     centers = draftScreen,
-                    sampleLocal = editor.draft.first(),
-                    localWidth = localWidth,
-                    hardness = editor.pathHardness,
-                    editor = editor,
-                    target = target,
+                    canvasWidth = canvasWidth,
+                    hardness = extending?.hardness ?: editor.pathHardness,
                     viewport = viewport,
                     colors = colors,
                 )
@@ -1186,11 +1182,8 @@ internal fun BoxScope.CanvasEditorOverlay(
                         .firstOrNull()?.let { tip ->
                             drawDeformPathInfluencePreview(
                                 centers = listOf(tip),
-                                sampleLocal = rubber,
-                                localWidth = localWidth,
-                                hardness = editor.pathHardness,
-                                editor = editor,
-                                target = target,
+                                canvasWidth = canvasWidth,
+                                hardness = extending?.hardness ?: editor.pathHardness,
                                 viewport = viewport,
                                 colors = colors,
                                 alphaScale = 0.55f,
@@ -1731,12 +1724,15 @@ private fun PlacementSettingsPanel(
                     fontSize = 10.sp,
                     modifier = Modifier.width(36.dp),
                 )
-                MiniStepper(
-                    value = (editor.pathWidth * 100f).roundToInt().coerceIn(1, 100),
-                    onValueChange = { if (!isClosing) editor.pathWidth = it.coerceIn(1, 100) / 100f },
-                    min = 1,
-                    max = 100,
-                    unit = "%",
+                io.github.psd2live.ui.components.CompactNumberSpinner(
+                    value = editor.pathWidth.toDouble(),
+                    onValueChange = { if (!isClosing) editor.pathWidth = it.coerceIn(0.0, 100000.0).toFloat() },
+                    min = 0.0,
+                    max = 100000.0,
+                    decimals = 2,
+                    step = 1.0,
+                    height = 23.dp,
+                    unit = "px",
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -1752,11 +1748,14 @@ private fun PlacementSettingsPanel(
                     fontSize = 10.sp,
                     modifier = Modifier.width(36.dp),
                 )
-                MiniStepper(
-                    value = (editor.pathHardness * 100f).roundToInt().coerceIn(0, 100),
-                    onValueChange = { if (!isClosing) editor.pathHardness = it.coerceIn(0, 100) / 100f },
-                    min = 0,
-                    max = 100,
+                io.github.psd2live.ui.components.CompactNumberSpinner(
+                    value = editor.pathHardness.toDouble(),
+                    onValueChange = { if (!isClosing) editor.pathHardness = it.coerceIn(0.0, 100.0).toFloat() },
+                    min = 0.0,
+                    max = 100.0,
+                    decimals = 2,
+                    step = 1.0,
+                    height = 23.dp,
                     unit = "%",
                     modifier = Modifier.weight(1f),
                 )
@@ -3405,24 +3404,15 @@ private fun DrawScope.drawDeformPathHandle(p: Offset, colors: ToolColors, hovere
 /** Live width (outer dashed) / hardness (inner) rings while placing a deform path. */
 private fun DrawScope.drawDeformPathInfluencePreview(
     centers: List<Offset>,
-    sampleLocal: Pair<Float, Float>,
-    localWidth: Float,
+    canvasWidth: Float,
     hardness: Float,
-    editor: CanvasEditor,
-    target: CanvasTarget,
     viewport: CanvasViewport,
     colors: ToolColors,
     alphaScale: Float = 1f,
 ) {
-    if (centers.isEmpty() || localWidth <= 1e-6f) return
-    val probe = editor.screen(
-        floatArrayOf(sampleLocal.first, sampleLocal.second, sampleLocal.first + localWidth, sampleLocal.second),
-        target,
-        viewport,
-    )
-    if (probe.size < 2) return
-    val outerR = (probe[1] - probe[0]).getDistance().coerceAtLeast(1f)
-    val hard = hardness.coerceIn(0f, 1f)
+    if (centers.isEmpty() || canvasWidth <= 0f) return
+    val outerR = (canvasWidth * viewport.scale).toFloat()
+    val hard = hardness.coerceIn(0f, 100f) / 100f
     val innerR = outerR * hard
     val dash = PathEffect.dashPathEffect(floatArrayOf(4f, 4f))
     centers.forEach { p ->

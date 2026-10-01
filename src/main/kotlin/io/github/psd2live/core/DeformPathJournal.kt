@@ -6,6 +6,7 @@ import org.umamo.runtime.model.*
 internal object DeformPathJournal {
     fun encode(path: DeformPath): JsonObject = buildJsonObject {
         put("op", "path_put"); put("id", path.id); put("target", "mesh:${path.drawableId.raw}")
+        put("path_units", "cubism")
         put("width", path.width); put("hardness", path.hardness); put("closed", path.closed); put("level", path.editLevel)
         put("points", JsonArray(path.points.map { p -> buildJsonObject {
             put("a",p.a);put("b",p.b);put("c",p.c);put("wa",p.wa);put("wb",p.wb);put("wc",p.wc);put("corner",p.corner)
@@ -20,13 +21,18 @@ internal object DeformPathJournal {
         }
         val target=RigAuthoringJournal.target(command.getValue("target").jsonPrimitive.content)
         require(target.kind==RigTargetKind.ART_MESH) { "Deform paths require an ArtMesh" }
-        val mesh=requireNotNull(model.drawables.single { it.id.raw==target.id }.mesh)
+        val drawable=model.drawables.single { it.id.raw==target.id }
+        val mesh=requireNotNull(drawable.mesh)
+        val nativeUnits=command["path_units"]?.jsonPrimitive?.content == "cubism"
+        val width=command.getValue("width").jsonPrimitive.float
+        val hardness=command.getValue("hardness").jsonPrimitive.float
         val path=DeformPath(id,DrawableId(target.id),command.getValue("points").jsonArray.map { e ->
             val p=e.jsonObject
             DeformPathPoint(p.getValue("a").jsonPrimitive.int,p.getValue("b").jsonPrimitive.int,p.getValue("c").jsonPrimitive.int,
                 p.getValue("wa").jsonPrimitive.float,p.getValue("wb").jsonPrimitive.float,p.getValue("wc").jsonPrimitive.float,
                 p["corner"]?.jsonPrimitive?.boolean ?: false)
-        },command.getValue("width").jsonPrimitive.float,command.getValue("hardness").jsonPrimitive.float,
+        },if(nativeUnits) width else width * org.umamo.render.eval.DeformPathMetrics.canvasScale(model,drawable),
+            if(nativeUnits) hardness else hardness * 100f,
             command["closed"]?.jsonPrimitive?.boolean ?: false,command["level"]?.jsonPrimitive?.int ?: 2)
         for(p in path.points) {
             p.position(mesh.positions)

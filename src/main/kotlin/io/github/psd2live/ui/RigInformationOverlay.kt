@@ -1,7 +1,6 @@
 package io.github.psd2live.ui
 
 import androidx.compose.ui.geometry.Offset
-import org.umamo.render.eval.DeformPathMetrics
 import io.github.psd2live.core.DeformPathTools
 import io.github.psd2live.core.RigGeometryTools
 import org.umamo.runtime.model.*
@@ -369,9 +368,9 @@ internal object RigInformationOverlay {
             val drawHardness = (showHardness || showRadius) && path.width > 0f && path.hardness > 0f && !isDimmed
 
             if (drawWidth || drawHardness) {
-                val worldWidth = DeformPathMetrics.canvasWidth(model, drawable, path)
+                val worldWidth = path.safeWidth
                 val outerRadiusPx = (worldWidth * viewport.scale).toFloat()
-                val innerRadiusPx = outerRadiusPx * path.hardness.coerceIn(0f, 1f)
+                val innerRadiusPx = outerRadiusPx * (path.safeHardness / 100f)
                 for (pt in screenPoints) {
                     if (drawHardness && innerRadiusPx > 1f) {
                         val innerBoundary = Ellipse2D.Float(pt.first - innerRadiusPx, pt.second - innerRadiusPx,

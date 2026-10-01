@@ -73,7 +73,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.ColorRgb
-import org.umamo.render.eval.DeformPathMetrics
 import org.umamo.runtime.model.DeformPath
 import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.DeformerId
@@ -213,15 +212,16 @@ private fun DeformPathInspector(
         InspectorSectionBox(title = tr("inspector.pathCurve")) {
             InspectorFormRow(label = tr("inspector.deformPathWidth")) {
                 CompactNumberSpinner(
-                    value = DeformPathMetrics.canvasWidth(editor.model, drawable, path).toDouble(),
+                    value = path.width.toDouble(),
                     onValueChange = { w ->
-                        if (editable) editor.changePath { it.copy(width = DeformPathMetrics.localWidth(editor.model, drawable, w.toFloat())) }
+                        if (editable) editor.changePath { it.copy(width = w.toFloat().coerceAtLeast(0f)) }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     min = 0.0,
                     max = 100000.0,
                     decimals = 2,
                     step = 1.0,
+                    unit = "px",
                     enabled = editable,
                     height = 23.dp,
                 )
@@ -229,14 +229,14 @@ private fun DeformPathInspector(
 
             InspectorFormRow(label = tr("inspector.deformPathHardness")) {
                 CompactNumberSpinner(
-                    value = path.hardness * 100.0,
+                    value = path.hardness.toDouble(),
                     onValueChange = { h ->
-                        if (editable) editor.changePath { it.copy(hardness = (h.toFloat() / 100f).coerceIn(0f, 1f)) }
+                        if (editable) editor.changePath { it.copy(hardness = h.toFloat().coerceIn(0f, 100f)) }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     min = 0.0,
                     max = 100.0,
-                    decimals = 0,
+                    decimals = 2,
                     step = 1.0,
                     unit = "%",
                     enabled = editable,

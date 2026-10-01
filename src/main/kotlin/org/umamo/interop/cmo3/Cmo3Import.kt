@@ -540,7 +540,7 @@ object Cmo3Import {
 				atlas = atlasIngest.atlas,
 				sources = atlasIngest.sources,
 			)
-		val withRenderRoot = Cmo3DeformPaths.toLocalWidths(model.copy(renderRoot = model.deriveRenderRoot()))
+		val withRenderRoot = model.copy(renderRoot = model.deriveRenderRoot())
 		val puppet = if (compactChannels) withRenderRoot.withChannelsCompacted() else withRenderRoot
 		return Cmo3ImportedDocument(puppet, atlasIngest)
 	}

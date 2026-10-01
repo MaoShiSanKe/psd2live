@@ -2,12 +2,11 @@ package org.umamo.render.eval
 
 import org.umamo.runtime.eval.meshGridDefaultDeltas
 
-import org.umamo.runtime.model.DeformPath
 import org.umamo.runtime.model.Drawable
 import org.umamo.runtime.model.PuppetModel
 import kotlin.math.hypot
 
-/** Converts parent-local path radii to the canvas distances stored in CMO3 lineWidth. */
+/** Internal coordinate scale for deformation math and migration of old path journals. */
 object DeformPathMetrics {
     fun canvasScale(model: PuppetModel, drawable: Drawable): Float {
         val mesh = requireNotNull(drawable.mesh)
@@ -29,9 +28,4 @@ object DeformPathMetrics {
         return if (localLength > 1e-12 && canvasLength > 1e-12) (canvasLength / localLength).toFloat() else 1f
     }
 
-    fun canvasWidth(model: PuppetModel, drawable: Drawable, path: DeformPath): Float =
-        path.safeWidth * canvasScale(model, drawable)
-
-    fun localWidth(model: PuppetModel, drawable: Drawable, canvasWidth: Float): Float =
-        canvasWidth.coerceAtLeast(0f) / canvasScale(model, drawable)
 }

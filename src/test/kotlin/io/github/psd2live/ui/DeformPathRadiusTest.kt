@@ -1,5 +1,8 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.core.DeformPathJournal
+import io.github.psd2live.agent.AgentPathTools
+import kotlinx.serialization.json.*
 import org.umamo.format.cmo3.Cmo3
 import org.umamo.format.cmo3.model.custom.CModelSource
 import org.umamo.format.cmo3.model.gen.CControllerCurve
@@ -10,7 +13,6 @@ import org.umamo.interop.cmo3.*
 import org.umamo.render.eval.DeformedGeometry
 import org.umamo.render.restMeshesToCanvasSpace
 import org.umamo.render.eval.CpuDeformationEvaluator
-import org.umamo.render.eval.DeformPathMetrics
 import org.umamo.runtime.model.*
 import java.awt.Color
 import java.awt.image.BufferedImage
@@ -20,6 +22,36 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class DeformPathRadiusTest {
+    @Test fun creationSettingsAndJournalUseExactCubismValues() {
+        val model = newlyCreatedPuppet()
+        val arguments = buildJsonObject {
+            put("target", "mesh:mesh")
+            put("points", JsonArray(listOf(JsonArray(listOf(JsonPrimitive(0.2f), JsonPrimitive(0.2f))),
+                JsonArray(listOf(JsonPrimitive(0.7f), JsonPrimitive(0.2f))))))
+        }
+        val defaults = AgentPathTools.createPutCommand(model, arguments).second
+        assertEquals(50f, defaults.getValue("width").jsonPrimitive.float)
+        assertEquals(50f, defaults.getValue("hardness").jsonPrimitive.float)
+        val explicit = AgentPathTools.createPutCommand(model, JsonObject(arguments + mapOf(
+            "width" to JsonPrimitive(37.25f), "hardness" to JsonPrimitive(63.5f)))).second
+        val replayed = DeformPathJournal.apply(model, explicit)
+        val path = replayed.deformPaths.last()
+        assertEquals(37.25f, path.width)
+        assertEquals(63.5f, path.hardness)
+        assertEquals(path, DeformPathJournal.apply(replayed, DeformPathJournal.encode(path)).deformPaths.last())
+    }
+
+    @Test fun legacyLocalUnitsMigrateOnceOnJournalReplay() {
+        val model = newlyCreatedPuppet()
+        val oldCommand = JsonObject(DeformPathJournal.encode(model.deformPaths.single()).filterKeys { it != "path_units" } +
+            mapOf("width" to JsonPrimitive(0.06f), "hardness" to JsonPrimitive(0.5f)))
+        val migrated = DeformPathJournal.apply(model, oldCommand)
+        val path = migrated.deformPaths.single()
+        assertEquals(50f, path.width, 0.001f)
+        assertEquals(50f, path.hardness)
+        assertEquals(path, DeformPathJournal.apply(migrated, DeformPathJournal.encode(path)).deformPaths.single())
+    }
+
     private fun newlyCreatedPuppet(): PuppetModel {
         val source = puppet()
         val span = 50f / 0.06f
@@ -32,14 +64,14 @@ class DeformPathRadiusTest {
                 geometryGrid = KeyformGrid(emptyList(), listOf(KeyformCell(intArrayOf(), MeshDeltaForm(FloatArray(6))))))
         }
         return source.copy(deformers = listOf(warp), drawables = listOf(drawable),
-            deformPaths = source.deformPaths.map { it.copy(width = 0.06f) })
+            deformPaths = source.deformPaths.map { it.copy(width = 50f) })
     }
 
     @Test fun newlyCreatedLocalPathShows50PixelsBeforeAndAfterExportNormalization() {
         val live = newlyCreatedPuppet()
         val normalized = restMeshesToCanvasSpace(live)
         for (model in listOf(live, normalized)) {
-            assertEquals(50f, DeformPathMetrics.canvasWidth(model, model.drawables.single(), model.deformPaths.single()), 0.001f)
+            assertEquals(50f, model.deformPaths.single().width, 0.001f)
             val image = BufferedImage(400, 400, BufferedImage.TYPE_INT_ARGB)
             val graphics = image.createGraphics()
             try {
@@ -63,7 +95,7 @@ class DeformPathRadiusTest {
         val file = Cmo3.read(Cmo3.write(result.model))
         assertEquals(50f, nativeWidth(file), 0.001f)
         val imported = Cmo3Import.fromModelSource(file.root as CModelSource)
-        assertEquals(50f, DeformPathMetrics.canvasWidth(imported, imported.drawables.single(), imported.deformPaths.single()), 0.001f)
+        assertEquals(50f, imported.deformPaths.single().width, 0.001f)
     }
 
     private fun puppet(): PuppetModel {
@@ -83,41 +115,44 @@ class DeformPathRadiusTest {
         val path = DeformPath(
             "a1111111-1111-4111-8111-111111111111", drawable.id,
             listOf(DeformPathPoint(0, 1, 2, 1f, 0f, 0f), DeformPathPoint(0, 1, 2, 0f, 1f, 0f)),
-            width = 0.2f, hardness = 0.6f,
+            width = 50f, hardness = 60f,
         )
         return PuppetModel(emptyList(), emptyList(), listOf(warp), listOf(drawable),
             listOf(OrgChild.Drawable(drawable.id)), null, canvasWidth = 200f, canvasHeight = 150f,
             deformPaths = listOf(path))
     }
 
-    private fun nativeWidth(model: org.umamo.format.cmo3.Cmo3Model): Float {
+    private fun nativeCurve(model: org.umamo.format.cmo3.Cmo3Model): CControllerCurve {
         val source = Cmo3GraphIndex(model.root as CModelSource).drawableSources.single()
         val controller = Cmo3Import.elementsOf(source._extensions).filterIsInstance<CControllerExtension>().single()
-        return Cmo3Import.elementsOf(controller.controlCurves).filterIsInstance<CControllerCurve>().single().lineWidth
+        return Cmo3Import.elementsOf(controller.controlCurves).filterIsInstance<CControllerCurve>().single()
     }
+
+    private fun nativeWidth(model: org.umamo.format.cmo3.Cmo3Model): Float = nativeCurve(model).lineWidth
 
     @Test fun inspectorRadiusMatchesSerializedCmo3AndEditedRoundTrip() {
         val puppet = puppet()
         val drawable = puppet.drawables.single()
         val path = puppet.deformPaths.single()
-        val expected = path.width * ((100.0 + 50.0 + hypot(100.0, 50.0)) / (2.0 + kotlin.math.sqrt(2.0))).toFloat()
-        assertEquals(expected, DeformPathMetrics.canvasWidth(puppet, drawable, path), 1e-4f)
+        val expected = 50f
+        assertEquals(expected, path.width, 1e-4f)
         val page = Cmo3Conversion.AtlasPage(PngCodec.write(RasterImage(2, 2, ByteArray(16) { 0xFF.toByte() })), 2, 2)
         val result = Cmo3Conversion.freshCmo3(puppet, listOf(page), mapOf("mesh" to 0), "radius", 0L, 0x42)
         val file = Cmo3.read(Cmo3.write(result.model))
         assertEquals(expected, nativeWidth(file), 1e-4f)
+        assertEquals(60f, nativeCurve(file).lineHardnessPercent)
         val imported = Cmo3Import.fromModelSource(file.root as CModelSource)
         assertEquals(path.width, imported.deformPaths.single().width, 1e-5f)
-        // This is the same canvas-to-local conversion used by the inspector's edit callback.
+        // The inspector writes its Cubism value directly, with no inverse conversion.
         val edited = imported.copy(deformPaths = imported.deformPaths.map {
-            it.copy(width = DeformPathMetrics.localWidth(imported, imported.drawables.single(), 32f))
+            it.copy(width = 32f)
         })
         Cmo3Export.apply(edited, file)
         val rewritten = Cmo3.read(Cmo3.write(file))
         assertEquals(32f, nativeWidth(rewritten), 1e-4f)
         val reimported = Cmo3Import.fromModelSource(rewritten.root as CModelSource)
-        assertEquals(32f, DeformPathMetrics.canvasWidth(reimported, reimported.drawables.single(), reimported.deformPaths.single()), 1e-4f)
-        // Changing the parent scale must update native width even when the path is unchanged.
+        assertEquals(32f, reimported.deformPaths.single().width, 1e-4f)
+        // Parent changes never reinterpret the authoritative canvas radius.
         val rescaled = reimported.copy(deformers = reimported.deformers.map { deformer ->
             val warp = deformer as Deformer.Warp
             warp.copy(geometryGrid = warp.geometryGrid!!.let { grid ->
@@ -128,16 +163,16 @@ class DeformPathRadiusTest {
                 })
             })
         })
-        val rescaledWidth = DeformPathMetrics.canvasWidth(rescaled, rescaled.drawables.single(), rescaled.deformPaths.single())
-        assertEquals(64f, rescaledWidth, 0.001f)
+        val rescaledWidth = rescaled.deformPaths.single().width
+        assertEquals(32f, rescaledWidth, 0.001f)
         Cmo3Export.apply(rescaled, rewritten)
         assertEquals(rescaledWidth, nativeWidth(Cmo3.read(Cmo3.write(rewritten))), 1e-4f)
     }
 
     @Test fun previewRadiusUsesExportDistanceAcrossZoomAndPoses() {
-        val model = puppet()
+        val model = puppet().let { it.copy(deformPaths = it.deformPaths.map { path -> path.copy(width = 15f) }) }
         val drawable = model.drawables.single()
-        val radius = DeformPathMetrics.canvasWidth(model, drawable, model.deformPaths.single())
+        val radius = model.deformPaths.single().width
         for (zoom in listOf(1.0, 2.0)) for (geometry in listOf(null,
             DeformedGeometry(mapOf(drawable.id to floatArrayOf(40f, 50f, 240f, 50f, 40f, 75f)), emptyMap(), emptyMap()))) {
             val image = BufferedImage(600, 400, BufferedImage.TYPE_INT_ARGB)
@@ -153,7 +188,7 @@ class DeformPathRadiusTest {
                 for (y in 0 until image.height) for (x in 0 until image.width) {
                     val color = Color(image.getRGB(x, y), true)
                     val distance = hypot(x - cx, y - cy)
-                    if (color.alpha > 50 && color.red > 180 && color.green < 120 && color.blue < 120 && distance < 50 * zoom) add(distance)
+                    if (color.alpha > 50 && color.red > 180 && color.green < 120 && color.blue < 120 && distance < 65 * zoom) add(distance)
                 }
             }
             assertTrue(distances.size > 20, "radius boundary must be visible")

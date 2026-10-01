@@ -10,7 +10,6 @@ import org.umamo.format.cmo3.model.identity.Guid
 import org.umamo.format.cmo3.model.type.GVector2
 import org.umamo.format.cmo3.type.CArrayList
 import org.umamo.runtime.model.*
-import org.umamo.render.eval.DeformPathMetrics
 import java.util.UUID
 import kotlin.math.sqrt
 
@@ -102,11 +101,6 @@ internal object Cmo3DeformPaths {
         else t.coerceAtMost(Math.nextDown(size - 1f))
     }
 
-    fun toLocalWidths(model: PuppetModel): PuppetModel = model.copy(deformPaths=model.deformPaths.map { path ->
-        val drawable=model.drawables.single { it.id==path.drawableId }
-        path.copy(width=DeformPathMetrics.localWidth(model,drawable,path.width))
-    })
-
     fun read(sources: List<CArtMeshSource>): List<DeformPath> = buildList {
         for(source in sources) {
             val id=Cmo3Import.idStrOf(source.id) ?: continue
@@ -117,7 +111,7 @@ internal object Cmo3DeformPaths {
                     val curveId=Cmo3Import.uuidOf(curve.curveId) ?: continue
                     if(extension.editLevel !in 2..3) continue
                     val safeLineWidth = curve.lineWidth.coerceAtLeast(0f)
-                    val safeHardness = (curve.lineHardnessPercent / 100f).coerceIn(0f, 1f)
+                    val safeHardness = curve.lineHardnessPercent.coerceIn(0f, 100f)
                     add(DeformPath(curveId,DrawableId(id),points.map { p ->
                         val b=p.pointInTriangle as PointInTriangle
                         DeformPathPoint(
@@ -137,10 +131,7 @@ internal object Cmo3DeformPaths {
             val id=Cmo3Import.idStrOf(source.id) ?: continue
             val paths=model.deformPaths.filter { it.drawableId.raw==id }
             val drawable=model.drawables.single { it.id.raw==id }
-            val baselinePaths=baseline.deformPaths.filter { it.drawableId.raw==id }
-            val baselineDrawable=baseline.drawables.firstOrNull { it.id.raw==id }
-            if(paths==baselinePaths && (paths.isEmpty() || (baselineDrawable != null &&
-                DeformPathMetrics.canvasScale(model,drawable)==DeformPathMetrics.canvasScale(baseline,baselineDrawable)))) continue
+            if(paths==baseline.deformPaths.filter { it.drawableId.raw==id }) continue
             val defaultForm=defaultKeyform(source)
             val vertices=defaultForm.positions as? FloatArray ?: error("Deform path default keyform has no positions")
             val canvasVertices=requireNotNull(drawable.mesh).positions
@@ -163,7 +154,7 @@ internal object Cmo3DeformPaths {
                 for(path in curves) {
                     val curve=CControllerCurve().apply {
                         curveId=Guid("CControllerCurveGuid").apply { uuid=path.id }
-                        lineWidth=DeformPathMetrics.canvasWidth(model,drawable,path);lineHardnessPercent=path.hardness.coerceIn(0f, 1f)*100f;isOpen=!path.closed
+                        lineWidth=path.safeWidth;lineHardnessPercent=path.safeHardness;isOpen=!path.closed
                     }
                     curve._curvePoints=CArrayList<Any?>().apply {
                         for(p in path.points) {

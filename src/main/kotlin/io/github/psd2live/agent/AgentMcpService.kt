@@ -992,7 +992,7 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
                 putJsonObject("path_id") { put("type", "string"); put("description", "ID of the deform path") }
                 putJsonObject("moved_points") { put("type", "array"); put("description", "Array of moved [x, y] coordinates") }
                 putJsonObject("width") { put("type", "number"); put("description", "Optional custom influence width to preview deformation with") }
-                putJsonObject("hardness") { put("type", "number"); put("description", "Optional custom falloff hardness (0..1) to preview deformation with") }
+                putJsonObject("hardness") { put("type", "number"); put("description", "Optional custom falloff hardness percent (0..100) to preview deformation with") }
                 putJsonObject("show_width") { put("type", "boolean"); put("description", "Whether to draw the influence width boundary circle in preview image (default: true)") }
                 putJsonObject("show_hardness") { put("type", "boolean"); put("description", "Whether to draw the core hardness circle in preview image (default: true)") }
                 putJsonObject("render") { put("type", "boolean"); put("description", "Whether to render a diagnostic visual preview image (default: true)") }
@@ -1026,8 +1026,8 @@ internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolea
                 putJsonObject("target") { put("type", "string"); put("description", "Mesh target, e.g. mesh:hair") }
                 putJsonObject("id") { put("type", "string"); put("description", "Optional path ID (auto-generated if omitted)") }
                 putJsonObject("points") { put("type", "array"); put("description", "Array of points: [[x,y],...] or [{x, y, corner},...]") }
-                putJsonObject("width") { put("type", "number"); put("description", "Influence width (default 12% of mesh extent)") }
-                putJsonObject("hardness") { put("type", "number"); put("description", "Deformation hardness 0..1 (default 0.5)") }
+                putJsonObject("width") { put("type", "number"); put("description", "Cubism influence radius in canvas pixels (default 50)") }
+                putJsonObject("hardness") { put("type", "number"); put("description", "Cubism hardness percent 0..100 (default 50)") }
                 putJsonObject("closed") { put("type", "boolean"); put("description", "Whether path is closed loop (default false)") }
                 putJsonObject("level") { put("type", "integer"); put("description", "Edit level 2 or 3 (default 2)") }
             },
