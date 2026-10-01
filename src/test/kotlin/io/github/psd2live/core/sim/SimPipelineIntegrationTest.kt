@@ -54,9 +54,13 @@ class SimPipelineIntegrationTest {
         val result = PSD2LivePipeline().run(psd, output, config)
         val physicsFile = result.exportedFiles.map { it.path }.single { it.toString().endsWith(".physics3.json") }
         val settings = Json.parseToJsonElement(physicsFile.readText()).jsonObject.getValue("PhysicsSettings").jsonArray.map { it.jsonObject }
-        val setting = settings.single { it.getValue("Id").jsonPrimitive.content == "PhysicsSim_back" }
-        val outputs = setting.getValue("Output").jsonArray.map { it.jsonObject.getValue("Destination").jsonObject.getValue("Id").jsonPrimitive.content }
-        assertTrue(outputs == bake.parameters, "exported outputs $outputs")
+        // Every pendulum of the bake is exported with its own outputs; up and down has one of its own.
+        for (pendulum in bake.pendulums) {
+            val setting = settings.single { it.getValue("Id").jsonPrimitive.content == pendulum.id }
+            val outputs = setting.getValue("Output").jsonArray.map { it.jsonObject.getValue("Destination").jsonObject.getValue("Id").jsonPrimitive.content }
+            assertTrue(outputs == pendulum.outputs.map { it.parameter }, "exported outputs of ${pendulum.id}: $outputs")
+        }
+        assertTrue(bake.pendulums.flatMap { p -> p.outputs.map { it.parameter } }.toSet() == bake.parameters.toSet())
         val moc = result.exportedFiles.map { it.path }.single { it.toString().endsWith(".moc3") }.readBytes().toString(Charsets.ISO_8859_1)
         for (parameter in bake.parameters) assertTrue(parameter in moc, "$parameter is in the moc3")
         assertTrue(result.warnings.none { "Sim" in it }, result.warnings.toString())

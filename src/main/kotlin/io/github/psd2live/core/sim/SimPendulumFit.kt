@@ -101,6 +101,8 @@ internal object SimPendulumFit {
         check: () -> Unit = {},
         /** How much each frame of [motion] counts, so each kind of motion counts alike however large; null is 1. */
         weights: FloatArray? = null,
+        /** Every input a translation: inputs that move the body up and down, which an angle input would only tilt. */
+        translations: Boolean = false,
     ): Result {
         val frames = motion.size
         require(heldOutMotion.isEmpty() || heldOutTrack.size == inputs.size && heldOutTrack.all { it.size == heldOutMotion.size })
@@ -194,7 +196,8 @@ internal object SimPendulumFit {
                 if (abs(weights[i * 2]) * sqrt(both.energy(i * 2)) >= abs(weights[i * 2 + 1]) * sqrt(both.energy(i * 2 + 1))) PhysicsSourceType.X
                 else PhysicsSourceType.ANGLE
             }
-            val combinations = if (inputs.size > MAX_TYPE_SEARCH) listOf(leaning)
+            val combinations = if (translations) listOf(inputs.map { PhysicsSourceType.X })
+                else if (inputs.size > MAX_TYPE_SEARCH) listOf(leaning)
                 else listOf(leaning) + (0 until (1 shl inputs.size)).map { bits -> inputs.indices.map { if (bits shr it and 1 == 0) PhysicsSourceType.X else PhysicsSourceType.ANGLE } }
             var best: Triple<Double, List<PhysicsSourceType>, FloatArray>? = null
             for (types in combinations.distinct()) {

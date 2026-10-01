@@ -14,14 +14,16 @@ import kotlin.math.sqrt
  * The body and the legs are two root warps side by side, so nothing that moves the body reaches the floor:
  *
  * - **The body** ([bodyPoint]): a warp over the body's own parts - the torso, the arms, the skirt, the
- *   tail - and the neck the head turns on, never the whole figure. Body X turns the torso like a solid
- *   about its centre line: the front of the chest moves toward the side it turns to, the near shoulder
- *   comes forward a little larger and lower, and the neck, near the axis, hardly moves, so the head stays
- *   in the middle of the body. Body Y opens the shoulders a little going down and stretches the back
+ *   tail - and the neck the head turns on, never the whole figure. Body X turns the upper body as one
+ *   solid about its centre line, waist and chest alike, easing out over the hips: the front of the chest
+ *   moves toward the side it turns to, the near shoulder comes forward a little larger and lower, and the
+ *   neck, near the axis, hardly moves, so the head stays in the middle of the body. Body Y opens the shoulders a little going down and stretches the back
  *   going up. Under both the whole body moves with the hips: a little sideways on Body X, down onto bent
  *   knees and up onto straightened legs on Body Y.
- * - **The lean** ([leanPoint]): a warp under the body on a parameter of its own, the upper body pitching
- *   about the waist toward the viewer - shorter and wider toward the shoulders - or back.
+ * - **The lean** ([leanPoint]): a warp under the body on a parameter of its own, the body bowing in three
+ *   dimensions toward the viewer or back - the pelvis a little about the hips, the upper body the rest
+ *   about the waist - and seen in perspective, with each arm in a warp of its own hanging from its
+ *   shoulder ([armPoint]).
  * - **The legs** ([legPoint]): a warp over the legs alone. Its lowest rows, the feet, stay where they are
  *   drawn; everything above them follows two-bone legs whose hips move with the body. A knee bends
  *   forward, toward the viewer, so a front-facing thigh shortens rather than swinging out sideways, and
@@ -310,9 +312,10 @@ internal class BodyStance private constructor(
 	 *   [TORSO_DEPTH] as deep as it is wide, narrowing to the neck above the shoulders. It turns about that
 	 *   line and is seen in perspective from a viewer in front of the head: the front of the chest moves
 	 *   toward the side it turns to, the side coming forward is drawn a little larger and lower and the one
-	 *   going back smaller, and the neck, near the axis, hardly moves. The turn grows from nothing at the
-	 *   waist to its full angle at the chest. Past the torso's sides points move with its silhouette, so an
-	 *   arm stays on its shoulder.
+	 *   going back smaller, and the neck, near the axis, hardly moves. Everything above the waist turns
+	 *   alike, as artists turn the upper body, so the torso does not wring; the turn eases out over the hips
+	 *   below it ([TURN_FADE]). Past the torso's sides points move with its silhouette, so an arm stays on
+	 *   its shoulder.
 	 * - **Open** (Body Y): going down the shoulders open a little and the back shortens; going up it
 	 *   stretches and the shoulders draw in, as when standing tall.
 	 */
@@ -326,7 +329,7 @@ internal class BodyStance private constructor(
 		var py = y
 		val above = waist - y
 		if (turn != 0.0) {
-			val yaw = Math.toRadians(YAW_DEGREES * turn) * smooth(above / (length * TURN_RISE))
+			val yaw = Math.toRadians(YAW_DEGREES * turn) * smooth((above + length * TURN_FADE) / (length * TURN_FADE))
 			if (yaw != 0.0) {
 				val radius = torso.halfWidth * YAW_RADIUS
 				val neck = smooth((torso.shoulderY + length * 0.05 - y) / (length * 0.2))
@@ -362,27 +365,83 @@ internal class BodyStance private constructor(
 	}
 
 	/**
-	 * Where canvas point ([x], [y]) goes on the upper body leaning at [lean] (-10..10): it pitches about the
-	 * waist, toward the viewer at positive values and back at negative ones. Leaning in, the upper body is
-	 * seen shorter and wider toward the shoulders, the chest and the head coming closer and lower; leaning
-	 * back it stands a little taller and narrower. Below the waist nothing moves.
+	 * Where canvas point ([x], [y]) goes on the body leaning at [lean] (-10..10), toward the viewer at
+	 * positive values and back at negative ones. The body is a solid ([surfaceDepth]) bowing in three
+	 * dimensions and seen in perspective from the viewer of [torsoPoint]: the pelvis tilts a share of the
+	 * lean ([PELVIS_SHARE]) about the hip joints, carrying the skirt with it, and the upper body the rest
+	 * about the waist, eased in across it. Leaning in, the chest and the head come closer, lower and larger
+	 * - the front of the chest more than its sides, so it rounds out - and the skirt below the hips swings
+	 * back a little; leaning back, the other way. Arms hang apart ([armPoint]).
 	 */
 	fun leanPoint(x: Double, y: Double, lean: Float): DoubleArray {
 		val pitch = lean / 10.0 * strength
 		if (pitch == 0.0) return doubleArrayOf(x, y)
-		val lever = lever(torso.waistY - y, torso.length * WAIST_BAND)
-		val shorten = if (pitch > 0.0) LEAN_SHORTEN * pitch else -LEAN_LENGTHEN * -pitch
-		val cx = torso.centerX.toDouble()
-		return doubleArrayOf(cx + (x - cx) * leanScale(y, lean), y + lever * shorten)
+		val p = leaned(x, y, pitch)
+		return doubleArrayOf(p[0], p[1])
 	}
 
-	/** How much larger the upper body is drawn at canvas height [y] leaning at [lean]. */
+	/**
+	 * Where canvas point ([x], [y]) of an arm hanging from the shoulder at canvas x [shoulderX] goes leaning
+	 * at [lean]: it hangs straight down whatever the body does, so it moves with its shoulder as one piece,
+	 * drawn as much larger as the shoulder is, instead of bending with the body it hangs beside.
+	 */
+	fun armPoint(x: Double, y: Double, shoulderX: Double, lean: Float): DoubleArray {
+		val pitch = lean / 10.0 * strength
+		if (pitch == 0.0) return doubleArrayOf(x, y)
+		val shoulderY = torso.shoulderY.toDouble()
+		val shoulder = leaned(shoulderX, shoulderY, pitch)
+		return doubleArrayOf(shoulder[0] + (x - shoulderX) * shoulder[2], shoulder[1] + (y - shoulderY) * shoulder[2])
+	}
+
+	/** How much larger the body is drawn at canvas height [y] on its centre line leaning at [lean]. */
 	fun leanScale(y: Double, lean: Float): Double {
 		val pitch = lean / 10.0 * strength
-		val lever = lever(torso.waistY - y, torso.length * WAIST_BAND)
-		if (lever <= 0.0 || pitch == 0.0) return 1.0
-		val reach = (lever / torso.length).coerceAtMost(LEAN_REACH)
-		return 1 + reach * (if (pitch > 0.0) LEAN_GROW * pitch else -LEAN_SHRINK * -pitch)
+		if (pitch == 0.0) return 1.0
+		return leaned(torso.centerX.toDouble(), y, pitch)[2]
+	}
+
+	/** ([x], [y]) on the body pitched by [pitch] (-1..1 times the strength): its canvas x and y and how much larger it is drawn. */
+	private fun leaned(x: Double, y: Double, pitch: Double): DoubleArray {
+		val theta = Math.toRadians(LEAN_DEGREES * pitch)
+		val length = torso.length.toDouble()
+		val waist = torso.waistY.toDouble()
+		val pivot = maxOf(hipY, waist)
+		val z0 = surfaceDepth(x, y)
+		// Pitched toward the viewer about a pivot at canvas height pivotY and depth pivotZ: up is -y, near is +z.
+		fun pitched(py: Double, pz: Double, pivotY: Double, pivotZ: Double, angle: Double): DoubleArray {
+			val h = pivotY - py
+			val d = pz - pivotZ
+			val c = cos(angle)
+			val s = sin(angle)
+			return doubleArrayOf(pivotY - (h * c - d * s), pivotZ + h * s + d * c)
+		}
+		val pelvis = theta * PELVIS_SHARE
+		val tilted = pitched(y, z0, pivot, 0.0, pelvis)
+		val waistAt = pitched(waist, 0.0, pivot, 0.0, pelvis)
+		val bowed = pitched(tilted[0], tilted[1], waistAt[0], waistAt[1], theta - pelvis)
+		val band = length * WAIST_BAND
+		val w = smooth((waist - y + band) / (2 * band))
+		val wy = tilted[0] + (bowed[0] - tilted[0]) * w
+		val wz = tilted[1] + (bowed[1] - tilted[1]) * w
+		val camera = CAMERA_DISTANCE * length
+		val cameraY = torso.shoulderY - length * CAMERA_HEIGHT
+		val k = (camera - z0) / (camera - wz)
+		val cx = torso.centerX.toDouble()
+		return doubleArrayOf(cx + (x - cx) * k, cameraY + (wy - cameraY) * k, k)
+	}
+
+	/**
+	 * How far the drawn surface at canvas ([x], [y]) stands toward the viewer from the body's centre plane:
+	 * the torso's cross-section is an ellipse [TORSO_DEPTH] as deep as it is wide, narrowing to the neck
+	 * above the shoulders; past its sides, nothing.
+	 */
+	private fun surfaceDepth(x: Double, y: Double): Double {
+		val length = torso.length.toDouble()
+		val radius = torso.halfWidth * YAW_RADIUS
+		val u = (x - torso.centerX) / radius
+		if (abs(u) >= 1.0) return 0.0
+		val neck = smooth((torso.shoulderY + length * 0.05 - y) / (length * 0.2))
+		return radius * (TORSO_DEPTH + (NECK_DEPTH - TORSO_DEPTH) * neck) * sqrt(1 - u * u)
 	}
 
 	companion object {
@@ -404,9 +463,9 @@ internal class BodyStance private constructor(
 		private const val KNEE_IN_REST = 10.0
 		private const val KNEES_IN = 35.0
 
-		/** The torso's turn at full Body X, degrees, and how far over the waist it takes it all, in torso lengths. */
+		/** The torso's turn at full Body X, degrees, and how far below the waist it eases out, in torso lengths. */
 		private const val YAW_DEGREES = 12.0
-		private const val TURN_RISE = 0.6
+		private const val TURN_FADE = 0.5
 
 		/** The turning torso's half width over its half width at the chest, and its depth and the neck's over that. */
 		private const val YAW_RADIUS = 1.1
@@ -423,15 +482,9 @@ internal class BodyStance private constructor(
 		private const val STAND_STRETCH = 0.015
 		private const val STAND_NARROW = 0.015
 
-		/**
-		 * At a full lean in the upper body is seen this much shorter, and this much wider a torso length up;
-		 * at a full lean back this much taller and narrower. The widening stops growing past [LEAN_REACH].
-		 */
-		private const val LEAN_SHORTEN = 0.07
-		private const val LEAN_GROW = 0.05
-		private const val LEAN_LENGTHEN = 0.02
-		private const val LEAN_SHRINK = 0.02
-		private const val LEAN_REACH = 1.5
+		/** Degrees the body bows at a full lean, and the share of them the pelvis takes about the hip joints. */
+		private const val LEAN_DEGREES = 15.0
+		private const val PELVIS_SHARE = 0.3
 
 		/** Half width of the band about the waist where the upper body's lean eases in, in torso lengths. */
 		private const val WAIST_BAND = 0.35

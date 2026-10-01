@@ -35,6 +35,10 @@ import kotlin.math.sqrt
  *    frame as the pendulum plays it - arcs and one-sided pushes included - over what the modes before it
  *    leave, and kept on a smooth curve so the body's speed does not jump at a key.
  *
+ * Steps 2 to 5 run twice when the inputs move the body both ways: the vertical inputs ([VERTICAL_INPUTS])
+ * apart, as translations into a one-mode pendulum of their own (see [SimGenerator.verticalParameterId]),
+ * since a pendulum answers only sideways.
+ *
  * [model] must not carry this simulation's own bake.
  */
 object SimBaker {
@@ -58,6 +62,8 @@ object SimBaker {
 
     /** Below this much motion (px) at the default pose a mode or static axis is not worth keys. */
     private const val MIN_MOTION_PX = 0.5f
+    /** Below this much motion (px) the vertical inputs are not worth a parameter and a pendulum of their own. */
+    private const val MIN_BOUNCE_PX = 2f
     /** Below this share of the motion's energy a principal direction is left out of the fit. */
     private const val MIN_ENERGY = 0.01f
     /** Principal directions the pendulum fit reads the motion in. */
@@ -103,11 +109,103 @@ object SimBaker {
             if (perKey.maxOf { space.motionPx(it) } < MIN_MOTION_PX) null else SimBakedAxis(parameter.id.raw, keys, space.split(perKey))
         }
 
-        // 2. Training run: each piece from rest on its own body.
-        options.progress(0.1f)
-        val inputs = edit.inputs.map { it.parameter }.ifEmpty { PhysicsGenerator.headAndBodyInputs(parameters.keys).map { it.parameter } }
+        // 2. The dynamic inputs, grouped as an artist sets up a model's physics, with what moves the body up and
+        // down apart: a Cubism pendulum hangs along gravity and answers only sideways - its root carried
+        // straight up or down leaves every angle as it was - so the vertical inputs drive a pendulum of their
+        // own, fed as translations (the one way it answers them), and a parameter of their own whose shapes are
+        // how the body lags and bounces up and down.
+        val inputs = edit.inputs.map { it.parameter }.ifEmpty { defaultInputs(parameters.keys) }
             .filter { input -> parameters[input]?.let { it.kind == ParameterKind.NORMAL && it.max > it.min } == true }
         require(inputs.isNotEmpty() || statics.isNotEmpty()) { "No input parameter moves ${edit.id}; add inputs to bake it" }
+        val vertical = inputs.filter { it in VERTICAL_INPUTS }
+        val sideways = inputs - vertical.toSet()
+        val fingerprint = SimBake.fingerprint(model, edit)
+        val bounceId = SimGenerator.verticalPhysicsId(edit)
+        val split = sideways.isNotEmpty() && vertical.isNotEmpty()
+        val main = if (inputs.isEmpty()) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
+            inputs = sideways.ifEmpty { vertical }, outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) },
+            id = SimGenerator.physicsId(edit), translations = sideways.isEmpty(), segments = edit.modes + options.extraSegments,
+            previous = options.previous, previousExtra = options.previousExtra.filter { it.id != bounceId },
+            minimum = MIN_MOTION_PX, progress = { options.progress(0.1f + it * (if (split) 0.6f else 0.85f)) })
+        val bounce = if (!split) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
+            inputs = vertical, outputs = listOf(SimGenerator.verticalParameterId(edit)), id = bounceId, translations = true,
+            segments = 1 + options.extraSegments, previous = options.previousExtra.firstOrNull { it.id == bounceId }, previousExtra = emptyList(),
+            minimum = MIN_BOUNCE_PX, progress = { options.progress(0.7f + it * 0.25f) })
+        val groups = listOfNotNull(main, bounce)
+        require(groups.isNotEmpty() || statics.isNotEmpty()) { "${edit.id} barely moves under its inputs; nothing to bake" }
+        options.progress(1f)
+        if (groups.isEmpty()) return SimBakeResult(fingerprint, space.counts, statics, emptyList())
+
+        // Out to the parameters' own span: a keyform axis snaps a value within 0.001 of a key onto it, which
+        // over -1..1 would jolt a large body every time a mode swings through rest.
+        val range = SimGenerator.MODE_RANGE
+        fun spanned(setting: io.github.psd2live.core.RigPhysicsEdit) = setting.copy(outputs = setting.outputs.map { it.copy(scale = it.scale * range) })
+        val total = groups.sumOf { it.total }.coerceAtLeast(1e-12)
+        val modes = groups.flatMap { group ->
+            group.modes.map { mode ->
+                SimBakedMode(SimBakedAxis(mode.axis.parameter, FloatArray(mode.axis.keys.size) { mode.axis.keys[it] * range }, mode.axis.offsets),
+                    mode.amplitude, (mode.energy * group.total / total).toFloat())
+            }
+        }
+        val first = groups.first()
+        val extraPhysics = (first.extra + groups.drop(1).flatMap { listOf(it.setting) + it.extra }).map(::spanned)
+        // How well the baked keys, played by the pendulums, reproduce the simulation on the motion the fit
+        // never saw, each group on its own motion; how far the parameters reach, how often they sit at ±1, and
+        // how smooth the baked motion is.
+        val moved = groups.sumOf { it.moved }.coerceAtLeast(1e-12)
+        return SimBakeResult(fingerprint, space.counts, statics, modes, spanned(first.setting),
+            (1.0 - groups.sumOf { it.missed } / moved).toFloat(), percentile(groups.flatMap { it.errors }, 0.95f), groups.maxOf { it.peak },
+            groups.sumOf { it.clipped }.toFloat() / groups.sumOf { it.frames }.coerceAtLeast(1),
+            sqrt(groups.sumOf { it.bakedJerk } / groups.sumOf { it.simulatedJerk }.coerceAtLeast(1e-12)).toFloat(), extraPhysics)
+    }
+
+    /**
+     * What one group of inputs bakes to: its modes over -1..1, the pendulum driving them and those of their
+     * own, and the check of them on held-out motion - the squared px missed and moved, each frame's error
+     * (px), the parameters' peak, the frames they sit at ±1 of how many, and the jerk energies of the baked
+     * and simulated motion. [total] is the energy of its training motion, which each mode's share is of.
+     */
+    private class Dynamic(
+        val modes: List<SimBakedMode>,
+        val setting: io.github.psd2live.core.RigPhysicsEdit,
+        val extra: List<io.github.psd2live.core.RigPhysicsEdit>,
+        val total: Double,
+        val missed: Double,
+        val moved: Double,
+        val errors: List<Float>,
+        val peak: Float,
+        val clipped: Int,
+        val frames: Int,
+        val bakedJerk: Double,
+        val simulatedJerk: Double,
+    )
+
+    /**
+     * Steps 2 to 5 for one group of [inputs], the others held at their defaults: the training run, the
+     * principal directions, the pendulum [id] driving [outputs] - fed by translations only when
+     * [translations] - and the keys. Null when the group moves the body less than [minimum] px.
+     */
+    private fun dynamic(
+        model: PuppetModel,
+        edit: RigSimEdit,
+        space: Space,
+        statics: List<SimBakedAxis>,
+        body: () -> SimScene,
+        check: () -> Unit,
+        dt: Float,
+        options: Options,
+        inputs: List<String>,
+        outputs: List<String>,
+        id: String,
+        translations: Boolean,
+        segments: Int,
+        previous: io.github.psd2live.core.RigPhysicsEdit?,
+        previousExtra: List<io.github.psd2live.core.RigPhysicsEdit>,
+        minimum: Float,
+        progress: (Float) -> Unit,
+    ): Dynamic? {
+        // 2. Training run: each piece from rest on its own body.
+        val parameters = model.parameters.associateBy { it.id.raw }
         val ranged = inputs.map { parameters.getValue(it) }
         /** Library values (-1..1 about the default) as parameter values. */
         fun values(piece: List<FloatArray>) = ranged.indices.map { i ->
@@ -116,7 +214,8 @@ object SimBaker {
         }
         val pieces = SimMotionLibrary.training(inputs.size, options.fps, options.duration).map(::values)
         val heldOutPiece = values(SimMotionLibrary.heldOut(inputs.size, options.fps, options.duration))
-        val all = each(pieces + listOf(heldOutPiece)) { piece ->
+        val runs = pieces + listOf(heldOutPiece)
+        val all = (if (options.parallel) runs.parallelStream() else runs.stream()).map { piece ->
             val scene = body()
             scene.reset(model, emptyMap())
             val frames = piece.firstOrNull()?.size ?: 0
@@ -129,7 +228,7 @@ object SimBaker {
                 for (axis in statics) pose[ParameterId(axis.parameter)]?.let { space.subtract(r, axis, it) }
                 r
             }
-        }
+        }.toList()
         val recorded = all.dropLast(1)
         val residuals = recorded.flatten()
         val heldOutResiduals = all.last()
@@ -137,7 +236,7 @@ object SimBaker {
         val starts = HashSet<Int>().also { set -> var at = 0; for (piece in recorded) { set += at; at += piece.size } }
 
         // 3. The few principal directions (px at the default pose) that span nearly all of the motion.
-        options.progress(0.6f)
+        progress(0.6f)
         check()
         val metric = residuals.map(space::toPx)
         val total = metric.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
@@ -145,13 +244,8 @@ object SimBaker {
         val sampled = metric.filterIndexed { f, _ -> f % 2 == 0 }
         val sampledTotal = sampled.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
         val directions = if (sampled.isEmpty()) emptyList() else principal(sampled, SUBSPACE).filter { it.second / sampledTotal >= MIN_ENERGY }.map { it.first }
-        val moves = metric.isNotEmpty() && percentile(residuals.map(space::motionPx), 0.98f) >= MIN_MOTION_PX
-        require(moves && directions.isNotEmpty() || statics.isNotEmpty()) { "${edit.id} barely moves under its inputs; nothing to bake" }
-        val fingerprint = SimBake.fingerprint(model, edit)
-        if (!moves || directions.isEmpty()) {
-            options.progress(1f)
-            return SimBakeResult(fingerprint, space.counts, statics, emptyList())
-        }
+        val moves = metric.isNotEmpty() && percentile(residuals.map(space::motionPx), 0.98f) >= minimum
+        if (!moves || directions.isEmpty()) return null
         val motion = metric.map { row -> FloatArray(directions.size) { dot(row, directions[it]) } }
         // Each piece counts alike: shaking the body through its resonance moves it far more than a drag, and
         // would otherwise decide the pendulum and the keys on its own.
@@ -175,15 +269,14 @@ object SimBaker {
         val heldOutMotion = heldOutMetric.map { row -> FloatArray(directions.size) { dot(row, directions[it]) } }
 
         // 4. The pendulum.
-        options.progress(0.65f)
-        val outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) }
-        val fit = SimPendulumFit.fit(SimGenerator.physicsId(edit), edit.name, outputs, inputs, PhysicsEngine.ranges(model.parameters),
-            track, motion, metric, dt, options.physicsFps.toFloat(), segments = edit.modes + options.extraSegments, starts = starts,
-            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, heldOutMetric = heldOutMetric, previous = options.previous,
-            previousExtra = options.previousExtra, check = ::check, weights = weights)
+        progress(0.65f)
+        val fit = SimPendulumFit.fit(id, edit.name, outputs, inputs, PhysicsEngine.ranges(model.parameters),
+            track, motion, metric, dt, options.physicsFps.toFloat(), segments = segments, starts = starts,
+            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, heldOutMetric = heldOutMetric, previous = previous,
+            previousExtra = previousExtra, check = check, weights = weights, translations = translations)
 
         // 5. Key shapes for every mode at once; a mode that ends up moving nothing is dropped and the rest solved again.
-        options.progress(0.95f)
+        progress(0.95f)
         val keys = edit.modeKeys
         var kept = fit.played.indices.toList()
         var shapes = solveModes(residuals, kept.map { fit.played[it] }, keys, space.size, weights)
@@ -193,7 +286,7 @@ object SimBaker {
             kept = moving
             shapes = if (kept.isEmpty()) emptyList() else solveModes(residuals, kept.map { fit.played[it] }, keys, space.size, weights)
         }
-        require(kept.isNotEmpty() || statics.isNotEmpty()) { "The fitted pendulum does not move ${edit.id}; nothing to bake" }
+        if (kept.isEmpty()) return null
         val judged = heldOutMetric.sumOf { row -> row.sumOf { (it * it).toDouble() } } > total * 1e-3
         if (kept.size > 1 && judged) {
             // On the motion the fit never saw: each mode's keys solved once more over what the others leave
@@ -239,12 +332,12 @@ object SimBaker {
         }
         val modes = kept.indices.map { place -> SimBakedMode(axes[place], percentile(swings[place], 0.98f), (contributions[place] / total).toFloat()) }
 
-        // How well the baked keys, played by the pendulum, reproduce the simulation on the motion the fit never saw.
+        // The check, on the motion the fit never saw when it moves the body at all.
         val (checkResiduals, checkPlayed) = if (judged) heldOutResiduals to fit.heldOut else residuals to fit.played
         val checkTotal = if (judged) heldOutMetric.sumOf { row -> row.sumOf { (it * it).toDouble() } } else total
         var missed = 0.0
         val simulated = ArrayList<FloatArray>(checkResiduals.size); val baked = ArrayList<FloatArray>(checkResiduals.size)
-        val errors = FloatArray(checkResiduals.size) { f ->
+        val errors = List(checkResiduals.size) { f ->
             val played = FloatArray(space.size)
             for ((place, k) in kept.withIndex()) {
                 val offsets = space.join(axes[place], checkPlayed[k][f])
@@ -255,25 +348,23 @@ object SimBaker {
             missed += px.sumOf { (it * it).toDouble() }
             maxDistance(px)
         }
-        // How far the parameters reach, how often they sit at ±1, and how smooth the baked motion is.
         val peak = kept.maxOf { k -> checkPlayed[k].maxOf(::abs) }
-        val clipped = checkPlayed.first().indices.count { f -> kept.any { k -> abs(checkPlayed[k][f]) >= 0.999f } }.toFloat() / checkPlayed.first().size
-        val jerk = sqrt(jerkEnergy(baked) / jerkEnergy(simulated).coerceAtLeast(1e-12)).toFloat()
-        // Out to the parameters' own span: a keyform axis snaps a value within 0.001 of a key onto it, which
-        // over -1..1 would jolt a large body every time a mode swings through rest.
-        val range = SimGenerator.MODE_RANGE
+        val clipped = checkPlayed.first().indices.count { f -> kept.any { k -> abs(checkPlayed[k][f]) >= 0.999f } }
         val keptParameters = kept.map { outputs[it] }.toSet()
-        fun spanned(setting: io.github.psd2live.core.RigPhysicsEdit) =
-            setting.copy(outputs = setting.outputs.filter { it.parameter in keptParameters }.map { it.copy(scale = it.scale * range) })
-        val physics = spanned(fit.setting)
-        val extraPhysics = fit.extra.map(::spanned).filter { it.outputs.isNotEmpty() }
-        val spannedModes = modes.map { mode ->
-            SimBakedMode(SimBakedAxis(mode.axis.parameter, FloatArray(mode.axis.keys.size) { mode.axis.keys[it] * range }, mode.axis.offsets), mode.amplitude, mode.energy)
-        }
-        options.progress(1f)
-        return SimBakeResult(fingerprint, space.counts, statics, spannedModes, physics,
-            (1.0 - missed / checkTotal).toFloat(), percentile(errors.toList(), 0.95f), peak, clipped, jerk, extraPhysics)
+        fun owned(setting: io.github.psd2live.core.RigPhysicsEdit) = setting.copy(outputs = setting.outputs.filter { it.parameter in keptParameters })
+        return Dynamic(modes, owned(fit.setting), fit.extra.map(::owned).filter { it.outputs.isNotEmpty() }, total,
+            missed, checkTotal, errors, peak, clipped, checkPlayed.first().size, jerkEnergy(baked), jerkEnergy(simulated))
     }
+
+    /**
+     * The inputs a simulation left without its own is baked for: the head and the body turning and tilting
+     * as the hair presets have them, and nodding and the body rising and sinking, which bake apart.
+     */
+    internal fun defaultInputs(available: Set<String>): List<String> =
+        PhysicsGenerator.headAndBodyInputs(available).map { it.parameter } + VERTICAL_INPUTS.filter { it in available }
+
+    /** The inputs that move the body up and down: nodding, the body rising and sinking, and leaning in. */
+    internal val VERTICAL_INPUTS = listOf("ParamAngleY", "ParamBodyAngleY", "ParamBodyLean")
 
     /** [count] keys over [parameter]'s range, half on each side of its default (the default itself is one). */
     internal fun staticKeys(parameter: Parameter, count: Int): FloatArray {

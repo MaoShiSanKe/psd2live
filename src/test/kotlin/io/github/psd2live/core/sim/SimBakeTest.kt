@@ -41,6 +41,42 @@ class SimBakeTest {
             listOf(OrgChild.Drawable(drawable.id)), null, vertexGroups = listOf(pin))
     }
 
+    /** [strand] that ParamBodyAngleY also carries 30 px up or down. */
+    private fun bouncingStrand(): PuppetModel {
+        val base = strand()
+        val drawable = base.drawables.single()
+        val count = drawable.mesh!!.positions.size
+        fun shift(dx: Float, dy: Float) = MeshDeltaForm(FloatArray(count) { if (it % 2 == 0) dx else dy })
+        val keys = floatArrayOf(-30f, 0f, 30f)
+        val ys = floatArrayOf(10f, 0f, -10f)
+        val cells = ArrayList<KeyformCell<MeshDeltaForm>>()
+        for (j in 0..2) for (i in 0..2) cells += KeyformCell(intArrayOf(i, j), shift(keys[i], keys[2 - j]))
+        val grid = KeyformGrid(listOf(KeyformAxis(angle, keys), KeyformAxis(bodyY, floatArrayOf(-10f, 0f, 10f))), cells)
+        return base.copy(parameters = base.parameters + Parameter(bodyY, "Body Y", -10f, 10f, 0f),
+            drawables = listOf(drawable.copy(geometryGrid = grid)))
+    }
+    private val bodyY = ParameterId("ParamBodyAngleY")
+
+    @Test fun theBodyMovingUpAndDownBakesToAPendulumOfItsOwnFedAsATranslation() {
+        val base = bouncingStrand()
+        val edit = edit().copy(modes = 1, inputs = listOf(PhysicsInput(angle.raw, 100f, PhysicsSourceType.X), PhysicsInput(bodyY.raw, 100f, PhysicsSourceType.X)))
+        val overlay = RigEditOverlay(simEdits = listOf(edit))
+        val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), edit, quick)
+        // The swing stays with Angle X alone; up and down is a parameter of its own, driven by a pendulum
+        // that takes Body Y as a translation, since a hanging pendulum's angles never answer it otherwise.
+        assertEquals(listOf("ParamSimhair_1", "ParamSimhair_Y"), bake.parameters)
+        assertEquals(listOf(angle.raw), bake.physics!!.inputs.map { it.parameter })
+        val bounce = bake.extraPhysics.single { it.id == SimGenerator.verticalPhysicsId(edit) }
+        assertEquals(listOf(bodyY.raw), bounce.inputs.map { it.parameter })
+        assertTrue(bounce.inputs.all { it.type == PhysicsSourceType.X })
+        assertEquals(listOf("ParamSimhair_Y"), bounce.outputs.map { it.parameter })
+        val vertical = bake.modes.single { it.axis.parameter == "ParamSimhair_Y" }
+        assertTrue(vertical.amplitude > 2f, "the strand lags up and down by ${vertical.amplitude} px")
+        // Written back, it is named for the simulation and moves the strand.
+        val baked = SimAuthoring.withBake(overlay, "hair", bake).applyTo(base)
+        assertEquals("Hair Y", baked.parameters.single { it.id.raw == "ParamSimhair_Y" }.name)
+    }
+
     private fun edit() = RigSimEdit("hair", "Hair", SimKind.HAIR, listOf("hair"),
         inputs = listOf(PhysicsInput(angle.raw, 100f, PhysicsSourceType.X)), exaggeration = 1f)
 

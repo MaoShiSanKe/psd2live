@@ -69,8 +69,11 @@ class BodyStanceTest {
 		val far = stance.torsoPoint(200.0 + radius, 260.0, 10f, 0f)
 		assertTrue(near[1] > far[1], "near shoulder ${near[1]} far ${far[1]}")
 		assertTrue(200.0 - near[0] > far[0] - 200.0, "near side wider")
-		// No row is sheared: the waist and everything below it only moves with the hips.
-		for (x in listOf(120.0, 200.0, 280.0)) for (y in listOf(450.0, 600.0)) {
+		// The upper body turns as one: the waist as far as the chest, so the torso does not wring.
+		val waist = stance.torsoPoint(200.0, 440.0, 10f, 0f)
+		assertEquals(chest[0] - 200.0, waist[0] - 200.0, (chest[0] - 200.0) * 0.15, "waist ${waist[0]}, chest ${chest[0]}")
+		// The turn eases out over the hips; below them everything only moves with the hips.
+		for (x in listOf(120.0, 200.0, 280.0)) for (y in listOf(560.0, 700.0)) {
 			val p = stance.torsoPoint(x, y, 10f, 0f)
 			assertEquals(x, p[0], 1e-9)
 			assertEquals(y, p[1], 1e-9)
@@ -107,21 +110,32 @@ class BodyStanceTest {
 		assertEquals(920.0, rising.legPoint(160.0, 920.0)[1], 0.05)
 	}
 
-	@Test fun theLeanPitchesTheUpperBodyOnItsOwnParameter() {
-		// Leaning in, the shoulders come lower and wider and the head larger; leaning back, a little taller and smaller.
+	@Test fun theLeanBowsTheBodyInThreeDimensions() {
+		// Leaning in, the shoulders come lower and wider and the head larger; leaning back, higher and smaller.
 		val shoulder = stance.leanPoint(120.0, 260.0, 10f)
-		assertTrue(shoulder[1] > 260.0 + 8.0, "shoulders come down: ${shoulder[1]}")
-		assertTrue(shoulder[0] < 120.0 - 2.0, "shoulders widen: ${shoulder[0]}")
+		assertTrue(shoulder[1] > 260.0 + 5.0, "shoulders come down: ${shoulder[1]}")
+		assertTrue(shoulder[0] < 120.0 - 3.0, "shoulders widen: ${shoulder[0]}")
 		assertTrue(stance.leanScale(150.0, 10f) > 1.04)
 		val back = stance.leanPoint(120.0, 260.0, -10f)
-		assertTrue(back[1] < 260.0 && back[1] > 260.0 - 6.0, "a little taller: ${back[1]}")
-		assertTrue(stance.leanScale(150.0, -10f) in 0.95..0.995)
-		for (lean in listOf(-10f, 10f)) {
-			assertEquals(1.0, stance.leanScale(700.0, lean))
-			val hip = stance.leanPoint(200.0, 700.0, lean)
-			assertEquals(200.0, hip[0], 1e-9)
-			assertEquals(700.0, hip[1], 1e-9)
-		}
+		assertTrue(back[1] < 260.0, "leaning back the shoulders rise: ${back[1]}")
+		assertTrue(stance.leanScale(150.0, -10f) < 0.98)
+		// The chest is a solid: its front, nearer the viewer, comes closer and grows more than its sides.
+		fun width(x: Double, y: Double): Double { val a = stance.leanPoint(x - 2.0, y, 10f); val b = stance.leanPoint(x + 2.0, y, 10f); return b[0] - a[0] }
+		assertTrue(width(200.0, 330.0) > width(200.0 + stance.torso.halfWidth * 1.05, 330.0) + 0.02, "the front rounds out")
+		// The skirt below the hips goes with the pelvis, back and up a little, rather than staying folded flat.
+		val hem = stance.leanPoint(200.0, 620.0, 10f)
+		assertTrue(hem[1] < 620.0 - 1.0, "the hem swings back: ${hem[1]}")
+		// An arm moves with its shoulder as one piece: its points keep their offsets, all scaled alike.
+		val shoulderX = (stance.torso.centerX - stance.torso.halfWidth).toDouble()
+		val elbow = stance.armPoint(100.0, 380.0, shoulderX, 10f)
+		val hand = stance.armPoint(90.0, 520.0, shoulderX, 10f)
+		val k = stance.armPoint(shoulderX + 1.0, stance.torso.shoulderY.toDouble(), shoulderX, 10f)[0] -
+			stance.armPoint(shoulderX, stance.torso.shoulderY.toDouble(), shoulderX, 10f)[0]
+		assertTrue(k > 1.02, "the arm comes closer: $k")
+		assertEquals(-10.0 * k, hand[0] - elbow[0], 1e-6)
+		assertEquals(140.0 * k, hand[1] - elbow[1], 1e-6)
+		assertEquals(1.0, stance.leanScale(150.0, 0f))
+		assertEquals(120.0, stance.leanPoint(120.0, 260.0, 0f)[0])
 	}
 
 	@Test fun aFigureWithoutLegsTurnsAboveTheWaistOnly() {
@@ -165,6 +179,15 @@ class BodyStanceTest {
 		assertTrue(legMeshes.isNotEmpty())
 		for (id in legMeshes) assertEquals("DeformLegs", ancestry(puppet, id).last())
 		assertSoles(puppet, legMeshes, mapOf())
+		// Each arm hangs in a warp of its own on the lean, under the body's.
+		val armLayers = preview.analysis.layers.filter { it.semantic.tag == SemanticTag.HANDWEAR }.associate { it.source.id.raw to it.semantic.side }
+		val armMeshes = preview.rig.layerIdByDrawableId.filterValues { it in armLayers }
+		assertEquals(2, armMeshes.size)
+		for ((id, layer) in armMeshes) {
+			val chain = ancestry(puppet, DrawableId(id))
+			assertEquals("DeformArmHang_" + (if (armLayers[layer] == Side.LEFT) "L" else "R"), chain.first())
+			assertTrue("DeformBodyLean" in chain, chain.toString())
+		}
 		assertTrue(RigIntegrityValidator.validateDirectionalWarpDimensions("tml", puppet).isEmpty(), RigIntegrityValidator.validateDirectionalWarpDimensions("tml", puppet).joinToString("\n"))
 
 		// With its skeleton, the leg poses stand on the same feet.

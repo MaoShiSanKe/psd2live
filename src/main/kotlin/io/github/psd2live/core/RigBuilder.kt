@@ -35,6 +35,7 @@ import org.umamo.runtime.model.DeformPath
 import org.umamo.runtime.model.DeformPathPoint
 import org.umamo.runtime.model.WarpLatticeForm
 import org.umamo.runtime.model.withDerivedRenderRoot
+import org.umamo.render.eval.buildDeformerWorlds
 import java.text.Normalizer
 import java.util.Locale
 import java.util.UUID
@@ -1643,8 +1644,77 @@ object RigBuilder {
 			}
 		}
 
+		if (config.rigEdits.skeleton?.enabled != true) {
+			deformers += armHangWarps(analysis, stance, rigLayerById, deformers, pairedParentByLayerId, pairFrames, bodyPartId) { layer ->
+				defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, faceFrame, frontHair, backHair, false, stance.legsFrame, bodyFrame)
+			}
+		}
+
 		return DeformerBuildResult(deformers, pairFrames, pairedParentByLayerId)
 	}
+
+	/**
+	 * A warp for each arm on the body's lean, as artists give each arm a warp of its own: an arm hangs
+	 * straight down from its shoulder whatever the body does ([BodyStance.armPoint]), but drawn beside the
+	 * skirt it would bend with the body in the lean warp. At each key its lattice holds every point where
+	 * the arm puts the point it covers at rest, read back through its parent as the body leans there. The
+	 * arm's layers move under it: [parents] and [frames] receive it.
+	 */
+	private fun armHangWarps(
+		analysis: PipelineAnalysis,
+		stance: BodyStance,
+		rigLayerById: Map<String, ClassifiedLayer>,
+		deformers: List<Deformer>,
+		parents: MutableMap<String, Pair<DeformerId, Bounds>>,
+		frames: MutableMap<String, Bounds>,
+		partId: PartId,
+		defaultParent: (ClassifiedLayer) -> Pair<DeformerId, Bounds>,
+	): List<Deformer.Warp> {
+		val lean = StandardParameters.BODY_LEAN
+		val keys = floatArrayOf(-10f, 0f, 10f)
+		val worlds = keys.associateWith { value ->
+			buildDeformerWorlds(deformers, { if (it == lean) value else 0f }, { 0f })
+		}
+		val torso = stance.torso
+		val warps = ArrayList<Deformer.Warp>()
+		for (side in listOf(Side.LEFT, Side.RIGHT)) {
+			val arms = analysis.layers.filter { it.semantic.tag == SemanticTag.HANDWEAR && it.semantic.side == side && it.opaquePixels > 0 }
+			if (arms.isEmpty()) continue
+			val hosts = arms.map { parents[it.source.id.raw] ?: defaultParent(it) }.distinct()
+			val (parentId, parentFrame) = hosts.singleOrNull() ?: continue
+			if (keys.any { worlds.getValue(it)[parentId] == null }) continue
+			val union = arms.map { rigLayerById.getValue(it.source.id.raw).bounds }.reduce(Bounds::union)
+			val frame = union.expanded(0.06f)
+			val shoulderX = torso.centerX + (if (frame.centerX >= torso.centerX) 1f else -1f) * torso.halfWidth
+			val rest = mapBounds(frame, parentFrame)
+			val cells = keys.mapIndexed { k, value ->
+				val world = worlds.getValue(value).getValue(parentId)
+				val points = FloatArray((ARM_HANG_COLUMNS + 1) * (ARM_HANG_ROWS + 1) * 2)
+				for (row in 0..ARM_HANG_ROWS) for (column in 0..ARM_HANG_COLUMNS) {
+					val i = (row * (ARM_HANG_COLUMNS + 1) + column) * 2
+					val u = column.toFloat() / ARM_HANG_COLUMNS
+					val v = row.toFloat() / ARM_HANG_ROWS
+					val local = floatArrayOf(rest.left + u * rest.width, rest.top + v * rest.height)
+					if (value == 0f) { points[i] = local[0]; points[i + 1] = local[1]; continue }
+					val target = stance.armPoint((frame.left + u * frame.width).toDouble(), (frame.top + v * frame.height).toDouble(), shoulderX.toDouble(), value)
+					val back = SkeletonRig.inverse(world, target[0].toFloat(), target[1].toFloat(), local)
+					points[i] = back[0]
+					points[i + 1] = back[1]
+				}
+				KeyformCell(intArrayOf(k), WarpLatticeForm(points))
+			}
+			val id = DeformerId("DeformArmHang_" + (if (side == Side.LEFT) "L" else "R"))
+			warps += Deformer.Warp(id, tr("model.deformer.armHang", arms.first().source.name),
+				parentId, partId, ARM_HANG_ROWS, ARM_HANG_COLUMNS, true, KeyformGrid(listOf(KeyformAxis(lean, keys)), cells))
+			frames[id.raw] = frame
+			for (layer in arms) parents[layer.source.id.raw] = id to frame
+		}
+		return warps
+	}
+
+	/** An arm's hang warp: columns across the arm and rows down it. */
+	private const val ARM_HANG_COLUMNS = 3
+	private const val ARM_HANG_ROWS = 6
 
 	private fun identityWarp(
 		id: DeformerId,
@@ -2767,8 +2837,8 @@ object RigBuilder {
 	/** Lattice sizes of the body warps: the body turns across its width, the lean only pitches about the waist. */
 	private const val BODY_COLUMNS = 12
 	private const val BODY_ROWS = 14
-	private const val LEAN_COLUMNS = 4
-	private const val LEAN_ROWS = 10
+	private const val LEAN_COLUMNS = 8
+	private const val LEAN_ROWS = 12
 
 	/** Columns of the legs warp, a few per leg, and its row spacing in leg lengths so the knee bends across rows. */
 	private const val LEG_COLUMNS = 8

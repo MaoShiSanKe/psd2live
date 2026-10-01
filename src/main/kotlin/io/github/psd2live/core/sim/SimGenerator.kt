@@ -40,8 +40,17 @@ object SimGenerator {
     /** `ParamSim<id>_<k>` for mode [k] (1-based). */
     fun parameterId(sim: RigSimEdit, k: Int) = "ParamSim${SwingAuthoring.asciiStem(sim.id)}_$k"
 
+    /**
+     * `ParamSim<id>_Y`: how the body lags and bounces up and down, as an artist's `裙y` or `长发y`. A pendulum
+     * answers only sideways, so the inputs that move the body up and down drive it apart, as translations.
+     */
+    fun verticalParameterId(sim: RigSimEdit) = "ParamSim${SwingAuthoring.asciiStem(sim.id)}_Y"
+
     /** `PhysicsSim_<id>`: the pendulum of a baked simulation; a later mode with one of its own adds `_<k>`. */
     fun physicsId(sim: RigSimEdit) = "PhysicsSim_${sim.id}"
+
+    /** `PhysicsSim_<id>_y`: the pendulum driving [verticalParameterId]. */
+    fun verticalPhysicsId(sim: RigSimEdit) = "PhysicsSim_${sim.id}_y"
 
     /** The pendulums of every enabled baked simulation whose parameters exist. */
     fun physicsRules(sims: List<RigSimEdit>, available: Set<String>): List<RigPhysicsEdit> = sims.filter { it.enabled }.flatMap { sim ->
@@ -69,7 +78,7 @@ object SimGenerator {
         if (!model.runtimeTarget.supports(RuntimeFeature.MeshWarpBlendShapes)) return false
         sim.blendShapes?.let { return it }
         val modes = sim.bake?.modes?.map { it.axis.keys.size } ?: List(sim.modes) { sim.keys }
-        val own = modes.indices.map { ParameterId(parameterId(sim, it + 1)) }.toSet()
+        val own = (sim.bake?.parameters ?: (1..sim.modes).map { parameterId(sim, it) }).map(::ParameterId).toSet()
         val added = modes.fold(1L) { n, keys -> n * keys }
         return sim.targets.any { target ->
             val grid = model.drawables.firstOrNull { it.id.raw == target }?.geometryGrid
@@ -83,10 +92,16 @@ object SimGenerator {
         val issues = ArrayList<String>()
         var current = model
         val blend = usesBlendShapes(model, sim)
+        val vertical = verticalParameterId(sim)
+        val sideways = bake.modes.count { it.axis.parameter != vertical }
         for ((k, mode) in bake.modes.withIndex()) {
             val id = ParameterId(mode.axis.parameter)
             if (current.parameters.any { it.id == id }) continue
-            val name = if (bake.modes.size == 1) sim.name else "${sim.name} ${k + 1}"
+            val name = when {
+                id.raw == vertical -> "${sim.name} Y"
+                sideways == 1 -> sim.name
+                else -> "${sim.name} ${k + 1}"
+            }
             current = current.withParameterCreated(id, name, if (blend) ParameterKind.BLEND_SHAPE else ParameterKind.NORMAL)
             current = current.copy(parameters = current.parameters.map {
                 if (it.id != id) it
