@@ -1323,7 +1323,8 @@ class ViewModelAgentWorkspace(
 
     override fun listSimulations() = viewModel.state.value.rigEdits.simEdits
 
-    override suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?):
+    override suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?,
+        autoBake: Boolean?):
         Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> {
         val id = arguments["id"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("id is required")
         val base = viewModel.state.value.previewModel?.baseRig?.puppet
@@ -1332,7 +1333,7 @@ class ViewModelAgentWorkspace(
             val put = io.github.psd2live.core.sim.SimAuthoring.put(document.rigEdits, puppet, arguments)
             if (base == null) return@mutateRigKeyform document.copy(rigEdits = put)
             val (rigEdits, failure) = viewModel.trackSimulationBake(id) { progress, cancelled ->
-                io.github.psd2live.core.sim.SimAuthoring.rebaked(put, base, id, progress, cancelled)
+                io.github.psd2live.core.sim.SimAuthoring.rebaked(put, base, id, progress, cancelled, autoBake)
             }
             val bake = rigEdits.simEdits.single { it.id == id }.bake
             report = kotlinx.serialization.json.buildJsonObject {

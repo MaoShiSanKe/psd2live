@@ -32,6 +32,13 @@ object AppSettings {
 			if (value.isFinite()) runCatching { preferences.putFloat("parameter_name_width", value.coerceIn(24f, 240f)) }
 		}
 
+	/** Whether edits in the simulation panel bake again as they commit; off by default, as a bake takes seconds. */
+	var simulationAutoBake: Boolean
+		get() = runCatching { preferences.getBoolean("simulation_auto_bake", false) }.getOrDefault(false)
+		set(value) {
+			runCatching { preferences.putBoolean("simulation_auto_bake", value) }
+		}
+
 	private fun parameterPadHeightKey(horizontalId: String, verticalId: String): String {
 		val pair = "${horizontalId.length}:$horizontalId$verticalId"
 		val digest = MessageDigest.getInstance("SHA-256").digest(pair.toByteArray(Charsets.UTF_8))

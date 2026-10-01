@@ -63,8 +63,6 @@ import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconEye
-import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -89,6 +87,7 @@ import org.umamo.runtime.model.VertexGroupKind
 import java.util.Locale
 import io.github.psd2live.ui.views.PanelToolbar
 import io.github.psd2live.ui.views.PanelToolbarSeparator
+import io.github.psd2live.ui.views.PanelToolSwitch
 import io.github.psd2live.ui.views.PanelExpandCollapseButtons
 import io.github.psd2live.ui.views.PanelResetButton
 
@@ -101,7 +100,7 @@ private enum class BakeState { BAKED, STALE, UNBAKED, DISABLED }
 /**
  * Simulation, laid out like the physics panel beside it: a toolbar with the bake status of every body and
  * Bake all, the bodies in a list, and the selected body's sections with its bake first. Edits commit one
- * history node each, baked again in the same node when the body bakes on its own; sliders commit on release.
+ * history node each, baked again in the same node while the toolbar's auto-bake is on; sliders commit on release.
  * The preview plays either the export (the bake, as Cubism plays it) or the reference simulation, which
  * never exports.
  */
@@ -179,7 +178,7 @@ private fun BakeState.color(): Color {
 
 private fun BakeState.label() = tr("sim.state.${name.lowercase()}")
 
-/** New body, Bake all with how many bodies export as set up, and the preview choice, in one row. */
+/** New body, Bake all with how many bodies export as set up, the auto-bake switch and the preview switch, in one row. */
 @Composable
 private fun SimulationToolbar(
 	viewModel: PSD2LiveViewModel,
@@ -195,11 +194,12 @@ private fun SimulationToolbar(
 	val ready = state.previewModel != null
 	val baking by viewModel.simulationBaking.collectAsState()
 	val outdated = states.values.any { it == BakeState.UNBAKED || it == BakeState.STALE }
+	val autoBake by viewModel.simulationAutoBake.collectAsState()
 	val live = selected != null && state.simulationPreviewId == selected.id
-	val labels = listOf(tr("sim.new"), tr("sim.bakeAll"), tr("sim.previewExport"), tr("sim.previewReference"))
+	val labels = listOf(tr("sim.new"), tr("sim.bakeAll"), tr("sim.autoBake"), tr(if (live) "sim.previewReference" else "sim.previewExport"))
 	PanelToolbar(
 		labels = labels,
-		iconCount = if (live) 7 else 6,
+		iconCount = if (live) 8 else 7,
 		secondary = {
 			Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
 				BakeAllStatus(viewModel, sims, states, Modifier.weight(1f))
@@ -223,15 +223,13 @@ private fun SimulationToolbar(
 			tooltip = tr(if (outdated) "sim.bakeAllTip" else "sim.rebakeAllTip")) {
 			SimSectionIconView(SimSectionIcon.BAKE, if (outdated) colors.warning else colors.textPrimary, size = 11.dp)
 		}
+		PanelToolSwitch(labels[2], showLabel = labelsShown > 2, checked = autoBake, onCheckedChange = viewModel::setSimulationAutoBake,
+			enabled = true, tooltip = tr("sim.autoBakeTip"))
 		PanelToolbarSeparator()
-		PanelToolButton(labels[2], showLabel = labelsShown > 2, onClick = { viewModel.setSimulationPreview(null) },
-			enabled = selected != null, active = !live, tooltip = tr("sim.previewExportTip")) {
-			IconEye(visible = true, modifier = Modifier.size(12.dp), tint = if (!live) colors.accent else colors.textMuted)
-		}
-		PanelToolButton(labels[3], showLabel = labelsShown > 3, onClick = { viewModel.setSimulationPreview(selected?.id) },
-			enabled = selected != null, active = live, tooltip = tr("sim.previewReferenceTip")) {
-			IconPlay(modifier = Modifier.size(12.dp), tint = if (live) colors.accent else colors.textMuted)
-		}
+		// On plays the reference simulation, off the export; the label names the one playing.
+		PanelToolSwitch(labels[3], showLabel = labelsShown > 3, checked = live,
+			onCheckedChange = { viewModel.setSimulationPreview(if (it) selected?.id else null) },
+			enabled = selected != null, tooltip = tr(if (live) "sim.previewReferenceTip" else "sim.previewExportTip"))
 		Spacer(Modifier.weight(1f))
 		PanelExpandCollapseButtons(onExpandAll = { onOpenSections(SECTIONS) }, onCollapseAll = { onOpenSections(emptySet()) })
 		if (live) PanelResetButton(onClick = viewModel::restartSimulationPreview, tooltip = tr("sim.restart"))
@@ -489,10 +487,6 @@ private fun BakeEditor(
 			enabled = bake != null && baking == null && !state.canvasEditBusy, height = 22.dp)
 	}
 
-	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-		FieldLabel(tr("sim.autoBake"), tooltip = tr("sim.autoBakeTip"))
-		CompactCheckbox(sim.autoBake, { commit(sim.copy(autoBake = it)) })
-	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		FieldLabel(tr("sim.modes"), tooltip = tr("sim.modesTip"))
 		CompactDropdown((1..RigSimEdit.MAX_MODES).toList(), sim.modes, { commit(sim.copy(modes = it)) }, Modifier.weight(1f),

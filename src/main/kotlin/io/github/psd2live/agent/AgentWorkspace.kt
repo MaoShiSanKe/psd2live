@@ -495,8 +495,10 @@ interface AgentWorkspace {
     /**
      * [arguments] are a `simulation` put request, laid over the simulation with that ID. A simulation that
      * bakes on its own is baked again in the same step; the second value reports that bake or why it failed.
+     * [autoBake] overrides the simulation's own setting when given.
      */
-    suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?):
+    suspend fun putSimulation(arguments: kotlinx.serialization.json.JsonObject, expectedHead: String, taskId: String?,
+        autoBake: Boolean? = null):
         Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
         throw UnsupportedOperationException("Simulation editing is unavailable")
     suspend fun deleteSimulation(id: String, expectedHead: String): AgentWorkspaceMutationResult =

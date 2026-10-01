@@ -526,10 +526,19 @@ class PSD2LiveViewModel : AutoCloseable {
         simPreview.restart(model.rig.puppet, simulationPose(_state.value, model))
     }
 
-    /** Creates or replaces [edit] as one history node. */
+    private val _simulationAutoBake = MutableStateFlow(AppSettings.simulationAutoBake)
+    /** Whether panel edits bake again in their history node; MCP puts keep each simulation's own setting. */
+    val simulationAutoBake: StateFlow<Boolean> = _simulationAutoBake.asStateFlow()
+
+    internal fun setSimulationAutoBake(on: Boolean) {
+        AppSettings.simulationAutoBake = on
+        _simulationAutoBake.value = on
+    }
+
+    /** Creates or replaces [edit] as one history node, baked again in it when [simulationAutoBake] is on. */
     internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) =
         runSimulationMutation("Set simulation ${edit.id}") { workspace, head ->
-            val (result, report) = workspace.putSimulation(edit.toJson(), head, null)
+            val (result, report) = workspace.putSimulation(edit.toJson(), head, null, _simulationAutoBake.value)
             report["bake_error"]?.jsonPrimitive?.contentOrNull?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
             result
         }

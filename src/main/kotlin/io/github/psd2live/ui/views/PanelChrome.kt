@@ -1,6 +1,8 @@
 package io.github.psd2live.ui.views
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
@@ -31,6 +33,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Divider
 import androidx.compose.material.Text
@@ -371,6 +375,74 @@ internal fun PanelToolButton(
 					color = when {
 						!enabled -> colors.textDisabled
 						active -> colors.accent
+						else -> colors.textPrimary
+					},
+					maxLines = 1,
+					softWrap = false,
+					modifier = Modifier.padding(start = 4.dp),
+				)
+			}
+		}
+	}
+}
+
+/**
+ * Toolbar switch: a sliding track that shows [checked] at a glance, with [label] - which may name the
+ * current state - slid in beside it when the toolbar has room.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun PanelToolSwitch(
+	label: String,
+	showLabel: Boolean,
+	checked: Boolean,
+	onCheckedChange: (Boolean) -> Unit,
+	enabled: Boolean,
+	tooltip: String,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	val thumb by animateDpAsState(if (checked) 10.dp else 2.dp, tween(140))
+	val track by animateColorAsState(
+		when {
+			!enabled -> colors.border.copy(alpha = 0.4f)
+			checked -> colors.accent
+			else -> colors.border
+		},
+		tween(140),
+	)
+	TooltipArea(tooltip = { ParameterTooltip(tooltip) }, delayMillis = 400) {
+		Row(
+			modifier = Modifier
+				.height(PanelToolHeight)
+				.background(if (hovered && enabled) colors.controlHover else Color.Transparent, RoundedCornerShape(2.dp))
+				.hoverable(interaction)
+				.clickable(enabled = enabled, interactionSource = interaction, indication = null) { onCheckedChange(!checked) }
+				.pointerHoverIcon(if (enabled) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
+				.padding(horizontal = 4.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			Box(Modifier.size(width = 20.dp, height = 12.dp).background(track, RoundedCornerShape(6.dp))) {
+				Box(
+					Modifier
+						.offset(x = thumb, y = 2.dp)
+						.size(8.dp)
+						.background(if (enabled) Color(0xFFE0E6ED) else colors.textDisabled, CircleShape),
+				)
+			}
+			AnimatedVisibility(
+				visible = showLabel,
+				enter = expandHorizontally(tween(160)) + fadeIn(tween(160)),
+				exit = shrinkHorizontally(tween(160)) + fadeOut(tween(120)),
+			) {
+				Text(
+					text = label,
+					style = typography.caption.copy(fontSize = 10.5.sp),
+					color = when {
+						!enabled -> colors.textDisabled
+						checked -> colors.accent
 						else -> colors.textPrimary
 					},
 					maxLines = 1,

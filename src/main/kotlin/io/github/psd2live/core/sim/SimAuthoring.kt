@@ -132,8 +132,8 @@ object SimAuthoring {
     }
 
     /**
-     * [overlay] with simulation [id] baked again when it bakes on its own ([RigSimEdit.autoBake]) and its bake
-     * is missing or stale; the old bake's pendulum is where the fit starts, which is quicker. When the bake
+     * [overlay] with simulation [id] baked again when it bakes on its own ([autoBake], or else
+     * [RigSimEdit.autoBake]) and its bake is missing or stale; the old bake's pendulum is where the fit starts, which is quicker. When the bake
      * fails or is [cancelled] the old bake stays, stale, and the second value says why.
      */
     fun rebaked(
@@ -142,9 +142,10 @@ object SimAuthoring {
         id: String,
         progress: (Float) -> Unit = {},
         cancelled: () -> Boolean = { false },
+        autoBake: Boolean? = null,
     ): Pair<RigEditOverlay, String?> {
         val edit = overlay.simEdits.firstOrNull { it.id == id } ?: return overlay to null
-        if (!edit.autoBake || !edit.enabled) return overlay to null
+        if (!(autoBake ?: edit.autoBake) || !edit.enabled) return overlay to null
         val model = unbakedModel(overlay, base, id)
         if (edit.bake != null && edit.bake.fingerprint == SimBake.fingerprint(model, edit)) return overlay to null
         return try {
