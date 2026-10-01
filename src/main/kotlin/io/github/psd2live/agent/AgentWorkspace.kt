@@ -509,8 +509,14 @@ interface AgentWorkspace {
     suspend fun applyModelPreset(preset: io.github.psd2live.core.sim.ModelPresets.Preset, layers: Set<String>, expectedHead: String,
         author: MutationAuthor = MutationAuthor.AGENT): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
         throw UnsupportedOperationException("Model presets are unavailable")
-    /** Removes the hair simulation preset of the [front] or back hair and brings back its legacy sway, as one history step. */
-    suspend fun restoreClassicHair(front: Boolean, expectedHead: String, author: MutationAuthor = MutationAuthor.AGENT): AgentWorkspaceMutationResult =
+    /**
+     * Removes the hair simulation preset of the [front] or back hair and brings back its legacy sway, running
+     * when [sway], as one history step.
+     */
+    suspend fun restoreClassicHair(front: Boolean, expectedHead: String, author: MutationAuthor = MutationAuthor.AGENT, sway: Boolean = true): AgentWorkspaceMutationResult =
+        throw UnsupportedOperationException("Model presets are unavailable")
+    /** Removes every clothing simulation preset, as one history step. */
+    suspend fun removeClothingPresets(expectedHead: String, author: MutationAuthor = MutationAuthor.AGENT): AgentWorkspaceMutationResult =
         throw UnsupportedOperationException("Model presets are unavailable")
     /**
      * Bakes simulation [id] into parameters, keyforms and pendulums on the current rig; slow. The second

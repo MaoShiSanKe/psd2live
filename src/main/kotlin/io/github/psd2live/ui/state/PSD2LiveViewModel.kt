@@ -559,33 +559,22 @@ class PSD2LiveViewModel : AutoCloseable {
         }
     }
 
-    /** Drops the [front] or back hair simulation preset and brings back the legacy sway. */
-    internal fun restoreClassicHair(front: Boolean) {
+    /** Drops the [front] or back hair simulation preset and brings back the legacy sway, running when [sway]. */
+    internal fun restoreClassicHair(front: Boolean, sway: Boolean = true) {
         if (_state.value.simulationPreviewId in io.github.psd2live.core.sim.ModelPresets.PRESET_SIMS) setSimulationPreview(null)
         runSimulationMutation("Restored classic hair sway") { workspace, head ->
-            workspace.restoreClassicHair(front, head, io.github.psd2live.agent.MutationAuthor.USER)
+            workspace.restoreClassicHair(front, head, io.github.psd2live.agent.MutationAuthor.USER, sway)
         }
     }
 
-    fun setCanvasCreationPreset(preset: CanvasCreationPreset) {
-        updateState { it.copy(canvasCreation = preset) }
-        markWorkspaceChanged()
-    }
-
-    /** New warps on [editor] take [preset]'s lattice and attachment from now on. */
-    private fun applyCanvasCreationPreset(preset: CanvasCreationPreset, editor: CanvasEditor) {
-        editor.warpCreateGridRows = preset.warpRows
-        editor.warpCreateGridCols = preset.warpCols
-        editor.warpCreateBezierRows = preset.bezierRows
-        editor.warpCreateBezierCols = preset.bezierCols
-        io.github.psd2live.ui.WarpAddTo.entries.firstOrNull { it.name == preset.warpAddTo }?.let { editor.warpAddTo = it }
-    }
-
-    /** Puts the active canvas in Edit with the create warp or rotation tool, ready to place one. */
-    internal fun beginCanvasCreation(rotation: Boolean) {
-        setCanvasMode(_state.value.activeCanvas.id, CanvasMode.EDIT)
-        applyCanvasCreationPreset(_state.value.canvasCreation, canvasEditor)
-        canvasEditor.activateTool(if (rotation) io.github.psd2live.ui.CanvasTool.CREATE_ROTATION else io.github.psd2live.ui.CanvasTool.CREATE_WARP)
+    /** Removes every clothing simulation preset. */
+    internal fun removeClothingPresets() {
+        if (_state.value.simulationPreviewId in io.github.psd2live.core.sim.ModelPresets.CLOTHING_SIMS.values) setSimulationPreview(null)
+        _simulationStatus.value = SimulationStatus.Idle
+        _modelPresetReport.value = null
+        runSimulationMutation("Removed clothing simulation presets") { workspace, head ->
+            workspace.removeClothingPresets(head, io.github.psd2live.agent.MutationAuthor.USER)
+        }
     }
 
     /** A new simulation of the meshes of the selected layers; returns its ID, or null with nothing selected. */
@@ -770,7 +759,7 @@ class PSD2LiveViewModel : AutoCloseable {
             editorGeneration = current.projectOpenGeneration
         }
         return canvasEditors.getOrPut(current.activeWorkspace.id to canvasId) {
-            CanvasEditor(this, current.activeWorkspace.id, canvasId).also { applyCanvasCreationPreset(current.canvasCreation, it) }
+            CanvasEditor(this, current.activeWorkspace.id, canvasId)
         }
     }
     internal val canvasEditor: CanvasEditor get() = canvasEditorFor(uiState.value.activeCanvas.id)
@@ -1651,7 +1640,6 @@ class PSD2LiveViewModel : AutoCloseable {
             else it.copy(drawOrderRulerWidth = clamped, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1)
         }
     }
-    fun setModelSettingsExpanded(expanded: Boolean) { updateState { it.copy(modelSettingsExpanded = expanded, projectDirty = it.analysis != null, projectEditVersion = it.projectEditVersion + 1) } }
 
     fun setInspectorCollapsed(collapsed: Boolean) {
         updateState { current ->
@@ -2822,11 +2810,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	fun setCanvasCreationExpanded(expanded: Boolean) {
-		updateState { it.copy(canvasCreationExpanded = expanded) }
-	    markWorkspaceChanged()
-	}
-
 	fun setStrengthSubExpanded(expanded: Boolean) {
 		updateState { it.copy(strengthSubExpanded = expanded) }
 	    markWorkspaceChanged()
@@ -2856,7 +2839,6 @@ class PSD2LiveViewModel : AutoCloseable {
 				physicsFrontHair = true,
 				physicsBackHair = true,
 				physicsEyeJelly = true,
-				canvasCreation = CanvasCreationPreset.STANDARD,
 			)
 		}
 		schedulePreviewRebuild()
@@ -5467,12 +5449,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	// that sit lower in this class (pausedPhysics, live pose, etc.).
 	init {
 		startMotionLoop()
-		// The preset reaches every open canvas, whether it changed here or arrived with a project.
-		scope.launch {
-			state.map { it.canvasCreation }.distinctUntilChanged().collect { preset ->
-				canvasEditors.values.forEach { applyCanvasCreationPreset(preset, it) }
-			}
-		}
 	}
 
 	override fun close() {

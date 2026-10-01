@@ -25,6 +25,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Divider
+import io.github.psd2live.ui.components.IconCollapseAll
+import io.github.psd2live.ui.components.IconExpandAll
+import io.github.psd2live.ui.components.CompactIconButton
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -123,104 +126,178 @@ private fun MotionItemWithPlay(
 internal fun ModelPresetsSection(
 	state: PSD2LiveState,
 	viewModel: PSD2LiveViewModel,
-	isExpanded: Boolean,
-	onToggleExpand: () -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val isBusy = state.isAnalyzing || state.isGenerating
 
-	Column(
-		modifier = Modifier
-			.fillMaxWidth()
-			.padding(horizontal = 6.dp, vertical = 2.dp),
-		verticalArrangement = Arrangement.spacedBy(2.dp),
-	) {
-		// Header Row: Expand/Collapse Chevron + Title ("模型预设") + Reset Button
+	fun expandAll(expanded: Boolean) {
+		viewModel.setStrengthSubExpanded(expanded)
+		viewModel.setDynamicsSubExpanded(expanded)
+		viewModel.setSimulationPresetsExpanded(expanded)
+	}
+
+	Column(modifier = Modifier.fillMaxWidth()) {
+		// Toolbar, as in the parameter panel: reset every preset, and open or close every group.
 		Row(
 			modifier = Modifier
 				.fillMaxWidth()
-				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-				.clickable(onClick = onToggleExpand)
-				.padding(vertical = 1.dp),
+				.background(colors.panelElevated)
+				.padding(horizontal = 4.dp, vertical = 3.dp)
+				.height(22.dp),
 			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.SpaceBetween,
+			horizontalArrangement = Arrangement.spacedBy(3.dp),
 		) {
-			Row(
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(4.dp),
+			PanelToolButton(
+				label = tr("settings.reset"),
+				showLabel = true,
+				onClick = { viewModel.resetModelPresetsToDefault() },
+				enabled = !isBusy,
+				tooltip = tr("settings.resetHint"),
 			) {
-				IconChevron(expanded = isExpanded, modifier = Modifier.size(9.dp), tint = colors.textPrimary)
-				Text(
-					text = tr("settings.title"),
-					style = typography.header.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-					color = colors.textPrimary,
-				)
+				IconReset(modifier = Modifier.size(11.dp), tint = if (!isBusy) colors.textPrimary else colors.textDisabled)
 			}
-			if (isExpanded) {
-				CompactButton(
-					text = tr("settings.reset"),
-					onClick = { viewModel.resetModelPresetsToDefault() },
-					enabled = !isBusy,
-					leadingIcon = { IconReset(tint = colors.textPrimary) },
-					height = 19.dp,
-				)
+			Spacer(Modifier.weight(1f))
+			CompactIconButton(onClick = { expandAll(true) }, enabled = !state.meshOnly, size = 22.dp, tooltip = tr("canvas.hierarchy.expandAll")) {
+				IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+			}
+			CompactIconButton(onClick = { expandAll(false) }, enabled = !state.meshOnly, size = 22.dp, tooltip = tr("canvas.hierarchy.collapseAll")) {
+				IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
 			}
 		}
+		Divider(color = colors.divider)
 
-		if (isExpanded) {
-			// Submenu: 形变与口型 (Rigging & Facial)
-			Row(
+		val mouthSummary = if (state.mouthOutlineEnabled) " · ${tr("mouth.outline")}" else ""
+		PresetFolderRow(
+			title = tr("settings.group.rigging"),
+			summary = if (state.meshOnly) tr("export.disabled")
+			else "头: ${"%.2f".format(state.headStrength)} · 身: ${"%.2f".format(state.bodyStrength)}$mouthSummary",
+			expanded = state.strengthSubExpanded,
+			enabled = !isBusy && !state.meshOnly,
+		) { viewModel.setStrengthSubExpanded(!state.strengthSubExpanded) }
+
+		if (state.strengthSubExpanded && !state.meshOnly) {
+			Column(
 				modifier = Modifier
 					.fillMaxWidth()
-					.clickable(enabled = !isBusy && !state.meshOnly) {
-						viewModel.setStrengthSubExpanded(!state.strengthSubExpanded)
-					}
-					.padding(vertical = 1.dp),
-				verticalAlignment = Alignment.CenterVertically,
+					.padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 3.dp),
+				verticalArrangement = Arrangement.spacedBy(2.dp),
 			) {
-				IconChevron(
-					expanded = state.strengthSubExpanded && !state.meshOnly,
-					modifier = Modifier.size(9.dp),
-					tint = if (!state.meshOnly) colors.textMuted else colors.textDisabled,
+				CompactCheckbox(
+					checked = state.featureDisplacementEnabled,
+					onCheckedChange = viewModel::setFeatureDisplacementEnabled,
+					label = tr("model.deformer.featureDisplacement"),
+					enabled = !isBusy && !state.meshOnly,
 				)
-				Spacer(Modifier.width(4.dp))
-				Text(
-					text = tr("settings.group.rigging"),
-					style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
-					color = if (!state.meshOnly) colors.textPrimary else colors.textDisabled,
-				)
-				if (!state.strengthSubExpanded || state.meshOnly) {
-					Spacer(Modifier.width(6.dp))
-					val mouthSummary = if (state.mouthOutlineEnabled) " · ${tr("mouth.outline")}" else ""
+
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					verticalAlignment = Alignment.CenterVertically,
+				) {
 					Text(
-						text = if (state.meshOnly) "(${tr("export.disabled")})" else "(头: ${"%.2f".format(state.headStrength)} · 身: ${"%.2f".format(state.bodyStrength)}$mouthSummary)",
-						style = typography.caption.copy(fontSize = 9.5.sp),
-						color = colors.textMuted,
+						text = tr("settings.headStrength"),
+						style = typography.body.copy(fontSize = 10.5.sp),
+						color = colors.textPrimary,
+						modifier = Modifier.width(76.dp),
+						textAlign = TextAlign.Right,
+					)
+					Spacer(Modifier.width(5.dp))
+					CompactSlider(
+						value = state.headStrength,
+						onValueChange = { viewModel.setHeadStrength(it) },
+						onValueChangeStarted = viewModel::beginEditorGesture,
+						onValueChangeFinished = viewModel::endEditorGesture,
+						valueRange = 0.0f..4.0f,
+						enabled = !isBusy,
+						height = 14.dp,
+						modifier = Modifier.weight(1f),
+					)
+					Spacer(Modifier.width(4.dp))
+					CompactNumberSpinner(
+						onEditStart = { viewModel.beginEditorField("setHeadStrength") },
+						onEditEnd = { viewModel.endEditorField("setHeadStrength") },
+						value = state.headStrength.toDouble(),
+						onValueChange = { viewModel.setHeadStrength(it.toFloat()) },
+						min = 0.0,
+						max = 4.0,
+						step = 0.05,
+						decimals = 2,
+						unit = tr("settings.unit.x"),
+						enabled = !isBusy,
+						modifier = Modifier.width(60.dp),
+						height = 20.dp,
 					)
 				}
-			}
 
-			if (state.strengthSubExpanded && !state.meshOnly) {
-				Column(
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					verticalAlignment = Alignment.CenterVertically,
+				) {
+					Text(
+						text = tr("settings.bodyStrength"),
+						style = typography.body.copy(fontSize = 10.5.sp),
+						color = colors.textPrimary,
+						modifier = Modifier.width(76.dp),
+						textAlign = TextAlign.Right,
+					)
+					Spacer(Modifier.width(5.dp))
+					CompactSlider(
+						value = state.bodyStrength,
+						onValueChange = { viewModel.setBodyStrength(it) },
+						onValueChangeStarted = viewModel::beginEditorGesture,
+						onValueChangeFinished = viewModel::endEditorGesture,
+						valueRange = 0.0f..4.0f,
+						enabled = !isBusy,
+						height = 14.dp,
+						modifier = Modifier.weight(1f),
+					)
+					Spacer(Modifier.width(4.dp))
+					CompactNumberSpinner(
+						onEditStart = { viewModel.beginEditorField("setBodyStrength") },
+						onEditEnd = { viewModel.endEditorField("setBodyStrength") },
+						value = state.bodyStrength.toDouble(),
+						onValueChange = { viewModel.setBodyStrength(it.toFloat()) },
+						min = 0.0,
+						max = 4.0,
+						step = 0.05,
+						decimals = 2,
+						unit = tr("settings.unit.x"),
+						enabled = !isBusy,
+						modifier = Modifier.width(60.dp),
+						height = 20.dp,
+					)
+				}
+
+				Row(
 					modifier = Modifier
 						.fillMaxWidth()
-						.padding(start = 12.dp, top = 1.dp, bottom = 1.dp),
-					verticalArrangement = Arrangement.spacedBy(2.dp),
+						.padding(top = 2.dp),
+					verticalAlignment = Alignment.CenterVertically,
+					horizontalArrangement = Arrangement.spacedBy(8.dp),
 				) {
 					CompactCheckbox(
-						checked = state.featureDisplacementEnabled,
-						onCheckedChange = viewModel::setFeatureDisplacementEnabled,
-						label = tr("model.deformer.featureDisplacement"),
+						checked = state.mouthOutlineEnabled,
+						onCheckedChange = { viewModel.setMouthOutlineEnabled(it) },
+						label = tr("mouth.outline"),
 						enabled = !isBusy && !state.meshOnly,
+						modifier = Modifier.weight(1f),
 					)
+					Box(modifier = Modifier.weight(1f)) {
+						io.github.psd2live.ui.components.MouthSettingsPopupButton(
+							state = state,
+							enabled = !isBusy && !state.meshOnly,
+							onApply = viewModel::setMouthShapeCurve,
+						)
+					}
+				}
 
+				if (state.mouthOutlineEnabled) {
 					Row(
 						modifier = Modifier.fillMaxWidth(),
 						verticalAlignment = Alignment.CenterVertically,
 					) {
 						Text(
-							text = tr("settings.headStrength"),
+							text = tr("mouth.thickness"),
 							style = typography.body.copy(fontSize = 10.5.sp),
 							color = colors.textPrimary,
 							modifier = Modifier.width(76.dp),
@@ -228,283 +305,152 @@ internal fun ModelPresetsSection(
 						)
 						Spacer(Modifier.width(5.dp))
 						CompactSlider(
-							value = state.headStrength,
-							onValueChange = { viewModel.setHeadStrength(it) },
+							value = state.mouthThickness,
+							onValueChange = { viewModel.setMouthThickness(it) },
 							onValueChangeStarted = viewModel::beginEditorGesture,
 							onValueChangeFinished = viewModel::endEditorGesture,
-							valueRange = 0.0f..4.0f,
-							enabled = !isBusy,
+							valueRange = 0.5f..8.0f,
+							enabled = !isBusy && !state.meshOnly,
 							height = 14.dp,
 							modifier = Modifier.weight(1f),
 						)
 						Spacer(Modifier.width(4.dp))
 						CompactNumberSpinner(
-							onEditStart = { viewModel.beginEditorField("setHeadStrength") },
-							onEditEnd = { viewModel.endEditorField("setHeadStrength") },
-							value = state.headStrength.toDouble(),
-							onValueChange = { viewModel.setHeadStrength(it.toFloat()) },
-							min = 0.0,
-							max = 4.0,
-							step = 0.05,
-							decimals = 2,
-							unit = tr("settings.unit.x"),
-							enabled = !isBusy,
+							onEditStart = { viewModel.beginEditorField("setMouthThickness") },
+							onEditEnd = { viewModel.endEditorField("setMouthThickness") },
+							value = state.mouthThickness.toDouble(),
+							onValueChange = { viewModel.setMouthThickness(it.toFloat()) },
+							min = 0.5,
+							max = 8.0,
+							step = 0.1,
+							decimals = 1,
+							unit = "px",
+							enabled = !isBusy && !state.meshOnly,
 							modifier = Modifier.width(60.dp),
 							height = 20.dp,
 						)
 					}
 
-					Row(
-						modifier = Modifier.fillMaxWidth(),
-						verticalAlignment = Alignment.CenterVertically,
-					) {
-						Text(
-							text = tr("settings.bodyStrength"),
-							style = typography.body.copy(fontSize = 10.5.sp),
-							color = colors.textPrimary,
-							modifier = Modifier.width(76.dp),
-							textAlign = TextAlign.Right,
-						)
-						Spacer(Modifier.width(5.dp))
-						CompactSlider(
-							value = state.bodyStrength,
-							onValueChange = { viewModel.setBodyStrength(it) },
-							onValueChangeStarted = viewModel::beginEditorGesture,
-							onValueChangeFinished = viewModel::endEditorGesture,
-							valueRange = 0.0f..4.0f,
-							enabled = !isBusy,
-							height = 14.dp,
-							modifier = Modifier.weight(1f),
-						)
-						Spacer(Modifier.width(4.dp))
-						CompactNumberSpinner(
-							onEditStart = { viewModel.beginEditorField("setBodyStrength") },
-							onEditEnd = { viewModel.endEditorField("setBodyStrength") },
-							value = state.bodyStrength.toDouble(),
-							onValueChange = { viewModel.setBodyStrength(it.toFloat()) },
-							min = 0.0,
-							max = 4.0,
-							step = 0.05,
-							decimals = 2,
-							unit = tr("settings.unit.x"),
-							enabled = !isBusy,
-							modifier = Modifier.width(60.dp),
-							height = 20.dp,
-						)
+					val sampledColor = remember(state.analysis, state.alphaThreshold) {
+						state.analysis?.layers?.firstOrNull {
+							it.source !is MouthLipLayer &&
+							it.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN) &&
+							it.opaquePixels > 0
+						}?.let { MouthLipLayers.perimeterColor(it.source.raster, state.alphaThreshold) } ?: 0x482C32
 					}
+					val autoColor = state.mouthColor == null
+					val rgb = state.mouthColor ?: sampledColor
 
 					Row(
-						modifier = Modifier
-							.fillMaxWidth()
-							.padding(top = 2.dp),
+						modifier = Modifier.fillMaxWidth().padding(top = 1.dp),
 						verticalAlignment = Alignment.CenterVertically,
-						horizontalArrangement = Arrangement.spacedBy(8.dp),
+						horizontalArrangement = Arrangement.spacedBy(6.dp),
 					) {
 						CompactCheckbox(
-							checked = state.mouthOutlineEnabled,
-							onCheckedChange = { viewModel.setMouthOutlineEnabled(it) },
-							label = tr("mouth.outline"),
+							checked = autoColor,
+							onCheckedChange = { auto ->
+								viewModel.setMouthColor(if (auto) null else (state.mouthColor ?: sampledColor))
+							},
+							label = tr("mouth.autoColor"),
 							enabled = !isBusy && !state.meshOnly,
 							modifier = Modifier.weight(1f),
 						)
-						Box(modifier = Modifier.weight(1f)) {
-							io.github.psd2live.ui.components.MouthSettingsPopupButton(
-								state = state,
-								enabled = !isBusy && !state.meshOnly,
-								onApply = viewModel::setMouthShapeCurve,
-							)
+						ColorPickerSwatch(
+							color = rgb,
+							enabled = !isBusy && !state.meshOnly,
+							onColorChanged = { chosenRgb ->
+								viewModel.setMouthColor(chosenRgb)
+							},
+							sampledColor = sampledColor,
+						)
+						var hexInput by remember(state.mouthColor, autoColor) {
+							mutableStateOf("%06X".format(state.mouthColor ?: sampledColor))
 						}
-					}
-
-					if (state.mouthOutlineEnabled) {
-						Row(
-							modifier = Modifier.fillMaxWidth(),
-							verticalAlignment = Alignment.CenterVertically,
-						) {
-							Text(
-								text = tr("mouth.thickness"),
-								style = typography.body.copy(fontSize = 10.5.sp),
-								color = colors.textPrimary,
-								modifier = Modifier.width(76.dp),
-								textAlign = TextAlign.Right,
-							)
-							Spacer(Modifier.width(5.dp))
-							CompactSlider(
-								value = state.mouthThickness,
-								onValueChange = { viewModel.setMouthThickness(it) },
-								onValueChangeStarted = viewModel::beginEditorGesture,
-								onValueChangeFinished = viewModel::endEditorGesture,
-								valueRange = 0.5f..8.0f,
-								enabled = !isBusy && !state.meshOnly,
-								height = 14.dp,
-								modifier = Modifier.weight(1f),
-							)
-							Spacer(Modifier.width(4.dp))
-							CompactNumberSpinner(
-								onEditStart = { viewModel.beginEditorField("setMouthThickness") },
-								onEditEnd = { viewModel.endEditorField("setMouthThickness") },
-								value = state.mouthThickness.toDouble(),
-								onValueChange = { viewModel.setMouthThickness(it.toFloat()) },
-								min = 0.5,
-								max = 8.0,
-								step = 0.1,
-								decimals = 1,
-								unit = "px",
-								enabled = !isBusy && !state.meshOnly,
-								modifier = Modifier.width(60.dp),
-								height = 20.dp,
-							)
-						}
-
-						val sampledColor = remember(state.analysis, state.alphaThreshold) {
-							state.analysis?.layers?.firstOrNull {
-								it.source !is MouthLipLayer &&
-								it.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN) &&
-								it.opaquePixels > 0
-							}?.let { MouthLipLayers.perimeterColor(it.source.raster, state.alphaThreshold) } ?: 0x482C32
-						}
-						val autoColor = state.mouthColor == null
-						val rgb = state.mouthColor ?: sampledColor
-
-						Row(
-							modifier = Modifier.fillMaxWidth().padding(top = 1.dp),
-							verticalAlignment = Alignment.CenterVertically,
-							horizontalArrangement = Arrangement.spacedBy(6.dp),
-						) {
-							CompactCheckbox(
-								checked = autoColor,
-								onCheckedChange = { auto ->
-									viewModel.setMouthColor(if (auto) null else (state.mouthColor ?: sampledColor))
-								},
-								label = tr("mouth.autoColor"),
-								enabled = !isBusy && !state.meshOnly,
-								modifier = Modifier.weight(1f),
-							)
-							ColorPickerSwatch(
-								color = rgb,
-								enabled = !isBusy && !state.meshOnly,
-								onColorChanged = { chosenRgb ->
-									viewModel.setMouthColor(chosenRgb)
-								},
-								sampledColor = sampledColor,
-							)
-							var hexInput by remember(state.mouthColor, autoColor) {
-								mutableStateOf("%06X".format(state.mouthColor ?: sampledColor))
-							}
-							CompactTextField(
-								value = if (autoColor) "%06X".format(sampledColor) else hexInput,
-								onValueChange = { newHex ->
-									hexInput = newHex
-									val cleaned = newHex.trim().removePrefix("#")
-									if (cleaned.length == 6) {
-										cleaned.toIntOrNull(16)?.let { c ->
-											viewModel.setMouthColor(c)
-										}
+						CompactTextField(
+							value = if (autoColor) "%06X".format(sampledColor) else hexInput,
+							onValueChange = { newHex ->
+								hexInput = newHex
+								val cleaned = newHex.trim().removePrefix("#")
+								if (cleaned.length == 6) {
+									cleaned.toIntOrNull(16)?.let { c ->
+										viewModel.setMouthColor(c)
 									}
-								},
-								enabled = !isBusy && !state.meshOnly && !autoColor,
-								isMono = true,
-								placeholder = "#RRGGBB",
-								modifier = Modifier.width(68.dp),
-								height = 20.dp,
-							)
-						}
+								}
+							},
+							enabled = !isBusy && !state.meshOnly && !autoColor,
+							isMono = true,
+							placeholder = "#RRGGBB",
+							modifier = Modifier.width(68.dp),
+							height = 20.dp,
+						)
 					}
 				}
 			}
+		}
 
-			Divider(color = colors.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
 
-			// Submenu: 动作 (Motions)
-			Row(
+		val motionCount = listOf(state.motionIdle, state.motionBlink, state.motionNod, state.motionShake).count { it }
+		PresetFolderRow(
+			title = tr("settings.group.motions"),
+			summary = if (state.meshOnly) tr("export.disabled") else "${tr("export.motions")}: $motionCount",
+			expanded = state.dynamicsSubExpanded,
+			enabled = !isBusy && !state.meshOnly,
+		) { viewModel.setDynamicsSubExpanded(!state.dynamicsSubExpanded) }
+
+		if (state.dynamicsSubExpanded && !state.meshOnly) {
+			Column(
 				modifier = Modifier
 					.fillMaxWidth()
-					.clickable(enabled = !isBusy && !state.meshOnly) {
-						viewModel.setDynamicsSubExpanded(!state.dynamicsSubExpanded)
-					}
-					.padding(vertical = 1.dp),
-				verticalAlignment = Alignment.CenterVertically,
+					.padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 3.dp),
+				verticalArrangement = Arrangement.spacedBy(3.dp),
 			) {
-				IconChevron(
-					expanded = state.dynamicsSubExpanded && !state.meshOnly,
-					modifier = Modifier.size(9.dp),
-					tint = if (!state.meshOnly) colors.textMuted else colors.textDisabled,
-				)
-				Spacer(Modifier.width(4.dp))
-				Text(
-					text = tr("settings.group.motions"),
-					style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
-					color = if (!state.meshOnly) colors.textPrimary else colors.textDisabled,
-				)
-				if (!state.dynamicsSubExpanded || state.meshOnly) {
-					Spacer(Modifier.width(6.dp))
-					val motionCount = listOf(state.motionIdle, state.motionBlink, state.motionNod, state.motionShake).count { it }
-					Text(
-						text = if (state.meshOnly) "(${tr("export.disabled")})" else "(${tr("export.motions")}: $motionCount)",
-						style = typography.caption.copy(fontSize = 9.5.sp),
-						color = colors.textMuted,
+				// Motions
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					horizontalArrangement = Arrangement.spacedBy(10.dp),
+				) {
+					MotionItemWithPlay(
+						checked = state.motionIdle,
+						onCheckedChange = { viewModel.setMotionIdle(it) },
+						label = tr("export.motion.idle"),
+						onPlay = { viewModel.triggerMotion("Idle") },
+						enabled = !isBusy,
+						modifier = Modifier.weight(1f),
+					)
+					MotionItemWithPlay(
+						checked = state.motionBlink,
+						onCheckedChange = { viewModel.setMotionBlink(it) },
+						label = tr("export.motion.blink"),
+						onPlay = { viewModel.triggerMotion("Blink") },
+						enabled = !isBusy,
+						modifier = Modifier.weight(1f),
+					)
+				}
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					horizontalArrangement = Arrangement.spacedBy(10.dp),
+				) {
+					MotionItemWithPlay(
+						checked = state.motionNod,
+						onCheckedChange = { viewModel.setMotionNod(it) },
+						label = tr("export.motion.nod"),
+						onPlay = { viewModel.triggerMotion("Nod") },
+						enabled = !isBusy,
+						modifier = Modifier.weight(1f),
+					)
+					MotionItemWithPlay(
+						checked = state.motionShake,
+						onCheckedChange = { viewModel.setMotionShake(it) },
+						label = tr("export.motion.shake"),
+						onPlay = { viewModel.triggerMotion("Shake") },
+						enabled = !isBusy,
+						modifier = Modifier.weight(1f),
 					)
 				}
 			}
-
-			if (state.dynamicsSubExpanded && !state.meshOnly) {
-				Column(
-					modifier = Modifier
-						.fillMaxWidth()
-						.padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
-					verticalArrangement = Arrangement.spacedBy(3.dp),
-				) {
-					// Motions
-					Row(
-						modifier = Modifier.fillMaxWidth(),
-						horizontalArrangement = Arrangement.spacedBy(10.dp),
-					) {
-						MotionItemWithPlay(
-							checked = state.motionIdle,
-							onCheckedChange = { viewModel.setMotionIdle(it) },
-							label = tr("export.motion.idle"),
-							onPlay = { viewModel.triggerMotion("Idle") },
-							enabled = !isBusy,
-							modifier = Modifier.weight(1f),
-						)
-						MotionItemWithPlay(
-							checked = state.motionBlink,
-							onCheckedChange = { viewModel.setMotionBlink(it) },
-							label = tr("export.motion.blink"),
-							onPlay = { viewModel.triggerMotion("Blink") },
-							enabled = !isBusy,
-							modifier = Modifier.weight(1f),
-						)
-					}
-					Row(
-						modifier = Modifier.fillMaxWidth(),
-						horizontalArrangement = Arrangement.spacedBy(10.dp),
-					) {
-						MotionItemWithPlay(
-							checked = state.motionNod,
-							onCheckedChange = { viewModel.setMotionNod(it) },
-							label = tr("export.motion.nod"),
-							onPlay = { viewModel.triggerMotion("Nod") },
-							enabled = !isBusy,
-							modifier = Modifier.weight(1f),
-						)
-						MotionItemWithPlay(
-							checked = state.motionShake,
-							onCheckedChange = { viewModel.setMotionShake(it) },
-							label = tr("export.motion.shake"),
-							onPlay = { viewModel.triggerMotion("Shake") },
-							enabled = !isBusy,
-							modifier = Modifier.weight(1f),
-						)
-					}
-				}
-			}
-
-			Divider(color = colors.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
-			SimulationPresetsGroup(state, viewModel)
-			Divider(color = colors.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
-			CanvasCreationPresetsGroup(state, viewModel)
 		}
+
+		SimulationPresetsGroup(state, viewModel)
 	}
 }
 

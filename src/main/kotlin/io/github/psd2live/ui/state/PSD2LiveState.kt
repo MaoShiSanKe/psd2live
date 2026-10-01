@@ -388,7 +388,6 @@ data class PSD2LiveState(
     val hierarchyWidth: Float = 210f,
     val hierarchySearch: String = "",
     val drawOrderRulerWidth: Float = 24f,
-    val modelSettingsExpanded: Boolean = true,
     val workspaceSplitRatio: Float = 0.60f,
 	/** One-shot request for DockWorkspaceView to select a dock module tab (e.g. "layers"). */
 	val requestedDockModule: String? = null,
@@ -453,9 +452,6 @@ data class PSD2LiveState(
 	val dynamicsSubExpanded: Boolean = false,
 	val projectOutputsExpanded: Boolean = false,
 	val simulationPresetsExpanded: Boolean = true,
-	val canvasCreationExpanded: Boolean = false,
-	/** Defaults a new warp takes on the canvas; a workspace preference, not rig data. */
-	val canvasCreation: CanvasCreationPreset = CanvasCreationPreset.STANDARD,
 	val strengthSubExpanded: Boolean = false,
 	val advancedExpanded: Boolean = false,
 	val isAnalyzing: Boolean = false,
@@ -762,24 +758,5 @@ data class PSD2LiveState(
 			size = size shl 1
 		}
 		return size.coerceIn(256, 16384)
-	}
-}
-
-/** The lattice a new warp gets on the canvas and where it attaches; [warpAddTo] names a `WarpAddTo`. */
-data class CanvasCreationPreset(
-	val warpRows: Int = 5,
-	val warpCols: Int = 5,
-	val bezierRows: Int = 2,
-	val bezierCols: Int = 2,
-	val warpAddTo: String = "PARENT_OF_SELECTED",
-) {
-	/** The built-in preset these values are, or null for custom ones. */
-	val builtIn: String? get() = BUILT_IN.entries.firstOrNull { it.value.copy(warpAddTo = warpAddTo) == this }?.key
-
-	companion object {
-		val COARSE = CanvasCreationPreset(3, 3, 1, 1)
-		val STANDARD = CanvasCreationPreset()
-		val FINE = CanvasCreationPreset(9, 9, 3, 3)
-		val BUILT_IN = linkedMapOf("coarse" to COARSE, "standard" to STANDARD, "fine" to FINE)
 	}
 }

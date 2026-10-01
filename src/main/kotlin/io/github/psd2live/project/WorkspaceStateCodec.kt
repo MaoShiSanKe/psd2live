@@ -392,7 +392,6 @@ internal object WorkspaceStateCodec {
         put("hierarchyCollapsed", state.hierarchyCollapsed)
         put("hierarchySearch", state.hierarchySearch)
         put("drawOrderRulerWidth", state.drawOrderRulerWidth)
-        put("modelSettingsExpanded", state.modelSettingsExpanded)
 
         put("workspaceSplitRatio", state.workspaceSplitRatio)
         put("inspectorCollapsed", state.inspectorCollapsed)
@@ -491,11 +490,6 @@ internal object WorkspaceStateCodec {
         put("motionSubExpanded", state.motionSubExpanded)
         put("physicsSubExpanded", state.physicsSubExpanded)
         put("dynamicsSubExpanded", state.dynamicsSubExpanded)
-        putJsonObject("canvasCreation") {
-            put("warpRows", state.canvasCreation.warpRows); put("warpCols", state.canvasCreation.warpCols)
-            put("bezierRows", state.canvasCreation.bezierRows); put("bezierCols", state.canvasCreation.bezierCols)
-            put("warpAddTo", state.canvasCreation.warpAddTo)
-        }
         put("projectOutputsExpanded", state.projectOutputsExpanded)
         put("advancedExpanded", state.advancedExpanded)
         put("logPanelExpanded", state.logPanelExpanded)
@@ -541,7 +535,6 @@ internal object WorkspaceStateCodec {
         hierarchyWidth = value["hierarchyWidth"]?.jsonPrimitive?.float ?: base.hierarchyWidth,
         hierarchySearch = value["hierarchySearch"]?.jsonPrimitive?.content ?: base.hierarchySearch,
         drawOrderRulerWidth = value["drawOrderRulerWidth"]?.jsonPrimitive?.float ?: base.drawOrderRulerWidth,
-        modelSettingsExpanded = value["modelSettingsExpanded"]?.jsonPrimitive?.boolean ?: base.modelSettingsExpanded,
 
         workspaceSplitRatio = value["workspaceSplitRatio"]?.jsonPrimitive?.float ?: base.workspaceSplitRatio,
         workspaces = workspaces,
@@ -623,15 +616,6 @@ internal object WorkspaceStateCodec {
         motionSubExpanded = value["motionSubExpanded"]?.jsonPrimitive?.boolean ?: base.motionSubExpanded,
         physicsSubExpanded = value["physicsSubExpanded"]?.jsonPrimitive?.boolean ?: base.physicsSubExpanded,
         dynamicsSubExpanded = value["dynamicsSubExpanded"]?.jsonPrimitive?.boolean ?: base.dynamicsSubExpanded,
-        canvasCreation = value["canvasCreation"]?.jsonObject?.let { o ->
-            io.github.psd2live.ui.state.CanvasCreationPreset(
-                (o["warpRows"]?.jsonPrimitive?.intOrNull ?: base.canvasCreation.warpRows).coerceIn(1, 32),
-                (o["warpCols"]?.jsonPrimitive?.intOrNull ?: base.canvasCreation.warpCols).coerceIn(1, 32),
-                (o["bezierRows"]?.jsonPrimitive?.intOrNull ?: base.canvasCreation.bezierRows).coerceIn(1, 16),
-                (o["bezierCols"]?.jsonPrimitive?.intOrNull ?: base.canvasCreation.bezierCols).coerceIn(1, 16),
-                o["warpAddTo"]?.jsonPrimitive?.contentOrNull ?: base.canvasCreation.warpAddTo,
-            )
-        } ?: base.canvasCreation,
         projectOutputsExpanded = value["projectOutputsExpanded"]?.jsonPrimitive?.boolean ?: base.projectOutputsExpanded,
         advancedExpanded = value["advancedExpanded"]?.jsonPrimitive?.boolean ?: base.advancedExpanded,
         logPanelHeight = value["logPanelHeight"]?.jsonPrimitive?.float ?: base.logPanelHeight,

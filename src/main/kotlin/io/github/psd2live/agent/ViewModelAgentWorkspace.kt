@@ -1393,12 +1393,20 @@ class ViewModelAgentWorkspace(
         return result to report
     }
 
-    override suspend fun restoreClassicHair(front: Boolean, expectedHead: String, author: MutationAuthor) =
+    override suspend fun restoreClassicHair(front: Boolean, expectedHead: String, author: MutationAuthor, sway: Boolean) =
         mutateRigKeyform(expectedHead, null, if (front) "Restored classic front hair sway" else "Restored classic back hair sway", "presets", author) { document, _ ->
             val id = if (front) io.github.psd2live.core.sim.ModelPresets.FRONT_HAIR_SIM else io.github.psd2live.core.sim.ModelPresets.BACK_HAIR_SIM
             val overlay = if (document.rigEdits.simEdits.any { it.id == id }) io.github.psd2live.core.sim.SimAuthoring.remove(document.rigEdits, id) else document.rigEdits
             document.copy(rigEdits = overlay, settings = kotlinx.serialization.json.JsonObject(document.settings +
-                ((if (front) "hairSimulationFront" else "hairSimulationBack") to kotlinx.serialization.json.JsonPrimitive(false))))
+                ((if (front) "hairSimulationFront" else "hairSimulationBack") to kotlinx.serialization.json.JsonPrimitive(false)) +
+                ((if (front) "physicsFrontHair" else "physicsBackHair") to kotlinx.serialization.json.JsonPrimitive(sway))))
+        }
+
+    override suspend fun removeClothingPresets(expectedHead: String, author: MutationAuthor) =
+        mutateRigKeyform(expectedHead, null, "Removed clothing simulation presets", "presets", author) { document, _ ->
+            val ids = io.github.psd2live.core.sim.ModelPresets.CLOTHING_SIMS.values.toSet()
+            document.copy(rigEdits = document.rigEdits.simEdits.map { it.id }.filter { it in ids }
+                .fold(document.rigEdits) { edits, id -> io.github.psd2live.core.sim.SimAuthoring.remove(edits, id) })
         }
 
     override suspend fun deleteSimulation(id: String, expectedHead: String) =

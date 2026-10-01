@@ -331,7 +331,6 @@ fun FrameWindowScope.PSD2LiveApp(
 			}
 			if (step.expandModelSettings) {
 				viewModel.setInspectorCollapsed(false)
-				viewModel.setModelSettingsExpanded(true)
 			}
 			// Don't force a mode that needs a target until the user finishes selecting.
 			if (step.prerequisiteMet(state)) {
