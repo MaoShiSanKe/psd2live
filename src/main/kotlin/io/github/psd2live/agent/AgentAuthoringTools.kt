@@ -388,9 +388,11 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
     }
     tool("model_preset", "Model presets, each one undoable step that ends baked. front_hair / back_hair: one hair simulation (preset_front_hair / preset_back_hair) over every hair mesh of that kind, " +
         "each strand pinned at its own root; the legacy hair sway (ParamHairFront/Back, its warp and pendulum) is removed for that hair. classic_front_hair / classic_back_hair undo that: the preset simulation goes and the legacy sway returns. " +
-        "clothing: reads each bottomwear layer as a skirt or trousers (name first, then the alpha silhouette: a gap between legs from the crotch to the hem), finds the waist, crotch and hem, " +
-        "and writes preset_pin (waist held, hem free; trousers per leg), preset_mass and preset_wind (growing to the hem); " +
-        "skirts become preset_skirt, trousers preset_trousers. auto_weights recomputes those groups for the given layers, or every simulated mesh, and bakes the simulations they feed. " +
+        "clothing: reads topwear, bottomwear (skirt or trousers: name first, then a gap between legs from the crotch to the hem), neckwear, handwear (sleeves) and legwear, " +
+        "and simulates each only where its art hangs loose: cloth standing out of the body column (ruffles, bows, flared hems, coat flaps), a top below the waist, a skirt below the hips once wider than them, neckwear below the knot, " +
+        "and on sleeves and legwear only what is much thinner than the limb (cuff ruffles, ribbons); skin is never loose. Garments worn tight get no simulation and leave a clothing preset simulation they were in. " +
+        "Writes preset_pin (tight held, loose free), preset_mass and preset_wind (growing with looseness); " +
+        "the simulations are preset_top, preset_skirt, preset_trousers, preset_neckwear, preset_sleeves and preset_legwear. auto_weights recomputes those groups for the given layers, or every simulated mesh, and bakes the simulations they feed. " +
         "layers narrows a preset to those layer ids; omitted applies it to every recognized part. A mesh in a simulation of the user's own is refused. Reports the garments read and each bake.",
         buildJsonObject {
             put("preset", choices("front_hair", "back_hair", "clothing", "auto_weights", "classic_front_hair", "classic_back_hair")); put("state", string())

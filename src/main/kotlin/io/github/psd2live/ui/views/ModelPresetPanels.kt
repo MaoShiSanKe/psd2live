@@ -25,7 +25,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.PhysicsGenerator
-import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.sim.ModelPresets
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
@@ -40,6 +39,8 @@ import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.floatOrNull
 
 /** A collapsible group title of the model presets, with a one-line summary while collapsed. */
 @Composable
@@ -89,8 +90,8 @@ private fun PresetRow(label: String, content: @Composable androidx.compose.found
 }
 
 /**
- * Physics and simulation presets: hair simulation in place of the legacy sway, skirts and trousers read
- * from the art, recomputed pin weights, and the eye jelly pendulum.
+ * Physics and simulation presets: hair simulation in place of the legacy sway, clothing simulated where
+ * the art shows it hanging loose, recomputed pin weights, and the eye jelly pendulum.
  */
 @Composable
 internal fun SimulationPresetsGroup(state: PSD2LiveState, viewModel: PSD2LiveViewModel) {
@@ -105,15 +106,16 @@ internal fun SimulationPresetsGroup(state: PSD2LiveState, viewModel: PSD2LiveVie
 	val hasSelection = state.selectedLayerIds.isNotEmpty() || state.selectedLayerId != null
 	val canApply = ready && (!selectedOnly || hasSelection)
 	val present = PhysicsGenerator.Presets.present(state.analysis)
-	val hasBottomwear = state.analysis?.layers.orEmpty().any { it.semantic.tag == SemanticTag.BOTTOMWEAR && it.opaquePixels > 0 }
+	val hasClothing = state.analysis?.layers.orEmpty().any { it.semantic.tag in ModelPresets.CLOTHING_TAGS && it.opaquePixels > 0 }
 	val sims = state.rigEdits.simEdits.associateBy { it.id }
+	val clothingSims = ModelPresets.CLOTHING_SIMS.filterValues { it in sims }
 
 	fun simStatus(id: String): String? = sims[id]?.let { tr(if (it.bake != null) "presets.status.baked" else "presets.status.unbaked") }
 
 	val summary = listOfNotNull(
 		tr(if (state.hairSimulationFront) "presets.summary.frontSim" else "presets.summary.frontClassic").takeIf { present.frontHair },
 		tr(if (state.hairSimulationBack) "presets.summary.backSim" else "presets.summary.backClassic").takeIf { present.backHair },
-		tr("presets.summary.clothing").takeIf { ModelPresets.SKIRT_SIM in sims || ModelPresets.TROUSERS_SIM in sims },
+		tr("presets.summary.clothing").takeIf { clothingSims.isNotEmpty() },
 	).joinToString(" · ").ifEmpty { tr("presets.summary.none") }
 	PresetGroupHeader(tr("settings.group.simulation"), summary, state.simulationPresetsExpanded, !state.meshOnly) {
 		viewModel.setSimulationPresetsExpanded(!state.simulationPresetsExpanded)
@@ -167,10 +169,8 @@ internal fun SimulationPresetsGroup(state: PSD2LiveState, viewModel: PSD2LiveVie
 
 		PresetRow(tr("presets.clothing")) {
 			Text(
-				text = listOfNotNull(
-					simStatus(ModelPresets.SKIRT_SIM)?.let { "${tr("presets.garment.skirt")}: $it" },
-					simStatus(ModelPresets.TROUSERS_SIM)?.let { "${tr("presets.garment.trousers")}: $it" },
-				).joinToString(" · ").ifEmpty { tr(if (hasBottomwear) "presets.status.notApplied" else "presets.status.noBottomwear") },
+				text = clothingSims.map { (wear, id) -> "${tr("presets.garment.${wear.jsonName}")}: ${simStatus(id)}" }
+					.joinToString(" · ").ifEmpty { tr(if (hasClothing) "presets.status.notApplied" else "presets.status.noClothing") },
 				style = typography.caption.copy(fontSize = 10.sp),
 				color = colors.textMuted,
 				modifier = Modifier.weight(1f),
@@ -178,7 +178,7 @@ internal fun SimulationPresetsGroup(state: PSD2LiveState, viewModel: PSD2LiveVie
 				overflow = TextOverflow.Ellipsis,
 			)
 			CompactButton(tr("presets.detectClothing"), onClick = { viewModel.applyModelPreset(ModelPresets.Preset.CLOTHING, selectedOnly) },
-				enabled = canApply && hasBottomwear, isPrimary = ModelPresets.SKIRT_SIM !in sims && ModelPresets.TROUSERS_SIM !in sims, height = 20.dp)
+				enabled = canApply && hasClothing, isPrimary = clothingSims.isEmpty(), height = 20.dp)
 		}
 		GarmentReport(state, report)
 
@@ -215,7 +215,7 @@ internal fun SimulationPresetsGroup(state: PSD2LiveState, viewModel: PSD2LiveVie
 	}
 }
 
-/** What the last clothing preset read from each garment: skirt or trousers, and from what. */
+/** What the last clothing preset read from each garment: its kind, how loose it hangs, or that it is worn tight. */
 @Composable
 private fun GarmentReport(state: PSD2LiveState, report: JsonObject?) {
 	val colors = LocalToolColors.current
@@ -225,9 +225,14 @@ private fun GarmentReport(state: PSD2LiveState, report: JsonObject?) {
 	for ((mesh, value) in garments) {
 		val profile = value as? JsonObject ?: continue
 		val garment = (profile["garment"] as? JsonPrimitive)?.content ?: continue
-		val decidedBy = (profile["decided_by"] as? JsonPrimitive)?.content ?: "silhouette"
+		val simulated = (profile["simulated"] as? JsonPrimitive)?.booleanOrNull ?: true
+		val loose = (profile["loose"] as? JsonPrimitive)?.floatOrNull ?: 0f
+		val detail = listOfNotNull(
+			(profile["decided_by"] as? JsonPrimitive)?.content?.let { tr("presets.decidedBy.$it") },
+			if (simulated) tr("presets.fit.loose", kotlin.math.round(loose * 100f).toInt()) else tr("presets.fit.tight"),
+		).joinToString(" · ")
 		Text(
-			text = tr("presets.garmentRead", names[mesh] ?: mesh, tr("presets.garment.$garment"), tr("presets.decidedBy.$decidedBy")),
+			text = tr("presets.garmentRead", names[mesh] ?: mesh, tr("presets.garment.$garment"), detail),
 			style = typography.caption.copy(fontSize = 9.5.sp),
 			color = colors.textMuted,
 			modifier = Modifier.padding(start = 65.dp),

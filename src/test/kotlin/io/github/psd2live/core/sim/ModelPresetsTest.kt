@@ -11,6 +11,8 @@ import org.umamo.runtime.model.DrawableMesh
 import org.umamo.runtime.model.VertexGroupKind
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -38,7 +40,7 @@ class ModelPresetsTest {
     }
 
     @Test fun flaredSkirtIsASkirtWithItsWaistAtTheBandEdge() {
-        val profile = ModelPresets.garmentProfile(skirt, 100f, 200f, "Layer 7")
+        val profile = ModelPresets.garmentProfile(skirt, 200f, "Layer 7")
         assertEquals(ModelPresets.Garment.SKIRT, profile.garment)
         assertEquals("silhouette", profile.decidedBy)
         assertNull(profile.crotch)
@@ -48,22 +50,20 @@ class ModelPresetsTest {
 
     @Test fun legsSplitFromTheCrotchToTheHemAreTrousers() {
         for (legRows in listOf(150, 40)) {
-            val profile = ModelPresets.garmentProfile(trousers(legRows), 0f, 0f, "bottom")
+            val profile = ModelPresets.garmentProfile(trousers(legRows), 0f, "bottom")
             assertEquals(ModelPresets.Garment.TROUSERS, profile.garment, "legs of $legRows rows")
             val crotch = assertNotNull(profile.crotch)
             assertTrue(abs(crotch - 50f) <= (50 + legRows) * 0.03f, "crotch $crotch for legs of $legRows rows")
-            assertTrue(abs(profile.seamX(crotch + 10f) - 40f) <= 1f, "seam ${profile.seamX(crotch + 10f)}")
         }
     }
 
     @Test fun aGarmentNameWinsOverTheSilhouette() {
-        assertEquals(ModelPresets.Garment.SKIRT, ModelPresets.garmentProfile(trousers(100), 0f, 0f, "スカート").garment)
-        val named = ModelPresets.garmentProfile(skirt, 0f, 0f, "裤子")
+        assertEquals(ModelPresets.Garment.SKIRT, ModelPresets.garmentProfile(trousers(100), 0f, "スカート").garment)
+        val named = ModelPresets.garmentProfile(skirt, 0f, "裤子")
         assertEquals(ModelPresets.Garment.TROUSERS, named.garment)
         assertEquals("name", named.decidedBy)
-        // Legs drawn together: the crotch is assumed and the seam runs down the middle.
+        // Legs drawn together: the crotch is assumed.
         assertTrue(named.crotch!! > named.waist && named.crotch!! < named.hem)
-        assertTrue(abs(named.seamX(100f) - 60f) <= 1f)
     }
 
     /** A grid mesh over [x0]..[x1] × [y0]..[y1], canvas px, [cols] × [rows] cells. */
@@ -92,36 +92,16 @@ class ModelPresetsTest {
     }
 
     @Test fun skirtWeightsHoldTheWaistAndFreeTheHem() {
-        val profile = ModelPresets.garmentProfile(skirt, 0f, 0f, "skirt")
+        val profile = ModelPresets.garmentProfile(skirt, 0f, "skirt")
+        val field = ClothFit.analyze(skirt, 0f, 0f, ClothFit.Wear.SKIRT, profile.waist)
         val (mesh, canvas) = mesh(grid(5f, 0f, 115f, 120f, 6, 12))
-        val weights = ModelPresets.garmentWeights(mesh, canvas, profile)
+        val weights = ModelPresets.clothWeights(mesh, canvas, field)
         val n = mesh.vertexCount
         val topRow = (0 until n).filter { canvas[it * 2 + 1] == 0f }
         val hemRow = (0 until n).filter { canvas[it * 2 + 1] == 120f }
-        assertTrue(topRow.all { weights.pin[it] == 1f }, "waist pinned")
-        assertTrue(hemRow.all { weights.pin[it] == 0f }, "hem free")
-        assertTrue(hemRow.all { weights.wind!![it] == 1f && weights.mass!![it] == 1f })
-        assertTrue(topRow.all { weights.wind!![it] == 0f && weights.mass!![it] == 0.6f })
-    }
-
-    @Test fun eachTrouserLegReleasesOverItsOwnLength() {
-        val profile = ModelPresets.garmentProfile(trousers(150), 0f, 0f, "pants")
-        // One mesh: hips, a long left leg and a right leg bent up shorter.
-        val (mesh, canvas) = mesh(
-            grid(5f, 0f, 75f, 50f, 4, 4),
-            grid(5f, 50f, 31f, 200f, 2, 10, base = 25),
-            grid(49f, 50f, 75f, 140f, 2, 6, base = 25 + 33),
-        )
-        val weights = ModelPresets.garmentWeights(mesh, canvas, profile)
-        val n = mesh.vertexCount
-        val leftHem = (0 until n).filter { canvas[it * 2] < 40f && canvas[it * 2 + 1] == 200f }
-        val rightHem = (0 until n).filter { canvas[it * 2] > 40f && canvas[it * 2 + 1] == 140f }
-        assertTrue(leftHem.isNotEmpty() && rightHem.isNotEmpty())
-        for (hem in listOf(leftHem, rightHem)) {
-            assertTrue(hem.all { weights.pin[it] == 0f && abs(weights.wind!![it] - 0.6f) < 1e-4f && weights.mass!![it] == 1f }, "each leg's own hem is free")
-        }
-        val hips = (0 until n).filter { canvas[it * 2 + 1] < 40f }
-        assertTrue(hips.all { weights.pin[it] >= 0.6f }, "the hips hold")
+        assertTrue(topRow.all { weights.pin[it] == 1f && weights.wind!![it] == 0f && weights.mass!![it] == 0.6f }, "waist pinned")
+        assertTrue(hemRow.all { weights.pin[it] < 0.1f && weights.wind!![it] > 0.9f && weights.mass!![it] > 0.95f }, "hem free")
+        assertTrue(ModelPresets.hangsLoose(weights))
     }
 
     @Test fun eachStrandIsRootedAtItsOwnTop() {
@@ -196,6 +176,32 @@ class ModelPresetsTest {
         } finally {
             temp.toFile().deleteRecursively()
         }
+    }
+
+    @Test fun clothingSimulatesOnlyWhatHangsLooseAndLetsATightGarmentGo() {
+        val pipeline = PSD2LivePipeline()
+        val base = pipeline.buildPreview(psd)
+        val layers = base.analysis.layers.associateBy { it.source.id.raw }
+        fun tagOf(mesh: String) = layers[base.rig.layerIdByDrawableId[mesh]]?.semantic?.tag
+        val skirt = base.rig.puppet.drawables.first { it.mesh != null && tagOf(it.id.raw) == SemanticTag.BOTTOMWEAR }.id.raw
+        val top = base.rig.puppet.drawables.first { it.mesh != null && tagOf(it.id.raw) == SemanticTag.TOPWEAR }.id.raw
+        // An earlier preset had put the fitted top into a simulation of its own.
+        val earlier = SimAuthoring.put(base.config.rigEdits, base.rig.puppet, RigSimEdit(ModelPresets.TOP_SIM, "Top", SimKind.CLOTH, listOf(top)))
+        val applied = ModelPresets.apply(earlier, base.rig.puppet, base.analysis, base.rig.layerIdByDrawableId, ModelPresets.Preset.CLOTHING)
+        // tml: the A-line skirt swings; the fitted top, the sleeves and the bare legs are worn tight.
+        assertEquals(listOf(ModelPresets.SKIRT_SIM), applied.simulationIds)
+        assertEquals(listOf(skirt), applied.overlay.simEdits.single().targets)
+        val garments = applied.garments
+        assertEquals("skirt", garments.getValue(skirt)["garment"]?.jsonPrimitive?.content)
+        assertEquals(true, garments.getValue(skirt)["simulated"]?.jsonPrimitive?.booleanOrNull)
+        assertEquals("top", garments.getValue(top)["garment"]?.jsonPrimitive?.content)
+        assertEquals(false, garments.getValue(top)["simulated"]?.jsonPrimitive?.booleanOrNull)
+        assertTrue(garments.values.count { it["simulated"]?.jsonPrimitive?.booleanOrNull == true } == 1, garments.toString())
+        // Applying again changes nothing.
+        val rebuilt = base.baseRig.withRigEdits(applied.overlay).puppet
+        val again = ModelPresets.apply(applied.overlay, rebuilt, base.analysis, base.rig.layerIdByDrawableId, ModelPresets.Preset.CLOTHING)
+        assertEquals(applied.overlay.simEdits, again.overlay.simEdits)
+        assertEquals(applied.overlay.authoringJournal, again.overlay.authoringJournal)
     }
 
     @Test fun aMeshInAUserSimulationIsRefused() {

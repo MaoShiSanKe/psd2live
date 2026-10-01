@@ -25,7 +25,10 @@ object ModelPresets {
     enum class Preset(val jsonName: String) {
         FRONT_HAIR("front_hair"),
         BACK_HAIR("back_hair"),
-        /** Skirts and trousers among the bottomwear, each with its own weights and cloth simulation. */
+        /**
+         * Tops, bottoms, neckwear, sleeves and legwear, simulated only where they hang loose (see [ClothFit]);
+         * one cloth simulation per kind of garment, and garments worn tight are left to the rig.
+         */
         CLOTHING("clothing"),
         /** Recomputes the weights only, for the selection or every simulated mesh; no new simulation. */
         AUTO_WEIGHTS("auto_weights");
@@ -42,7 +45,21 @@ object ModelPresets {
     const val BACK_HAIR_SIM = "preset_back_hair"
     const val SKIRT_SIM = "preset_skirt"
     const val TROUSERS_SIM = "preset_trousers"
-    val PRESET_SIMS = setOf(FRONT_HAIR_SIM, BACK_HAIR_SIM, SKIRT_SIM, TROUSERS_SIM)
+    const val TOP_SIM = "preset_top"
+    const val NECKWEAR_SIM = "preset_neckwear"
+    const val SLEEVES_SIM = "preset_sleeves"
+    const val LEGWEAR_SIM = "preset_legwear"
+
+    /** The clothing simulation each kind of garment goes to. */
+    val CLOTHING_SIMS = mapOf(
+        ClothFit.Wear.TOP to TOP_SIM,
+        ClothFit.Wear.SKIRT to SKIRT_SIM,
+        ClothFit.Wear.TROUSERS to TROUSERS_SIM,
+        ClothFit.Wear.NECKWEAR to NECKWEAR_SIM,
+        ClothFit.Wear.SLEEVE to SLEEVES_SIM,
+        ClothFit.Wear.LEGWEAR to LEGWEAR_SIM,
+    )
+    val PRESET_SIMS = setOf(FRONT_HAIR_SIM, BACK_HAIR_SIM) + CLOTHING_SIMS.values
 
     /** The group each preset writes for a kind, unless the simulation already names one of its own. */
     val GROUP_NAMES = mapOf(
@@ -51,13 +68,13 @@ object ModelPresets {
         VertexGroupKind.WIND to "preset_wind",
     )
 
+    /** Layers the clothing preset reads; each is simulated only where it hangs loose. */
+    val CLOTHING_TAGS = setOf(SemanticTag.TOPWEAR, SemanticTag.BOTTOMWEAR, SemanticTag.NECKWEAR, SemanticTag.HANDWEAR, SemanticTag.LEGWEAR)
+
     private val SKIRT_NAMES = listOf("skirt", "dress", "裙", "スカート", "ワンピース")
     private val TROUSER_NAMES = listOf("pants", "trouser", "shorts", "jeans", "裤", "褲", "ズボン", "パンツ")
 
-    /**
-     * What the silhouette of a bottomwear layer says, in canvas px (y down). [crotch] and the seam exist
-     * only for trousers: below the crotch, a vertex left of [seamX] belongs to the left leg.
-     */
+    /** What the silhouette of a bottomwear layer says, in canvas px (y down); [crotch] exists only for trousers. */
     class GarmentProfile internal constructor(
         val garment: Garment,
         val top: Float,
@@ -66,12 +83,7 @@ object ModelPresets {
         val hem: Float,
         /** How the garment was told apart: "name" or "silhouette". */
         val decidedBy: String,
-        private val seamTop: Float,
-        private val seams: FloatArray,
     ) {
-        fun seamX(y: Float): Float =
-            if (seams.isEmpty()) Float.NaN else seams[(y - seamTop).toInt().coerceIn(0, seams.lastIndex)]
-
         fun toJson() = buildJsonObject {
             put("garment", garment.jsonName); put("decided_by", decidedBy)
             put("waist", round(waist)); crotch?.let { put("crotch", round(it)) }; put("hem", round(hem))
@@ -79,12 +91,12 @@ object ModelPresets {
     }
 
     /**
-     * Reads a garment from [raster], placed at ([left], [top]) on the canvas. Each row's opaque runs give
+     * Reads a garment from [raster], its top row at canvas y [top]. Each row's opaque runs give
      * its extent and the widest interior gap with enough cloth on both sides. The waist is the narrowest
      * row of the upper third; trousers are a gap that starts at the crotch and holds down to the hem. A
      * garment [name] decides the type first, since a slit skirt or legs drawn together fool the silhouette.
      */
-    fun garmentProfile(raster: LayerRaster, left: Float, top: Float, name: String, alphaThreshold: Int = 8): GarmentProfile {
+    fun garmentProfile(raster: LayerRaster, top: Float, name: String, alphaThreshold: Int = 8): GarmentProfile {
         val w = raster.width
         val h = raster.height
         val minRun = maxOf(2, w / 100)
@@ -159,24 +171,29 @@ object ModelPresets {
             else -> null
         }
         val garment = named ?: if (crotchRow != null) Garment.TROUSERS else Garment.SKIRT
-        if (garment == Garment.SKIRT) {
-            return GarmentProfile(garment, top + first, top + waist, null, top + last + 1, if (named != null) "name" else "silhouette", 0f, FloatArray(0))
-        }
-        // Trousers drawn with the legs together have no gap: the crotch is assumed and the seam is the middle.
+        val decidedBy = if (named != null) "name" else "silhouette"
+        if (garment == Garment.SKIRT) return GarmentProfile(garment, top + first, top + waist, null, top + last + 1, decidedBy)
+        // Trousers drawn with the legs together have no gap: the crotch is assumed.
         val crotch = crotchRow ?: (waist + (last - waist) * 35 / 100)
-        val seams = FloatArray(last - crotch + 1)
-        var previous = (rowLeft[crotch] + rowRight[crotch]).coerceAtLeast(0) * 0.5f
-        for (i in seams.indices) {
-            val y = crotch + i
-            previous = when {
-                split[y] -> gapCenter[y]
-                rowLeft[y] >= 0 && crotchRow == null -> (rowLeft[y] + rowRight[y]) * 0.5f
-                else -> previous
-            }
-            seams[i] = left + previous
-        }
-        return GarmentProfile(garment, top + first, top + waist, top + crotch, top + last + 1,
-            if (named != null) "name" else "silhouette", top + crotch, seams)
+        return GarmentProfile(garment, top + first, top + waist, top + crotch, top + last + 1, decidedBy)
+    }
+
+    /**
+     * Where a top stops resting on the torso, canvas y: the waist of the bottoms, or the top of legwear
+     * reaching up under the top. Specks a fraction of the size of the real clothing do not count.
+     */
+    fun waistLine(layers: List<ClassifiedLayer>, alphaThreshold: Int = 8): Float? {
+        val largest = layers.filter { it.semantic.tag in CLOTHING_TAGS }.maxOfOrNull { it.opaquePixels } ?: return null
+        val worn = layers.filter { it.opaquePixels > 0 && it.opaquePixels >= largest * 0.05f }
+        fun bounds(layer: ClassifiedLayer) =
+            ClothFit.clothBounds(layer.source.raster, layer.source.bounds.left.toFloat(), layer.source.bounds.top.toFloat(), alphaThreshold)
+        val topBottom = worn.filter { it.semantic.tag == SemanticTag.TOPWEAR }.mapNotNull { bounds(it)?.get(3) }.maxOrNull()
+        return worn.filter { it.semantic.tag == SemanticTag.BOTTOMWEAR }.mapNotNull { layer ->
+            runCatching {
+                garmentProfile(layer.source.raster, layer.source.bounds.top.toFloat(), layer.source.name, alphaThreshold).waist
+            }.getOrNull()
+        }.minOrNull() ?: worn.filter { it.semantic.tag == SemanticTag.LEGWEAR }.mapNotNull { bounds(it)?.get(1) }
+            .filter { topBottom != null && it < topBottom }.minOrNull()
     }
 
     /** Per-vertex weights of one mesh; a null group is not written. */
@@ -188,45 +205,19 @@ object ModelPresets {
     }
 
     /**
-     * Garment weights from [profile], with [canvas] the mesh's rest vertices in canvas px.
-     * - Skirt: pinned above the waist and released over the next 30% toward the hem; mass and wind grow
-     *   to the hem.
-     * - Trousers: the hips hold (pin 1 to 0.6 at the crotch); below it each leg, split at the seam, releases
-     *   over its own length and swings on its own.
+     * Cloth weights from a garment's looseness, with [canvas] the mesh's rest vertices in canvas px: pinned
+     * where it is worn tight, free where it hangs loose, heavier and catching more wind the looser it is.
+     * Cloth on a limb catches less wind, being smaller and held closer.
      */
-    fun garmentWeights(mesh: DrawableMesh, canvas: FloatArray, profile: GarmentProfile): PresetWeights {
+    fun clothWeights(mesh: DrawableMesh, canvas: FloatArray, field: ClothFit.Field): PresetWeights {
         val n = mesh.vertexCount
-        val pin = FloatArray(n)
-        val mass = FloatArray(n)
-        val wind = FloatArray(n)
-        val crotch = profile.crotch
-        if (profile.garment == Garment.SKIRT || crotch == null) {
-            val span = (profile.hem - profile.waist).coerceAtLeast(1f)
-            for (v in 0 until n) {
-                val d = (canvas[v * 2 + 1] - profile.waist) / span
-                pin[v] = 1f - smoothstep(0.02f, 0.3f, d)
-                mass[v] = 0.6f + 0.4f * smoothstep(0f, 1f, d)
-                wind[v] = smoothstep(0.1f, 1f, d)
-            }
-            return PresetWeights(pin, mass, wind)
-        }
-        val leg = IntArray(n) { v -> if (canvas[v * 2 + 1] < crotch) -1 else if (canvas[v * 2] < profile.seamX(canvas[v * 2 + 1])) 0 else 1 }
-        val legHem = FloatArray(2) { side -> (0 until n).filter { leg[it] == side }.maxOfOrNull { canvas[it * 2 + 1] } ?: profile.hem }
-        val hips = (crotch - profile.waist).coerceAtLeast(1f)
-        for (v in 0 until n) {
-            val y = canvas[v * 2 + 1]
-            if (leg[v] < 0) {
-                pin[v] = 1f - 0.4f * smoothstep(0.1f, 1f, (y - profile.waist) / hips)
-                mass[v] = 0.6f
-                continue
-            }
-            val t = (y - crotch) / (legHem[leg[v]] - crotch).coerceAtLeast(1f)
-            pin[v] = 0.6f * (1f - smoothstep(0f, 0.7f, t))
-            mass[v] = 0.6f + 0.4f * smoothstep(0f, 1f, t)
-            wind[v] = 0.6f * smoothstep(0.2f, 1f, t)
-        }
-        return PresetWeights(pin, mass, wind)
+        val loose = FloatArray(n) { field.at(canvas[it * 2], canvas[it * 2 + 1]) }
+        val wind = if (field.wear.onLimb) 0.6f else 1f
+        return PresetWeights(FloatArray(n) { 1f - loose[it] }, FloatArray(n) { 0.6f + 0.4f * loose[it] }, FloatArray(n) { wind * loose[it] })
     }
+
+    /** Whether [weights] leave enough of a mesh free to be worth simulating. */
+    internal fun hangsLoose(weights: PresetWeights) = weights.pin.count { it < 0.5f } >= maxOf(3, weights.pin.size / 100)
 
     /**
      * Strand pins for hair and other hanging parts: each connected island of the mesh is a strand rooted
@@ -255,10 +246,20 @@ object ModelPresets {
         return PresetWeights(pin)
     }
 
-    class Applied(val overlay: RigEditOverlay, val simulationIds: List<String>, val garments: Map<String, GarmentProfile>) {
+    class Applied(val overlay: RigEditOverlay, val simulationIds: List<String>, val garments: Map<String, JsonObject>) {
         fun toJson() = buildJsonObject {
             putJsonArray("simulations") { simulationIds.forEach { add(it) } }
-            if (garments.isNotEmpty()) putJsonObject("garments") { garments.forEach { (mesh, profile) -> put(mesh, profile.toJson()) } }
+            if (garments.isNotEmpty()) putJsonObject("garments") { garments.forEach { (mesh, garment) -> put(mesh, garment) } }
+        }
+    }
+
+    /** What the clothing preset read from one garment layer. */
+    private class Fit(val field: ClothFit.Field, val profile: GarmentProfile?) {
+        fun toJson(simulated: Boolean) = buildJsonObject {
+            put("garment", field.wear.jsonName)
+            profile?.toJson()?.forEach { (key, value) -> if (key != "garment") put(key, value) }
+            field.toJson().forEach { (key, value) -> put(key, value) }
+            put("simulated", simulated)
         }
     }
 
@@ -284,11 +285,27 @@ object ModelPresets {
             if (layer.opaquePixels <= 0 || (layers.isNotEmpty() && layer.source.id.raw !in layers)) null else drawable to layer
         }
         val writer = Writer(overlay, model, canvas)
-        val profiles = LinkedHashMap<String, GarmentProfile>()
-        fun profileOf(layer: ClassifiedLayer) = profiles.getOrPut(layer.source.id.raw) {
-            garmentProfile(layer.source.raster, layer.source.bounds.left.toFloat(), layer.source.bounds.top.toFloat(), layer.source.name, alphaThreshold)
+        // Clothing specks next to the real garments (a stray stroke on an empty layer) are not worn.
+        val largestClothing = analysis.layers.filter { it.semantic.tag in CLOTHING_TAGS }.maxOfOrNull { it.opaquePixels } ?: 0
+        fun worn(layer: ClassifiedLayer) = layer.semantic.tag in CLOTHING_TAGS && layer.opaquePixels >= largestClothing * 0.05f
+        val waist by lazy { waistLine(analysis.layers, alphaThreshold) }
+        val fits = HashMap<String, Fit?>()
+        fun fitOf(layer: ClassifiedLayer) = fits.getOrPut(layer.source.id.raw) {
+            val source = layer.source
+            val top = source.bounds.top.toFloat()
+            runCatching {
+                val profile = if (layer.semantic.tag == SemanticTag.BOTTOMWEAR) garmentProfile(source.raster, top, source.name, alphaThreshold) else null
+                val wear = when (layer.semantic.tag) {
+                    SemanticTag.TOPWEAR -> ClothFit.Wear.TOP
+                    SemanticTag.NECKWEAR -> ClothFit.Wear.NECKWEAR
+                    SemanticTag.HANDWEAR -> ClothFit.Wear.SLEEVE
+                    SemanticTag.LEGWEAR -> ClothFit.Wear.LEGWEAR
+                    else -> if (profile?.garment == Garment.TROUSERS) ClothFit.Wear.TROUSERS else ClothFit.Wear.SKIRT
+                }
+                Fit(ClothFit.analyze(source.raster, source.bounds.left.toFloat(), top, wear, profile?.waist ?: waist, alphaThreshold), profile)
+            }.getOrNull()
         }
-        val garments = LinkedHashMap<String, GarmentProfile>()
+        val garments = LinkedHashMap<String, JsonObject>()
         when (preset) {
             Preset.FRONT_HAIR, Preset.BACK_HAIR -> {
                 val front = preset == Preset.FRONT_HAIR
@@ -301,20 +318,26 @@ object ModelPresets {
                     targets.map { it.id.raw }, SimMaterial.preset(SimKind.HAIR), keepOthers = layers.isNotEmpty())
             }
             Preset.CLOTHING -> {
-                val targets = candidates.filter { it.second.semantic.tag == SemanticTag.BOTTOMWEAR }
-                require(targets.isNotEmpty()) { "No bottomwear meshes" }
-                for ((garment, members) in targets.groupBy { profileOf(it.second).garment }) {
-                    val skirt = garment == Garment.SKIRT
-                    val id = if (skirt) SKIRT_SIM else TROUSERS_SIM
-                    for ((drawable, layer) in members) {
-                        val profile = profileOf(layer)
-                        garments[drawable.id.raw] = profile
-                        writer.weights(drawable, id, garmentWeights(drawable.mesh!!, canvas.getValue(drawable.id.raw), profile))
-                    }
-                    val material = if (skirt) SimMaterial.preset(SimKind.CLOTH)
-                        else SimMaterial.preset(SimKind.CLOTH).copy(bend = 0.5f, goal = 0.25f, slack = 0.015f)
-                    writer.simulation(id, tr(if (skirt) "presets.sim.skirt" else "presets.sim.trousers"), SimKind.CLOTH,
-                        members.map { it.first.id.raw }, material, keepOthers = layers.isNotEmpty())
+                val targets = candidates.filter { worn(it.second) }
+                require(targets.isNotEmpty()) { "No clothing meshes" }
+                val loose = LinkedHashMap<ClothFit.Wear, MutableList<Drawable>>()
+                val tight = ArrayList<String>()
+                for ((drawable, layer) in targets) {
+                    val fit = fitOf(layer) ?: continue
+                    val weights = clothWeights(drawable.mesh!!, canvas.getValue(drawable.id.raw), fit.field)
+                    val simulated = hangsLoose(weights)
+                    garments[drawable.id.raw] = fit.toJson(simulated)
+                    if (!simulated) { tight += drawable.id.raw; continue }
+                    writer.weights(drawable, CLOTHING_SIMS.getValue(fit.field.wear), weights)
+                    loose.getOrPut(fit.field.wear) { ArrayList() } += drawable
+                }
+                // A garment now read as tight leaves the clothing simulation it was in; one read as another
+                // kind moves over as its simulation is put.
+                val released = writer.release(tight, CLOTHING_SIMS.values.toSet())
+                require(loose.isNotEmpty() || released) { "Every garment is worn tight; nothing hangs loose enough to simulate" }
+                for ((wear, members) in loose) {
+                    writer.simulation(CLOTHING_SIMS.getValue(wear), tr("presets.sim.${wear.jsonName}"), SimKind.CLOTH,
+                        members.map { it.id.raw }, clothMaterial(wear), keepOthers = layers.isNotEmpty())
                 }
             }
             Preset.AUTO_WEIGHTS -> {
@@ -324,11 +347,11 @@ object ModelPresets {
                 for ((drawable, layer) in targets) {
                     val owner = overlay.simEdits.firstOrNull { drawable.id.raw in it.targets }?.id
                     val positions = canvas.getValue(drawable.id.raw)
-                    val weights = when (layer.semantic.tag) {
-                        SemanticTag.FRONT_HAIR -> hairWeights(drawable, canvas, true)
-                        SemanticTag.BACK_HAIR -> hairWeights(drawable, canvas, false)
-                        SemanticTag.BOTTOMWEAR -> profileOf(layer).also { garments[drawable.id.raw] = it }
-                            .let { garmentWeights(drawable.mesh!!, positions, it) }
+                    val fit = if (layer.semantic.tag in CLOTHING_TAGS) fitOf(layer) else null
+                    val weights = when {
+                        layer.semantic.tag == SemanticTag.FRONT_HAIR -> hairWeights(drawable, canvas, true)
+                        layer.semantic.tag == SemanticTag.BACK_HAIR -> hairWeights(drawable, canvas, false)
+                        fit != null -> clothWeights(drawable.mesh!!, positions, fit.field).also { garments[drawable.id.raw] = fit.toJson(owner != null) }
                         else -> strandWeights(drawable.mesh!!, positions, 0.06f, 0.12f)
                     }
                     writer.weights(drawable, owner, weights)
@@ -337,6 +360,16 @@ object ModelPresets {
             }
         }
         return Applied(writer.overlay, writer.simulationIds.toList(), garments)
+    }
+
+    /** Cloth on a limb or legs bends less and keeps closer to its drawn shape than a skirt or coat. */
+    private fun clothMaterial(wear: ClothFit.Wear): SimMaterial {
+        val cloth = SimMaterial.preset(SimKind.CLOTH)
+        return when (wear) {
+            ClothFit.Wear.TOP, ClothFit.Wear.SKIRT -> cloth
+            ClothFit.Wear.NECKWEAR -> cloth.copy(bend = 0.4f)
+            ClothFit.Wear.TROUSERS, ClothFit.Wear.SLEEVE, ClothFit.Wear.LEGWEAR -> cloth.copy(bend = 0.5f, goal = 0.25f, slack = 0.015f)
+        }
     }
 
     private fun hairWeights(drawable: Drawable, canvas: Map<String, FloatArray>, front: Boolean) =
@@ -389,6 +422,20 @@ object ModelPresets {
                 ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups)
             overlay = SimAuthoring.put(overlay, model, edit)
             simulationIds += id
+        }
+
+        /**
+         * Takes [targets] out of the [simulations] they are in, removing a simulation left with none.
+         * Returns whether anything changed.
+         */
+        fun release(targets: Collection<String>, simulations: Set<String>): Boolean {
+            val before = overlay
+            for (edit in overlay.simEdits.filter { it.id in simulations && it.targets.any(targets::contains) }) {
+                val left = edit.targets.filterNot(targets::contains)
+                overlay = if (left.isEmpty()) SimAuthoring.remove(overlay, edit.id)
+                    else SimAuthoring.put(overlay, model, edit.copy(targets = left))
+            }
+            return overlay != before
         }
 
         /** Points every simulation whose meshes got weights at the groups just written, and lists it. */
