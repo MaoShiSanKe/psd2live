@@ -93,6 +93,9 @@ class CubismSdkPreviewSession(
 		val pointerY: Float,
 		val animationEnabled: Boolean = true,
 		val parameterOverrides: Map<ParameterId, Float>,
+		val parameterDefinitions: List<org.umamo.runtime.model.Parameter> = emptyList(),
+		val pointerTrackingEnabled: Boolean = pointerX != 0f || pointerY != 0f,
+		val lockedParameters: Set<ParameterId> = emptySet(),
 		val frameTimeNanos: Long = System.nanoTime(),
         val viewId: String = "",
 	)
@@ -300,9 +303,12 @@ class CubismSdkPreviewSession(
                 previous.animationEnabled == request.animationEnabled &&
 					(!request.animationEnabled || previous.frameTimeNanos == request.frameTimeNanos) &&
                     previous.pointerX == request.pointerX && previous.pointerY == request.pointerY &&
-                    previous.parameterOverrides == request.parameterOverrides
+                    previous.parameterOverrides == request.parameterOverrides &&
+                    previous.pointerTrackingEnabled == request.pointerTrackingEnabled &&
+                    previous.lockedParameters == request.lockedParameters &&
+                    previous.parameterDefinitions == request.parameterDefinitions
             } == true
-			val needsRefresh: Boolean
+			var needsRefresh: Boolean
             if (reusePose) {
                 needsRefresh = false
             } else if (request.animationEnabled) {
@@ -329,14 +335,23 @@ class CubismSdkPreviewSession(
 				}
 				// Paused previews cannot advance Cubism's smoothed drag manager. Apply the static
 				// look offsets directly so mouse tracking remains useful while inspecting a pose.
-				applyPausedPointerTracking(
-					native,
-					handle,
-					request.pointerX,
-					request.pointerY,
-					request.parameterOverrides,
-				)
+				val tracked = pointerPreviewPose(request.parameterOverrides, request.pointerX, request.pointerY,
+					request.parameterDefinitions, request.pointerTrackingEnabled, request.lockedParameters)
+				for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
+					val id = ParameterId(binding.parameterId)
+					tracked[id]?.let { native.Live2D_SetParameterValue(handle, id.raw, it) }
+				}
 				needsRefresh = true
+			}
+			// Native motion/physics and look updates can add after the SDK's setters clamp.
+			// Bound the final pose before geometry evaluation, using this model's edited ranges.
+			if (!reusePose && request.parameterDefinitions.isNotEmpty()) {
+				val pose = copyParameterValues(native, handle)
+				val bounded = boundedPreviewPose(pose, request.parameterDefinitions)
+				if (bounded !== pose) {
+					for ((id, value) in bounded) if (value != pose[id]) native.Live2D_SetParameterValue(handle, id.raw, value)
+					needsRefresh = true
+				}
 			}
 			if (needsRefresh) native.Live2D_RefreshModel(handle)
             if (!reusePose) canvas.lastPoseRequest = request
@@ -395,21 +410,6 @@ class CubismSdkPreviewSession(
 			if (amount == 0f) continue
 			val current = native.Live2D_GetParameterValue(handle, binding.parameterId)
 			native.Live2D_SetParameterValue(handle, binding.parameterId, current + amount)
-		}
-	}
-
-	/** Mouse look intentionally excludes ParamAngleZ; roll remains owned by motion/breath. */
-	private fun applyPausedPointerTracking(
-		native: Api,
-		handle: Pointer,
-		x: Float,
-		y: Float,
-		baseValues: Map<ParameterId, Float>,
-	) {
-		for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
-			val amount = x * binding.xScale + y * binding.yScale
-			val base = baseValues[ParameterId(binding.parameterId)] ?: 0f
-			native.Live2D_SetParameterValue(handle, binding.parameterId, base + amount)
 		}
 	}
 

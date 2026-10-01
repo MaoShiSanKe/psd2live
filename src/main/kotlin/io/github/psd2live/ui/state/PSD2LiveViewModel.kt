@@ -5266,14 +5266,17 @@ class PSD2LiveViewModel : AutoCloseable {
 				motion = motion,
 			).let { inputs ->
 				// 4. Physics reads the posed inputs and writes its outputs over them, as Cubism evaluates it.
-				if (anim) inputs + stepSoftwarePhysics(PhysicsClock.PLAYING, current, model, inputs, dt) else inputs
+				val boundedInputs = io.github.psd2live.core.boundedPreviewPose(inputs, model.rig.puppet.parameters)
+				if (anim) boundedInputs + stepSoftwarePhysics(PhysicsClock.PLAYING, current, model, boundedInputs, dt) else boundedInputs
 			}
-			latestLiveParameters = liveParams
+			val boundedLiveParams = io.github.psd2live.core.boundedPreviewPose(liveParams, model.rig.puppet.parameters)
+			latestLiveParameters = boundedLiveParams
 			if (current.sdkStatus != "ready") {
 				updateState { latest ->
 					if (!latest.previewLive) latest
 					else {
-						val mergedValues = parameterValuesAfterSoftwareFrame(latest, liveParams, pointerActive)
+						val mergedValues = io.github.psd2live.core.boundedPreviewPose(
+							parameterValuesAfterSoftwareFrame(latest, boundedLiveParams, pointerActive), model.rig.puppet.parameters)
 						setLivePose(when {
 							anim -> mergedValues
 							pointerActive -> mergedValues.filterKeys { it in POINTER_POSE_PARAMETERS }
@@ -5329,14 +5332,15 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		val panel = current.previewPanelState()
 		val pointer = if (tracking) canvasPointers[canvasRenderKey(panel.previewControlCanvas().id, CanvasMode.PREVIEW)] else null
-		val pose = pausedPointerPose(parameterScrubPose(current, panel.parameterValues), pointer?.first ?: 0f, -(pointer?.second ?: 0f))
+		val pose = io.github.psd2live.core.pointerPreviewPose(parameterScrubPose(current, panel.parameterValues),
+			pointer?.first ?: 0f, -(pointer?.second ?: 0f), model.rig.puppet.parameters, pointer != null, panel.lockedParameters)
 		val out = stepSoftwarePhysics(PhysicsClock.PAUSED, current, model, pose, dt).filterKeys { it !in panel.lockedParameters }
 		val moved = out.any { (id, value) -> kotlin.math.abs(value - (pausedPhysics[id] ?: Float.NaN)) > PAUSED_PHYSICS_REST || pausedPhysics[id] == null }
 		pausedPhysicsStillFor = if (moved) 0f else pausedPhysicsStillFor + dt
 		pausedPhysicsSettled = pausedPhysicsStillFor >= PAUSED_PHYSICS_REST_SECONDS
 		pausedPhysics = out
 		if (current.sdkStatus != "ready") {
-			val shown = pose + out
+			val shown = io.github.psd2live.core.boundedPreviewPose(pose + out, model.rig.puppet.parameters)
 			setLivePose((if (pointer != null) pose.filterKeys { it in POINTER_POSE_PARAMETERS } else emptyMap()) + out)
 			updateState { latest -> if (!latest.previewLive || latest.previewParameterValues == shown) latest else latest.copy(previewParameterValues = shown) }
 		}
@@ -5457,6 +5461,9 @@ class PSD2LiveViewModel : AutoCloseable {
 				pointerY = if (tracking) -(canvasPointers[viewId]?.second ?: 0f) else 0f,
 				animationEnabled = isAnim,
 				parameterOverrides = previewValues,
+				parameterDefinitions = snapshot.previewModel?.rig?.puppet?.parameters.orEmpty(),
+				pointerTrackingEnabled = tracking && canvasPointers.containsKey(viewId),
+				lockedParameters = presentation.lockedParameters,
 				frameTimeNanos = frameTimeNanos,
                 viewId = viewId,
 			),
@@ -5510,17 +5517,10 @@ class PSD2LiveViewModel : AutoCloseable {
 }
 
 /**
- * The pose a paused preview shows under the pointer at ([x], [y]): Cubism's look offsets added to [values] the
- * way the renderer applies them, so paused physics reads what is on screen.
+ * The paused preview's pointer pose, with tracking owning the look axes rather than adding to an old edit.
  */
 internal fun pausedPointerPose(values: Map<ParameterId, Float>, x: Float, y: Float): Map<ParameterId, Float> {
-	if (x == 0f && y == 0f) return values
-	val pose = values.toMutableMap()
-	for (binding in io.github.psd2live.core.CUBISM_POINTER_TRACKING_BINDINGS) {
-		val id = ParameterId(binding.parameterId)
-		pose[id] = (values[id] ?: 0f) + x * binding.xScale + y * binding.yScale
-	}
-	return pose
+	return io.github.psd2live.core.pointerPreviewPose(values, x, y, StandardParameters.all, x != 0f || y != 0f)
 }
 
 internal fun mergeUnlockedParameterValues(
