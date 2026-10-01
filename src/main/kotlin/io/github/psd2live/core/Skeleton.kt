@@ -81,6 +81,9 @@ data class SkeletonBone(
 	val blendWidth: Float? = null,
 	/** Null preserves the inferred connection of legacy projects; false explicitly separates coincident joints. */
 	val connected: Boolean? = null,
+	/** Duplicated semantic bones keep their role but drive an independent parameter. */
+	val parameterOverride: String? = null,
+	val mirrorId: String? = null,
 ) {
 	init {
 		require(id.isNotBlank() && id.none(Char::isISOControl)) { "Bone ID must not be blank" }
@@ -104,6 +107,7 @@ data class SkeletonBone(
 	/** The parameter that drives this joint. Standard Cubism IDs where one exists. */
 	val parameterId: String
 		get() {
+			parameterOverride?.let { return it }
 			val s = when (side) {
 				Side.LEFT -> "L"
 				Side.RIGHT -> "R"
@@ -141,6 +145,8 @@ data class SkeletonBone(
 		put("maxAngle", maxAngle)
 		blendWidth?.let { put("blendWidth", it) }
 		connected?.let { put("connected", it) }
+		parameterOverride?.let { put("parameterOverride", it) }
+		mirrorId?.let { put("mirror", it) }
 	}
 
 	companion object {
@@ -175,6 +181,8 @@ data class SkeletonBone(
 				maxAngle = o["maxAngle"]?.jsonPrimitive?.floatOrNull ?: role.maxAngle,
 				blendWidth = o["blendWidth"]?.jsonPrimitive?.floatOrNull,
 				connected = o["connected"]?.jsonPrimitive?.booleanOrNull,
+				parameterOverride = o["parameterOverride"]?.jsonPrimitive?.contentOrNull,
+				mirrorId = o["mirror"]?.jsonPrimitive?.contentOrNull,
 			)
 		}
 	}
@@ -219,8 +227,10 @@ data class SkeletonSpec(
 	val enabled: Boolean = true,
 	val bones: List<SkeletonBone> = emptyList(),
 	val sampling: SkeletonSampling = SkeletonSampling(),
+	val symmetryAxisX: Float? = null,
 ) {
 	init {
+		require(symmetryAxisX == null || symmetryAxisX.isFinite())
 		require(bones.map { it.id }.distinct().size == bones.size) { "Duplicate bone IDs" }
 		val ids = bones.map { it.id }.toSet()
 		require(bones.all { it.parentId == null || it.parentId in ids }) { "Bone parent not found" }
@@ -384,11 +394,15 @@ data class SkeletonSpec(
 	/** Removes a bone and re-parents its children to the removed bone's parent. */
 	fun withoutBone(boneId: String): SkeletonSpec {
 		val bone = bone(boneId) ?: return this
-		return copy(bones = bones.filter { it.id != boneId }.map { if (it.parentId == boneId) it.copy(parentId = bone.parentId, connected = false) else it })
+		return copy(bones = bones.filter { it.id != boneId }.map {
+			val next = if (it.parentId == boneId) it.copy(parentId = bone.parentId, connected = false) else it
+			if (next.mirrorId == boneId) next.copy(mirrorId = null) else next
+		})
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 5)
+		put("version", 6)
+		symmetryAxisX?.let { put("symmetryAxisX", it) }
 		put("enabled", enabled)
 		put("sampling", sampling.toJson())
 		putJsonArray("bones") { bones.forEach { add(it.toJson()) } }
@@ -403,6 +417,7 @@ data class SkeletonSpec(
 				enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
 				bones = raw.map(SkeletonBone::fromJson),
 				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(),
+				symmetryAxisX = o["symmetryAxisX"]?.jsonPrimitive?.floatOrNull,
 			)
 			return migrateAnchors(spec, raw.associate { it.getValue("id").jsonPrimitive.content to it.getValue("role").jsonPrimitive.content })
 		}

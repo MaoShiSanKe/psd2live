@@ -102,6 +102,23 @@ class SkeletonRigTest {
 		assertEquals(DeformerId("DeformSkel_upper"), baked.drawables.single().parentDeformerId)
 	}
 
+	@Test fun structurallyEditedArmaturesBakeWithStableRestMeshesAndUniqueParameters() {
+		val mesh = strip("arm", 100f, 95f, 435f, 18f, 10f)
+		val original = arm("arm")
+		val specs = listOf(
+			SkeletonAuthoring.duplicate(original, setOf("upper"), true, dx = 0f, dy = 0f, transferBindings = true).spec,
+			SkeletonAuthoring.subdivide(original, "fore", 3).spec,
+			SkeletonAuthoring.dissolve(original, "fore").spec,
+		)
+		for (spec in specs) {
+			val baked = SkeletonRig.apply(legacy(mesh), spec, frame)
+			assertEquals(baked.parameters.size, baked.parameters.map { it.id }.distinct().size)
+			val expected = rest(mesh); val actual = canvas(baked).getValue(mesh.id)
+			for (i in expected.indices) assertEquals(expected[i], actual[i], 0.05f)
+			for (bone in spec.bones.filterNot { it.role.anchor }) assertTrue(baked.parameters.any { it.id.raw == bone.parameterId })
+		}
+	}
+
 	private val breathId = DeformerId("DeformBodyZBreath")
 
 	/** A breath warp over the whole body whose breath key lifts the top edge, stretching the body. */

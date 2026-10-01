@@ -457,6 +457,8 @@ internal class CanvasEditor(
 	var skeletonEditSubTool by mutableStateOf(SkeletonEditSubTool.EDIT)
 	var skeletonPoseSubTool by mutableStateOf(SkeletonPoseSubTool.AUTO)
 	var transformBoneDescendants by mutableStateOf(false)
+	var editBonesSymmetrically by mutableStateOf(false)
+	var transferCopiedBoneBindings by mutableStateOf(false)
 
 	/** The authored armature, enabled or not, once it has bones. */
 	val committedSkeleton: io.github.psd2live.core.SkeletonSpec?
@@ -602,10 +604,63 @@ internal class CanvasEditor(
 	}
 
 	fun transformSelectedBones(dx: Float = 0f, dy: Float = 0f, degrees: Float = 0f, scale: Float = 1f) {
-		skeletonDraft = skeletonDraft?.withBonesTransformed(selectedBoneIds, dx, dy, degrees, scale, transformBoneDescendants)
+		val draft = skeletonDraft ?: return
+		var next = draft.withBonesTransformed(selectedBoneIds, dx, dy, degrees, scale, transformBoneDescendants)
+		if (editBonesSymmetrically) next = io.github.psd2live.core.SkeletonAuthoring.synchronizeMirrors(next,
+			selectedBoneIds + if (transformBoneDescendants) selectedBoneIds.flatMap(draft::descendants) else emptyList())
+		skeletonDraft = next
 	}
 
 	fun restoreSkeletonDraft(spec: io.github.psd2live.core.SkeletonSpec) { if (skeletonDraft != null) skeletonDraft = spec }
+
+	fun setBoneSymmetryAxis(x: Float) { if (x.isFinite()) skeletonDraft = skeletonDraft?.copy(symmetryAxisX = x) }
+
+	/** Match opposite-side layers only when their semantic/name match identifies one drawable. */
+	fun boneMirrorDrawables(): Map<String, String> {
+		val preview = state.previewModel ?: return emptyMap()
+		val layers = preview.analysis.layers.associateBy { it.source.id.raw }
+		val byDrawable = preview.rig.puppet.drawables.mapNotNull { d ->
+			layers[preview.rig.layerIdByDrawableId[d.id.raw] ?: d.id.raw]?.let { d.id.raw to it }
+		}.toMap()
+		fun neutral(name: String) = name.lowercase().replace(Regex("left|right|左|右|[_. ]l\\b|[_. ]r\\b"), "")
+		return byDrawable.mapNotNull { (id, layer) ->
+			val side = layer.semantic.side
+			if (side == io.github.psd2live.core.Side.NONE) return@mapNotNull null
+			val matches = byDrawable.filter { (_, other) ->
+				other.semantic.side != side && other.semantic.side != io.github.psd2live.core.Side.NONE &&
+				other.semantic.tag == layer.semantic.tag && other.semantic.variant == layer.semantic.variant &&
+				other.semantic.type == layer.semantic.type && other.semantic.parameter == layer.semantic.parameter &&
+				other.semantic.switchId == layer.semantic.switchId
+			}
+			val named = matches.filter { (_, other) -> neutral(other.source.name) == neutral(layer.source.name) }
+			val target = (if (named.isNotEmpty()) named else matches).keys.singleOrNull() ?: return@mapNotNull null
+			id to target
+		}.toMap()
+	}
+
+	fun duplicateSelectedBones(mirror: Boolean = false) {
+		val draft = skeletonDraft ?: return
+		val result = io.github.psd2live.core.SkeletonAuthoring.duplicate(draft, selectedBoneIds, transformBoneDescendants,
+			transferBindings = transferCopiedBoneBindings, mirrorAxis = if (mirror) draft.symmetryAxisX ?: model.canvasWidth / 2f else null,
+			drawableMirrors = if (mirror) boneMirrorDrawables() else emptyMap(),
+			suffix = tr(if (mirror) "skeleton.structure.mirrorSuffix" else "skeleton.structure.copySuffix"))
+		skeletonDraft = result.spec
+		selectBones(result.selected)
+	}
+
+	fun subdivideSelectedBone(segments: Int) {
+		val draft = skeletonDraft ?: return
+		val result = io.github.psd2live.core.SkeletonAuthoring.subdivide(draft, selectedBoneId ?: return, segments)
+		skeletonDraft = result.spec; selectBones(result.selected)
+	}
+
+	fun dissolveSelectedBone() {
+		val draft = skeletonDraft ?: return
+		val id = selectedBoneId ?: return
+		if (!io.github.psd2live.core.SkeletonAuthoring.canDissolve(draft, id)) return
+		val result = io.github.psd2live.core.SkeletonAuthoring.dissolve(draft, id)
+		skeletonDraft = result.spec; selectBones(result.selected)
+	}
 
 	fun renameBone(id: String, name: String) {
 		if (name.isBlank() || name.any(Char::isISOControl)) return
@@ -617,7 +672,9 @@ internal class CanvasEditor(
 	}
 
 	fun moveBoneJoint(id: String, end: io.github.psd2live.core.BoneEnd, x: Float, y: Float) {
-		skeletonDraft = skeletonDraft?.withJointMoved(id, end, x, y)
+		var next = skeletonDraft?.withJointMoved(id, end, x, y) ?: return
+		if (editBonesSymmetrically) next = io.github.psd2live.core.SkeletonAuthoring.synchronizeMirrors(next, setOf(id))
+		skeletonDraft = next
 		selectedBoneId = id
 	}
 
