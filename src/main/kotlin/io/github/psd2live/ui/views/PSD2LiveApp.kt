@@ -28,9 +28,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.LinearProgressIndicator
-import androidx.compose.material.ProgressIndicatorDefaults
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
@@ -136,6 +136,9 @@ fun FrameWindowScope.PSD2LiveApp(
 	},
 ) {
 	val state by viewModel.uiState
+	val baking by viewModel.simulationBaking.collectAsState()
+	val download by viewModel.modelDownloadState.collectAsState()
+	val task = io.github.psd2live.ui.state.taskProgress(state, baking, download)
 	var helpDialogTab by remember { mutableStateOf<HelpTab?>(null) }
 	var showAgentDialog by remember { mutableStateOf(false) }
 	var tutorial by remember { mutableStateOf(InteractiveTutorialState()) }
@@ -346,6 +349,7 @@ fun FrameWindowScope.PSD2LiveApp(
 			}
 		}
 
+		Box(Modifier.fillMaxSize()) {
 		CompositionLocalProvider(LocalTutorialTargets provides tutorialTargets) {
 		Box(
 			modifier = Modifier
@@ -546,7 +550,11 @@ fun FrameWindowScope.PSD2LiveApp(
 						onOpenPsd = onOpenPsdAction,
 					)
 					// Selection / tool hint bar ("已选 N 个对象 / M 个控制点 · …")
-					StatusBar(state, viewModel, Modifier.tutorialTarget(TutorialTargetId.STATUS_BAR))
+					if (task == null) {
+						StatusBar(state, viewModel, Modifier.tutorialTarget(TutorialTargetId.STATUS_BAR))
+					} else {
+						Spacer(Modifier.fillMaxWidth().height(24.dp).tutorialTarget(TutorialTargetId.STATUS_BAR))
+					}
 				}
 			}
 
@@ -630,8 +638,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				config = state.textureUpscale,
 				isBusy = isBusy,
 				isUpscaling = state.isUpscaling,
-				progress = state.progress,
-				statusText = state.statusText,
+				onDownloadStateChange = viewModel::reportModelDownload,
 				onDismiss = { viewModel.closeTextureUpscaleDialog() },
 				onApply = viewModel::setTextureUpscale,
 			)
@@ -725,6 +732,12 @@ fun FrameWindowScope.PSD2LiveApp(
 				}
 			}
 		}
+		// Keep the shared task indicator visible above dialog scrims.
+		if (task != null) {
+			StatusBar(state, viewModel, Modifier.align(Alignment.BottomCenter).background(colors.windowBackground), task)
+		}
+
+		} // Dialogs and shared status bar
 	}
 }
 
@@ -733,17 +746,18 @@ private fun StatusBar(
 	state: PSD2LiveState,
 	viewModel: PSD2LiveViewModel,
 	modifier: Modifier = Modifier,
+	task: io.github.psd2live.ui.state.TaskProgress? = null,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val editor = viewModel.canvasEditor
 	// Read editor snapshot fields so tool/selection changes recompose this bar.
-	val editorMessage = if (!state.isBusy && state.activeCanvas.mode == CanvasMode.EDIT) {
+	val editorMessage = if (task == null && state.activeCanvas.mode == CanvasMode.EDIT) {
 		editor.statusBarMessage(state.selectedLayerId, state.selectedDeformerId)
 	} else {
 		null
 	}
-	val statusText = editorMessage?.text ?: state.statusText.ifBlank { tr("status.ready") }
+	val statusText = task?.text ?: editorMessage?.text ?: state.statusText.ifBlank { tr("status.ready") }
 	val statusColor = when (editorMessage?.tone) {
 		CanvasStatusTone.ERROR -> colors.error
 		CanvasStatusTone.WARNING -> colors.warning
@@ -767,20 +781,20 @@ private fun StatusBar(
 			modifier = Modifier.weight(1f),
 		)
 
-		if (state.isBusy) {
+		if (task != null) {
 			Spacer(Modifier.width(12.dp))
 			Row(
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.spacedBy(6.dp),
 			) {
-				if (!state.isIndeterminateProgress) {
+				if (task.fraction != null) {
 					Text(
-						text = "%3d%%".format((state.progress * 100).toInt()),
+						text = "%3d%%".format((task.fraction * 100).toInt()),
 						style = typography.monoSmall.copy(fontSize = 10.sp),
 						color = colors.accent,
 					)
 					LinearProgressIndicator(
-						progress = state.progress,
+						progress = task.fraction,
 						modifier = Modifier.width(140.dp).height(5.dp),
 						color = colors.accent,
 						backgroundColor = colors.controlBackground,
@@ -791,6 +805,11 @@ private fun StatusBar(
 						color = colors.accent,
 						backgroundColor = colors.controlBackground,
 					)
+				}
+				if (task.canCancelBake) {
+					CompactIconButton(onClick = viewModel::cancelSimulationBake, tooltip = tr("sim.cancelBake"), size = 18.dp) {
+						IconClose(modifier = Modifier.size(9.dp), tint = colors.textPrimary)
+					}
 				}
 			}
 		}

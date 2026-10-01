@@ -24,7 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Divider
-import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -251,7 +250,7 @@ private fun SimulationToolbar(
 }
 
 /**
- * How many bodies export as set up; while a bake runs, show its progress and Cancel instead.
+ * How many bodies export as set up; task progress is displayed in the status bar.
  */
 @Composable
 private fun RowScope.BakeAllStatus(
@@ -265,16 +264,7 @@ private fun RowScope.BakeAllStatus(
 	val baking by viewModel.simulationBaking.collectAsState()
 	val enabled = sims.count { it.enabled }
 	val outdated = states.values.count { it == BakeState.UNBAKED || it == BakeState.STALE }
-	val running = baking
-	if (running != null) {
-		CompactIconButton(onClick = viewModel::cancelSimulationBake, tooltip = tr("sim.cancelBake"), size = 22.dp) {
-			IconClose(modifier = Modifier.size(9.dp), tint = colors.textPrimary)
-		}
-		val percent = (running.progress * 100f).toInt()
-		Text(if (running.count > 1) tr("sim.bakingBatch", running.id, running.index + 1, running.count, percent) else tr("sim.bakingOne", running.id, percent),
-			style = caption, color = colors.accent, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
-		return
-	}
+	if (baking != null) return
 	Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
 		if (enabled == 0) return@Row
 		Dot(if (outdated > 0) colors.warning else colors.success)
@@ -510,7 +500,7 @@ private fun BakeEditor(
 	val running = baking?.takeIf { it.id == sim.id }
 
 	when {
-		running != null -> Text(tr("sim.baking", (running.progress * 100f).toInt()), style = caption, color = colors.accent)
+		running != null -> Unit
 		bakeState == BakeState.DISABLED -> Text(tr("sim.disabledHint"), style = caption, color = colors.textMuted)
 		bake == null -> Text(tr("sim.notBaked"), style = caption, color = colors.textMuted)
 		else -> {
@@ -523,15 +513,11 @@ private fun BakeEditor(
 		}
 	}
 	Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-		if (running != null) {
-			CompactButton(tr("sim.cancelBake"), viewModel::cancelSimulationBake, Modifier.weight(1f), height = 22.dp)
-		} else {
-			CompactButton(tr(if (bake == null) "sim.bakeAction" else "sim.rebake"), { viewModel.bakeSimulation(sim.id) }, Modifier.weight(1f),
-				enabled = baking == null && sim.enabled && !state.canvasEditBusy,
-				isPrimary = bakeState == BakeState.UNBAKED || bakeState == BakeState.STALE, height = 22.dp)
-			CompactButton(tr("sim.clearBake"), { viewModel.clearSimulationBake(sim.id) }, Modifier.weight(1f),
-				enabled = bake != null && baking == null && !state.canvasEditBusy, height = 22.dp)
-		}
+		CompactButton(tr(if (bake == null) "sim.bakeAction" else "sim.rebake"), { viewModel.bakeSimulation(sim.id) }, Modifier.weight(1f),
+			enabled = baking == null && sim.enabled && !state.canvasEditBusy,
+			isPrimary = bakeState == BakeState.UNBAKED || bakeState == BakeState.STALE, height = 22.dp)
+		CompactButton(tr("sim.clearBake"), { viewModel.clearSimulationBake(sim.id) }, Modifier.weight(1f),
+			enabled = bake != null && baking == null && !state.canvasEditBusy, height = 22.dp)
 	}
 
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

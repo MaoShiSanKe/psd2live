@@ -386,6 +386,11 @@ class PSD2LiveViewModel : AutoCloseable {
 
     private val _simulationBaking = MutableStateFlow<SimulationBaking?>(null)
     val simulationBaking: StateFlow<SimulationBaking?> = _simulationBaking.asStateFlow()
+    private val _modelDownloadState = MutableStateFlow<io.github.psd2live.core.DownloadState>(io.github.psd2live.core.DownloadState.Idle)
+    internal val modelDownloadState = _modelDownloadState.asStateFlow()
+    internal fun reportModelDownload(state: io.github.psd2live.core.DownloadState) {
+        _modelDownloadState.value = state
+    }
     private var simBaking: kotlinx.coroutines.Job? = null
 
     /**
@@ -486,7 +491,7 @@ class PSD2LiveViewModel : AutoCloseable {
     @Volatile private var simBakeCancelled = false
 
     /**
-     * Runs [bake] for simulation [id] with its progress shown in [simulationBaking] and the panel's Cancel
+     * Runs [bake] for simulation [id] with its progress shown in [simulationBaking] and the status bar's Cancel
      * wired to its second argument; for bakes that run inside a workspace edit.
      */
     internal fun <T> trackSimulationBake(id: String, bake: (progress: (Float) -> Unit, cancelled: () -> Boolean) -> T): T {

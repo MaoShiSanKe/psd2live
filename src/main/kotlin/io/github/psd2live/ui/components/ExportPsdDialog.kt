@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -97,21 +96,6 @@ fun ExportPsdDialog(
 						style = typography.title.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Bold),
 						color = colors.textPrimary,
 					)
-					if (isExporting) {
-						Box(
-							modifier = Modifier
-								.clip(RoundedCornerShape(4.dp))
-								.background(colors.highlightContainer)
-								.border(BorderStroke(1.dp, colors.highlight), RoundedCornerShape(4.dp))
-								.padding(horizontal = 6.dp, vertical = 2.dp),
-						) {
-							Text(
-								text = "EXPORTING",
-								style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-								color = colors.highlight,
-							)
-						}
-					}
 				}
 				CompactIconButton(
 					onClick = { viewModel.closeExportPsdDialog() },
@@ -119,25 +103,6 @@ fun ExportPsdDialog(
 					size = 20.dp,
 				) {
 					IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-				}
-			}
-
-			// Progress bar during export
-			if (isExporting) {
-				Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-					LinearProgressIndicator(
-						progress = state.progress,
-						modifier = Modifier.fillMaxWidth().height(4.dp),
-						color = colors.accent,
-						backgroundColor = colors.inputBackground,
-					)
-					Text(
-						text = state.statusText,
-						style = typography.caption.copy(fontSize = 10.sp),
-						color = colors.accent,
-						maxLines = 1,
-						overflow = TextOverflow.Ellipsis,
-					)
 				}
 			}
 
