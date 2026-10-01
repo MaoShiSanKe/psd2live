@@ -304,6 +304,7 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 		)
 		PanelToolbarSeparator()
 		AddTrackButton(viewModel, clip, state)
+		InsertSavedSkeletonPoseMenu(viewModel, state)
 		CompactButton(
 			text = tr("animation.editor.keyPose"),
 			onClick = { viewModel.keyCurrentPose() },

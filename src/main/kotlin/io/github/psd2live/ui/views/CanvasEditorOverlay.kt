@@ -42,6 +42,7 @@ import org.jetbrains.skia.Paint as SkiaPaint
 import org.jetbrains.skia.VertexMode as SkiaVertexMode
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -1252,29 +1253,145 @@ internal fun BoxScope.CanvasEditorOverlay(
             val maxDist = (kotlin.math.sqrt(lenSq) * 0.12f).coerceIn(6f, 18f)
             dist <= maxDist
         }?.id
-        var draggedJoint by remember { mutableStateOf<Pair<String, BoneEnd>?>(null) }
+        val subTool = editor.skeletonEditSubTool
+        var draggedJoint by remember(viewport, subTool) { mutableStateOf<Pair<String, BoneEnd>?>(null) }
+        var creationHead by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        var creationTail by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        var creationParent by remember(viewport, subTool) { mutableStateOf<String?>(null) }
+        var pressPosition by remember { mutableStateOf(Offset.Zero) }
+        var additiveSelection by remember { mutableStateOf(false) }
+        var movingBones by remember(viewport, subTool) { mutableStateOf(false) }
+        var boxStart by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        var boxEnd by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        var moveBefore by remember { mutableStateOf<io.github.psd2live.core.SkeletonSpec?>(null) }
+        var weightStrokeActive by remember(viewport, subTool) { mutableStateOf(false) }
+        var weightPointer by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        val weightMap = remember(skeleton, preview?.rig?.puppet, editor.skeletonWeightDrawableId, subTool) {
+            if (subTool == SkeletonEditSubTool.WEIGHTS) editor.activeSkeletonWeights() else null
+        }
+        fun clearCreation() { creationHead = null; creationTail = null; creationParent = null }
+        fun finishCreation() {
+            val head = creationHead
+            val tail = creationTail
+            if (head != null && tail != null && (tail - head).getDistance() >= 4f) {
+                editor.createBone(viewport.canvasX(head.x), viewport.canvasY(head.y),
+                    viewport.canvasX(tail.x), viewport.canvasY(tail.y), creationParent)
+            }
+            clearCreation()
+        }
         Canvas(Modifier.fillMaxSize()
-            .pointerInput(editor, viewport) {
+            .onPointerEvent(PointerEventType.Move) { if (subTool == SkeletonEditSubTool.WEIGHTS) weightPointer = it.changes.first().position }
+            .onPointerEvent(PointerEventType.Exit) { weightPointer = null }
+            .onPointerEvent(PointerEventType.Press) { event ->
+                pressPosition = event.changes.first().position
+                additiveSelection = event.keyboardModifiers.isShiftPressed
+            }
+            .pointerInput(editor, viewport, subTool) {
                 detectDragGestures(
-                    onDragStart = { draggedJoint = hitJoint(it) },
-                    onDragEnd = { draggedJoint = null },
-                    onDragCancel = { draggedJoint = null },
-                ) { change, _ ->
-                    draggedJoint?.let { (id, end) ->
+                    onDragStart = { pos ->
+                        when (subTool) {
+                            SkeletonEditSubTool.WEIGHTS -> {
+                                moveBefore = editor.skeletonDraft
+                                editor.pickSkeletonDrawable(pressPosition, viewport)?.let(editor::selectSkeletonWeightDrawable)
+                                weightStrokeActive = editor.prepareSkeletonWeightStroke()
+                                if (weightStrokeActive) editor.paintSkeletonWeights(pressPosition, viewport)
+                            }
+                            SkeletonEditSubTool.BIND -> { boxStart = pressPosition; boxEnd = pos }
+                            SkeletonEditSubTool.EDIT -> {
+                                draggedJoint = hitJoint(pressPosition)
+                                if (draggedJoint == null) {
+                                    val id = hitBoneBody(pressPosition)
+                                    if (id != null) {
+                                        if (id !in editor.selectedBoneIds) editor.selectBone(id, additiveSelection)
+                                        moveBefore = editor.skeletonDraft
+                                        movingBones = true
+                                    } else { boxStart = pressPosition; boxEnd = pos }
+                                }
+                            }
+                            SkeletonEditSubTool.NEW_BONE -> { creationHead = pressPosition; creationTail = pos }
+                            SkeletonEditSubTool.EXTRUDE -> {
+                                val selected = currentSkeleton.bone(editor.selectedBoneId ?: "")
+                                val id = selected?.takeIf { (screen(it.tailX, it.tailY) - pos).getDistance() <= 14f }?.id
+                                    ?: hitJoint(pos)?.first ?: hitBoneBody(pos) ?: selected?.id
+                                currentSkeleton.bone(id ?: "")?.let { parent ->
+                                    editor.selectBone(parent.id)
+                                    creationParent = parent.id
+                                    creationHead = screen(parent.tailX, parent.tailY)
+                                    creationTail = pos
+                                }
+                            }
+                        }
+                    },
+                    onDragEnd = {
+                        boxStart?.let { start -> boxEnd?.let { end ->
+                            if (subTool == SkeletonEditSubTool.BIND) {
+                                val left = minOf(start.x, end.x); val right = maxOf(start.x, end.x)
+                                val top = minOf(start.y, end.y); val bottom = maxOf(start.y, end.y)
+                                val hits = neutralGeometry?.worldPositions.orEmpty().filter { (_, positions) ->
+                                    val xs = positions.indices.filter { it % 2 == 0 }.map { viewport.x(positions[it]).toFloat() }
+                                    val ys = positions.indices.filter { it % 2 == 1 }.map { viewport.yFromWorld(positions[it]).toFloat() }
+                                    xs.isNotEmpty() && xs.min() <= right && xs.max() >= left && ys.min() <= bottom && ys.max() >= top
+                                }.keys.mapTo(linkedSetOf()) { it.raw }
+                                editor.selectSkeletonBindingDrawables(hits, additiveSelection)
+                            } else editor.selectBones(currentSkeleton.bonesInBox(viewport.canvasX(start.x), viewport.canvasY(start.y),
+                                viewport.canvasX(end.x), viewport.canvasY(end.y)), additiveSelection)
+                        } }
+                        draggedJoint = null; movingBones = false; weightStrokeActive = false; moveBefore = null; boxStart = null; boxEnd = null; finishCreation()
+                    },
+                    onDragCancel = {
+                        moveBefore?.let(editor::restoreSkeletonDraft)
+                        draggedJoint = null; movingBones = false; weightStrokeActive = false; moveBefore = null; boxStart = null; boxEnd = null; clearCreation()
+                    },
+                ) { change, amount ->
+                    if (subTool == SkeletonEditSubTool.WEIGHTS) {
+                        weightPointer = change.position
+                        if (weightStrokeActive) {
+                            val spacing = (editor.skeletonWeightRadius * viewport.scale.toFloat() * 0.25f).coerceAtLeast(1f)
+                            val steps = kotlin.math.ceil(amount.getDistance() / spacing).toInt().coerceIn(1, 64)
+                            for (step in 1..steps) editor.paintSkeletonWeights(change.position - amount * (1f - step.toFloat() / steps), viewport)
+                        }
+                        change.consume()
+                    } else if (creationHead != null) {
+                        creationTail = change.position
+                        change.consume()
+                    } else if (movingBones) {
+                        editor.transformSelectedBones(dx = (amount.x / viewport.scale).toFloat(), dy = (amount.y / viewport.scale).toFloat())
+                        change.consume()
+                    } else if (boxStart != null) {
+                        boxEnd = change.position
+                        change.consume()
+                    } else draggedJoint?.let { (id, end) ->
                         editor.moveBoneJoint(id, end, viewport.canvasX(change.position.x), viewport.canvasY(change.position.y))
                         change.consume()
                     }
                 }
             }
-            .pointerInput(editor, viewport) {
+            .pointerInput(editor, viewport, subTool) {
                 detectTapGestures { pos ->
+                    if (subTool == SkeletonEditSubTool.NEW_BONE) return@detectTapGestures
+                    if (subTool == SkeletonEditSubTool.WEIGHTS) {
+                        editor.pickSkeletonDrawable(pos, viewport)?.let(editor::selectSkeletonWeightDrawable)
+                        if (editor.prepareSkeletonWeightStroke()) editor.paintSkeletonWeights(pos, viewport)
+                        return@detectTapGestures
+                    }
+                    if (subTool == SkeletonEditSubTool.BIND) {
+                        editor.pickSkeletonDrawable(pos, viewport)?.let(editor::toggleSkeletonBindingDrawable)
+                        return@detectTapGestures
+                    }
                     val joint = hitJoint(pos)
                     if (joint != null) {
-                        editor.selectBone(joint.first)
+                        editor.selectBone(joint.first, additiveSelection)
                     } else {
                         val body = hitBoneBody(pos)
                         if (body != null) {
-                            editor.selectBone(body)
+                            editor.selectBone(body, additiveSelection)
+                        } else if (subTool == SkeletonEditSubTool.EXTRUDE) {
+                            currentSkeleton.bone(editor.selectedBoneId ?: "")?.let { parent ->
+                                creationParent = parent.id
+                                creationHead = screen(parent.tailX, parent.tailY)
+                                creationTail = pos
+                                finishCreation()
+                            }
                         } else {
                             editor.pickSkeletonDrawable(pos, viewport)?.let(editor::bindDrawableToSelectedBone)
                         }
@@ -1289,7 +1406,7 @@ internal fun BoxScope.CanvasEditorOverlay(
             for (bone in skeleton.bones) {
                 if (bone.role.anchor) continue
                 val color = boneColor(bone.id)
-                val isSelected = editor.selectedBoneId == bone.id
+                val isSelected = bone.id in editor.selectedBoneIds
                 for (drawableId in bone.drawableIds) {
                     val mesh = drawables[drawableId]?.mesh ?: continue
                     val positions = neutralGeometry?.worldPositions?.get(DrawableId(drawableId)) ?: continue
@@ -1316,11 +1433,38 @@ internal fun BoxScope.CanvasEditorOverlay(
             }
 
             // 2. The bones themselves, the selected one on top.
-            val halo = colors.windowBackground
-            for (bone in skeleton.bones.sortedBy { it.id == editor.selectedBoneId }) {
-                drawCanvasBone(screen(bone.headX, bone.headY), screen(bone.tailX, bone.tailY), boneColor(bone.id), halo,
-                    lit = editor.selectedBoneId == bone.id)
+            if (subTool == SkeletonEditSubTool.WEIGHTS && weightMap != null) {
+                for (v in weightMap.weights.indices) {
+                    val value = (weightMap.weights[v][editor.selectedBoneId] ?: 0f).coerceIn(0f, 1f)
+                    drawCircle(androidx.compose.ui.graphics.lerp(Color(0xFF386BDB), Color(0xFFFF754A), value), 2.8f,
+                        screen(weightMap.positions[v * 2], weightMap.positions[v * 2 + 1]))
+                }
+                weightPointer?.let { p -> drawCircle(colors.accent, editor.skeletonWeightRadius * viewport.scale.toFloat(), p, style = Stroke(1.5f)) }
             }
+            if (subTool == SkeletonEditSubTool.BIND) for (id in editor.pendingSkeletonDrawableIds) {
+                val positions = neutralGeometry?.worldPositions?.get(DrawableId(id)) ?: continue
+                for (edge in meshOutlines[id].orEmpty()) {
+                    val a = edge.endpointLow * 2; val b = edge.endpointHigh * 2
+                    if (maxOf(a, b) + 1 >= positions.size) continue
+                    drawLine(colors.accent, Offset(viewport.x(positions[a]).toFloat(), viewport.yFromWorld(positions[a + 1]).toFloat()),
+                        Offset(viewport.x(positions[b]).toFloat(), viewport.yFromWorld(positions[b + 1]).toFloat()), strokeWidth = 3f)
+                }
+            }
+            val halo = colors.windowBackground
+            for (bone in skeleton.bones.sortedBy { it.id in editor.selectedBoneIds }) {
+                drawCanvasBone(screen(bone.headX, bone.headY), screen(bone.tailX, bone.tailY), boneColor(bone.id), halo,
+                    lit = bone.id in editor.selectedBoneIds)
+            }
+            creationHead?.let { head -> creationTail?.let { tail ->
+                drawCanvasBone(head, tail, colors.accent, halo, lit = true)
+            } }
+            boxStart?.let { start -> boxEnd?.let { end ->
+                val bounds = Rect(start, end)
+                val origin = Offset(minOf(start.x, end.x), minOf(start.y, end.y))
+                val boxSize = Size(kotlin.math.abs(bounds.width), kotlin.math.abs(bounds.height))
+                drawRect(colors.accent.copy(alpha = 0.12f), origin, boxSize)
+                drawRect(colors.accent, origin, boxSize, style = Stroke(1f))
+            } }
         }
     }
 
@@ -2086,6 +2230,7 @@ private fun BoxScope.CanvasToolBar(
                     ).orEmpty(),
                     brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
                     paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
+                    skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
                     onClick = {
                         editor.activateTool(tool)
                         focus()
@@ -2126,6 +2271,44 @@ private fun BoxScope.CanvasToolBar(
                             },
                         )
                     }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = CanvasTool.SKELETON_EDIT in availableTools && editor.tool == CanvasTool.SKELETON_EDIT,
+            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).height(1.dp)
+                    .background(colors.border.copy(alpha = 0.45f)))
+                SkeletonEditSubTool.entries.forEach { sub ->
+                    ShapeItemRow(
+                        label = tr(sub.labelKey),
+                        isSelected = editor.skeletonEditSubTool == sub,
+                        isToolbarExpanded = animatedWidth > 42.dp,
+                        textAlpha = textAlpha,
+                        textOffset = textOffset,
+                        isBusy = editor.busy,
+                        icon = { color -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
+                        onClick = { editor.skeletonEditSubTool = sub; focus() },
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = CanvasTool.SKELETON_POSE in availableTools && editor.tool == CanvasTool.SKELETON_POSE,
+            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
+        ) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).height(1.dp).background(colors.border.copy(alpha = 0.45f)))
+                SkeletonPoseSubTool.entries.forEach { sub ->
+                    ShapeItemRow(label = tr(sub.labelKey), isSelected = editor.skeletonPoseSubTool == sub,
+                        isToolbarExpanded = animatedWidth > 42.dp, textAlpha = textAlpha, textOffset = textOffset, isBusy = editor.busy,
+                        icon = { color -> SkeletonPoseSubToolIcon(sub, color) }, onClick = { editor.skeletonPoseSubTool = sub; focus() })
                 }
             }
         }
@@ -2261,6 +2444,7 @@ private fun ToolItemRow(
     keyLabel: String,
     brushShape: BrushShape? = null,
     paintShape: PaintShape? = null,
+    skeletonEditSubTool: SkeletonEditSubTool? = null,
     onClick: () -> Unit,
 ) {
     val colors = LocalToolColors.current
@@ -2303,6 +2487,7 @@ private fun ToolItemRow(
                 },
                 brushShape = brushShape,
                 paintShape = paintShape,
+                skeletonEditSubTool = skeletonEditSubTool,
             )
         }
 
@@ -3483,6 +3668,17 @@ private fun SkeletonPoseLayer(editor: CanvasEditor, viewport: CanvasViewport, pa
             }
         }
         val active = editor.poseDrag ?: editor.poseHover
+        if (!passive) for ((id, target) in spec.ikTargets) {
+            val effector = bones.firstOrNull { it.bone.id == id } ?: continue
+            val p = screen(target.x, target.y)
+            val error = hypot(effector.tailX - target.x, effector.tailY - target.y)
+            val color = if (!target.enabled) colors.textMuted else if (error > effector.bone.ik.tolerancePx) colors.warning else colors.accent
+            drawLine(color.copy(alpha = 0.6f), screen(effector.tailX, effector.tailY), p,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 3f)))
+            drawCircle(color, 7f, p, style = Stroke(1.5f))
+            drawLine(color, p - Offset(10f, 0f), p + Offset(10f, 0f), strokeWidth = 1.5f)
+            drawLine(color, p - Offset(0f, 10f), p + Offset(0f, 10f), strokeWidth = 1.5f)
+        }
         for (posed in bones) {
             val lit = active?.boneId == posed.bone.id ||
                 (passive && editor.skeletonSelected && editor.selectedBoneId == posed.bone.id)

@@ -127,6 +127,18 @@ internal enum class SelectionStyle { BOX, LASSO }
 
 internal enum class GlueSubTool { BRUSH, WEIGHT, REMERGE }
 
+internal enum class SkeletonEditSubTool(val labelKey: String, val hintKey: String) {
+    EDIT("skeleton.tool.edit", "skeleton.edit.hint"),
+    NEW_BONE("skeleton.tool.new", "skeleton.tool.new.hint"),
+    EXTRUDE("skeleton.tool.extrude", "skeleton.tool.extrude.hint"),
+    BIND("skeleton.tool.bind", "skeleton.tool.bind.hint"),
+    WEIGHTS("skeleton.tool.weights", "skeleton.tool.weights.hint"),
+}
+
+internal enum class SkeletonPoseSubTool(val labelKey: String) {
+    AUTO("skeleton.pose.auto"), FK("skeleton.pose.fk"), IK("skeleton.pose.ik"),
+}
+
 internal enum class GlueWeightMode { BALANCE, A, B }
 
 /** Glue's sub-tools and weight sides with the labels every picker shows them under. */
@@ -438,7 +450,32 @@ internal class CanvasEditor(
 	/** The Skeleton Edit tool's working copy of the armature. Leaving the tool writes it back as one history entry. */
 	var skeletonDraft by mutableStateOf<io.github.psd2live.core.SkeletonSpec?>(null)
 		private set
-	var selectedBoneId by mutableStateOf<String?>(null)
+	var selectedBoneIds by mutableStateOf<Set<String>>(emptySet())
+		private set
+	private var selectedBoneIdState by mutableStateOf<String?>(null)
+	var selectedBoneId: String?
+		get() = selectedBoneIdState
+		private set(value) { selectedBoneIdState = value; selectedBoneIds = setOfNotNull(value) }
+	var skeletonEditSubTool by mutableStateOf(SkeletonEditSubTool.EDIT)
+	var skeletonPoseSubTool by mutableStateOf(SkeletonPoseSubTool.AUTO)
+	var transformBoneDescendants by mutableStateOf(false)
+	var editBonesSymmetrically by mutableStateOf(false)
+	var transferCopiedBoneBindings by mutableStateOf(false)
+	var pendingSkeletonDrawableIds by mutableStateOf<Set<String>>(emptySet())
+		private set
+	var skeletonWeightDrawableId by mutableStateOf<String?>(null)
+		private set
+	var skeletonWeightSourceId by mutableStateOf<String?>(null)
+	var skeletonWeightBrushMode by mutableStateOf(io.github.psd2live.core.SkeletonWeightBrushMode.ADD)
+	var skeletonWeightRadius by mutableStateOf(40f)
+	var skeletonWeightStrength by mutableStateOf(0.2f)
+	var skeletonWeightReplaceValue by mutableStateOf(1f)
+	var skeletonWeightInfluences by mutableStateOf(2)
+	var skeletonWeightCutoff by mutableStateOf(0.001f)
+	var skeletonWeightTransferMode by mutableStateOf(io.github.psd2live.core.SkeletonWeightTransferMode.INTERPOLATE)
+	var skeletonWeightTransferTolerance by mutableStateOf(10f)
+	var mirrorSkeletonWeights by mutableStateOf(false)
+	var skeletonWeightBoneMapping by mutableStateOf<Map<String, String>>(emptyMap())
 		private set
 
 	/** The authored armature, enabled or not, once it has bones. */
@@ -531,6 +568,7 @@ internal class CanvasEditor(
 	private fun openSkeletonDraft() {
 		val spec = committedSkeleton ?: return
 		skeletonDraft = spec
+		pendingSkeletonDrawableIds = emptySet()
 		if (selectedBoneId == null || spec.bone(selectedBoneId!!) == null) selectedBoneId = spec.bones.firstOrNull { !it.role.anchor }?.id
 		viewModel.resetAllParameters()
 	}
@@ -570,10 +608,188 @@ internal class CanvasEditor(
 		if (committed.enabled != enabled) viewModel.setSkeleton(committed.copy(enabled = enabled))
 	}
 
-	fun selectBone(id: String?) { selectedBoneId = id }
+	fun selectBone(id: String?, additive: Boolean = false) {
+		if (!additive || id == null) { selectedBoneId = id; return }
+		val next = if (id in selectedBoneIds) selectedBoneIds - id else selectedBoneIds + id
+		selectedBoneId = id.takeIf { it in next } ?: next.lastOrNull()
+		selectedBoneIds = next
+	}
+
+	fun selectBones(ids: Set<String>, additive: Boolean = false) {
+		val valid = ids.filterTo(linkedSetOf()) { skeletonDraft?.bone(it) != null }
+		val next = if (additive) selectedBoneIds + valid else valid
+		selectedBoneId = next.lastOrNull()
+		selectedBoneIds = next
+	}
+
+	fun transformSelectedBones(dx: Float = 0f, dy: Float = 0f, degrees: Float = 0f, scale: Float = 1f) {
+		val draft = skeletonDraft ?: return
+		var next = draft.withBonesTransformed(selectedBoneIds, dx, dy, degrees, scale, transformBoneDescendants)
+		if (editBonesSymmetrically) next = io.github.psd2live.core.SkeletonAuthoring.synchronizeMirrors(next,
+			selectedBoneIds + if (transformBoneDescendants) selectedBoneIds.flatMap(draft::descendants) else emptyList())
+		skeletonDraft = next
+	}
+
+	fun restoreSkeletonDraft(spec: io.github.psd2live.core.SkeletonSpec) { if (skeletonDraft != null) skeletonDraft = spec }
+
+	fun selectSkeletonBindingDrawables(ids: Set<String>, additive: Boolean = false) {
+		pendingSkeletonDrawableIds = if (additive) pendingSkeletonDrawableIds + ids else ids
+	}
+
+	fun toggleSkeletonBindingDrawable(id: String) {
+		pendingSkeletonDrawableIds = if (id in pendingSkeletonDrawableIds) pendingSkeletonDrawableIds - id else pendingSkeletonDrawableIds + id
+	}
+
+	fun applySkeletonBindingBatch(unbind: Boolean = false) {
+		val draft = skeletonDraft ?: return
+		val bone = if (unbind) null else selectedBoneId ?: return
+		val valid = model.drawables.map { it.id.raw }.toSet()
+		skeletonDraft = draft.withDrawablesBound(pendingSkeletonDrawableIds.intersect(valid), bone)
+		pendingSkeletonDrawableIds = emptySet()
+	}
+
+	fun selectSkeletonWeightDrawable(id: String?) {
+		skeletonWeightDrawableId = id
+		skeletonWeightBoneMapping = emptyMap()
+	}
+
+	fun activeSkeletonWeights(): io.github.psd2live.core.SkeletonWeightMap? = skeletonDraft?.let { spec ->
+		skeletonWeightDrawableId?.let { io.github.psd2live.core.SkeletonManualWeights.capture(spec, model, it) }
+	}
+
+	fun prepareSkeletonWeightStroke(): Boolean {
+		val spec = skeletonDraft ?: return false
+		val id = skeletonWeightDrawableId ?: return false
+		if (selectedBoneId !in io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, id)) return false
+		val map = activeSkeletonWeights() ?: return false
+		skeletonDraft = spec.withManualWeights(id, map)
+		return true
+	}
+
+	fun paintSkeletonWeights(pos: Offset, viewport: CanvasViewport) {
+		val spec = skeletonDraft ?: return
+		val id = skeletonWeightDrawableId ?: return
+		val bone = selectedBoneId ?: return
+		if (bone !in io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, id)) return
+		val map = spec.manualWeights[id] ?: return
+		val painted = io.github.psd2live.core.SkeletonManualWeights.paint(spec, map, bone,
+			viewport.canvasX(pos.x), viewport.canvasY(pos.y), skeletonWeightRadius, skeletonWeightStrength,
+			skeletonWeightBrushMode, skeletonWeightReplaceValue)
+		skeletonDraft = spec.withManualWeights(id, painted)
+	}
+
+	fun cleanupSkeletonWeights() {
+		val spec = skeletonDraft ?: return
+		val id = skeletonWeightDrawableId ?: return
+		val map = activeSkeletonWeights() ?: return
+		val fallback = io.github.psd2live.core.SkeletonManualWeights.capture(spec.withManualWeights(id, null), model, id) ?: return
+		skeletonDraft = spec.withManualWeights(id, io.github.psd2live.core.SkeletonManualWeights.cleanup(spec, map, fallback,
+			skeletonWeightInfluences, skeletonWeightCutoff))
+	}
+
+	fun resetSkeletonWeights() { skeletonWeightDrawableId?.let { id -> skeletonDraft = skeletonDraft?.withManualWeights(id, null) } }
+
+	fun setSkeletonWeightBoneMapping(source: String, target: String) { skeletonWeightBoneMapping = skeletonWeightBoneMapping + (source to target) }
+
+	fun effectiveSkeletonWeightBoneMapping(): Map<String, String> {
+		val spec = skeletonDraft ?: return emptyMap()
+		val target = skeletonWeightDrawableId ?: return emptyMap()
+		val source = skeletonWeightSourceId ?: return emptyMap()
+		val targetIds = io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, target)
+		val sourceIds = io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, source)
+		return sourceIds.mapNotNull { id ->
+			if (id in skeletonWeightBoneMapping) return@mapNotNull skeletonWeightBoneMapping[id]?.takeIf { it in targetIds }?.let { id to it }
+			val bone = spec.bone(id) ?: return@mapNotNull null
+			val side = when (bone.side) { io.github.psd2live.core.Side.LEFT -> io.github.psd2live.core.Side.RIGHT
+				io.github.psd2live.core.Side.RIGHT -> io.github.psd2live.core.Side.LEFT; io.github.psd2live.core.Side.NONE -> io.github.psd2live.core.Side.NONE }
+			val partner = bone.mirrorId?.takeIf { mirrorSkeletonWeights && it in targetIds }
+				?: id.takeIf { !mirrorSkeletonWeights && it in targetIds }
+				?: targetIds.filter { t -> spec.bone(t)?.let { b -> b.role == bone.role && b.chainIndex == bone.chainIndex &&
+					(!mirrorSkeletonWeights || b.side == side) } == true }.singleOrNull()
+			partner?.let { id to it }
+		}.toMap()
+	}
+
+	fun skeletonWeightTransferPreview(): io.github.psd2live.core.SkeletonManualWeights.Transfer? {
+		val spec = skeletonDraft ?: return null
+		val source = skeletonWeightSourceId?.let { io.github.psd2live.core.SkeletonManualWeights.capture(spec, model, it) } ?: return null
+		val targetId = skeletonWeightDrawableId ?: return null
+		val target = io.github.psd2live.core.SkeletonManualWeights.capture(spec.withManualWeights(targetId, null), model, targetId) ?: return null
+		if (skeletonWeightTransferMode == io.github.psd2live.core.SkeletonWeightTransferMode.TOPOLOGY &&
+			(source.weights.size != target.weights.size || source.triangles != target.triangles)) return null
+		return io.github.psd2live.core.SkeletonManualWeights.transfer(source, target, effectiveSkeletonWeightBoneMapping(),
+			skeletonWeightTransferMode, skeletonWeightTransferTolerance,
+			if (mirrorSkeletonWeights) spec.symmetryAxisX ?: model.canvasWidth / 2f else null)
+	}
+
+	fun applySkeletonWeightTransfer() {
+		val id = skeletonWeightDrawableId ?: return
+		val result = skeletonWeightTransferPreview() ?: return
+		skeletonDraft = skeletonDraft?.withManualWeights(id, result.map)
+	}
+
+	fun setBoneSymmetryAxis(x: Float) { if (x.isFinite()) skeletonDraft = skeletonDraft?.copy(symmetryAxisX = x) }
+
+	/** Match opposite-side layers only when their semantic/name match identifies one drawable. */
+	fun boneMirrorDrawables(): Map<String, String> {
+		val preview = state.previewModel ?: return emptyMap()
+		val layers = preview.analysis.layers.associateBy { it.source.id.raw }
+		val byDrawable = preview.rig.puppet.drawables.mapNotNull { d ->
+			layers[preview.rig.layerIdByDrawableId[d.id.raw] ?: d.id.raw]?.let { d.id.raw to it }
+		}.toMap()
+		fun neutral(name: String) = name.lowercase().replace(Regex("left|right|左|右|[_. ]l\\b|[_. ]r\\b"), "")
+		return byDrawable.mapNotNull { (id, layer) ->
+			val side = layer.semantic.side
+			if (side == io.github.psd2live.core.Side.NONE) return@mapNotNull null
+			val matches = byDrawable.filter { (_, other) ->
+				other.semantic.side != side && other.semantic.side != io.github.psd2live.core.Side.NONE &&
+				other.semantic.tag == layer.semantic.tag && other.semantic.variant == layer.semantic.variant &&
+				other.semantic.type == layer.semantic.type && other.semantic.parameter == layer.semantic.parameter &&
+				other.semantic.switchId == layer.semantic.switchId
+			}
+			val named = matches.filter { (_, other) -> neutral(other.source.name) == neutral(layer.source.name) }
+			val target = (if (named.isNotEmpty()) named else matches).keys.singleOrNull() ?: return@mapNotNull null
+			id to target
+		}.toMap()
+	}
+
+	fun duplicateSelectedBones(mirror: Boolean = false) {
+		val draft = skeletonDraft ?: return
+		val result = io.github.psd2live.core.SkeletonAuthoring.duplicate(draft, selectedBoneIds, transformBoneDescendants,
+			transferBindings = transferCopiedBoneBindings, mirrorAxis = if (mirror) draft.symmetryAxisX ?: model.canvasWidth / 2f else null,
+			drawableMirrors = if (mirror) boneMirrorDrawables() else emptyMap(),
+			suffix = tr(if (mirror) "skeleton.structure.mirrorSuffix" else "skeleton.structure.copySuffix"))
+		skeletonDraft = result.spec
+		selectBones(result.selected)
+	}
+
+	fun subdivideSelectedBone(segments: Int) {
+		val draft = skeletonDraft ?: return
+		val result = io.github.psd2live.core.SkeletonAuthoring.subdivide(draft, selectedBoneId ?: return, segments)
+		skeletonDraft = result.spec; selectBones(result.selected)
+	}
+
+	fun dissolveSelectedBone() {
+		val draft = skeletonDraft ?: return
+		val id = selectedBoneId ?: return
+		if (!io.github.psd2live.core.SkeletonAuthoring.canDissolve(draft, id)) return
+		val result = io.github.psd2live.core.SkeletonAuthoring.dissolve(draft, id)
+		skeletonDraft = result.spec; selectBones(result.selected)
+	}
+
+	fun renameBone(id: String, name: String) {
+		if (name.isBlank() || name.any(Char::isISOControl)) return
+		skeletonDraft = skeletonDraft?.withBoneRenamed(id, name)
+	}
+
+	fun setSelectedBoneParent(parentId: String?, connect: Boolean = false) {
+		skeletonDraft = skeletonDraft?.withBoneParent(selectedBoneId ?: return, parentId, connect)
+	}
 
 	fun moveBoneJoint(id: String, end: io.github.psd2live.core.BoneEnd, x: Float, y: Float) {
-		skeletonDraft = skeletonDraft?.withJointMoved(id, end, x, y)
+		var next = skeletonDraft?.withJointMoved(id, end, x, y) ?: return
+		if (editBonesSymmetrically) next = io.github.psd2live.core.SkeletonAuthoring.synchronizeMirrors(next, setOf(id))
+		skeletonDraft = next
 		selectedBoneId = id
 	}
 
@@ -598,36 +814,56 @@ internal class CanvasEditor(
 	/** Bone under the pointer while the pose tool is armed, and the bone being dragged. */
 	var poseHover by mutableStateOf<BoneHit?>(null)
 	var poseDrag by mutableStateOf<BoneHit?>(null)
+	private var draggingIkTargetId: String? = null
+	private var ikTargetDragOrigin: io.github.psd2live.core.SkeletonSpec? = null
+	private var ikTargetDragValues: Map<ParameterId, Float>? = null
 
 	/** Whether the pose tool shades each skinned mesh by the bones it follows. */
 	var showSkeletonWeights by mutableStateOf(false)
 
 	private var posedCache: Triple<PuppetModel, Map<ParameterId, Float>, List<PosedBone>>? = null
+	private var posedCacheSpec: io.github.psd2live.core.SkeletonSpec? = null
 
 	/** The bones where the current pose holds them, cached per model and pose: hover asks on every move. */
 	fun posedBones(): List<PosedBone> {
 		val puppet = model
 		val values = state.parameterValues
-		posedCache?.let { (m, v, bones) -> if (m === puppet && v == values) return bones }
-		return SkeletonPoseTool.posed(puppet, bakedSkeleton, values).also { posedCache = Triple(puppet, values, it) }
+		posedCache?.let { (m, v, bones) -> if (m === puppet && v == values && posedCacheSpec === bakedSkeleton) return bones }
+		return SkeletonPoseTool.posed(puppet, bakedSkeleton, values).also { posedCache = Triple(puppet, values, it); posedCacheSpec = bakedSkeleton }
 	}
 
 	fun beginPose(pos: Offset, viewport: CanvasViewport): Boolean {
+		val targets = bakedSkeleton?.ikTargets.orEmpty()
+		val target = targets.entries.firstOrNull { (_, t) -> t.enabled &&
+			(Offset(viewport.x(t.x).toFloat(), (viewport.offsetY + t.y * viewport.scale).toFloat()) - pos).getDistance() <= 10f }
+		if (target != null) {
+			draggingIkTargetId = target.key; ikTargetDragOrigin = committedSkeleton
+			ikTargetDragValues = state.parameterValues
+			poseDrag = BoneHit(target.key, true); selectedBoneId = target.key
+			viewModel.beginEditorGesture(); return true
+		}
 		poseDrag = SkeletonPoseTool.hit(posedBones(), pos, viewport)
+		poseDrag?.let { selectedBoneId = it.boneId }
 		if (poseDrag != null) viewModel.beginEditorGesture()
 		return poseDrag != null
 	}
 
 	fun dragPose(pos: Offset, viewport: CanvasViewport, ik: Boolean) {
+		draggingIkTargetId?.let { id ->
+			updateIkTarget(id, io.github.psd2live.core.SkeletonIkTarget(viewport.canvasX(pos.x), viewport.canvasY(pos.y)))
+			return
+		}
 		val hit = poseDrag ?: return
 		val spec = bakedSkeleton ?: return
-		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), state.parameterValues, ik)
+		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), state.parameterValues,
+			ik = ik, mode = skeletonPoseSubTool)
 		if (values.isNotEmpty()) viewModel.setParameterValues(values)
 	}
 
 	fun endPose() {
 		if (poseDrag != null) {
 			poseDrag = null
+			draggingIkTargetId = null; ikTargetDragOrigin = null; ikTargetDragValues = null
 			viewModel.endEditorGesture()
 		}
 	}
@@ -649,6 +885,46 @@ internal class CanvasEditor(
 		viewModel.setParameterValues(SkeletonPoseTool.rest(bakedSkeleton))
 	}
 
+	fun saveSkeletonPose(name: String) {
+		if (name.isBlank() || name.any(Char::isISOControl)) return
+		val spec = committedSkeleton ?: return
+		val values = model.parameters.associate { p -> p.id.raw to (state.parameterValues[p.id] ?: p.default).coerceIn(p.min, p.max) }
+		viewModel.setSkeletonPoseMetadata(spec.withSavedPose(name, values))
+	}
+
+	fun applySavedSkeletonPose(name: String) {
+		val saved = committedSkeleton?.savedPoses?.get(name) ?: return
+		viewModel.setParameterValues(model.parameters.mapNotNull { p -> saved[p.id.raw]?.let { p.id to it.coerceIn(p.min, p.max) } }.toMap())
+	}
+
+	fun deleteSavedSkeletonPose(name: String) {
+		val spec = committedSkeleton ?: return
+		viewModel.setSkeletonPoseMetadata(spec.withoutSavedPose(name))
+	}
+
+	fun setSelectedBoneIk(settings: io.github.psd2live.core.SkeletonIkSettings) {
+		val spec = skeletonDraft ?: committedSkeleton ?: return
+		val bone = spec.bone(selectedBoneId ?: return) ?: return
+		val next = spec.withBone(bone.copy(ik = settings))
+		if (skeletonDraft != null) skeletonDraft = next else {
+			viewModel.setSkeletonPoseMetadata(next)
+			viewModel.setParameterValues(io.github.psd2live.core.SkeletonPoseSolver.solveTargets(model, next, state.parameterValues))
+		}
+	}
+
+	fun pinSelectedBone() {
+		val posed = posedBones().firstOrNull { it.bone.id == selectedBoneId } ?: return
+		updateIkTarget(posed.bone.id, io.github.psd2live.core.SkeletonIkTarget(posed.tailX, posed.tailY))
+	}
+
+	fun updateIkTarget(id: String, target: io.github.psd2live.core.SkeletonIkTarget?) {
+		val spec = committedSkeleton ?: return
+		val next = spec.withIkTarget(id, target)
+		viewModel.setSkeletonPoseMetadata(next)
+		val constrained = io.github.psd2live.core.SkeletonPoseSolver.solveTargets(model, next, state.parameterValues)
+		viewModel.setParameterValues(constrained)
+	}
+
 	fun bindDrawableToSelectedBone(drawableId: String) {
 		val draft = skeletonDraft ?: return
 		skeletonDraft = draft.withDrawableBound(drawableId, selectedBoneId)
@@ -661,11 +937,16 @@ internal class CanvasEditor(
 	fun addBone() {
 		val draft = skeletonDraft ?: return
 		val parent = draft.bone(selectedBoneId ?: return) ?: return
-		val id = generateSequence(1) { it + 1 }.map { "custom_$it" }.first { draft.bone(it) == null }
-		val bone = io.github.psd2live.core.SkeletonBone(id, io.github.psd2live.core.SkeletonNames.bone(io.github.psd2live.core.BoneRole.CUSTOM,
-			io.github.psd2live.core.Side.NONE), parent.id, io.github.psd2live.core.BoneRole.CUSTOM,
-			headX = parent.tailX, headY = parent.tailY, tailX = parent.tailX, tailY = parent.tailY + 60f)
-		skeletonDraft = draft.withBone(bone)
+		createBone(parent.tailX, parent.tailY, parent.tailX, parent.tailY + 60f, parent.id)
+	}
+
+	/** Creation stays in the edit draft, sharing its finish/cancel and history behavior. */
+	fun createBone(headX: Float, headY: Float, tailX: Float, tailY: Float, parentId: String? = null) {
+		val draft = skeletonDraft ?: return
+		val next = draft.withCustomBone(headX, headY, tailX, tailY, parentId)
+		if (next == draft) return
+		skeletonDraft = next
+		selectedBoneId = next.bones.last().id
 	}
 
 	fun removeSelectedBone() {
@@ -681,7 +962,7 @@ internal class CanvasEditor(
 		val draft = skeletonDraft ?: return
 		if (!enabled) {
 			val removed = draft.bones.filter { it.role == role }.mapTo(HashSet()) { it.id }
-			skeletonDraft = draft.copy(bones = draft.bones.filterNot { it.id in removed })
+			skeletonDraft = removed.fold(draft) { spec, id -> spec.withoutBone(id) }
 			if (selectedBoneId in removed) selectedBoneId = io.github.psd2live.core.SkeletonSpec.LOWER_BODY_ID
 			return
 		}
@@ -2199,6 +2480,11 @@ internal class CanvasEditor(
 
     fun cancel() {
         if (busy) return
+        if (draggingIkTargetId != null) {
+            ikTargetDragOrigin?.let(viewModel::setSkeletonPoseMetadata)
+            ikTargetDragValues?.let(viewModel::setParameterValues)
+            endPose()
+        }
         // Every tip edits pixels as it goes, so an abandoned gesture has to give them back.
         val session = paintSession
         if (isPainting && session != null) {
@@ -5012,7 +5298,21 @@ internal class CanvasEditor(
 
 	fun pickSkeletonDrawable(pos: Offset, viewport: CanvasViewport): String? {
 		val layerId = pickLayer(pos, viewport) ?: return null
-		return state.previewModel?.rig?.layerIdByDrawableId?.entries?.firstOrNull { it.value == layerId }?.key
+		val preview = state.previewModel ?: return null
+		val geometry = RigCanvasSupport.evaluate(preview)
+		val x = viewport.canvasX(pos.x); val y = -viewport.canvasY(pos.y)
+		return preview.rig.puppet.drawables.asReversed().firstOrNull { drawable ->
+			if ((preview.rig.layerIdByDrawableId[drawable.id.raw] ?: drawable.id.raw) != layerId) return@firstOrNull false
+			val positions = geometry.worldPositions[drawable.id] ?: return@firstOrNull false
+			val indices = drawable.mesh?.indices ?: return@firstOrNull false
+			fun cross(a: Int, b: Int) = (positions[b * 2] - positions[a * 2]) * (y - positions[a * 2 + 1]) -
+				(positions[b * 2 + 1] - positions[a * 2 + 1]) * (x - positions[a * 2])
+			indices.indices.step(3).any { i ->
+				val a = indices[i]; val b = indices[i + 1]; val c = indices[i + 2]
+				val ab = cross(a, b); val bc = cross(b, c); val ca = cross(c, a)
+				(ab >= 0f && bc >= 0f && ca >= 0f) || (ab <= 0f && bc <= 0f && ca <= 0f)
+			}
+		}?.id?.raw
 	}
 
     /**

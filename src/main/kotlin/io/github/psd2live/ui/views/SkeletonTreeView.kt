@@ -24,14 +24,20 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +58,8 @@ import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.SkeletonPalette
 import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.components.CompactButton
+import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.CompactToggleChip
@@ -202,7 +210,8 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 				buildAnnotatedString {
 					withStyle(SpanStyle(color = colors.accent, fontWeight = FontWeight.SemiBold)) { append(tr("skeleton.tree.editing")) }
 					append(" · ")
-					append(tr("skeleton.panel.clickMesh"))
+					append(tr(if (editor.skeletonEditSubTool == io.github.psd2live.ui.SkeletonEditSubTool.EDIT)
+						"skeleton.panel.clickMesh" else editor.skeletonEditSubTool.hintKey))
 				},
 				color = colors.textMuted,
 				style = typography.caption.copy(fontSize = 10.sp),
@@ -238,12 +247,12 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 					spec = shown,
 					bone = bone,
 					expanded = expanded,
-					selected = editor.skeletonSelected && bone.id == editor.selectedBoneId,
+					selected = editor.skeletonSelected && bone.id in editor.selectedBoneIds,
 					pointCount = pointCounts?.get(bone.parameterId),
 					countPending = shown.enabled && pointCounts == null,
 					editable = true,
 					onToggle = { collapsed[bone.id] = expanded },
-					onSelect = { if (draft != null) editor.selectBone(bone.id) else editor.selectSkeleton(bone.id) },
+					onSelect = { additive -> if (draft != null) editor.selectBone(bone.id, additive) else editor.selectSkeleton(bone.id) },
 				)
 				// Anchor bones are skinned by the body rig, not by bones; their meshes stay out of the tree.
 				if (!expanded || bone.role.anchor) continue
@@ -267,7 +276,7 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 
 		if (draft != null) {
 			val selected = draft.bone(editor.selectedBoneId ?: "")
-			if (selected != null && !selected.role.anchor) BoneSettings(editor, draft, selected)
+			if (selected != null) BoneSettings(editor, draft, selected)
 			Row(
 				Modifier.fillMaxWidth().height(30.dp).background(colors.panelElevated)
 					.border(BorderStroke(1.dp, colors.divider)).padding(horizontal = 6.dp),
@@ -347,6 +356,7 @@ private fun Modifier.treeGuides(depth: Int, openLevels: List<Boolean>, isLast: B
 
 /** One bone of the tree: bone icon in its color, fold chevron, name, and the parameter it drives. */
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun BoneRow(
 	spec: SkeletonSpec,
 	bone: SkeletonBone,
@@ -356,7 +366,7 @@ private fun BoneRow(
 	countPending: Boolean,
 	editable: Boolean,
 	onToggle: () -> Unit,
-	onSelect: () -> Unit,
+	onSelect: (Boolean) -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -368,7 +378,8 @@ private fun BoneRow(
 	val hasChildren = meshCount > 0 || spec.children(bone.id).isNotEmpty()
 	val interaction = remember { MutableInteractionSource() }
 	val hovered by interaction.collectIsHoveredAsState()
-	val clickable = editable && !bone.role.anchor
+	val clickable = editable
+	var additive by remember { mutableStateOf(false) }
 	val textColor = when {
 		selected -> colors.selectionText
 		bone.role.anchor -> colors.textMuted
@@ -386,7 +397,8 @@ private fun BoneRow(
 			)
 			.treeGuides(depth, openLevels, !hasNextSibling(spec, bone), expanded && hasChildren, guideColor(colors.textMuted))
 			.hoverable(interaction)
-			.clickable(enabled = clickable, interactionSource = interaction, indication = null, onClick = onSelect)
+			.onPointerEvent(PointerEventType.Press) { additive = it.keyboardModifiers.isShiftPressed }
+			.clickable(enabled = clickable, interactionSource = interaction, indication = null, onClick = { onSelect(additive) })
 			.padding(start = (BASE_PADDING_DP + depth * INDENT_STEP_DP).dp, end = 6.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
@@ -507,6 +519,17 @@ private fun BoneSettings(editor: CanvasEditor, spec: SkeletonSpec, bone: Skeleto
 		Text(bone.parameterId, color = colors.textMuted, style = typography.monoSmall.copy(fontSize = 9.sp), maxLines = 1)
 	}
 	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		var name by remember(bone.id, bone.name) { mutableStateOf(bone.name) }
+		CompactTextField(value = name, onValueChange = { name = it }, placeholder = tr("skeleton.author.name"),
+			modifier = Modifier.fillMaxWidth(), onCommit = { editor.renameBone(bone.id, name) },
+			onFocusLost = { editor.renameBone(bone.id, name) })
+		val excluded = spec.descendants(bone.id) + bone.id
+		val parents = listOf("" to tr("skeleton.author.noParent")) + spec.bones.filterNot { it.id in excluded }.map { it.id to it.name }
+		CompactDropdown(items = parents, selectedItem = parents.first { it.first == (bone.parentId ?: "") },
+			onItemSelected = { editor.setSelectedBoneParent(it.first.takeIf(String::isNotEmpty)) }, itemLabel = { it.second },
+			modifier = Modifier.fillMaxWidth(), height = 24.dp)
+		CompactToggleChip(text = tr("skeleton.author.connected"), selected = spec.isConnected(bone.id), enabled = bone.parentId != null,
+			onToggle = { editor.setSelectedBoneParent(bone.parentId, !spec.isConnected(bone.id)) }, height = 22.dp)
 		// A body half bends about the waist across a band of its own.
 		if (parent != null || bone.role.body) {
 			val limit = ((if (parent != null) minOf(bone.length, parent.length) else bone.length) * 0.45f).coerceAtLeast(1f)

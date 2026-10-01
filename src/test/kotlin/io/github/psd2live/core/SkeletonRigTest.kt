@@ -102,6 +102,42 @@ class SkeletonRigTest {
 		assertEquals(DeformerId("DeformSkel_upper"), baked.drawables.single().parentDeformerId)
 	}
 
+	@Test fun authoredWeightsDriveActualBakedMotionIncludingRefinedVertices() {
+		val mesh = strip("arm", 100f, 95f, 435f, 18f, 20f)
+		val positions = rest(mesh)
+		val weights = SkeletonWeightMap(positions.toList(), mesh.mesh!!.indices.toList(), List(positions.size / 2) { mapOf("fore" to 1f) })
+		val spec = arm("arm").withManualWeights("arm", weights)
+		val restored = SkeletonSpec.fromJson(spec.toJson())
+		val baked = SkeletonRig.apply(legacy(mesh), restored, frame)
+		val neutral = canvas(baked).getValue(mesh.id)
+		val moved = canvas(baked, mapOf(restored.bone("fore")!!.parameterId to 30f)).getValue(mesh.id)
+		for (v in neutral.indices step 2) {
+			val expected = rotate(neutral[v], neutral[v + 1], 100f, 250f, 30f)
+			assertEquals(expected.first, moved[v], 0.1f, "manual weighted vertex $v x")
+			assertEquals(expected.second, moved[v + 1], 0.1f, "manual weighted vertex $v y")
+		}
+		val automatic = SkeletonRig.apply(legacy(mesh), arm("arm"), frame)
+		val autoMoved = canvas(automatic, mapOf(restored.bone("fore")!!.parameterId to 30f)).getValue(mesh.id)
+		assertTrue(abs(autoMoved[0] - moved[0]) > 10f)
+	}
+
+	@Test fun structurallyEditedArmaturesBakeWithStableRestMeshesAndUniqueParameters() {
+		val mesh = strip("arm", 100f, 95f, 435f, 18f, 10f)
+		val original = arm("arm")
+		val specs = listOf(
+			SkeletonAuthoring.duplicate(original, setOf("upper"), true, dx = 0f, dy = 0f, transferBindings = true).spec,
+			SkeletonAuthoring.subdivide(original, "fore", 3).spec,
+			SkeletonAuthoring.dissolve(original, "fore").spec,
+		)
+		for (spec in specs) {
+			val baked = SkeletonRig.apply(legacy(mesh), spec, frame)
+			assertEquals(baked.parameters.size, baked.parameters.map { it.id }.distinct().size)
+			val expected = rest(mesh); val actual = canvas(baked).getValue(mesh.id)
+			for (i in expected.indices) assertEquals(expected[i], actual[i], 0.05f)
+			for (bone in spec.bones.filterNot { it.role.anchor }) assertTrue(baked.parameters.any { it.id.raw == bone.parameterId })
+		}
+	}
+
 	private val breathId = DeformerId("DeformBodyZBreath")
 
 	/** A breath warp over the whole body whose breath key lifts the top edge, stretching the body. */

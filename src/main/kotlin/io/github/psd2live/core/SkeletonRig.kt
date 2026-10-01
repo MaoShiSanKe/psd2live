@@ -198,12 +198,12 @@ internal object SkeletonRig {
 
 		// 2b. Split parts of one limb welded wherever they overlap, before skinning so every new vertex
 		// gets its joints baked like the rest.
-		val seams = weldSplitParts(model, canvas, drawableRoot, treeBones, parentOf, lockedTopology, candidates)
+		val seams = weldSplitParts(model, canvas, drawableRoot, treeBones, parentOf, lockedTopology, candidates, spec.manualWeights)
 		model = seams.model
 		canvas = seams.canvas
 
 		// 2c. The bone each mesh hangs under, and the bone parameters whose turns only ever add.
-		val plan = planBlend(model, canvas, drawableRoot, treeBones, parentOf, candidates)
+		val plan = planBlend(model, canvas, drawableRoot, treeBones, parentOf, candidates, spec.manualWeights)
 
 		// 3. The body halves spliced into the body chain as warps - the head rotation and everything else on
 		// the breath warp ends up under the upper body - and a rotation deformer per limb bone hung from them.
@@ -221,7 +221,7 @@ internal object SkeletonRig {
 		for ((id, root) in drawableRoot) {
 			val drawableId = DrawableId(id)
 			model = skinDrawable(model, drawableId, canvas.getValue(drawableId), treeBones.getValue(root), parentOf, poses,
-				plan.homes.getValue(id), plan.blend, spec.sampling)
+				plan.homes.getValue(id), plan.blend, spec.sampling, spec.manualWeights[id])
 		}
 
 		// 6. The welded parts glued, no deformer left holding nothing, and no joint inside one mesh left as a
@@ -262,6 +262,7 @@ internal object SkeletonRig {
 		treeBones: Map<String, List<SkeletonBone>>,
 		parentOf: Map<String, SkeletonBone?>,
 		candidates: Set<String>,
+		manualWeights: Map<String, SkeletonWeightMap>,
 	): BlendPlan {
 		val homes = HashMap<String, Int>()
 		val coupled = HashSet<String>()
@@ -271,7 +272,7 @@ internal object SkeletonRig {
 			val drawableId = DrawableId(id)
 			val frame = canvas.getValue(drawableId)
 			val triangles = model.drawables.first { it.id == drawableId }.mesh!!.indices
-			val skins = SkeletonWeights.skin(frame, skinBones, triangles)
+			val skins = SkeletonManualWeights.weights(frame, triangles, tree, parentOf, manualWeights[id])
 			val home = homeBone(skins, skinBones, frame, triangles) { tree[it].parameterId in candidates }
 			homes[id] = home
 			for (moving in dependencies(skins, skinBones, home)) {
@@ -886,12 +887,13 @@ internal object SkeletonRig {
 		home: Int,
 		blend: Set<ParameterId>,
 		sampling: SkeletonSampling,
+		manual: SkeletonWeightMap?,
 	): PuppetModel {
 		val drawable = base.drawables.firstOrNull { it.id == drawableId } ?: return base
 		val mesh = drawable.mesh ?: return base
 		if (canvas.size != mesh.positions.size) return base
 		val skinBones = skinBones(tree, parentOf)
-		val skins = SkeletonWeights.skin(canvas, skinBones, mesh.indices)
+		val skins = SkeletonManualWeights.weights(canvas, mesh.indices, tree, parentOf, manual)
 		val deformerOf = tree.map { DeformerId(it.deformerId) }
 
 		// Bones whose angle changes where a vertex sits relative to home.
@@ -1204,6 +1206,7 @@ internal object SkeletonRig {
 		parentOf: Map<String, SkeletonBone?>,
 		lockedTopology: Set<String>,
 		candidates: Set<String>,
+		manualWeights: Map<String, SkeletonWeightMap>,
 	): Seams {
 		var model = base
 		val canvas = HashMap(baseCanvas)
@@ -1215,7 +1218,7 @@ internal object SkeletonRig {
 			val home = members.associateWith { id ->
 				val frame = canvas.getValue(id)
 				val triangles = model.drawables.first { it.id == id }.mesh!!.indices
-				homeBone(SkeletonWeights.skin(frame, skinBones, triangles), skinBones, frame, triangles) { tree[it].parameterId in candidates }
+				homeBone(SkeletonManualWeights.weights(frame, triangles, tree, parentOf, manualWeights[id.raw]), skinBones, frame, triangles) { tree[it].parameterId in candidates }
 			}
 			fun isAncestor(ancestor: Int, bone: Int) =
 				generateSequence(skinBones[bone].parent.takeIf { it >= 0 }) { skinBones[it].parent.takeIf { p -> p >= 0 } }.any { it == ancestor }

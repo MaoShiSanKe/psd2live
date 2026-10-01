@@ -40,6 +40,14 @@ internal class MotionEditorState {
 }
 
 internal object MotionKeyEdits {
+	/** Inserts a parameter snapshot in one edit, creating missing curves and preserving existing handles. */
+	fun pose(clip: MotionClip, values: Map<String, Float>, time: Float): MotionClip {
+		val at = time.coerceIn(0f, clip.duration)
+		return values.filterValues(Float::isFinite).entries.fold(clip) { next, (id, value) ->
+			val previous = next.curve(id)?.keys?.firstOrNull(MotionKeyRef(id, at)::matches)
+			setKey(next, id, previous?.copy(value = value) ?: MotionKey(at, value))
+		}
+	}
 	fun keysOf(clip: MotionClip, selection: Set<MotionKeyRef>): List<Pair<String, MotionKey>> =
 		clip.curves.flatMap { curve ->
 			curve.keys.filter { key -> selection.any { it.parameterId == curve.parameterId && it.matches(key) } }

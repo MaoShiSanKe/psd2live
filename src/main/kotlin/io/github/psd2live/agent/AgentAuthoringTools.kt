@@ -626,6 +626,14 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
           catch (e: IllegalStateException) { authoringError(e, workspace) }
     }
 
+    fun skeletonMap(value: JsonObject) = buildJsonObject {
+        put("type", "object"); put("additionalProperties", value)
+    }
+    val ikSettings = objectSchema(buildJsonObject {
+        put("chainLength", integer(1, 32)); put("iterations", integer(1, 256))
+        put("tolerancePx", buildJsonObject { put("type", "number"); put("minimum", 0.001); put("maximum", 10) })
+        put("bendDirection", integer(-1, 1))
+    })
     val boneFields = buildJsonObject {
         put("id", string()); put("name", string()); put("parent", string())
         put("role", choices(*io.github.psd2live.core.BoneRole.entries.map { it.name }.toTypedArray()))
@@ -634,6 +642,8 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         put("drawables", arraySchema(string(), 0, 256)); put("chainIndex", integer(0))
         put("direction", number()); put("minAngle", number()); put("maxAngle", number())
         put("blendWidth", number())
+        put("connected", boolean()); put("parameterOverride", string()); put("mirror", string())
+        put("ik", ikSettings)
     }
     val skeletonBranches = listOf(
         variant("mode", "get", buildJsonObject {}, emptyList()),
@@ -641,7 +651,17 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         variant("mode", "auto", buildJsonObject { put("state", string()) }, listOf("state")),
         variant("mode", "put", buildJsonObject {
             put("state", string()); put("spec", objectSchema(buildJsonObject {
-                put("version", integer(1, 4)); put("enabled", boolean())
+                put("version", integer(1, 9)); put("enabled", boolean())
+                put("symmetryAxisX", number())
+                put("savedPoses", skeletonMap(skeletonMap(number())))
+                put("ikTargets", skeletonMap(objectSchema(buildJsonObject {
+                    put("x", number()); put("y", number()); put("enabled", boolean())
+                }, listOf("x", "y"))))
+                put("manualWeights", skeletonMap(objectSchema(buildJsonObject {
+                    put("positions", arraySchema(number(), 0, Int.MAX_VALUE))
+                    put("triangles", arraySchema(integer(0), 0, Int.MAX_VALUE))
+                    put("weights", arraySchema(skeletonMap(number()), 0, Int.MAX_VALUE))
+                }, listOf("positions", "triangles", "weights"))))
                 put("sampling", objectSchema(buildJsonObject {
                     put("tolerancePx", buildJsonObject { put("type", "number"); put("minimum", 0.25); put("maximum", 4.0) })
                     put("minimumStepDegrees", buildJsonObject { put("type", "number"); put("minimum", 2.5); put("maximum", 20.0) })

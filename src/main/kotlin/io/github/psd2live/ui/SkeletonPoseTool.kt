@@ -66,7 +66,16 @@ internal object SkeletonPoseTool {
 		y: Float,
 		values: Map<ParameterId, Float>,
 		ik: Boolean,
-	): Map<ParameterId, Float> = SkeletonPoseSolver.drag(spec, bones, hit, x, y, values, ik)
+		mode: SkeletonPoseSubTool = SkeletonPoseSubTool.AUTO,
+	): Map<ParameterId, Float> {
+		val effectiveHit = BoneHit(hit.boneId, tip = when (mode) {
+			SkeletonPoseSubTool.AUTO -> hit.tip
+			SkeletonPoseSubTool.FK -> false
+			SkeletonPoseSubTool.IK -> true
+		})
+		return SkeletonPoseSolver.drag(spec, bones, effectiveHit, x, y, values,
+			ik = mode == SkeletonPoseSubTool.IK || (mode == SkeletonPoseSubTool.AUTO && ik))
+	}
 
 	/** Every limb and pose parameter back at rest. */
 	fun rest(spec: SkeletonSpec?): Map<ParameterId, Float> =
@@ -94,8 +103,7 @@ internal object SkeletonPoseTool {
 			val canvas = rest[drawableId] ?: continue
 			val triangles = model.drawables.firstOrNull { it.id == drawableId }?.mesh?.indices ?: continue
 			val tree = trees.getValue(rootOf.getValue(bone.id))
-			val skinBones = SkeletonRig.skinBones(tree, parentOf)
-			out[drawableId] = tree to SkeletonWeights.skin(canvas, skinBones, triangles)
+			out[drawableId] = tree to io.github.psd2live.core.SkeletonManualWeights.weights(canvas, triangles, tree, parentOf, spec.manualWeights[id])
 		}
 		return out
 	}
