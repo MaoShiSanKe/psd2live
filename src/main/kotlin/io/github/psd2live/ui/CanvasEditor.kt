@@ -127,6 +127,12 @@ internal enum class SelectionStyle { BOX, LASSO }
 
 internal enum class GlueSubTool { BRUSH, WEIGHT, REMERGE }
 
+internal enum class SkeletonEditSubTool(val labelKey: String, val hintKey: String) {
+    EDIT("skeleton.tool.edit", "skeleton.edit.hint"),
+    NEW_BONE("skeleton.tool.new", "skeleton.tool.new.hint"),
+    EXTRUDE("skeleton.tool.extrude", "skeleton.tool.extrude.hint"),
+}
+
 internal enum class GlueWeightMode { BALANCE, A, B }
 
 /** Glue's sub-tools and weight sides with the labels every picker shows them under. */
@@ -440,6 +446,7 @@ internal class CanvasEditor(
 		private set
 	var selectedBoneId by mutableStateOf<String?>(null)
 		private set
+	var skeletonEditSubTool by mutableStateOf(SkeletonEditSubTool.EDIT)
 
 	/** The authored armature, enabled or not, once it has bones. */
 	val committedSkeleton: io.github.psd2live.core.SkeletonSpec?
@@ -661,11 +668,16 @@ internal class CanvasEditor(
 	fun addBone() {
 		val draft = skeletonDraft ?: return
 		val parent = draft.bone(selectedBoneId ?: return) ?: return
-		val id = generateSequence(1) { it + 1 }.map { "custom_$it" }.first { draft.bone(it) == null }
-		val bone = io.github.psd2live.core.SkeletonBone(id, io.github.psd2live.core.SkeletonNames.bone(io.github.psd2live.core.BoneRole.CUSTOM,
-			io.github.psd2live.core.Side.NONE), parent.id, io.github.psd2live.core.BoneRole.CUSTOM,
-			headX = parent.tailX, headY = parent.tailY, tailX = parent.tailX, tailY = parent.tailY + 60f)
-		skeletonDraft = draft.withBone(bone)
+		createBone(parent.tailX, parent.tailY, parent.tailX, parent.tailY + 60f, parent.id)
+	}
+
+	/** Creation stays in the edit draft, sharing its finish/cancel and history behavior. */
+	fun createBone(headX: Float, headY: Float, tailX: Float, tailY: Float, parentId: String? = null) {
+		val draft = skeletonDraft ?: return
+		val next = draft.withCustomBone(headX, headY, tailX, tailY, parentId)
+		if (next == draft) return
+		skeletonDraft = next
+		selectedBoneId = next.bones.last().id
 	}
 
 	fun removeSelectedBone() {

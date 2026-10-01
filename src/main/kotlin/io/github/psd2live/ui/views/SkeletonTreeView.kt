@@ -202,7 +202,8 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 				buildAnnotatedString {
 					withStyle(SpanStyle(color = colors.accent, fontWeight = FontWeight.SemiBold)) { append(tr("skeleton.tree.editing")) }
 					append(" · ")
-					append(tr("skeleton.panel.clickMesh"))
+					append(tr(if (editor.skeletonEditSubTool == io.github.psd2live.ui.SkeletonEditSubTool.EDIT)
+						"skeleton.panel.clickMesh" else editor.skeletonEditSubTool.hintKey))
 				},
 				color = colors.textMuted,
 				style = typography.caption.copy(fontSize = 10.sp),

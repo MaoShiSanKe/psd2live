@@ -25,6 +25,7 @@ import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
+import io.github.psd2live.ui.SkeletonEditSubTool
 import io.github.psd2live.ui.components.drawSingleBoneIcon
 import io.github.psd2live.ui.components.drawBoneIcon
 import org.umamo.runtime.model.VertexGroupKind
@@ -107,8 +108,9 @@ internal fun ToolIcon(
     color: Color,
     brushShape: BrushShape? = null,
     paintShape: PaintShape? = null,
+    skeletonEditSubTool: SkeletonEditSubTool? = null,
 ) {
-    Canvas(Modifier.size(18.dp)) { drawToolIcon(tool, color, brushShape, paintShape) }
+    Canvas(Modifier.size(18.dp)) { drawToolIcon(tool, color, brushShape, paintShape, skeletonEditSubTool) }
 }
 
 /** The hierarchy mode bar's icons, one per mode, on the same grid as the tools. */
@@ -132,11 +134,17 @@ internal fun GlueSubToolIcon(subTool: GlueSubTool, color: Color, size: Dp = 14.d
     Canvas(Modifier.size(size)) { drawGlueSubToolIcon(subTool, color) }
 }
 
+@Composable
+internal fun SkeletonEditSubToolIcon(subTool: SkeletonEditSubTool, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) { IconPen(this, color).skeletonEditSubTool(subTool) }
+}
+
 internal fun DrawScope.drawToolIcon(
     tool: CanvasTool,
     color: Color,
     brushShape: BrushShape? = null,
     paintShape: PaintShape? = null,
+    skeletonEditSubTool: SkeletonEditSubTool? = null,
 ) {
     val pen = IconPen(this, color)
     when (tool) {
@@ -147,7 +155,7 @@ internal fun DrawScope.drawToolIcon(
         CanvasTool.SMOOTH -> pen.smooth()
         CanvasTool.INFLATE -> pen.inflate()
         CanvasTool.SKELETON_POSE -> pen.skeletonPose()
-        CanvasTool.SKELETON_EDIT -> pen.skeletonEdit()
+        CanvasTool.SKELETON_EDIT -> pen.skeletonEditSubTool(skeletonEditSubTool ?: SkeletonEditSubTool.EDIT)
         CanvasTool.CREATE_WARP -> pen.warpLattice()
         CanvasTool.CREATE_ROTATION -> pen.rotationDeformer()
         CanvasTool.CREATE_DEFORM_PATH -> pen.deformPath()
@@ -394,6 +402,23 @@ private fun IconPen.inflate() {
 }
 
 // --- skeleton --------------------------------------------------------------------------------------------
+
+private fun IconPen.skeletonEditSubTool(subTool: SkeletonEditSubTool) {
+    when (subTool) {
+        SkeletonEditSubTool.EDIT -> skeletonEdit()
+        SkeletonEditSubTool.NEW_BONE -> {
+            scope.drawBoneIcon(p(3.5f, 13f), p(11f, 5.5f), color, stroke = 1.2f * s, headRadius = 1.6f * s)
+            line(11.5f, 13.5f, 16.5f, 13.5f)
+            line(14f, 11f, 14f, 16f)
+        }
+        SkeletonEditSubTool.EXTRUDE -> {
+            scope.drawBoneIcon(p(2.5f, 15.5f), p(8.5f, 9.5f), color, stroke = 1.2f * s, headRadius = 1.5f * s)
+            scope.drawBoneIcon(p(8.5f, 9.5f), p(14.5f, 3.5f), color, stroke = 1.2f * s, headRadius = 1.5f * s)
+            line(11.5f, 13.5f, 16f, 9f)
+            chevron(16f, 9f, 1f, -1f, 2.5f)
+        }
+    }
+}
 
 /** Pose: a bone swung about its head. */
 private fun IconPen.skeletonPose() {

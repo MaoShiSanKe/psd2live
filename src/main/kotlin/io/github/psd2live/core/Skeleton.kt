@@ -289,6 +289,18 @@ data class SkeletonSpec(
 		return copy(bones = if (index < 0) bones + bone else bones.toMutableList().also { it[index] = bone })
 	}
 
+	/** Creates an unbound custom bone; a parent makes its head connect to that parent's tail. */
+	fun withCustomBone(headX: Float, headY: Float, tailX: Float, tailY: Float, parentId: String? = null): SkeletonSpec {
+		require(listOf(headX, headY, tailX, tailY).all(Float::isFinite)) { "Bone coordinates must be finite" }
+		val parent = parentId?.let { requireNotNull(bone(it)) { "Bone parent not found: $it" } }
+		val x = parent?.tailX ?: headX
+		val y = parent?.tailY ?: headY
+		if (kotlin.math.hypot(tailX - x, tailY - y) < 0.001f) return this
+		val id = generateSequence(1) { it + 1 }.map { "custom_$it" }.first { bone(it) == null }
+		return withBone(SkeletonBone(id, SkeletonNames.bone(BoneRole.CUSTOM, Side.NONE), parentId, BoneRole.CUSTOM,
+			headX = x, headY = y, tailX = tailX, tailY = tailY))
+	}
+
 	/** Removes a bone and re-parents its children to the removed bone's parent. */
 	fun withoutBone(boneId: String): SkeletonSpec {
 		val bone = bone(boneId) ?: return this

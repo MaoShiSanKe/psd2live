@@ -52,6 +52,7 @@ import io.github.psd2live.ui.GLUE_SUB_TOOL_LABELS
 import io.github.psd2live.ui.GLUE_WEIGHT_MODE_LABELS
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.SelectionStyle
+import io.github.psd2live.ui.SkeletonEditSubTool
 import io.github.psd2live.ui.WarpAddTo
 import io.github.psd2live.ui.WarpSizeStrategy
 import io.github.psd2live.ui.components.CompactButton
@@ -1019,8 +1020,14 @@ internal fun ToolDetailsView(
                         style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
                         color = colors.textPrimary,
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        SkeletonEditSubTool.entries.forEach { sub ->
+                            CompactToggleChip(text = tr(sub.labelKey), selected = editor.skeletonEditSubTool == sub,
+                                onToggle = { editor.skeletonEditSubTool = sub }, height = 24.dp, modifier = Modifier.weight(1f))
+                        }
+                    }
                     Text(
-                        text = tr("skeleton.edit.hint"),
+                        text = tr(editor.skeletonEditSubTool.hintKey),
                         style = typography.caption.copy(fontSize = 10.5.sp),
                         color = colors.textMuted,
                     )

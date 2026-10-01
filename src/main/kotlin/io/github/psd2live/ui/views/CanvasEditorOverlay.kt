@@ -1252,22 +1252,56 @@ internal fun BoxScope.CanvasEditorOverlay(
             val maxDist = (kotlin.math.sqrt(lenSq) * 0.12f).coerceIn(6f, 18f)
             dist <= maxDist
         }?.id
-        var draggedJoint by remember { mutableStateOf<Pair<String, BoneEnd>?>(null) }
+        val subTool = editor.skeletonEditSubTool
+        var draggedJoint by remember(viewport, subTool) { mutableStateOf<Pair<String, BoneEnd>?>(null) }
+        var creationHead by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        var creationTail by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        var creationParent by remember(viewport, subTool) { mutableStateOf<String?>(null) }
+        fun clearCreation() { creationHead = null; creationTail = null; creationParent = null }
+        fun finishCreation() {
+            val head = creationHead
+            val tail = creationTail
+            if (head != null && tail != null && (tail - head).getDistance() >= 4f) {
+                editor.createBone(viewport.canvasX(head.x), viewport.canvasY(head.y),
+                    viewport.canvasX(tail.x), viewport.canvasY(tail.y), creationParent)
+            }
+            clearCreation()
+        }
         Canvas(Modifier.fillMaxSize()
-            .pointerInput(editor, viewport) {
+            .pointerInput(editor, viewport, subTool) {
                 detectDragGestures(
-                    onDragStart = { draggedJoint = hitJoint(it) },
-                    onDragEnd = { draggedJoint = null },
-                    onDragCancel = { draggedJoint = null },
+                    onDragStart = { pos ->
+                        when (subTool) {
+                            SkeletonEditSubTool.EDIT -> draggedJoint = hitJoint(pos)
+                            SkeletonEditSubTool.NEW_BONE -> { creationHead = pos; creationTail = pos }
+                            SkeletonEditSubTool.EXTRUDE -> {
+                                val selected = currentSkeleton.bone(editor.selectedBoneId ?: "")
+                                val id = selected?.takeIf { (screen(it.tailX, it.tailY) - pos).getDistance() <= 14f }?.id
+                                    ?: hitJoint(pos)?.first ?: hitBoneBody(pos) ?: selected?.id
+                                currentSkeleton.bone(id ?: "")?.let { parent ->
+                                    editor.selectBone(parent.id)
+                                    creationParent = parent.id
+                                    creationHead = screen(parent.tailX, parent.tailY)
+                                    creationTail = pos
+                                }
+                            }
+                        }
+                    },
+                    onDragEnd = { draggedJoint = null; finishCreation() },
+                    onDragCancel = { draggedJoint = null; clearCreation() },
                 ) { change, _ ->
-                    draggedJoint?.let { (id, end) ->
+                    if (creationHead != null) {
+                        creationTail = change.position
+                        change.consume()
+                    } else draggedJoint?.let { (id, end) ->
                         editor.moveBoneJoint(id, end, viewport.canvasX(change.position.x), viewport.canvasY(change.position.y))
                         change.consume()
                     }
                 }
             }
-            .pointerInput(editor, viewport) {
+            .pointerInput(editor, viewport, subTool) {
                 detectTapGestures { pos ->
+                    if (subTool == SkeletonEditSubTool.NEW_BONE) return@detectTapGestures
                     val joint = hitJoint(pos)
                     if (joint != null) {
                         editor.selectBone(joint.first)
@@ -1275,6 +1309,13 @@ internal fun BoxScope.CanvasEditorOverlay(
                         val body = hitBoneBody(pos)
                         if (body != null) {
                             editor.selectBone(body)
+                        } else if (subTool == SkeletonEditSubTool.EXTRUDE) {
+                            currentSkeleton.bone(editor.selectedBoneId ?: "")?.let { parent ->
+                                creationParent = parent.id
+                                creationHead = screen(parent.tailX, parent.tailY)
+                                creationTail = pos
+                                finishCreation()
+                            }
                         } else {
                             editor.pickSkeletonDrawable(pos, viewport)?.let(editor::bindDrawableToSelectedBone)
                         }
@@ -1321,6 +1362,9 @@ internal fun BoxScope.CanvasEditorOverlay(
                 drawCanvasBone(screen(bone.headX, bone.headY), screen(bone.tailX, bone.tailY), boneColor(bone.id), halo,
                     lit = editor.selectedBoneId == bone.id)
             }
+            creationHead?.let { head -> creationTail?.let { tail ->
+                drawCanvasBone(head, tail, colors.accent, halo, lit = true)
+            } }
         }
     }
 
@@ -2086,6 +2130,7 @@ private fun BoxScope.CanvasToolBar(
                     ).orEmpty(),
                     brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
                     paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
+                    skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
                     onClick = {
                         editor.activateTool(tool)
                         focus()
@@ -2126,6 +2171,29 @@ private fun BoxScope.CanvasToolBar(
                             },
                         )
                     }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = CanvasTool.SKELETON_EDIT in availableTools && editor.tool == CanvasTool.SKELETON_EDIT,
+            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).height(1.dp)
+                    .background(colors.border.copy(alpha = 0.45f)))
+                SkeletonEditSubTool.entries.forEach { sub ->
+                    ShapeItemRow(
+                        label = tr(sub.labelKey),
+                        isSelected = editor.skeletonEditSubTool == sub,
+                        isToolbarExpanded = animatedWidth > 42.dp,
+                        textAlpha = textAlpha,
+                        textOffset = textOffset,
+                        isBusy = editor.busy,
+                        icon = { color -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
+                        onClick = { editor.skeletonEditSubTool = sub; focus() },
+                    )
                 }
             }
         }
@@ -2261,6 +2329,7 @@ private fun ToolItemRow(
     keyLabel: String,
     brushShape: BrushShape? = null,
     paintShape: PaintShape? = null,
+    skeletonEditSubTool: SkeletonEditSubTool? = null,
     onClick: () -> Unit,
 ) {
     val colors = LocalToolColors.current
@@ -2303,6 +2372,7 @@ private fun ToolItemRow(
                 },
                 brushShape = brushShape,
                 paintShape = paintShape,
+                skeletonEditSubTool = skeletonEditSubTool,
             )
         }
 
