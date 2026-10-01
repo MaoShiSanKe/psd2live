@@ -201,6 +201,9 @@ data class RigKeyformCopyEdit(
  * included in Agent history snapshots and export configuration.
  */
 data class RigEditOverlay(
+	/** Embedded CMO3 baseline; imported rigs rebuild from this instead of generating a PSD rig. */
+	val importedCmo3: String? = null,
+	val importedLayerIds: Map<String, String> = emptyMap(),
 	/** Null means no skeleton has been authored yet; [SkeletonSpec.Disabled] is an explicit opt-out. */
 	val skeleton: SkeletonSpec? = null,
 	val parameterEdits: List<RigParameterEdit> = emptyList(),

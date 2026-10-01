@@ -9,7 +9,7 @@
 | Path | Content |
 | --- | --- |
 | `manifest.json` | Format, version, project UUID and SHA-256 inventory |
-| `source/original.psd` | Original imported source |
+| `source/original.psd` or `source/original.cmo3` | Original imported source |
 | `workspace.json` | Durable UI layout, camera, selection, parameter preview, annotations and logs |
 | `images/<hash>.png` | Log images |
 | `workspace/<projectId>/HEAD.json` | Current node and insertion order |

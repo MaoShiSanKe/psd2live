@@ -2243,9 +2243,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		val model = state.previewModel ?: return emptyList()
 		val key = listOf(model.analysis, model.rig.puppet.parameters, state.rigEdits.physicsEdits, state.rigEdits.disabledPhysicsIds, state.rigEdits.physicsOrder,
 			state.rigEdits.skeleton, state.rigEdits.swingEdits, state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly,
-			state.hairSimulationFront, state.hairSimulationBack)
+			state.hairSimulationFront, state.hairSimulationBack, state.rigEdits.importedCmo3)
 		physicsCatalogCache?.let { (k, groups) -> if (k == key) return groups }
-		val groups = PhysicsCatalog.groups(PhysicsGenerator.Presets.present(model.analysis, state.hairSimulationFront, state.hairSimulationBack),
+		val groups = PhysicsCatalog.groups(if (state.rigEdits.importedCmo3 != null) PhysicsGenerator.Presets(false, false, false)
+			else PhysicsGenerator.Presets.present(model.analysis, state.hairSimulationFront, state.hairSimulationBack),
 			PhysicsGenerator.Presets(state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly),
 			state.rigEdits, model.rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
 		physicsCatalogCache = key to groups
@@ -2263,7 +2264,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setPhysicsGroupEnabled(id: String, enabled: Boolean) {
-		if (id in PhysicsGenerator.presetIds) return setPresetPhysics(id, enabled)
+		if (physicsGroups().firstOrNull { it.id == id }?.origin == io.github.psd2live.core.PhysicsOrigin.PRESET) return setPresetPhysics(id, enabled)
 		updateState { current ->
 			val next = current.copy(rigEdits = PhysicsAuthoring.setEnabled(current.rigEdits, id, enabled))
 			if (enabled) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
@@ -4668,6 +4669,75 @@ class PSD2LiveViewModel : AutoCloseable {
 			}
 		}
 	}
+
+    /** Import an authored model without running PSD rig, skeleton, motion or physics presets. */
+    fun importCmo3(path: Path, mode: io.github.psd2live.core.Cmo3ImportMode) {
+        if (_state.value.isBusy || _state.value.projectSaving) return
+        flushEditorFields()
+        endSwing()
+        val before = _state.value
+        val replace = mode == io.github.psd2live.core.Cmo3ImportMode.REPLACE && before.previewModel != null
+        previewRebuildJob?.cancel()
+        activeWorkJob = scope.launch {
+            updateState { it.copy(isAnalyzing = true, isIndeterminateProgress = true, errorMessage = null,
+                statusText = tr("cmo3.importing")) }
+            try {
+                val preview = runInterruptible(Dispatchers.Default) {
+                    require(Files.isRegularFile(path)) { "CMO3 file does not exist: $path" }
+                    val (source, config) = io.github.psd2live.core.Cmo3ModelImport.prepare(
+                        Files.readAllBytes(path), mode, before.previewModel, before.buildConfig())
+                    pipeline.buildPreview(source, config)
+                }
+                val config = preview.config
+                val summary = tr("cmo3.imported", path.fileName.toString())
+                resetCanvasPaintSessions()
+                updateState { current -> current.copy(
+                    projectId = if (replace) before.projectId else java.util.UUID.randomUUID().toString(),
+                    projectSourceName = if (replace) before.projectSourceName else path.fileName.toString(),
+                    projectFile = if (replace) before.projectFile else null,
+                    inputPath = if (replace) before.inputPath else path.toAbsolutePath().normalize().toString(),
+                    loadedInputPath = if (replace) before.loadedInputPath else path.toAbsolutePath().normalize().toString(),
+                    loadedInputFileSignature = if (replace) before.loadedInputFileSignature else "${Files.size(path)}:${Files.getLastModifiedTime(path).toMillis()}",
+                    analysis = preview.analysis, previewModel = preview, previewModelDirty = false,
+                    rigEdits = config.rigEdits, runtimeTarget = config.runtimeTarget,
+                    meshOnly = config.meshOnly, generateDeformers = config.generateDeformers,
+                    mouthOutlineEnabled = config.mouthOutlineEnabled, generatePhysics = config.generatePhysics,
+                    physicsFrontHair = false, physicsBackHair = false, physicsEyeJelly = false,
+                    motionIdle = config.motionIdle, motionBlink = config.motionBlink, motionNod = config.motionNod,
+                    motionShake = config.motionShake, motionSkeleton = config.motionSkeleton,
+                    hairSimulationFront = if (replace) before.hairSimulationFront else false,
+                    hairSimulationBack = if (replace) before.hairSimulationBack else false,
+                    layerOverrides = config.layerOverrides, layerVisibility = config.layerVisibility,
+                    deletedLayerIds = config.deletedLayerIds, meshOverrides = config.meshOverrides,
+                    parentOverrides = config.parentOverrides, drawOrderOverrides = config.drawOrderOverrides,
+                    deformerVisibility = if (replace) before.deformerVisibility else emptyMap(),
+                    selectedLayerId = null, selectedLayerIds = emptySet(), selectedDeformerId = null,
+                    hoveredLayerId = null, hoveredDeformerId = null, isolatedLayerId = null, isolationSnapshot = null,
+                    clipMaskPickSourceId = null,
+                    parameterValues = preview.rig.puppet.parameters.associate { it.id to it.default },
+                    previewParameterValues = emptyMap(), lockedParameters = emptySet(),
+                    parameterSnapshots = if (replace) before.parameterSnapshots else emptyList(),
+                    animationEnabled = false, simulationPreviewId = null,
+                    historySnapshot = if (replace) before.historySnapshot else null,
+                    historyAnnotations = if (replace) before.historyAnnotations else emptyMap(),
+                    projectOpenGeneration = if (replace) before.projectOpenGeneration else before.projectOpenGeneration + 1,
+                    projectDirty = true, projectEditVersion = current.projectEditVersion + 1,
+                    showProjectLocationDialog = false, statusText = summary,
+                ) }
+                val workspace = agentWorkspace as? io.github.psd2live.agent.ViewModelAgentWorkspace
+                if (replace) workspace?.editorChanged(summary) else {
+                    workspace?.importedPsd(recoverLegacy = false)
+                    workspace?.let { updateHistorySnapshot(it.history()) }
+                }
+                refreshSdkSession(preview)
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                updateState { it.copy(errorMessage = failure.message ?: failure.toString(), statusText = tr("status.failed", failure.message)) }
+            } finally {
+                updateState { it.copy(isAnalyzing = false, isIndeterminateProgress = false) }
+            }
+        }
+    }
 
 	fun generateRig(targetOutputPath: String? = null) {
 		if (!targetOutputPath.isNullOrBlank()) {

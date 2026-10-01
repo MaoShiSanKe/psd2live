@@ -129,6 +129,8 @@ fun AppTitleBar(
 	sidebarToggles: List<SidebarToggle> = emptyList(),
 	onToggleSidebar: (SidebarSide) -> Unit = {},
 	onOpenPsd: () -> Unit,
+    onReplaceCmo3: () -> Unit = {},
+    onNewCmo3: () -> Unit = {},
     onOpenProject: () -> Unit,
     onSaveProject: () -> Unit,
     onSaveProjectAs: () -> Unit,
@@ -272,6 +274,10 @@ fun AppTitleBar(
 
 					AppMenuSeparator()
 
+					AppMenuHeader(tr("cmo3.menu"))
+					AppMenuItem(text = tr("cmo3.replace"), enabled = !isBusy, onClick = { activeMenu = null; onReplaceCmo3() })
+					AppMenuItem(text = tr("cmo3.new"), enabled = !isBusy, onClick = { activeMenu = null; onNewCmo3() })
+					AppMenuSeparator()
 					// 2. PSD 原画 (Source PSD)
 					AppMenuHeader(tr("menu.file.category.psd"))
 					AppMenuItem(

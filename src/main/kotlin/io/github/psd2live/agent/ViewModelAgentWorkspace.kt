@@ -434,12 +434,12 @@ class ViewModelAgentWorkspace(
     internal fun rememberProjectDirectory(path: Path) { projectDirectories.add(path) }
     internal suspend fun flushProjectPersistence() { persistenceScope.launch { }.join() }
 
-    internal suspend fun importedPsd() = editMutex.withLock {
+    internal suspend fun importedPsd(recoverLegacy: Boolean = true) = editMutex.withLock {
         val state = viewModel.state.value
         val id = state.projectId ?: error("Imported project has no identity")
         val store = AgentWorkspaceStore(storeRoot)
         val legacyId = projectId(state.copy(projectId = null))
-        val legacy = withContext(Dispatchers.IO) { store.loadHistory(legacyId) }
+        val legacy = if (recoverLegacy) withContext(Dispatchers.IO) { store.loadHistory(legacyId) } else null
         val migrated = legacy?.let { old ->
             WorkspaceHistoryTree.restore(old.selections().map { selection ->
                 val document = selection.snapshot.copy(settings = selection.snapshot.settings.ifEmpty { io.github.psd2live.project.WorkspaceStateCodec.settings(state) })

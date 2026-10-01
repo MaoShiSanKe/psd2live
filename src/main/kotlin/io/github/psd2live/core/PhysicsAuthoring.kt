@@ -27,7 +27,7 @@ object PhysicsAuthoring {
 
     /** Turns a non-preset group on or off; the presets are switched by their own settings. */
     fun setEnabled(overlay: RigEditOverlay, id: String, enabled: Boolean): RigEditOverlay {
-        require(id !in PhysicsGenerator.presetIds) { "Presets are switched by their settings" }
+        require(overlay.importedCmo3 != null || id !in PhysicsGenerator.presetIds) { "Presets are switched by their settings" }
         return overlay.copy(disabledPhysicsIds = if (enabled) overlay.disabledPhysicsIds - id else overlay.disabledPhysicsIds + id)
     }
 

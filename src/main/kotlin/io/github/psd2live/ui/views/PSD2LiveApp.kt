@@ -481,6 +481,16 @@ fun FrameWindowScope.PSD2LiveApp(
 						sidebarToggles = sidebarToggles,
 						onToggleSidebar = viewModel::toggleSidebar,
 						onOpenPsd = onOpenPsdAction,
+						onReplaceCmo3 = {
+                            NativeFilePicker.chooseCmo3File(window, state.inputPath)?.let {
+                                viewModel.importCmo3(Path.of(it), io.github.psd2live.core.Cmo3ImportMode.REPLACE)
+                            }
+                        },
+                        onNewCmo3 = {
+                            NativeFilePicker.chooseCmo3File(window, state.inputPath)?.let {
+                                viewModel.withSavedChanges { viewModel.importCmo3(Path.of(it), io.github.psd2live.core.Cmo3ImportMode.NEW) }
+                            }
+                        },
                         onOpenProject = onOpenProjectAction,
                         onSaveProject = { viewModel.requestProjectSave() },
                         onSaveProjectAs = { viewModel.requestProjectSave(true) },

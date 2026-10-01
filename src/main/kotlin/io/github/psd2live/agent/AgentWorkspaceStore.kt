@@ -388,6 +388,8 @@ internal class AgentWorkspaceStore(
 			}
 		}
 		putJsonObject("rigEdits") {
+			document.rigEdits.importedCmo3?.let { put("importedCmo3", it) }
+			put("importedLayerIds", JsonObject(document.rigEdits.importedLayerIds.mapValues { JsonPrimitive(it.value) }))
 			document.rigEdits.skeleton?.let { put("skeleton", it.toJson()) }
             put("assetLayers", JsonObject(document.rigEdits.assetLayers))
             putJsonArray("calibrationLayerIds") { document.rigEdits.calibrationLayerIds.sorted().forEach { add(JsonPrimitive(it)) } }
@@ -558,6 +560,8 @@ internal class AgentWorkspaceStore(
 		}
 		val rigEditObject = value.optionalObject("rigEdits")
 		val rigEdits = RigEditOverlay(
+			importedCmo3 = rigEditObject["importedCmo3"]?.jsonPrimitive?.contentOrNull,
+			importedLayerIds = rigEditObject.optionalObject("importedLayerIds").mapValues { it.value.jsonPrimitive.content },
 			// Existing projects predate armatures; keep their authored deformer hierarchy on load.
 			skeleton = rigEditObject["skeleton"]?.jsonObject?.let(SkeletonSpec::fromJson) ?: SkeletonSpec.Disabled,
             assetLayers = rigEditObject.optionalObject("assetLayers").mapValues { it.value.jsonObject },

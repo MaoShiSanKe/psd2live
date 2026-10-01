@@ -46,13 +46,21 @@ class PSD2LivePipeline {
 		source: SourceArt,
 		config: PipelineConfig = PipelineConfig(),
 		progress: ProgressListener = ProgressListener { _, _ -> },
-	): RigPreviewModel = buildPreview(CharacterAnalyzer.analyze(source, config), config, progress)
+	): RigPreviewModel = buildPreview(if (config.rigEdits.importedCmo3 != null) Cmo3ModelImport.analysis(source, config)
+		else CharacterAnalyzer.analyze(source, config), config, progress)
 
 	fun buildPreview(
 		analysis: PipelineAnalysis,
 		config: PipelineConfig = PipelineConfig(),
 		progress: ProgressListener = ProgressListener { _, _ -> },
 	): RigPreviewModel {
+        if (config.rigEdits.importedCmo3 != null) {
+            val importedAnalysis = Cmo3ModelImport.analysis(analysis.source, config)
+            val (atlas, baseRig) = Cmo3ModelImport.baseRig(analysis.source, config)
+            val rig = baseRig.withRigEdits(config.rigEdits)
+            val bundle = buildRuntimeBundle("psd2live-preview", importedAnalysis, atlas, rig, config).first
+            return RigPreviewModel(importedAnalysis, atlas, rig, config, bundle, baseRig)
+        }
         val effectiveAnalysis = MouthLipLayers.prepare(analysis, config)
         val atlas = AtlasPacker.pack(effectiveAnalysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
 		val baseRig = RigBuilder.build(effectiveAnalysis, atlas, config, meshCache)
@@ -96,6 +104,7 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 		progress: ProgressListener = ProgressListener { _, _ -> },
 	): RigPreviewModel {
+        if (config.rigEdits.importedCmo3 != null) return buildPreview(current.analysis, config, progress)
 		if (current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits, drawOrderOverrides = config.drawOrderOverrides,
 				hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack) == config) {
 			val baseRig = RigBuilder.build(current.analysis, current.atlas, config, meshCache)
@@ -253,6 +262,7 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 	): Boolean {
 		if (current == null) return false
+		if (current.config.rigEdits.importedCmo3 != config.rigEdits.importedCmo3) return false
 		if (current.analysis.source !== source && current.analysis.source != source) return false
 		if (current.config.rigEdits.skeleton != config.rigEdits.skeleton) return false
 		return current.config.copy(rigEdits = config.rigEdits) == config
@@ -284,7 +294,8 @@ class PSD2LivePipeline {
 		progress: ProgressListener = ProgressListener { _, _ -> },
 	): PipelineResult {
 		progress.update(tr("progress.readPsd"), 0.04)
-		val analysis = CharacterAnalyzer.analyze(source, config)
+		val analysis = if (config.rigEdits.importedCmo3 != null) Cmo3ModelImport.analysis(source, config)
+			else CharacterAnalyzer.analyze(source, config)
 		return exportAnalysis(
 			inputAnalysis = analysis,
 			baseName = safeBaseName(sourceName.substringBeforeLast('.')),
@@ -301,10 +312,12 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 		progress: ProgressListener,
 	): PipelineResult {
-        val analysis = MouthLipLayers.prepare(inputAnalysis, config)
+		val imported = config.rigEdits.importedCmo3 != null
+		val analysis = if (imported) inputAnalysis else MouthLipLayers.prepare(inputAnalysis, config)
 		progress.update(tr("progress.classify"), 0.18)
-		val atlas = AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
-		val baseRig = RigBuilder.build(analysis, atlas, config)
+		val importedBase = if (imported) Cmo3ModelImport.baseRig(analysis.source, config) else null
+		val atlas = importedBase?.first ?: AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+		val baseRig = importedBase?.second ?: RigBuilder.build(analysis, atlas, config)
 		val rig = baseRig.withRigEdits(config.rigEdits)
 		val generatedLabel = tr("validation.generated")
 		val neutralRig = RigIntegrityValidator.validateNeutralPose(generatedLabel, rig.puppet, rig.sourceBoundsByDrawableId)
@@ -315,7 +328,7 @@ class PSD2LivePipeline {
 		// Umamo's conversion preserves that mixed-space invariant exactly.
 		// Evaluating the mouth at MOUTH_OPEN=1.0f keeps the base mesh in its initial open state matching
 		// the authored PSD layer artwork and atlas UV coordinates, avoiding singular affine transforms in CMO3.
-		val exportPuppet = restMeshesToCanvasSpace(rig.puppet, mapOf(StandardParameters.MOUTH_OPEN to 1.0f))
+		val exportPuppet = restMeshesToCanvasSpace(rig.puppet, if (imported) emptyMap() else mapOf(StandardParameters.MOUTH_OPEN to 1.0f))
 		val outputRoot = outputDirectory.toAbsolutePath().normalize()
 		Files.createDirectories(outputRoot)
 		val files = mutableListOf<ExportedFile>()
@@ -383,7 +396,7 @@ class PSD2LivePipeline {
 		rig: BuiltRig,
 		config: PipelineConfig,
 	): Pair<CubismRuntimeBundle, org.umamo.interop.ExportReport> {
-		val exportPuppet = restMeshesToCanvasSpace(rig.puppet, mapOf(StandardParameters.MOUTH_OPEN to 1.0f))
+		val exportPuppet = restMeshesToCanvasSpace(rig.puppet, if (config.rigEdits.importedCmo3 != null) emptyMap() else mapOf(StandardParameters.MOUTH_OPEN to 1.0f))
 		val parameterIds = rig.puppet.parameters.mapTo(linkedSetOf()) { it.id.raw }
 		val textureFolder = "$baseName.${atlas.pages.firstOrNull()?.image?.width ?: config.atlasSize}"
 		val pages = atlas.pages.mapIndexed { index, page ->

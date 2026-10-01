@@ -33,7 +33,8 @@ internal class ProjectSession(private val viewModel: PSD2LiveViewModel, private 
                 val original = Path.of(state.loadedInputPath ?: state.inputPath)
                 require(Files.isRegularFile(original)) { "Original PSD is unavailable: $original" }
                 Files.createDirectories(root.resolve("source"))
-                Files.copy(original, root.resolve("source/original.psd"))
+                val sourceName = if (original.fileName.toString().endsWith(".cmo3", true)) "original.cmo3" else "original.psd"
+                Files.copy(original, root.resolve("source/$sourceName"))
                 val ui = WorkspaceStateCodec.encode(state).toMutableMap()
                 ui["logEntries"] = JsonArray(ui.getValue("logEntries").jsonArray.map { entry ->
                     val log = entry.jsonObject.toMutableMap()
@@ -80,8 +81,8 @@ internal class ProjectSession(private val viewModel: PSD2LiveViewModel, private 
                 JsonObject(log)
             })
             val state = WorkspaceStateCodec.decode(JsonObject(ui))
-            val source = root.resolve("source/original.psd")
-            require(Files.isRegularFile(source)) { "Project has no original PSD" }
+            val source = root.resolve("source/original.cmo3").takeIf(Files::isRegularFile) ?: root.resolve("source/original.psd")
+            require(Files.isRegularFile(source)) { "Project has no original source" }
             workspace.installProject(id, path.toAbsolutePath().normalize(), source, state, tree, store, expected)
             // The opened archive's private extraction is the session's recovery store and source PSD.
             workspace.rememberProjectDirectory(root)

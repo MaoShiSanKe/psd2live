@@ -9,7 +9,7 @@
 | 路径 | 内容 |
 | --- | --- |
 | `manifest.json` | 格式名、版本、工程 UUID、载荷 SHA-256 清单 |
-| `source/original.psd` | 原始导入源文件 |
+| `source/original.psd` 或 `source/original.cmo3` | 原始导入源文件 |
 | `workspace.json` | 布局、镜头、选择、参数预览、历史注释和日志等持久 UI 状态 |
 | `images/<hash>.png` | 日志图片 |
 | `workspace/<projectId>/HEAD.json` | 当前节点与节点顺序 |
