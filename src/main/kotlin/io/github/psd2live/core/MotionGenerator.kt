@@ -15,7 +15,7 @@ object MotionGenerator {
 	): String? = buildMotionJson(
 		duration = SkeletonMotions.IDLE_DURATION,
 		loop = true,
-		curves = SkeletonMotions.idle(skeleton, skeletonExclude).map { (id, points) -> curve(id, points) } + idleBlink(),
+		curves = SkeletonMotions.idle(skeleton, skeletonExclude).map(::curve) + idleBlink(),
 		availableParameterIds = availableParameterIds,
 	)
 
@@ -26,18 +26,18 @@ object MotionGenerator {
 	fun skeleton(tracks: List<MotionTrack>, availableParameterIds: Set<String>, loop: Boolean = false): String? {
 		if (tracks.isEmpty()) return null
 		return buildMotionJson(
-			duration = tracks.maxOf { it.second.last().first },
+			duration = tracks.maxOf { it.keys.last().time },
 			loop = loop,
-			curves = tracks.map { (id, points) -> curve(id, points) } + (if (loop) idleBlink() else emptyList()),
+			curves = tracks.map(::curve) + (if (loop) idleBlink() else emptyList()),
 			availableParameterIds = availableParameterIds,
 		)
 	}
 
 	/** One blink partway through the idle's cycle. */
-	private fun idleBlink(): List<Curve> = idleBlinkTracks.map { (id, points) -> curve(id, points) }
+	private fun idleBlink(): List<Curve> = idleBlinkTracks.map(::curve)
 
 	val idleBlinkTracks: List<MotionTrack> = listOf("ParamEyeLOpen", "ParamEyeROpen").map {
-		it to listOf(0f to 1f, 2.7f to 1f, 2.78f to 0f, 2.88f to 1f, SkeletonMotions.IDLE_DURATION to 1f)
+		MotionCurveMath.linear(it, listOf(0f to 1f, 2.7f to 1f, 2.78f to 0f, 2.88f to 1f, SkeletonMotions.IDLE_DURATION to 1f))
 	}
 
 	/**
@@ -60,7 +60,7 @@ object MotionGenerator {
 
 	/** The blink's tracks; the preview samples the same points the export writes. */
 	val blinkTracks: List<MotionTrack> = listOf("ParamEyeLOpen", "ParamEyeROpen").map {
-		it to listOf(0f to 1f, 0.35f to 1f, 0.45f to 0f, 0.58f to 1f, 1.2f to 1f)
+		MotionCurveMath.linear(it, listOf(0f to 1f, 0.35f to 1f, 0.45f to 0f, 0.58f to 1f, 1.2f to 1f))
 	}
 
 	fun nod(): String = nod(ALL_PARAMETERS)!!
@@ -68,10 +68,10 @@ object MotionGenerator {
 	fun nod(availableParameterIds: Set<String>): String? = oneShot(nodTracks, availableParameterIds)
 
 	val nodTracks: List<MotionTrack> = listOf(
-		"ParamAngleY" to listOf(0f to 0f, 0.55f to -18f, 1.25f to 6f, 2.0f to 0f),
-		"ParamBodyAngleY" to listOf(0f to 0f, 0.55f to -4f, 1.25f to 1.5f, 2.0f to 0f),
-		"ParamEyeLOpen" to listOf(0f to 1f, 0.55f to 0.75f, 1.25f to 1f, 2.0f to 1f),
-		"ParamEyeROpen" to listOf(0f to 1f, 0.55f to 0.75f, 1.25f to 1f, 2.0f to 1f),
+		MotionCurveMath.linear("ParamAngleY", listOf(0f to 0f, 0.55f to -18f, 1.25f to 6f, 2.0f to 0f)),
+		MotionCurveMath.linear("ParamBodyAngleY", listOf(0f to 0f, 0.55f to -4f, 1.25f to 1.5f, 2.0f to 0f)),
+		MotionCurveMath.linear("ParamEyeLOpen", listOf(0f to 1f, 0.55f to 0.75f, 1.25f to 1f, 2.0f to 1f)),
+		MotionCurveMath.linear("ParamEyeROpen", listOf(0f to 1f, 0.55f to 0.75f, 1.25f to 1f, 2.0f to 1f)),
 	)
 
 	fun shake(): String = shake(ALL_PARAMETERS)!!
@@ -79,15 +79,15 @@ object MotionGenerator {
 	fun shake(availableParameterIds: Set<String>): String? = oneShot(shakeTracks, availableParameterIds)
 
 	val shakeTracks: List<MotionTrack> = listOf(
-		"ParamAngleX" to listOf(0f to 0f, 0.4f to -20f, 0.9f to 20f, 1.4f to -8f, 2.0f to 0f),
-		"ParamBodyAngleX" to listOf(0f to 0f, 0.4f to -3f, 0.9f to 3f, 1.4f to -1.2f, 2.0f to 0f),
-		"ParamAngleZ" to listOf(0f to 0f, 0.4f to 2f, 0.9f to -2f, 1.4f to 1f, 2.0f to 0f),
+		MotionCurveMath.linear("ParamAngleX", listOf(0f to 0f, 0.4f to -20f, 0.9f to 20f, 1.4f to -8f, 2.0f to 0f)),
+		MotionCurveMath.linear("ParamBodyAngleX", listOf(0f to 0f, 0.4f to -3f, 0.9f to 3f, 1.4f to -1.2f, 2.0f to 0f)),
+		MotionCurveMath.linear("ParamAngleZ", listOf(0f to 0f, 0.4f to 2f, 0.9f to -2f, 1.4f to 1f, 2.0f to 0f)),
 	)
 
 	private fun oneShot(tracks: List<MotionTrack>, availableParameterIds: Set<String>): String? = buildMotionJson(
-		duration = tracks.maxOf { it.second.last().first },
+		duration = tracks.maxOf { it.keys.last().time },
 		loop = false,
-		curves = tracks.map { (id, points) -> curve(id, points) },
+		curves = tracks.map(::curve),
 		availableParameterIds = availableParameterIds,
 	)
 
@@ -129,11 +129,6 @@ object MotionGenerator {
 	}
 
 	private data class Curve(val parameter: String, val json: String, val pointCount: Int, val segmentCount: Int)
-
-	private fun curve(parameter: String, points: List<Pair<Float, Float>>): Curve {
-		require(points.size >= 2)
-		return curve(MotionCurve(parameter, points.map { (time, value) -> MotionKey(time, value, MotionInterpolation.LINEAR) }))
-	}
 
 	private fun curve(source: MotionCurve): Curve {
 		val first = source.keys.first()

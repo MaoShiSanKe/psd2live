@@ -286,7 +286,7 @@ private fun builtinEntries(viewModel: PSD2LiveViewModel, state: PSD2LiveState): 
 				fps = 30f,
 				fadeIn = 1f,
 				fadeOut = 1f,
-				curves = tracks.map { (id, points) -> id to (points.minOf { it.second } to points.maxOf { it.second }) },
+				curves = tracks.map { curve -> curve.parameterId to (curve.keys.minOf { it.value } to curve.keys.maxOf { it.value }) },
 			),
 			enabled = enabled,
 			onEnabledChange = setEnabled,

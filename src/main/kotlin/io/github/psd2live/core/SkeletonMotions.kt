@@ -2,11 +2,11 @@ package io.github.psd2live.core
 
 import org.umamo.runtime.model.ParameterId
 import kotlin.math.PI
-import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.sin
 
-/** A parameter id and the (time, value) points a motion drives it through, linear between points. */
-typealias MotionTrack = Pair<String, List<Pair<Float, Float>>>
+/** A parameter and the curve a motion drives it along. */
+typealias MotionTrack = MotionCurve
 
 /**
  * The body motions: the idle, and the one-shots written against the skeleton's poses.
@@ -15,19 +15,22 @@ typealias MotionTrack = Pair<String, List<Pair<Float, Float>>>
  * crouch or a tail swing does to each joint and each mesh, so a motion only says when. Besides the body
  * parameters the idle only drives the upper body's sway; nothing writes geometry, so preview and export
  * describe the same motion, and a limb's own parameter stays free for the hand, the pose tool or physics.
+ *
+ * Curves are sparse eased keys (see [MotionCurveMath]); the gestures that read the figure's own body are
+ * worked out by [MotionSynth].
  */
 object SkeletonMotions {
 	/** One loop of the idle. Six seconds is long enough that the phases do not read as a pattern. */
 	const val IDLE_DURATION = 6f
 	const val TAIL_SWING_DURATION = 3f
-	const val CROUCH_DURATION = 1.8f
-	const val WEIGHT_SHIFT_DURATION = 3f
-	const val SHY_DURATION = 3f
-	const val WAVE_DURATION = 2.4f
-	const val HEAD_TILT_DURATION = 2.2f
-	const val CHEER_DURATION = 1.8f
-	const val LEG_KICK_DURATION = 2.6f
-	const val SWAY_DURATION = 3f
+	const val CROUCH_DURATION = MotionSynth.CROUCH_DURATION
+	const val WEIGHT_SHIFT_DURATION = MotionSynth.WEIGHT_SHIFT_DURATION
+	const val SHY_DURATION = MotionSynth.SHY_DURATION
+	const val WAVE_DURATION = MotionSynth.WAVE_DURATION
+	const val HEAD_TILT_DURATION = MotionSynth.HEAD_TILT_DURATION
+	const val CHEER_DURATION = MotionSynth.CHEER_DURATION
+	const val LEG_KICK_DURATION = MotionSynth.LEG_KICK_DURATION
+	const val SWAY_DURATION = MotionSynth.SWAY_DURATION
 
 	/**
 	 * A preset written against the skeleton's poses. A [loop] preset is another idle: the export puts it in
@@ -48,9 +51,6 @@ object SkeletonMotions {
 		Preset("Sway", tracks = ::sway),
 		Preset("IdleCute", loop = true) { idleCute(it) },
 	)
-
-	/** Samples per cycle of a sampled sine; Cubism interpolates linearly between the points a motion carries. */
-	private const val SAMPLES_PER_CYCLE = 24
 
 	/**
 	 * The resting idle: the whole body on two clocks, a weight cycle and a breath twice as fast, every part
@@ -103,7 +103,7 @@ object SkeletonMotions {
 		val sway = SkeletonRig.limbBones(spec).filter { it.role == BoneRole.UPPER_BODY && it.parameterId !in exclude }.map { bone ->
 			weightCycle(bone.parameterId, amplitude = (UPPER_BODY_SWAY * bone.direction).coerceIn(bone.minAngle, bone.maxAngle), lag = 0.12f)
 		}
-		return (body + posed.clamped() + sway).distinctBy { it.first }
+		return (body + posed.clamped() + sway).distinctBy { it.parameterId }
 	}
 
 	/** Degrees the upper body sways with the weight in the idle, leaning back over the hips. */
@@ -117,108 +117,70 @@ object SkeletonMotions {
 		if (SkeletonPoses.tailSwing !in SkeletonPoses.available(spec)) emptyList()
 		else listOf(sine(SkeletonPoses.tailSwing.id.raw, amplitude = 1f, cycles = 3, phase = 0f, duration = TAIL_SWING_DURATION))
 
-	/** A dip and a recovery: the knees give and the arms swing out. */
-	fun crouch(spec: SkeletonSpec?): List<MotionTrack> = oneShotOf(spec, CROUCH_DURATION, needs = setOf(SkeletonPoses.crouch),
-		SkeletonPoses.crouch.id.raw to listOf(0f to 0f, 0.55f to 1f, 1.1f to 0.85f, CROUCH_DURATION to 0f),
-	)
+	/** A dip and a recovery, worked out for the figure (see [MotionSynth.crouch]). */
+	fun crouch(spec: SkeletonSpec?): List<MotionTrack> =
+		synthesized(spec, CROUCH_DURATION, setOf(SkeletonPoses.crouch), MotionSynth.crouch(spec))
 
-	/** A shift onto one foot and back, the hips leading and the torso and arms following. */
-	fun weightShift(spec: SkeletonSpec?): List<MotionTrack> = oneShotOf(spec, WEIGHT_SHIFT_DURATION, needs = setOf(SkeletonPoses.weight),
-		SkeletonPoses.weight.id.raw to listOf(0f to 0f, 0.9f to 1f, 2.1f to 1f, WEIGHT_SHIFT_DURATION to 0f),
-	)
+	/** A shift onto one foot and back (see [MotionSynth.weightShift]). */
+	fun weightShift(spec: SkeletonSpec?): List<MotionTrack> =
+		synthesized(spec, WEIGHT_SHIFT_DURATION, setOf(SkeletonPoses.weight), MotionSynth.weightShift(spec))
 
-	/** Knees drawn in and hands together, the head ducked and tilted, the body twisting side to side. */
-	fun shy(spec: SkeletonSpec?): List<MotionTrack> = oneShotOf(spec, SHY_DURATION, needs = setOf(SkeletonPoses.kneesIn, SkeletonPoses.arms),
-		SkeletonPoses.kneesIn.id.raw to listOf(0f to 0f, 0.5f to 0.8f, 2.3f to 0.8f, SHY_DURATION to 0f),
-		SkeletonPoses.arms.id.raw to listOf(0f to 0f, 0.6f to -1f, 2.3f to -1f, SHY_DURATION to 0f),
-		StandardParameters.ANGLE_Z.raw to listOf(0f to 0f, 0.6f to 8f, 1.5f to 6f, 2.3f to 8f, SHY_DURATION to 0f),
-		StandardParameters.ANGLE_Y.raw to listOf(0f to 0f, 0.6f to -8f, 2.3f to -8f, SHY_DURATION to 0f),
-		StandardParameters.BODY_X.raw to listOf(0f to 0f, 0.6f to 0f, 1f to 3f, 1.5f to -3f, 2f to 3f, 2.4f to 0f, SHY_DURATION to 0f),
-	)
+	/** Knees in, hands together, the head ducked and tilted away (see [MotionSynth.shy]). */
+	fun shy(spec: SkeletonSpec?): List<MotionTrack> =
+		synthesized(spec, SHY_DURATION, setOf(SkeletonPoses.kneesIn, SkeletonPoses.arms), MotionSynth.shy(spec))
 
-	/** The right hand raised beside the face and waved three times, the head turning toward the viewer. */
-	fun wave(spec: SkeletonSpec?): List<MotionTrack> = oneShotOf(spec, WAVE_DURATION, needs = setOf(SkeletonPoses.wave),
-		SkeletonPoses.wave.id.raw to listOf(0f to 0f, 0.35f to 1f, 2f to 1f, WAVE_DURATION to 0f),
-		SkeletonPoses.waveSwing.id.raw to listOf(0f to 0f, 0.35f to 0f, 0.6f to 1f, 0.85f to -1f, 1.1f to 1f, 1.35f to -1f,
-			1.6f to 1f, 1.85f to 0f, WAVE_DURATION to 0f),
-		// The weight goes onto the left foot, away from the raised arm.
-		SkeletonPoses.weight.id.raw to listOf(0f to 0f, 0.4f to 0.3f, 2f to 0.3f, WAVE_DURATION to 0f),
-		StandardParameters.ANGLE_Z.raw to listOf(0f to 0f, 0.4f to 5f, 2f to 5f, WAVE_DURATION to 0f),
-		StandardParameters.ANGLE_X.raw to listOf(0f to 0f, 0.4f to 6f, 2f to 6f, WAVE_DURATION to 0f),
-	)
+	/** A hand raised beside the face and waved, worked out for the figure (see [MotionSynth.wave]). */
+	fun wave(spec: SkeletonSpec?): List<MotionTrack> = synthesized(spec, WAVE_DURATION, emptySet(), MotionSynth.wave(spec))
 
-	/** A big head tilt held for a beat, the body and weight leaning with it and the hands drawn in a little. */
+	/** A big head tilt held for a beat (see [MotionSynth.headTilt]). */
 	fun headTilt(spec: SkeletonSpec?): List<MotionTrack> =
-		oneShotOf(spec, HEAD_TILT_DURATION, needs = setOf(SkeletonPoses.weight, SkeletonPoses.arms),
-			StandardParameters.ANGLE_Z.raw to listOf(0f to 0f, 0.45f to 12f, 1.6f to 12f, HEAD_TILT_DURATION to 0f),
-			StandardParameters.ANGLE_Y.raw to listOf(0f to 0f, 0.45f to 4f, 1.6f to 4f, HEAD_TILT_DURATION to 0f),
-			StandardParameters.BODY_Z.raw to listOf(0f to 0f, 0.55f to 3f, 1.6f to 3f, HEAD_TILT_DURATION to 0f),
-			SkeletonPoses.weight.id.raw to listOf(0f to 0f, 0.5f to 0.4f, 1.6f to 0.4f, HEAD_TILT_DURATION to 0f),
-			SkeletonPoses.arms.id.raw to listOf(0f to 0f, 0.5f to -0.4f, 1.6f to -0.4f, HEAD_TILT_DURATION to 0f),
-		)
+		synthesized(spec, HEAD_TILT_DURATION, setOf(SkeletonPoses.weight, SkeletonPoses.arms), MotionSynth.headTilt(spec))
 
-	/** Two little hops, each out of a dip, the arms thrown up on each, the head lifted and the tail and wings going. */
-	fun cheer(spec: SkeletonSpec?): List<MotionTrack> = oneShotOf(spec, CHEER_DURATION, needs = setOf(SkeletonPoses.crouch, SkeletonPoses.arms),
-		SkeletonPoses.crouch.id.raw to listOf(0f to 0f, 0.25f to 0.4f, 0.4f to 0f, 0.7f to 0f, 0.85f to 0.4f, 1f to 0f,
-			1.3f to 0f, 1.45f to 0.2f, CHEER_DURATION to 0f),
-		SkeletonPoses.hop.id.raw to listOf(0f to 0f, 0.4f to 0f, 0.55f to 0.4f, 0.7f to 0f, 1f to 0f, 1.15f to 0.4f, 1.3f to 0f,
-			CHEER_DURATION to 0f),
-		SkeletonPoses.arms.id.raw to listOf(0f to 0f, 0.25f to -0.2f, 0.55f to 1f, 0.8f to 0.6f, 1.05f to 1f, 1.4f to 1f, CHEER_DURATION to 0f),
-		StandardParameters.ANGLE_Y.raw to listOf(0f to 0f, 0.25f to -3f, 0.55f to 10f, 1.4f to 10f, CHEER_DURATION to 0f),
-		StandardParameters.BODY_Y.raw to listOf(0f to 0f, 0.25f to -3f, 0.55f to 3f, 0.75f to -3f, 1.05f to 3f, CHEER_DURATION to 0f),
-		StandardParameters.BREATH.raw to listOf(0f to 0f, 0.55f to 1f, 1.2f to 1f, CHEER_DURATION to 0f),
-		sine(SkeletonPoses.tailSwing.id.raw, amplitude = 0.8f, cycles = 3, phase = 0f, duration = CHEER_DURATION),
-		sine(SkeletonPoses.wingFlap.id.raw, amplitude = 1f, cycles = 4, phase = 0f, duration = CHEER_DURATION),
-	)
+	/** Two little hops with the arms thrown up (see [MotionSynth.cheer]), the tail and the wings going. */
+	fun cheer(spec: SkeletonSpec?): List<MotionTrack> = synthesized(spec, CHEER_DURATION, setOf(SkeletonPoses.crouch, SkeletonPoses.arms),
+		MotionSynth.cheer(spec) + listOf(
+			sine(SkeletonPoses.tailSwing.id.raw, amplitude = 0.8f, cycles = 3, phase = 0f, duration = CHEER_DURATION),
+			sine(SkeletonPoses.wingFlap.id.raw, amplitude = 1f, cycles = 4, phase = 0f, duration = CHEER_DURATION),
+		))
 
-	/** The weight onto the left foot, then the right foot kicked up behind and held, the arms out for balance. */
-	fun legKick(spec: SkeletonSpec?): List<MotionTrack> = oneShotOf(spec, LEG_KICK_DURATION, needs = setOf(SkeletonPoses.legLift),
-		SkeletonPoses.weight.id.raw to listOf(0f to 0f, 0.5f to 0.8f, 2f to 0.8f, LEG_KICK_DURATION to 0f),
-		SkeletonPoses.legLift.id.raw to listOf(0f to 0f, 0.4f to 0f, 0.8f to -1f, 1.8f to -1f, 2.2f to 0f, LEG_KICK_DURATION to 0f),
-		SkeletonPoses.arms.id.raw to listOf(0f to 0f, 0.8f to 0.3f, 1.8f to 0.3f, 2.4f to 0f, LEG_KICK_DURATION to 0f),
-		StandardParameters.ANGLE_Z.raw to listOf(0f to 0f, 0.8f to -6f, 1.8f to -6f, 2.4f to 0f, LEG_KICK_DURATION to 0f),
-		StandardParameters.BODY_Z.raw to listOf(0f to 0f, 0.6f to 2f, 2f to 2f, LEG_KICK_DURATION to 0f),
-	)
+	/** One foot kicked up behind, the arms out for balance (see [MotionSynth.legKick]). */
+	fun legKick(spec: SkeletonSpec?): List<MotionTrack> =
+		synthesized(spec, LEG_KICK_DURATION, setOf(SkeletonPoses.legLift), MotionSynth.legKick(spec))
 
-	/** A happy side-to-side sway, bigger than the idle's, every part trailing the hips; it fades in and out. */
-	fun sway(spec: SkeletonSpec?): List<MotionTrack> {
-		fun swing(id: String, amplitude: Float, lag: Float) = faded(id, amplitude, cycles = 2, lag = lag, duration = SWAY_DURATION)
-		return oneShotOf(spec, SWAY_DURATION, needs = setOf(SkeletonPoses.weight, SkeletonPoses.armSway),
-			swing(SkeletonPoses.weight.id.raw, amplitude = 0.8f, lag = 0f),
-			swing(StandardParameters.BODY_Z.raw, amplitude = -2f, lag = 0.08f),
-			swing(StandardParameters.ANGLE_Z.raw, amplitude = 4f, lag = 0.15f),
-			swing(StandardParameters.ANGLE_X.raw, amplitude = 4f, lag = 0.2f),
-			swing(SkeletonPoses.armSway.id.raw, amplitude = 1f, lag = 0.2f),
-			swing(SkeletonPoses.tailSwing.id.raw, amplitude = 0.6f, lag = 0.3f),
-		)
-	}
+	/** A happy side-to-side sway, bigger than the idle's (see [MotionSynth.sway]). */
+	fun sway(spec: SkeletonSpec?): List<MotionTrack> =
+		synthesized(spec, SWAY_DURATION, setOf(SkeletonPoses.weight, SkeletonPoses.armSway), MotionSynth.sway(spec))
+
+	/** The [crouch] and the like: [tracks] played as a one-shot, nothing when the synthesizer had nothing to move. */
+	private fun synthesized(spec: SkeletonSpec?, duration: Float, needs: Set<SkeletonPose>, tracks: List<MotionTrack>): List<MotionTrack> =
+		if (tracks.isEmpty()) emptyList() else oneShotOf(spec, duration, needs, *tracks.toTypedArray())
 
 	/**
-	 * The idle standing knock-kneed with the hands drawn in. The knees hold [SkeletonPoses.kneesIn], so the
-	 * weight cycle - another leg pose - drops out and the body tracks alone carry the sway.
+	 * The idle standing knock-kneed with the hands drawn a little together (see [MotionSynth.tucked]). The
+	 * knees hold [SkeletonPoses.kneesIn], so the weight cycle - another leg pose - drops out and the body
+	 * tracks alone carry the sway.
 	 */
 	fun idleCute(spec: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> {
 		val available = SkeletonPoses.available(spec)
 		if (SkeletonPoses.kneesIn !in available) return emptyList()
-		val held = available.filter { it.legs }.associateWith { if (it == SkeletonPoses.kneesIn) 0.3f else 0f } +
-			available.filter { it == SkeletonPoses.arms }.associateWith { -0.3f }
-		val ids = held.keys.mapTo(HashSet()) { it.id.raw }
-		return played(spec, idleTracks(spec, exclude).filterNot { it.first in ids } +
-			held.map { (pose, value) -> pose.id.raw to listOf(0f to value, IDLE_DURATION to value) })
+		val held = available.filter { it.legs }.associate { it.id.raw to if (it == SkeletonPoses.kneesIn) 0.3f else 0f } +
+			MotionSynth.tucked(spec, 0.3f).filterKeys { it !in exclude }
+		return played(spec, idleTracks(spec, exclude).filterNot { it.parameterId in held } +
+			held.map { (id, value) -> MotionCurveMath.linear(id, listOf(0f to value, IDLE_DURATION to value)) })
 	}
 
 	/**
-	 * A one-shot of [tracks] across [duration], empty unless [spec] can play one of the poses it [needs].
-	 * Tracks of poses [spec] cannot play are dropped, and every leg pose the motion leaves out is held at
-	 * rest: the leg poses only add, so two of them never play together.
+	 * A one-shot of [tracks] across [duration], empty unless [spec] can play one of the poses it [needs]
+	 * (any, when it needs none). Tracks of poses [spec] cannot play are dropped, and every leg pose the
+	 * motion leaves out is held at rest: the leg poses only add, so two of them never play together.
 	 */
 	private fun oneShotOf(spec: SkeletonSpec?, duration: Float, needs: Set<SkeletonPose>, vararg tracks: MotionTrack): List<MotionTrack> {
 		val available = SkeletonPoses.available(spec)
-		if (available.none { it in needs }) return emptyList()
+		if (needs.isNotEmpty() && available.none { it in needs }) return emptyList()
 		val playable = available.mapTo(HashSet()) { it.id.raw }
-		val kept = tracks.filter { (id) -> SkeletonPoses.all.none { it.id.raw == id } || id in playable }
-		val held = available.filter { pose -> pose.legs && kept.none { it.first == pose.id.raw } }
-			.map { it.id.raw to listOf(0f to 0f, duration to 0f) }
+		val kept = tracks.filter { track -> SkeletonPoses.all.none { it.id.raw == track.parameterId } || track.parameterId in playable }
+		val held = available.filter { pose -> pose.legs && kept.none { it.parameterId == pose.id.raw } }
+			.map { MotionCurveMath.linear(it.id.raw, listOf(0f to 0f, duration to 0f)) }
 		return played(spec, (kept + held).clamped())
 	}
 
@@ -226,46 +188,82 @@ object SkeletonMotions {
 	 * [tracks] as the rig plays them: every gesture, and the limb turns of a rig pose, moved onto the
 	 * bones' own parameters and added to whatever the motion already writes there (see [SkeletonPoses]).
 	 *
-	 * Every track is linear between its points and every pose between its keys, so the bone tracks take a
-	 * point wherever a track has one or a pose passes one of its keys, and follow the poses exactly.
+	 * Each pose turns a bone linearly between two of its keys, and every segment of a generated curve is a
+	 * cubic in time, so between the keys of every track and the moments a pose crosses one of its keys,
+	 * each bone curve is a cubic too. A bone takes a key at each of those times, with the value and the
+	 * slopes either side that the poses and its own track give it there, and follows them exactly.
 	 */
 	internal fun played(spec: SkeletonSpec?, tracks: List<MotionTrack>): List<MotionTrack> {
 		if (spec?.enabled != true) return tracks
-		val poses = tracks.mapNotNull { (id, points) -> SkeletonPoses.all.firstOrNull { it.id.raw == id }?.let { it to points } }
+		val poses = tracks.mapNotNull { track -> SkeletonPoses.all.firstOrNull { it.id.raw == track.parameterId }?.let { it to track } }
 		val gestures = poses.filterNot { it.first.rig }.mapTo(HashSet()) { it.first.id.raw }
 		val bones = SkeletonRig.limbBones(spec)
 		val parameterOf = bones.associate { it.id to it.parameterId }
-		val reached = poses.flatMap { (pose) -> pose.keys.flatMap { SkeletonPoses.gestureTurns(spec, pose, it).keys } }
-			.mapNotNullTo(LinkedHashSet()) { parameterOf[it] }
-		val direct = tracks.filter { it.first in reached }.toMap()
-		val times = sortedSetOf<Float>()
-		for ((pose, points) in poses) {
-			for ((time) in points) times += time
-			for ((a, b) in points.zipWithNext()) for (key in pose.keys) {
-				if ((key - a.second) * (key - b.second) < 0f) times += a.first + (key - a.second) / (b.second - a.second) * (b.first - a.first)
-			}
+		// The bone parameters each pose turns; a pose held at rest turns none.
+		val reachedBy = poses.associate { (pose, curve) ->
+			pose to if (curve.keys.all { it.value == 0f }) emptySet()
+			else pose.keys.flatMap { SkeletonPoses.gestureTurns(spec, pose, it).keys }.mapNotNullTo(HashSet()) { parameterOf[it] }
 		}
-		for (points in direct.values) for ((time) in points) times += time
-		val turned = reached.associateWith { ArrayList<Pair<Float, Float>>() }
-		for (time in times) {
-			val sum = HashMap<String, Float>()
-			for ((id, points) in direct) sum[id] = sample(points, time.toDouble(), loop = false)
-			for ((pose, points) in poses) {
-				val value = sample(points, time.toDouble(), loop = false)
-				for ((boneId, turn) in SkeletonPoses.turnsAt(spec, pose, value, SkeletonPoses::gestureTurns)) {
-					val id = parameterOf[boneId] ?: continue
-					sum[id] = (sum[id] ?: 0f) + turn
+		val reached = poses.flatMapTo(LinkedHashSet()) { (pose) ->
+			pose.keys.flatMap { SkeletonPoses.gestureTurns(spec, pose, it).keys }.mapNotNull { parameterOf[it] }
+		}
+		val direct = tracks.filter { it.parameterId in reached }.associateBy { it.parameterId }
+
+		// Bone parameter turn per unit of the pose around [value], by parameter; none past the pose's ends.
+		fun gain(pose: SkeletonPose, value: Float): Map<String, Float> {
+			if (value <= pose.keys.first() || value >= pose.keys.last()) return emptyMap()
+			val (a, b) = SkeletonPoses.bracket(pose, value).map { it.first }
+			if (b <= a) return emptyMap()
+			val at = SkeletonPoses.gestureTurns(spec, pose, a)
+			val bt = SkeletonPoses.gestureTurns(spec, pose, b)
+			return (at.keys + bt.keys).mapNotNull { boneId ->
+				parameterOf[boneId]?.let { it to ((bt[boneId] ?: 0f) - (at[boneId] ?: 0f)) / (b - a) }
+			}.toMap()
+		}
+
+		val turned = reached.mapNotNull { id ->
+			val moving = poses.filter { id in reachedBy.getValue(it.first) }
+			val own = direct[id]
+			// The bone's curve is a cubic between its own keys and the keys and key crossings of the poses that turn it.
+			val raw = sortedSetOf<Float>()
+			own?.keys?.forEach { raw += it.time }
+			for ((pose, curve) in moving) {
+				for (key in curve.keys) raw += key.time
+				for (level in pose.keys) raw += MotionCurveMath.crossings(curve, level)
+			}
+			if (raw.isEmpty()) return@mapNotNull null
+			val times = ArrayList<Float>()
+			for (time in raw) if (times.isEmpty() || time - times.last() > MotionClips.TIME_EPSILON) times += time
+			val knots = times.mapIndexed { i, time ->
+				var value = 0f
+				var slopeIn = 0f
+				var slopeOut = 0f
+				own?.let {
+					value += MotionCurveMath.value(it, time)
+					slopeIn += MotionCurveMath.slope(it, time, after = false)
+					slopeOut += MotionCurveMath.slope(it, time, after = true)
 				}
+				for ((pose, curve) in moving) {
+					val turns = SkeletonPoses.turnsAt(spec, pose, MotionCurveMath.value(curve, time), SkeletonPoses::gestureTurns)
+					for ((boneId, turn) in turns) if (parameterOf[boneId] == id) value += turn
+					if (i > 0) {
+						val mid = MotionCurveMath.value(curve, (times[i - 1] + time) / 2f)
+						slopeIn += (gain(pose, mid)[id] ?: 0f) * MotionCurveMath.slope(curve, time, after = false)
+					}
+					if (i < times.lastIndex) {
+						val mid = MotionCurveMath.value(curve, (time + times[i + 1]) / 2f)
+						slopeOut += (gain(pose, mid)[id] ?: 0f) * MotionCurveMath.slope(curve, time, after = true)
+					}
+				}
+				MotionCurveMath.Knot(time, value, slopeIn, slopeOut)
 			}
-			for ((id, points) in turned) {
-				val bone = bones.first { it.parameterId == id }
-				points += time to (sum[id] ?: 0f).coerceIn(bone.minAngle, bone.maxAngle)
-			}
+			val bone = bones.first { it.parameterId == id }
+			MotionCurveMath.clamped(MotionCurveMath.curve(id, knots), bone.minAngle, bone.maxAngle)
 		}
-		return tracks.filterNot { (id) -> id in gestures || id in reached } + turned.map { (id, points) -> id to points.toList() }
+		return tracks.filterNot { it.parameterId in gestures || it.parameterId in reached } + turned
 	}
 
-	private class PreparedIdle(val spec: SkeletonSpec?, val tracks: List<Pair<ParameterId, List<Pair<Float, Float>>>>)
+	private class PreparedIdle(val spec: SkeletonSpec?, val tracks: List<MotionTrack>)
 
 	@Volatile private var preparedIdle: PreparedIdle? = null
 
@@ -280,38 +278,27 @@ object SkeletonMotions {
 		val tracks = if (cached != null && cached.spec === spec) cached.tracks else synchronized(this) {
 			val current = preparedIdle
 			if (current != null && current.spec === spec) current.tracks else
-				idle(spec).map { (id, points) -> ParameterId(id) to points }.also {
-					preparedIdle = PreparedIdle(spec, it)
-				}
+				idle(spec).also { preparedIdle = PreparedIdle(spec, it) }
 		}
-		return tracks.associate { (id, points) -> id to sample(points, elapsed, loop = true) }
+		return tracks.associate { ParameterId(it.parameterId) to sample(it, elapsed, loop = true) }
 	}
 
 	/** The values a one-shot motion holds [elapsed] seconds in; null once it has finished. */
 	fun oneShot(tracks: List<MotionTrack>, elapsed: Double): Map<ParameterId, Float>? {
-		val duration = tracks.maxOfOrNull { it.second.last().first } ?: return null
+		val duration = tracks.maxOfOrNull { it.keys.last().time } ?: return null
 		if (elapsed > duration) return null
-		return tracks.associate { (id, points) -> ParameterId(id) to sample(points, elapsed, loop = false) }
+		return tracks.associate { ParameterId(it.parameterId) to sample(it, elapsed, loop = false) }
 	}
 
-	/** Every point kept inside the range of the pose it drives. */
-	private fun List<MotionTrack>.clamped(): List<MotionTrack> = map { (id, points) ->
-		val pose = SkeletonPoses.all.firstOrNull { it.id.raw == id } ?: return@map id to points
-		id to points.map { (time, value) -> time to value.coerceIn(pose.min, pose.max) }
-	}
-
-	/** A [sine] faded in and out over the first and last fifth of [duration], so a one-shot starts and ends at rest. */
-	private fun faded(parameterId: String, amplitude: Float, cycles: Int, lag: Float, duration: Float): MotionTrack {
-		val (id, points) = sine(parameterId, amplitude, cycles, phase = -lag * TAU, duration = duration)
-		return id to points.map { (time, value) ->
-			val edge = (minOf(time, duration - time) / (duration * 0.2f)).coerceIn(0f, 1f)
-			time to value * edge * edge * (3f - 2f * edge)
-		}
+	/** Every key inside the range of the pose it drives. */
+	private fun List<MotionTrack>.clamped(): List<MotionTrack> = map { track ->
+		val pose = SkeletonPoses.all.firstOrNull { it.id.raw == track.parameterId } ?: return@map track
+		MotionCurveMath.clamped(track, pose.min, pose.max)
 	}
 
 	/**
-	 * A sine sampled into linear points whose loop closes exactly: [cycles] whole cycles across [duration]
-	 * means the last point repeats the first, so a looping motion has no seam.
+	 * A sine as eased keys four to a cycle, each with the sine's own slope, so the cubic between them
+	 * follows it to a fraction of a percent. [cycles] whole cycles across [duration] close the loop exactly.
 	 */
 	private fun sine(
 		parameterId: String,
@@ -321,28 +308,20 @@ object SkeletonMotions {
 		bias: Float = 0f,
 		duration: Float = IDLE_DURATION,
 	): MotionTrack {
-		val samples = (SAMPLES_PER_CYCLE * cycles).coerceAtLeast(4)
-		val points = (0..samples).map { index ->
-			val time = duration * index / samples
-			val angle = 2.0 * PI * cycles * index / samples + phase
-			time to (bias + amplitude * sin(angle).toFloat())
+		val count = (4 * cycles).coerceAtLeast(4)
+		val omega = 2.0 * PI * cycles / duration
+		val knots = (0..count).map { index ->
+			val time = duration * index / count
+			val angle = omega * time + phase
+			MotionCurveMath.Knot(time, bias + amplitude * sin(angle).toFloat(), (amplitude * omega * cos(angle)).toFloat())
 		}
-		return parameterId to points
+		return MotionCurveMath.curve(parameterId, knots)
 	}
 
-	/** The value [points] holds at [elapsed] seconds, interpolating linearly and optionally looping. */
-	internal fun sample(points: List<Pair<Float, Float>>, elapsed: Double, loop: Boolean): Float {
-		if (points.isEmpty()) return 0f
-		if (points.size == 1) return points.single().second
-		val duration = points.last().first
-		if (duration <= 1e-6f) return points.first().second
-		val time = if (loop) (elapsed % duration).toFloat().let { if (it < 0f) it + duration else it }
-		else elapsed.toFloat().coerceIn(0f, duration)
-		val next = points.indexOfFirst { it.first >= time }.takeIf { it > 0 } ?: return points.first().second
-		val (startTime, startValue) = points[next - 1]
-		val (endTime, endValue) = points[next]
-		val span = endTime - startTime
-		if (abs(span) < 1e-6f) return endValue
-		return startValue + (endValue - startValue) * ((time - startTime) / span)
+	/** The value [curve] holds at [elapsed] seconds, optionally looping over its length. */
+	internal fun sample(curve: MotionTrack, elapsed: Double, loop: Boolean): Float {
+		val duration = curve.keys.last().time
+		return if (loop) MotionCurveMath.looped(curve, elapsed, duration)
+		else MotionCurveMath.value(curve, elapsed.toFloat().coerceIn(0f, duration))
 	}
 }

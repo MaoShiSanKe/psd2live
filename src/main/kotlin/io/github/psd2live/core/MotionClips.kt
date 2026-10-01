@@ -113,29 +113,27 @@ object MotionClips {
 
 	fun builtinDuration(name: String, tracks: List<MotionTrack>): Float =
 		if (name.equals("Idle", ignoreCase = true)) SkeletonMotions.IDLE_DURATION
-		else tracks.maxOfOrNull { it.second.last().first } ?: 0f
+		else tracks.maxOfOrNull { it.keys.last().time } ?: 0f
 
 	/** The override of [builtin] in [clips], if the user edited it. */
 	fun overrideOf(clips: List<MotionClip>, builtin: String): MotionClip? =
 		clips.firstOrNull { it.builtin.equals(builtin, ignoreCase = true) }
 
-	/** Linear keys through [tracks]; how a generated motion becomes an editable clip. */
+	/** The keys of [tracks] as they are; how a generated motion becomes an editable clip. */
 	fun fromTracks(
 		id: String,
 		name: String,
 		builtin: String?,
 		loop: Boolean,
 		tracks: List<MotionTrack>,
-		duration: Float = tracks.maxOfOrNull { it.second.last().first } ?: 2f,
+		duration: Float = tracks.maxOfOrNull { it.keys.last().time } ?: 2f,
 	): MotionClip = MotionClip(
 		id = id,
 		name = name,
 		builtin = builtin,
 		loop = loop,
 		duration = duration.takeIf { it > 0f } ?: 2f,
-		curves = tracks.distinctBy { it.first }.map { (parameter, points) ->
-			MotionCurve(parameter, normalized(points.map { (time, value) -> MotionKey(time, value, MotionInterpolation.LINEAR) }))
-		},
+		curves = tracks.distinctBy { it.parameterId }.map { it.copy(keys = normalized(it.keys)) },
 	)
 
 	/** Keys sorted by time, a later key replacing an earlier one at the same time. */

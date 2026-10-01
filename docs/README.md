@@ -40,6 +40,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | 运行时与导出边界 | 数据流、格式支持范围、交付检查 | [打开](zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) | 中文 | 中文 |
 | 网格拓扑与图层拆分 | 自适应网格生成、填充算法、两种拆分 | [打开](zh/spec/MESH_TOPOLOGY_AND_SPLIT.md) | 中文 | 中文 |
 | 绘画系统 | 绘画会话、组件分工、提交与网格迁移 | [打开](zh/spec/PAINT_SYSTEM_ARCHITECTURE_AND_PRD.md) | 中文 | 中文 |
+| 默认动画重构计划 | 解剖模型、动作合成、待机与跟踪的分阶段计划和进度 | [打开](zh/spec/DEFAULT_ANIMATION_PRESET_REFACTOR_PLAN.md) | 中文 | 中文 |
 
 ## Agent（MCP）
 

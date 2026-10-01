@@ -64,10 +64,10 @@ class MotionClipsTest {
 	@Test fun convertedTracksSampleLikeTheGeneratedMotion() {
 		val clip = MotionClips.fromTracks("c", "Nod", "Nod", loop = false, tracks = MotionGenerator.nodTracks)
 		for (time in listOf(0f, 0.3f, 0.55f, 1f, 1.7f, 2f)) {
-			for ((id, points) in MotionGenerator.nodTracks) {
+			for (curve in MotionGenerator.nodTracks) {
 				assertEquals(
-					SkeletonMotions.sample(points, time.toDouble(), loop = false),
-					MotionClips.sampleAll(clip, time.toDouble()).getValue(org.umamo.runtime.model.ParameterId(id)),
+					SkeletonMotions.sample(curve, time.toDouble(), loop = false),
+					MotionClips.sampleAll(clip, time.toDouble()).getValue(org.umamo.runtime.model.ParameterId(curve.parameterId)),
 					1e-4f,
 				)
 			}
@@ -159,7 +159,7 @@ class MotionClipsTest {
 	@Test fun builtinTracksMatchWhatTheExportWrites() {
 		assertEquals(MotionGenerator.blinkTracks, MotionClips.builtinTracks("Blink", null))
 		val idle = MotionClips.builtinTracks("Idle", null)
-		assertTrue(idle.any { it.first == "ParamEyeLOpen" })
+		assertTrue(idle.any { it.parameterId == "ParamEyeLOpen" })
 		assertEquals(SkeletonMotions.IDLE_DURATION, MotionClips.builtinDuration("Idle", idle))
 		assertTrue(MotionClips.isLoopBuiltin("idle"))
 		assertTrue(MotionClips.isLoopBuiltin("IdleCute"))
