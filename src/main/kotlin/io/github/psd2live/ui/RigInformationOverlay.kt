@@ -1,6 +1,7 @@
 package io.github.psd2live.ui
 
 import androidx.compose.ui.geometry.Offset
+import org.umamo.render.eval.DeformPathMetrics
 import io.github.psd2live.core.DeformPathTools
 import io.github.psd2live.core.RigGeometryTools
 import org.umamo.runtime.model.*
@@ -364,38 +365,28 @@ internal object RigInformationOverlay {
                 g.draw(curvePath)
             }
 
-            val localBounds = RigGeometryTools.bounds(mesh.positions)
-            val localExtent = maxOf(localBounds[2], localBounds[3]).coerceAtLeast(1e-6f)
-            val worldBounds = RigGeometryTools.bounds(positions)
-            val worldExtent = maxOf(worldBounds[2], worldBounds[3]).coerceAtLeast(1e-6f)
-            val localToWorldScale = if (geometry?.worldPositions?.containsKey(path.drawableId) == true) {
-                worldExtent / localExtent
-            } else {
-                1f
-            }
-
             val drawWidth = (showWidth || showRadius) && path.width > 0f && !isDimmed
             val drawHardness = (showHardness || showRadius) && path.width > 0f && path.hardness > 0f && !isDimmed
 
             if (drawWidth || drawHardness) {
-                val worldWidth = path.width * localToWorldScale
+                val worldWidth = DeformPathMetrics.canvasWidth(model, drawable, path)
                 val outerRadiusPx = (worldWidth * viewport.scale).toFloat()
                 val innerRadiusPx = outerRadiusPx * path.hardness.coerceIn(0f, 1f)
                 for (pt in screenPoints) {
                     if (drawHardness && innerRadiusPx > 1f) {
+                        val innerBoundary = Ellipse2D.Float(pt.first - innerRadiusPx, pt.second - innerRadiusPx,
+                            innerRadiusPx * 2, innerRadiusPx * 2)
                         g.color = Color(33, 150, 243, 35)
-                        g.fillOval((pt.first - innerRadiusPx).toInt(), (pt.second - innerRadiusPx).toInt(),
-                            (innerRadiusPx * 2).toInt(), (innerRadiusPx * 2).toInt())
+                        g.fill(innerBoundary)
                         g.color = Color(33, 150, 243, 160)
                         g.stroke = BasicStroke(1.2f)
-                        g.drawOval((pt.first - innerRadiusPx).toInt(), (pt.second - innerRadiusPx).toInt(),
-                            (innerRadiusPx * 2).toInt(), (innerRadiusPx * 2).toInt())
+                        g.draw(innerBoundary)
                     }
                     if (drawWidth && outerRadiusPx > 1f) {
                         g.color = Color(244, 67, 54, 180)
                         g.stroke = BasicStroke(1.4f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0f, floatArrayOf(4f, 4f), 0f)
-                        g.drawOval((pt.first - outerRadiusPx).toInt(), (pt.second - outerRadiusPx).toInt(),
-                            (outerRadiusPx * 2).toInt(), (outerRadiusPx * 2).toInt())
+                        g.draw(Ellipse2D.Float(pt.first - outerRadiusPx, pt.second - outerRadiusPx,
+                            outerRadiusPx * 2, outerRadiusPx * 2))
                     }
                 }
             }

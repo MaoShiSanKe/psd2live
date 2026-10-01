@@ -73,6 +73,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.ColorRgb
+import org.umamo.render.eval.DeformPathMetrics
 import org.umamo.runtime.model.DeformPath
 import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.DeformerId
@@ -212,9 +213,9 @@ private fun DeformPathInspector(
         InspectorSectionBox(title = tr("inspector.pathCurve")) {
             InspectorFormRow(label = tr("inspector.deformPathWidth")) {
                 CompactNumberSpinner(
-                    value = path.width.toDouble(),
+                    value = DeformPathMetrics.canvasWidth(editor.model, drawable, path).toDouble(),
                     onValueChange = { w ->
-                        if (editable) editor.changePath { it.copy(width = w.toFloat().coerceAtLeast(0f)) }
+                        if (editable) editor.changePath { it.copy(width = DeformPathMetrics.localWidth(editor.model, drawable, w.toFloat())) }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     min = 0.0,

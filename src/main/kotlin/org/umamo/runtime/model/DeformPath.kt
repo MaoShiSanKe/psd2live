@@ -5,6 +5,7 @@ data class DeformPath(
     val id: String,
     val drawableId: DrawableId,
     val points: List<DeformPathPoint>,
+    /** Influence radius in parent-local units; UI and CMO3 expose its canvas distance. */
     val width: Float = 0.1f,
     val hardness: Float = 0.5f,
     val closed: Boolean = false,
