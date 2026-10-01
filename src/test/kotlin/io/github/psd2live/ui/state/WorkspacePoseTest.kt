@@ -15,6 +15,39 @@ import kotlin.test.*
 class WorkspacePoseTest {
     private val parameter = ParameterId("pose")
 
+    @Test fun enteringPreviewResumesEffectsFromTheAuthoredPose() {
+        PSD2LiveViewModel().use { vm ->
+            val canvas = vm.state.value.activeCanvas.id
+            vm.setParameterValue(parameter, 0.5f)
+            vm.toggleParameterLock(parameter)
+            assertTrue(vm.state.value.activeWorkspace.pose!!.authoringPose)
+            vm.setCanvasMode(canvas, CanvasMode.PREVIEW)
+            assertFalse(vm.state.value.activeWorkspace.pose!!.authoringPose)
+            assertEquals(0.5f, vm.state.value.parameterValues[parameter])
+            assertTrue(parameter in vm.state.value.lockedParameters)
+            assertTrue(vm.state.value.mouseTrackingEnabled)
+            assertFalse(vm.state.value.animationEnabled)
+        }
+    }
+
+    @Test fun focusingOrRevealingPreviewResumesEffectsAfterEditingInAnotherCanvas() {
+        PSD2LiveViewModel().use { vm ->
+            val edit = vm.state.value.activeCanvas.id
+            val preview = vm.addCanvas(CanvasMode.PREVIEW)
+            vm.focusCanvas(edit)
+            vm.setParameterValue(parameter, 0.25f)
+            assertTrue(vm.state.value.activeWorkspace.pose!!.authoringPose)
+            vm.focusCanvas(preview)
+            assertFalse(vm.state.value.activeWorkspace.pose!!.authoringPose)
+            vm.focusCanvas(edit)
+            vm.setModuleVisible(preview, false)
+            vm.setParameterValue(parameter, 0.75f)
+            vm.setModuleVisible(preview, true)
+            assertFalse(vm.state.value.activeWorkspace.pose!!.authoringPose)
+            assertEquals(0.75f, vm.state.value.parameterValues[parameter])
+        }
+    }
+
     private fun preview(): RigPreviewModel {
         val layer = WorkspaceSourceLayer(LayerId("body"), "body", "", SourceLayerKind.Raster, true, 1,
             LayerBounds(0, 0, 8, 8), 1f, false, LayerBlend.Normal, ChannelMask.ALL,

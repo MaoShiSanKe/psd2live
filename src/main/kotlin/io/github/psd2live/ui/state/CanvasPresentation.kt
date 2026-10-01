@@ -254,7 +254,10 @@ internal fun reconcileCanvasPresentation(previous: PSD2LiveState, next: PSD2Live
     // An authored pose change invalidates the cached preview, never the user's locks.
     if (!switched && shared.parameterValues != previous.parameterValues)
         shared = shared.copy(previewParameterValues = emptyMap())
-    if (shared.animationEnabled || shared.mouseTrackingEnabled != previous.mouseTrackingEnabled)
+    val enteringPreview = next.previewLive && (!previous.previewLive ||
+        (next.activeCanvas.mode == CanvasMode.PREVIEW && (switched ||
+            previous.activeCanvas.id != next.activeCanvas.id || previous.activeCanvas.mode != CanvasMode.PREVIEW)))
+    if (enteringPreview || shared.animationEnabled || shared.mouseTrackingEnabled != previous.mouseTrackingEnabled)
         shared = shared.copy(authoringPose = false)
     var result = local
     if (switched && previous.projectOpenGeneration == next.projectOpenGeneration)
