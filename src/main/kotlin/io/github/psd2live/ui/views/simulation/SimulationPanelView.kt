@@ -51,6 +51,7 @@ import io.github.psd2live.core.sim.SimBake
 import io.github.psd2live.core.sim.SimGenerator
 import io.github.psd2live.core.sim.SimKind
 import io.github.psd2live.core.sim.SimMaterial
+import io.github.psd2live.core.sim.SimMaterialPreset
 import io.github.psd2live.core.sim.glueKey
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
@@ -399,7 +400,7 @@ private fun SimulationEditor(
 		}
 	}
 	PhysicsSection(tr("sim.material"), section("material"), { toggle("material") }, icon = icon(SimSectionIcon.MATERIAL), trailing = resetMaterial.takeIf { sim.material != preset }) {
-		MaterialEditor(sim.material) { commit(sim.copy(material = it)) }
+		MaterialEditor(sim.kind, sim.material) { commit(sim.copy(material = it)) }
 	}
 
 	PhysicsSection(tr("sim.inputs"), section("inputs"), { toggle("inputs") }, count = sim.inputs.size, icon = icon(SimSectionIcon.INPUTS)) {
@@ -531,9 +532,17 @@ private fun BakeEditor(
 }
 
 @Composable
-private fun MaterialEditor(material: SimMaterial, onCommit: (SimMaterial) -> Unit) {
+private fun MaterialEditor(kind: SimKind, material: SimMaterial, onCommit: (SimMaterial) -> Unit) {
 	// Sliders move a local draft and commit once on release, so a drag is one history node.
 	var draft by remember(material) { mutableStateOf(material) }
+	val matching = SimMaterialPreset.matching(draft)
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.materialPreset"), tooltip = tr("sim.materialPresetTip"))
+		val presets = SimMaterialPreset.of(kind).let { if (matching != null && matching !in it) it + matching else it }
+		CompactDropdown(listOf<SimMaterialPreset?>(null) + presets, matching, { if (it != null) onCommit(it.material) },
+			Modifier.weight(1f), itemLabel = { tr(if (it == null) "sim.preset.custom" else "sim.preset.${it.jsonName}") },
+			itemEnabled = { it != null }, height = 22.dp)
+	}
 	DraftSlider(tr("sim.stretch"), tr("sim.stretchTip"), draft.stretch, 0f..1f, { draft = draft.copy(stretch = it) }) { onCommit(draft) }
 	DraftSlider(tr("sim.bend"), tr("sim.bendTip"), draft.bend, 0f..1f, { draft = draft.copy(bend = it) }) { onCommit(draft) }
 	DraftSlider(tr("sim.area"), tr("sim.areaTip"), draft.area, 0f..1f, { draft = draft.copy(area = it) }) { onCommit(draft) }

@@ -6,6 +6,7 @@ import io.github.psd2live.core.LayerType
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.Side
 import io.github.psd2live.core.MotionClips
+import io.github.psd2live.core.sim.SimMaterialPreset
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.serialization.json.*
@@ -359,6 +360,7 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
             put("mass", number()); put("stretch", number()); put("bend", number()); put("damping", number()); put("goal", number()); put("slack", number())
             put("area", number()); put("anisotropy", number())
         }))
+        put("material_preset", choices(*SimMaterialPreset.entries.map { it.jsonName }.toTypedArray()))
         put("groups", buildJsonObject { put("type", "object"); put("additionalProperties", string()) })
         put("glue_roles", buildJsonObject { put("type", "object"); put("additionalProperties", choices("ignore", "pin", "constraint")) })
         put("inputs", arraySchema(objectSchema(buildJsonObject {
@@ -369,7 +371,7 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         put("exaggeration", buildJsonObject { put("type", "number"); put("minimum", 1.0); put("maximum", 2.0) })
         put("hold", number()); put("release", number()); put("wind", vector(2))
     }
-    tool("simulation", "2D cloth and hair simulation on ArtMeshes. It runs in the editor only; bake is what exports. put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend = how sharply it may curve; area = how firmly each triangle keeps its area, low lets it bunch up; anisotropy = how much softer it is across the grain, which runs away from the pins; goal = spring back to the drawn shape; slack = long-range give) except mass and damping (1/s). Mass follows each vertex's share of the mesh area, so a finer mesh is the same material. " +
+    tool("simulation", "2D cloth and hair simulation on ArtMeshes. It runs in the editor only; bake is what exports. put creates or patches a body by id: targets are mesh ids simulated together, material values are 0..1 (stretch near 1 keeps length; bend = how sharply it may curve; area = how firmly each triangle keeps its area, low lets it bunch up; anisotropy = how much softer it is across the grain, which runs away from the pins; goal = spring back to the drawn shape; slack = long-range give) except mass and damping (1/s); material_preset (cloth: cotton, silk, chiffon, wool, denim, leather, elastic; hair: hair, fine_hair, thick_hair) starts from a named material and material fields given with it override its values. Mass follows each vertex's share of the mesh area, so a finer mesh is the same material. " +
         "Pins come from the PIN vertex group; a glue is never a pin unless glue_roles sets its key (meshA|meshB from inspect scope=simulations) to pin (follow the other mesh) or constraint (both sides simulated). groups names the vertex group to use per kind. " +
         "inputs are the parameters that shake it (empty: head and body angles, nodding and the body rising and sinking). simulate runs it (settle, each input held at max for hold s then released, optional wind [x, y] px/s² with y up) and reports peaks, rest drift, stretch and setup notes. " +
         "bake (2-5 s) reduces it to what Cubism plays: static_inputs (default none) get exact corrections on their own axes, and the remaining motion becomes modes (1..3, default 2: the swing, then the bend and compression it leaves, each fitted over what the ones above leave) parameters ParamSim<id>_<k> (-30..30) with keys (3..9) each, driven by one pendulum PhysicsSim_<id> fitted over dragging, shaking and flinging the inputs (a later mode may get a pendulum of its own, PhysicsSim_<id>_<k>, when that follows unseen motion better); the inputs that move the body up and down (ParamAngleY, ParamBodyAngleY, ParamBodyLean), which a pendulum cannot answer as angles, are baked apart into one more parameter ParamSim<id>_Y driven by a pendulum of its own PhysicsSim_<id>_y fed as translations, when they move it 2 px or more; " +

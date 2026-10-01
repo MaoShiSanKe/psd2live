@@ -81,10 +81,47 @@ data class SimMaterial(
             o.number("area") ?: base.area, o.number("anisotropy") ?: base.anisotropy,
         )
 
-        fun preset(kind: SimKind) = when (kind) {
-            SimKind.CLOTH -> SimMaterial(stretch = 0.98f, bend = 0.3f, damping = 1.5f, goal = 0.1f, area = 0.3f, anisotropy = 0.3f)
-            SimKind.HAIR -> SimMaterial(stretch = 1f, bend = 0.45f, damping = 2f, goal = 0.15f, slack = 0.01f, area = 0.5f, anisotropy = 0.7f)
+        fun preset(kind: SimKind) = SimMaterialPreset.default(kind).material
+    }
+}
+
+/**
+ * Named materials for each kind. Picking one only fills in the values, so a project keeps the values and
+ * never the name; the panel names the preset a material matches.
+ */
+enum class SimMaterialPreset(val jsonName: String, val kind: SimKind, val material: SimMaterial) {
+    COTTON("cotton", SimKind.CLOTH, SimMaterial(stretch = 0.98f, bend = 0.3f, damping = 1.5f, goal = 0.1f, area = 0.3f, anisotropy = 0.3f)),
+    /** Light and smooth: it falls in soft folds, follows through long and settles slowly. */
+    SILK("silk", SimKind.CLOTH, SimMaterial(mass = 0.6f, stretch = 0.98f, bend = 0.12f, damping = 0.8f, goal = 0.05f, slack = 0.04f, area = 0.15f, anisotropy = 0.4f)),
+    /** Sheer and airy: the lightest and limpest, the air stills it sooner than silk. */
+    CHIFFON("chiffon", SimKind.CLOTH, SimMaterial(mass = 0.4f, stretch = 0.96f, bend = 0.06f, damping = 1.2f, goal = 0.04f, slack = 0.05f, area = 0.1f, anisotropy = 0.35f)),
+    /** Heavy and soft: it swings late and settles quickly. */
+    WOOL("wool", SimKind.CLOTH, SimMaterial(mass = 1.4f, stretch = 0.97f, bend = 0.4f, damping = 2.2f, goal = 0.12f, slack = 0.03f, area = 0.45f, anisotropy = 0.25f)),
+    /** Heavy and stiff: broad folds that keep their shape. */
+    DENIM("denim", SimKind.CLOTH, SimMaterial(mass = 1.6f, stretch = 0.99f, bend = 0.6f, damping = 2f, goal = 0.2f, slack = 0.015f, area = 0.6f, anisotropy = 0.2f)),
+    /** The stiffest: it moves as a whole, barely bunches and springs back to its drawn shape. */
+    LEATHER("leather", SimKind.CLOTH, SimMaterial(mass = 1.8f, stretch = 1f, bend = 0.75f, damping = 2.5f, goal = 0.3f, slack = 0.01f, area = 0.75f, anisotropy = 0.15f)),
+    /** Stretches and snaps back, as a band or a stocking does. */
+    ELASTIC("elastic", SimKind.CLOTH, SimMaterial(mass = 0.8f, stretch = 0.85f, bend = 0.4f, damping = 1.2f, goal = 0.3f, slack = 0.08f, area = 0.7f, anisotropy = 0.1f)),
+    HAIR("hair", SimKind.HAIR, SimMaterial(stretch = 1f, bend = 0.45f, damping = 2f, goal = 0.15f, slack = 0.01f, area = 0.5f, anisotropy = 0.7f)),
+    /** Fine strands: light, they curl and part easily and keep swinging. */
+    FINE_HAIR("fine_hair", SimKind.HAIR, SimMaterial(mass = 0.7f, stretch = 1f, bend = 0.3f, damping = 1.6f, goal = 0.1f, slack = 0.015f, area = 0.4f, anisotropy = 0.8f)),
+    /** Thick or set hair: heavier locks that swing as one and hold their shape. */
+    THICK_HAIR("thick_hair", SimKind.HAIR, SimMaterial(mass = 1.3f, stretch = 1f, bend = 0.6f, damping = 2.4f, goal = 0.22f, slack = 0.008f, area = 0.6f, anisotropy = 0.6f));
+
+    companion object {
+        fun default(kind: SimKind) = when (kind) {
+            SimKind.CLOTH -> COTTON
+            SimKind.HAIR -> HAIR
         }
+
+        fun of(kind: SimKind) = entries.filter { it.kind == kind }
+
+        /** The preset whose values [material] has, or null for a custom one. */
+        fun matching(material: SimMaterial) = entries.firstOrNull { it.material == material }
+
+        fun parse(text: String) = entries.firstOrNull { it.jsonName.equals(text, ignoreCase = true) || it.name.equals(text, ignoreCase = true) }
+            ?: throw IllegalArgumentException("Unknown material preset: $text (${entries.joinToString { it.jsonName }})")
     }
 }
 
@@ -161,17 +198,19 @@ data class RigSimEdit(
     }
 
     /**
-     * [o] laid over this edit: arrays and maps replace, `material` merges field by field. `bake` is taken
-     * as given (null clears it); leaving it out keeps the bake, which then reads as stale if the setup changed.
+     * [o] laid over this edit: arrays and maps replace, `material` merges field by field over `material_preset`
+     * when given. `bake` is taken as given (null clears it); leaving it out keeps the bake, which then reads as
+     * stale if the setup changed.
      */
     fun patched(o: JsonObject): RigSimEdit {
         val nextKind = o.string("kind")?.let(SimKind::parse) ?: kind
+        val baseMaterial = o.string("material_preset")?.let(SimMaterialPreset::parse)?.material
+            ?: if (nextKind != kind) SimMaterial.preset(nextKind) else material
         return copy(
             name = o.string("name") ?: name,
             kind = nextKind,
             targets = o["targets"]?.jsonArray?.map { it.jsonPrimitive.content } ?: targets,
-            material = o["material"]?.jsonObject?.let { SimMaterial.fromJson(it, if (nextKind != kind) SimMaterial.preset(nextKind) else material) }
-                ?: if (nextKind != kind) SimMaterial.preset(nextKind) else material,
+            material = o["material"]?.jsonObject?.let { SimMaterial.fromJson(it, baseMaterial) } ?: baseMaterial,
             groups = o["groups"]?.jsonObject?.filterKeys { it.lowercase() !in VertexGroupKind.RETIRED }
                 ?.map { (k, v) -> VertexGroupKind.parse(k) to v.jsonPrimitive.content }?.toMap() ?: groups,
             glueRoles = o["glue_roles"]?.jsonObject?.map { (k, v) -> k to GlueRole.parse(v.jsonPrimitive.content) }?.toMap() ?: glueRoles,

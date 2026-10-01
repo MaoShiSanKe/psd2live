@@ -284,6 +284,39 @@ class SimulationTest {
         assertEquals(0.4f, material.bend)
     }
 
+    @Test fun materialPresetsFillInTheirValuesAndFieldsOverrideThem() {
+        for (kind in SimKind.entries) {
+            assertEquals(SimMaterialPreset.default(kind).material, SimMaterial.preset(kind))
+            assertTrue(SimMaterialPreset.default(kind) in SimMaterialPreset.of(kind))
+        }
+        assertEquals(SimMaterialPreset.entries.size, SimMaterialPreset.entries.map { it.material }.distinct().size, "presets must be told apart")
+        val edit = RigSimEdit("skirt", "Skirt", SimKind.CLOTH, listOf("a"))
+        assertEquals(SimMaterialPreset.SILK.material, edit.patched(buildJsonObject { put("material_preset", "silk") }).material)
+        val leather = edit.patched(buildJsonObject { put("material_preset", "leather"); putJsonObject("material") { put("goal", 0.5f) } }).material
+        assertEquals(SimMaterialPreset.LEATHER.material.copy(goal = 0.5f), leather)
+        assertNull(SimMaterialPreset.matching(leather))
+        // Only the values persist: a reopened edit names the preset again by matching them.
+        val reopened = RigSimEdit.fromJson(edit.patched(buildJsonObject { put("material_preset", "chiffon") }).toJson())
+        assertEquals(SimMaterialPreset.CHIFFON, SimMaterialPreset.matching(reopened.material))
+        assertFailsWith<IllegalArgumentException> { edit.patched(buildJsonObject { put("material_preset", "velvet") }) }
+    }
+
+    @Test fun silkBillowsFurtherThanLeatherInTheSameWind() {
+        val mesh = grid(3, 6, 10f)
+        val source = model(drawable("cloth", mesh), groups = listOf(topPin("cloth", mesh, 3)))
+        fun hemDrift(preset: SimMaterialPreset): Float {
+            val scene = hangingScene(source) { it.copy(material = preset.material) }
+            scene.calibrate(source)
+            scene.solver.settings = scene.solver.settings.copy(windX = 1500f)
+            repeat(45) { scene.drive(source, emptyMap(), 1f / 60f) }
+            val hem = 6 * 4 + 1
+            return scene.positions(DrawableId("cloth"))!![hem * 2] - world(mesh)[hem * 2]
+        }
+        val silk = hemDrift(SimMaterialPreset.SILK)
+        val leather = hemDrift(SimMaterialPreset.LEATHER)
+        assertTrue(silk > leather * 1.2f, "silk hem moved $silk px, leather $leather px")
+    }
+
     // Glue roles
 
     private fun gluedPair(role: GlueRole): Pair<PuppetModel, SimScene> {
