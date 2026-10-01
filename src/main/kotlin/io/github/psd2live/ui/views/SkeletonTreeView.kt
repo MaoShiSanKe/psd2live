@@ -24,6 +24,8 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,8 @@ import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.SkeletonPalette
 import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.components.CompactButton
+import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.CompactToggleChip
@@ -268,7 +272,7 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 
 		if (draft != null) {
 			val selected = draft.bone(editor.selectedBoneId ?: "")
-			if (selected != null && !selected.role.anchor) BoneSettings(editor, draft, selected)
+			if (selected != null) BoneSettings(editor, draft, selected)
 			Row(
 				Modifier.fillMaxWidth().height(30.dp).background(colors.panelElevated)
 					.border(BorderStroke(1.dp, colors.divider)).padding(horizontal = 6.dp),
@@ -508,6 +512,17 @@ private fun BoneSettings(editor: CanvasEditor, spec: SkeletonSpec, bone: Skeleto
 		Text(bone.parameterId, color = colors.textMuted, style = typography.monoSmall.copy(fontSize = 9.sp), maxLines = 1)
 	}
 	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		var name by remember(bone.id, bone.name) { mutableStateOf(bone.name) }
+		CompactTextField(value = name, onValueChange = { name = it }, placeholder = tr("skeleton.author.name"),
+			modifier = Modifier.fillMaxWidth(), onCommit = { editor.renameBone(bone.id, name) },
+			onFocusLost = { editor.renameBone(bone.id, name) })
+		val excluded = spec.descendants(bone.id) + bone.id
+		val parents = listOf("" to tr("skeleton.author.noParent")) + spec.bones.filterNot { it.id in excluded }.map { it.id to it.name }
+		CompactDropdown(items = parents, selectedItem = parents.first { it.first == (bone.parentId ?: "") },
+			onItemSelected = { editor.setSelectedBoneParent(it.first.takeIf(String::isNotEmpty)) }, itemLabel = { it.second },
+			modifier = Modifier.fillMaxWidth(), height = 24.dp)
+		CompactToggleChip(text = tr("skeleton.author.connected"), selected = spec.isConnected(bone.id), enabled = bone.parentId != null,
+			onToggle = { editor.setSelectedBoneParent(bone.parentId, !spec.isConnected(bone.id)) }, height = 22.dp)
 		// A body half bends about the waist across a band of its own.
 		if (parent != null || bone.role.body) {
 			val limit = ((if (parent != null) minOf(bone.length, parent.length) else bone.length) * 0.45f).coerceAtLeast(1f)

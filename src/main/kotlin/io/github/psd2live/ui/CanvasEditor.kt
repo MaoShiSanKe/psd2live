@@ -579,6 +579,15 @@ internal class CanvasEditor(
 
 	fun selectBone(id: String?) { selectedBoneId = id }
 
+	fun renameBone(id: String, name: String) {
+		if (name.isBlank() || name.any(Char::isISOControl)) return
+		skeletonDraft = skeletonDraft?.withBoneRenamed(id, name)
+	}
+
+	fun setSelectedBoneParent(parentId: String?, connect: Boolean = false) {
+		skeletonDraft = skeletonDraft?.withBoneParent(selectedBoneId ?: return, parentId, connect)
+	}
+
 	fun moveBoneJoint(id: String, end: io.github.psd2live.core.BoneEnd, x: Float, y: Float) {
 		skeletonDraft = skeletonDraft?.withJointMoved(id, end, x, y)
 		selectedBoneId = id
@@ -693,7 +702,7 @@ internal class CanvasEditor(
 		val draft = skeletonDraft ?: return
 		if (!enabled) {
 			val removed = draft.bones.filter { it.role == role }.mapTo(HashSet()) { it.id }
-			skeletonDraft = draft.copy(bones = draft.bones.filterNot { it.id in removed })
+			skeletonDraft = removed.fold(draft) { spec, id -> spec.withoutBone(id) }
 			if (selectedBoneId in removed) selectedBoneId = io.github.psd2live.core.SkeletonSpec.LOWER_BODY_ID
 			return
 		}

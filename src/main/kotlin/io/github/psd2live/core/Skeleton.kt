@@ -79,6 +79,8 @@ data class SkeletonBone(
 	 * parent bone into this one; null sizes it from the bone lengths.
 	 */
 	val blendWidth: Float? = null,
+	/** Null preserves the inferred connection of legacy projects; false explicitly separates coincident joints. */
+	val connected: Boolean? = null,
 ) {
 	init {
 		require(id.isNotBlank() && id.none(Char::isISOControl)) { "Bone ID must not be blank" }
@@ -138,6 +140,7 @@ data class SkeletonBone(
 		put("minAngle", minAngle)
 		put("maxAngle", maxAngle)
 		blendWidth?.let { put("blendWidth", it) }
+		connected?.let { put("connected", it) }
 	}
 
 	companion object {
@@ -171,6 +174,7 @@ data class SkeletonBone(
 				minAngle = o["minAngle"]?.jsonPrimitive?.floatOrNull ?: role.minAngle,
 				maxAngle = o["maxAngle"]?.jsonPrimitive?.floatOrNull ?: role.maxAngle,
 				blendWidth = o["blendWidth"]?.jsonPrimitive?.floatOrNull,
+				connected = o["connected"]?.jsonPrimitive?.booleanOrNull,
 			)
 		}
 	}
@@ -235,6 +239,39 @@ data class SkeletonSpec(
 
 	fun children(id: String?): List<SkeletonBone> = bones.filter { it.parentId == id }
 
+	fun descendants(id: String): Set<String> {
+		val result = linkedSetOf<String>()
+		fun visit(parent: String) { for (child in children(parent)) { result += child.id; visit(child.id) } }
+		visit(id)
+		return result
+	}
+
+	fun isConnected(id: String): Boolean {
+		val child = bone(id) ?: return false
+		val parent = child.parentId?.let(::bone) ?: return false
+		return child.connected != false && kotlin.math.hypot(child.headX - parent.tailX, child.headY - parent.tailY) < 0.5f
+	}
+
+	fun withBoneRenamed(id: String, name: String): SkeletonSpec {
+		require(name.isNotBlank() && name.none(Char::isISOControl)) { "Bone name must not be blank or contain control characters" }
+		val bone = bone(id) ?: return this
+		return withBone(bone.copy(name = name.trim()))
+	}
+
+	/** Reparents without changing rest geometry, or translates the whole subtree to connect at the new tip. */
+	fun withBoneParent(id: String, parentId: String?, connect: Boolean = false): SkeletonSpec {
+		val child = bone(id) ?: return this
+		require(parentId != id && parentId !in descendants(id)) { "Bone hierarchy would contain a cycle" }
+		val parent = parentId?.let { requireNotNull(bone(it)) { "Bone parent not found: $it" } }
+		val dx = if (connect && parent != null) parent.tailX - child.headX else 0f
+		val dy = if (connect && parent != null) parent.tailY - child.headY else 0f
+		val subtree = descendants(id) + id
+		return copy(bones = bones.map { b ->
+			val moved = if (b.id in subtree) b.copy(headX = b.headX + dx, headY = b.headY + dy, tailX = b.tailX + dx, tailY = b.tailY + dy) else b
+			if (b.id == id) moved.copy(parentId = parentId, connected = connect && parent != null) else moved
+		})
+	}
+
 	/** Parents before children. */
 	fun topological(): List<SkeletonBone> {
 		val out = ArrayList<SkeletonBone>(bones.size)
@@ -255,14 +292,14 @@ data class SkeletonSpec(
 		fun near(ax: Float, ay: Float) = kotlin.math.hypot(ax - oldX, ay - oldY) < 0.5f
 		val linked = mutableSetOf(bone.id to end)
 		if (end == BoneEnd.HEAD) {
-			bone.parentId?.let { p -> bone(p)?.takeIf { near(it.tailX, it.tailY) }?.let { linked += it.id to BoneEnd.TAIL } }
+			if (isConnected(bone.id)) bone.parentId?.let { linked += it to BoneEnd.TAIL }
 		}
-		val jointOwner = if (end == BoneEnd.TAIL) bone.id else bone.parentId
+		val jointOwner = if (end == BoneEnd.TAIL) bone.id else bone.parentId?.takeIf { isConnected(bone.id) }
 		for (child in bones.filter { it.parentId == jointOwner && it.id != bone.id }) {
-			if (near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
+			if (isConnected(child.id) && near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
 		}
 		if (end == BoneEnd.TAIL) {
-			for (child in children(bone.id)) if (near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
+			for (child in children(bone.id)) if (isConnected(child.id) && near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
 		}
 		return copy(bones = bones.map { b ->
 			var next = b
@@ -298,17 +335,17 @@ data class SkeletonSpec(
 		if (kotlin.math.hypot(tailX - x, tailY - y) < 0.001f) return this
 		val id = generateSequence(1) { it + 1 }.map { "custom_$it" }.first { bone(it) == null }
 		return withBone(SkeletonBone(id, SkeletonNames.bone(BoneRole.CUSTOM, Side.NONE), parentId, BoneRole.CUSTOM,
-			headX = x, headY = y, tailX = tailX, tailY = tailY))
+			headX = x, headY = y, tailX = tailX, tailY = tailY, connected = parentId != null))
 	}
 
 	/** Removes a bone and re-parents its children to the removed bone's parent. */
 	fun withoutBone(boneId: String): SkeletonSpec {
 		val bone = bone(boneId) ?: return this
-		return copy(bones = bones.filter { it.id != boneId }.map { if (it.parentId == boneId) it.copy(parentId = bone.parentId) else it })
+		return copy(bones = bones.filter { it.id != boneId }.map { if (it.parentId == boneId) it.copy(parentId = bone.parentId, connected = false) else it })
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 4)
+		put("version", 5)
 		put("enabled", enabled)
 		put("sampling", sampling.toJson())
 		putJsonArray("bones") { bones.forEach { add(it.toJson()) } }
