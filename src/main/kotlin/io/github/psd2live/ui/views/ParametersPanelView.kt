@@ -3,6 +3,7 @@ package io.github.psd2live.ui.views
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.translate
@@ -123,6 +124,7 @@ import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconLock
 import io.github.psd2live.ui.components.IconMeshWireframe
 import io.github.psd2live.ui.components.IconParameterLink
+import io.github.psd2live.ui.components.IconPhysics
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconRotationDeformer
 import io.github.psd2live.ui.components.IconSelectedOnly
@@ -181,6 +183,13 @@ internal sealed interface ParameterPanelRow {
 		val folderLabelColor: ParameterLabelColor = ParameterLabelColor.None,
 	) : ParameterPanelRow
 }
+
+private data class ParameterPhysicsStatus(
+	val outputs: Set<String> = emptySet(),
+	val controlled: Set<String> = emptySet(),
+)
+
+private val LocalParameterPhysicsStatus = compositionLocalOf { ParameterPhysicsStatus() }
 
 /** Layout bounds of one parameter-panel row, in the drag container's local coordinates. */
 private data class ParamItemLayout(
@@ -403,6 +412,13 @@ internal fun ParametersListView(
 	val model = state.previewModel
 	val puppet = model?.rig?.puppet
 	val allParameters = puppet?.parameters.orEmpty()
+	val physicsGroups = viewModel.physicsGroups(state)
+	val physicsOutputs = physicsGroups.flatMapTo(HashSet()) { it.setting.outputParameters }
+	val physicsLive = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW &&
+		state.previewLive && state.activeWorkspace.pose?.authoringPose != true && state.generatePhysics && !state.meshOnly
+	val physicsControlled = if (physicsLive) physicsGroups.filter { it.active }
+		.flatMapTo(HashSet()) { it.setting.outputParameters }
+		.minus(state.lockedParameters.map { it.raw }) else emptySet()
     var creatingParameter by remember { mutableStateOf(false) }
 	var creatingUnderGroupId by remember { mutableStateOf<String?>(null) }
     if (creatingParameter && puppet != null) {
@@ -508,7 +524,11 @@ internal fun ParametersListView(
 	val listState = rememberLazyListState()
 
 	val nameWidth = remember { mutableStateOf(AppSettings.parameterNameWidth.dp) }
-	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth, LocalInlineEditorRegions provides renameEditorRegions) {
+	CompositionLocalProvider(
+		LocalParameterNameWidth provides nameWidth,
+		LocalInlineEditorRegions provides renameEditorRegions,
+		LocalParameterPhysicsStatus provides ParameterPhysicsStatus(physicsOutputs, physicsControlled),
+	) {
 	Column(
 		modifier = Modifier
 			.fillMaxSize()
@@ -1279,13 +1299,14 @@ private fun ParameterLabelSwatch(
 private fun ParameterName(param: Parameter, locked: Boolean = false, modifier: Modifier = Modifier) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
+	val controlled = param.id.raw in LocalParameterPhysicsStatus.current.controlled
 	Text(
 		text = param.name,
 		style = typography.body.copy(
 			fontSize = 11.sp,
 			fontWeight = if (locked) FontWeight.SemiBold else FontWeight.Normal,
 		),
-		color = if (locked) colors.accent else colors.textPrimary,
+		color = if (controlled) colors.textDisabled else if (locked) colors.accent else colors.textPrimary,
 		maxLines = 1,
 		overflow = TextOverflow.Ellipsis,
 		modifier = modifier,
@@ -1294,6 +1315,8 @@ private fun ParameterName(param: Parameter, locked: Boolean = false, modifier: M
 
 @Composable
 private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (Float) -> Unit) {
+	val enabled = param.id.raw !in LocalParameterPhysicsStatus.current.controlled
+	val enabledState by rememberUpdatedState(enabled)
 	val focusManager = LocalFocusManager.current
 	var focused by remember(param.id) { mutableStateOf(false) }
 	var draft by remember(param.id) { mutableStateOf(formatParamValue(value)) }
@@ -1302,13 +1325,14 @@ private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (
 	}
 	CompactTextField(
 		value = draft,
+		enabled = enabled,
 		onValueChange = { draft = it },
 		isMono = true,
 		onCommit = { focusManager.clearFocus() },
 		modifier = Modifier.width(44.dp)
 			.semantics { contentDescription = param.name + " (" + param.id.raw + ")" }
 			.onFocusChanged { focus ->
-				if (focused && !focus.isFocused) {
+				if (focused && !focus.isFocused && enabledState) {
 					draft.replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() }?.let {
 						onValueChange(it.coerceIn(param.min, param.max))
 					}
@@ -1653,6 +1677,7 @@ private fun ParameterRowItem(
 ) {
 	val colors = LocalToolColors.current
 	val isLocked = param.id in state.lockedParameters
+	val controlled = param.id.raw in LocalParameterPhysicsStatus.current.controlled
 	val currentValue = liveValue(param, state, viewModel)
 	val sliderMarks = remember(keyMarks) { keyMarks.toSliderMarks() }
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -1680,11 +1705,12 @@ private fun ParameterRowItem(
 		ParameterNameDivider()
 		ParameterTrack(
 			value = currentValue.coerceIn(param.min, param.max),
+			enabled = !controlled,
 			onValueChange = { viewModel.setParameterValue(param.id, it) },
 			valueRange = param.min..param.max,
 			keyMarks = sliderMarks,
             highlightedKeys = selectedKeys,
-			modifier = Modifier.weight(1f),
+			modifier = Modifier.weight(1f).alpha(if (controlled) 0.45f else 1f),
 			thumbShape = if (param.kind == ParameterKind.BLEND_SHAPE) SliderKeyShape.Square else SliderKeyShape.Circle,
 			onHoverKey = onKeyHover,
 			onGestureStart = viewModel::beginParameterScrub,
@@ -1694,7 +1720,7 @@ private fun ParameterRowItem(
 		Spacer(Modifier.width(ParamRowInputSpacer))
 		CompactIconButton(
 			onClick = { viewModel.resetParameter(param.id) },
-			enabled = isLocked || abs(currentValue - param.default) > 0.001f,
+			enabled = !controlled && (isLocked || abs(currentValue - param.default) > 0.001f),
 			size = ParamRowResetWidth,
 			tooltip = tr("parameters.resetTooltip"),
 		) {
@@ -1726,6 +1752,8 @@ private fun LinkedParameterPad(
 	val colors = LocalToolColors.current
 	val xLocked = horizontal.id in state.lockedParameters
 	val yLocked = vertical.id in state.lockedParameters
+	val xControlled = horizontal.id.raw in LocalParameterPhysicsStatus.current.controlled
+	val yControlled = vertical.id.raw in LocalParameterPhysicsStatus.current.controlled
 	val xValue = liveValue(horizontal, state, viewModel)
 	val yValue = liveValue(vertical, state, viewModel)
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -1766,17 +1794,17 @@ private fun LinkedParameterPad(
 				vertical = vertical,
 				xValue = xValue,
 				yValue = yValue,
-				xLocked = xLocked,
-				yLocked = yLocked,
+				xLocked = xLocked || xControlled,
+				yLocked = yLocked || yControlled,
 				horizontalKeys = horizontalKeys,
 	            highlightedX = highlightedX,
 	            highlightedY = highlightedY,
 				verticalKeys = verticalKeys,
-				modifier = Modifier.weight(1f).fillMaxWidth(),
+				modifier = Modifier.weight(1f).fillMaxWidth().alpha(if (xControlled && yControlled) 0.45f else 1f),
 				onChange = { x, y ->
 					val values = buildMap {
-						if (!xLocked) put(horizontal.id, x)
-						if (!yLocked) put(vertical.id, y)
+						if (!xLocked && !xControlled) put(horizontal.id, x)
+						if (!yLocked && !yControlled) put(vertical.id, y)
 					}
 					viewModel.setParameterValues(values)
 				},
@@ -1840,7 +1868,7 @@ private fun LinkedParameterPad(
 		) {
 			CompactIconButton(
 				onClick = { viewModel.resetParameter(horizontal.id) },
-				enabled = xLocked || abs(xValue - horizontal.default) > 0.001f,
+				enabled = !xControlled && (xLocked || abs(xValue - horizontal.default) > 0.001f),
 				size = ParamRowResetWidth,
 				tooltip = tr("parameters.resetTooltip"),
 			) {
@@ -1848,7 +1876,7 @@ private fun LinkedParameterPad(
 			}
 			CompactIconButton(
 				onClick = { viewModel.resetParameter(vertical.id) },
-				enabled = yLocked || abs(yValue - vertical.default) > 0.001f,
+				enabled = !yControlled && (yLocked || abs(yValue - vertical.default) > 0.001f),
 				size = ParamRowResetWidth,
 				tooltip = tr("parameters.resetTooltip"),
 			) {
@@ -1922,7 +1950,8 @@ private fun ParameterPad2D(
 	Canvas(
 		modifier = modifier
 			.onGloballyPositioned { padCoords = it }
-			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)))
+			.pointerHoverIcon(if (xLocked && yLocked) PointerIcon.Default
+				else PointerIcon(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)))
 			.onPointerEvent(PointerEventType.Move) { event ->
 				val pos = event.changes.firstOrNull()?.position ?: return@onPointerEvent
 				val insetX = insetHorizontalDp.toPx()
@@ -1956,7 +1985,7 @@ private fun ParameterPad2D(
 				hoverKeyCb?.invoke(null, null, null, 0f)
 			}
 			.onPointerEvent(PointerEventType.Press) { event ->
-				if (event.button != PointerButton.Secondary) return@onPointerEvent
+				if ((xLockedState && yLockedState) || event.button != PointerButton.Secondary) return@onPointerEvent
 				val hit = hoverKey ?: return@onPointerEvent
 				onChangeState(
 					if (!xLockedState) hit.first else xValueState,
@@ -1964,7 +1993,8 @@ private fun ParameterPad2D(
 				)
 				event.changes.forEach { it.consume() }
 			}
-			.pointerInput(horizontal.id, vertical.id) {
+			.pointerInput(horizontal.id, vertical.id, xLocked && yLocked) {
+				if (xLocked && yLocked) return@pointerInput
 				val insetX = insetHorizontalDp.toPx()
 				val insetY = insetVerticalDp.toPx()
 				awaitEachGesture {
@@ -2131,16 +2161,26 @@ private fun EditableParameterName(
 ) {
     var editing by remember(param.id) { mutableStateOf(false) }
     val editable = state.historySnapshot != null && !state.canvasEditBusy
+    val physics = LocalParameterPhysicsStatus.current
+    val physicsOutput = param.id.raw in physics.outputs
+    val controlled = param.id.raw in physics.controlled
+    val colors = LocalToolColors.current
     TooltipArea(
-        tooltip = { ParameterTooltip(param.name) },
+        tooltip = { ParameterTooltip(param.name + if (physicsOutput) " · " +
+            tr(if (controlled) "parameters.physicsControlled" else "parameters.physicsOutput") else "") },
         modifier = Modifier.width(LocalParameterNameWidth.current.value),
         delayMillis = 400,
     ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+    if (physicsOutput) {
+        IconPhysics(active = controlled, modifier = Modifier.size(10.dp), tint = if (controlled) colors.textDisabled else colors.textMuted)
+        Spacer(Modifier.width(2.dp))
+    }
     ParameterName(
         param,
         locked = locked,
         modifier = Modifier
-            .fillMaxWidth()
+            .weight(1f)
             .semantics {
                 contentDescription = param.name + " — " + tr("parameters.properties") +
                     if (related) " — " + tr("parameters.related") else ""
@@ -2153,6 +2193,7 @@ private fun EditableParameterName(
                 }
             },
     )
+    }
     }
     if (editing) ParameterDefinitionDialog(param, state, viewModel, lockValue = value) { editing = false }
 }

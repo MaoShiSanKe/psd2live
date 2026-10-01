@@ -2,6 +2,8 @@ package io.github.psd2live.core
 
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.umamo.edit.Pose
 import org.umamo.edit.channelValueAt
 import org.umamo.edit.geometryGridOf
@@ -11,6 +13,7 @@ import org.umamo.edit.withGeometryKeyRemoved
 import org.umamo.edit.withParameterCreated
 import org.umamo.edit.withParameterDeleted
 import org.umamo.edit.withParameterRange
+import org.umamo.edit.withParametersSyncedFromTree
 import org.umamo.runtime.keyform.MeshDeltaInterpolator
 import org.umamo.runtime.keyform.RotationPivotInterpolator
 import org.umamo.runtime.keyform.WarpLatticeInterpolator
@@ -271,7 +274,18 @@ data class RigEditOverlay(
 		}
 		val journalWarpIds = structureEdits.filter { it["action"]?.jsonPrimitive?.contentOrNull == "create_warp" }.map { it.getValue("id").jsonPrimitive.content }.toSet()
         for (warp in warpEdits) if(warp.id !in journalWarpIds) model = warp.applyTo(model)
-        model = RigStructureEdits.replay(model, structureEdits)
+		// Generated axes do not exist until swing/simulation materialization. Replay their panel
+		// placement and links afterwards, including moves of another parameter relative to them.
+		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
+			simEdits.flatMap { it.bake?.parameters.orEmpty() }
+		fun generatedPanelEdit(edit: kotlinx.serialization.json.JsonObject): Boolean =
+			edit["kind"]?.jsonPrimitive?.contentOrNull == "parameter" &&
+				edit["action"]?.jsonPrimitive?.contentOrNull in setOf("move", "link") &&
+				listOf("id", "partner_id", "before_id").any { field ->
+					edit[field]?.jsonPrimitive?.contentOrNull in generatedIds
+				}
+		val (generatedPanelEdits, earlyStructureEdits) = structureEdits.partition(::generatedPanelEdit)
+        model = RigStructureEdits.replay(model, earlyStructureEdits)
 		// 3. Apply keyform sets
 		for (set in keyformSetEdits) {
 			model = applyKeyformSet(model, set)
@@ -284,7 +298,19 @@ data class RigEditOverlay(
 		for (delete in keyformDeleteEdits) {
 			model = applyKeyformDelete(model, delete)
 		}
-		return io.github.psd2live.core.sim.SimGenerator.apply(SwingGenerator.apply(authoringJournal.fold(model, RigAuthoringJournal::replay), swingEdits), simEdits)
+		val deferredJournalEdits = mutableListOf<kotlinx.serialization.json.JsonObject>()
+		for (command in authoringJournal) {
+			if (command["op"]?.jsonPrimitive?.contentOrNull == "structure") {
+				val edits = command.getValue("edits").jsonArray.map { it.jsonObject }
+				val (deferred, early) = edits.partition(::generatedPanelEdit)
+				deferredJournalEdits += deferred
+				model = RigStructureEdits.replay(model, early)
+			} else {
+				model = RigAuthoringJournal.replay(model, command)
+			}
+		}
+		model = io.github.psd2live.core.sim.SimGenerator.apply(SwingGenerator.apply(model, swingEdits), simEdits)
+		return RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree()
 	}
 
 	fun upsert(edit: RigParameterEdit): RigEditOverlay {
