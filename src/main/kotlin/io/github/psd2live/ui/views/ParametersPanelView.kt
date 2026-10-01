@@ -1334,6 +1334,7 @@ private val ParamRowHandleWidth = 14.dp
 private val ParamRowDepthIndent = 8
 
 private val ParamTrackInsetHorizontal = 6.dp
+private val ParamPadInsetVertical = 14.dp
 private val ParamKeyRadius = 2.8.dp
 private val ParamThumbRadius = 5.2.dp
 
@@ -1597,7 +1598,7 @@ private val LocalParameterNameWidth = compositionLocalOf<MutableState<Dp>> { mut
 
 /** Thin line between the names and the tracks; drag it to trade width between the two. */
 @Composable
-private fun ParameterNameDivider() {
+private fun ParameterNameDivider(pad: Boolean = false) {
 	val colors = LocalToolColors.current
 	val density = LocalDensity.current
 	val nameWidth = LocalParameterNameWidth.current
@@ -1627,7 +1628,10 @@ private fun ParameterNameDivider() {
 		Box(
 			Modifier
 				.width(if (hovered || dragging) 1.5.dp else 0.5.dp)
-				.fillMaxHeight(0.7f)
+				.then(if (pad) Modifier.fillMaxHeight().padding(
+					top = ParamPadInsetVertical,
+					bottom = ParamPadInsetVertical + ParamRowDividerWidth,
+				) else Modifier.fillMaxHeight(0.7f))
 				.background(if (hovered || dragging) colors.accent else colors.divider),
 		)
 	}
@@ -1755,7 +1759,7 @@ private fun LinkedParameterPad(
 			EditableParameterName(horizontal, xLocked, xValue, state, viewModel, horizontal.id in relatedIds)
 			EditableParameterName(vertical, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
 		}
-		ParameterNameDivider()
+		ParameterNameDivider(pad = true)
 		Column(Modifier.weight(1f).fillMaxHeight()) {
 			ParameterPad2D(
 				horizontal = horizontal,
@@ -1815,7 +1819,7 @@ private fun LinkedParameterPad(
 						},
 					contentAlignment = Alignment.Center,
 				) {
-					Box(Modifier.fillMaxWidth(0.7f)
+					Box(Modifier.fillMaxWidth().padding(horizontal = ParamTrackInsetHorizontal)
 						.height(if (resizeHovered || resizing) 1.5.dp else 0.5.dp)
 						.background(if (resizeHovered || resizing) colors.accent else colors.divider))
 				}
@@ -1911,7 +1915,7 @@ private fun ParameterPad2D(
 
 	// Same horizontal inset as ParameterTrack so the pad's x range lines up with the sliders above and below.
 	val insetHorizontalDp = ParamTrackInsetHorizontal
-	val insetVerticalDp = 14.dp
+	val insetVerticalDp = ParamPadInsetVertical
 	val keyRadiusDp = ParamKeyRadius
 	val thumbRadiusDp = ParamThumbRadius
 
