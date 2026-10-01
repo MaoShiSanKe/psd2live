@@ -523,9 +523,26 @@ internal fun ParametersListView(
 	}
 	val listState = rememberLazyListState()
 
-	val nameWidth = remember { mutableStateOf(AppSettings.parameterNameWidth.dp) }
+	var nameWidth by remember { mutableStateOf(AppSettings.parameterNameWidth.dp) }
+	// The divider sits at one x for every row: deeper rows give their indent back out of the name column.
+	val maxDepth = rows.maxOfOrNull {
+		when (it) {
+			is ParameterPanelRow.Single -> it.depth
+			is ParameterPanelRow.Linked -> it.depth
+			is ParameterPanelRow.Folder -> 0
+		}
+	} ?: 0
+	val nameWidthRange = (ParamRowNameWidthRange.start + (maxDepth * ParamRowDepthIndent).dp).let { min ->
+		min..maxOf(min, ParamRowNameWidthRange.endInclusive)
+	}
+	val shownNameWidth = nameWidth.coerceIn(nameWidthRange.start, nameWidthRange.endInclusive)
+	val density = LocalDensity.current
+	val dividerCenter = with(density) { (ParamRowNameStart + shownNameWidth + ParamRowDividerWidth / 2).toPx() }
+	val dividerHalfWidth = with(density) { (ParamRowDividerWidth / 2).toPx() }
+	var dividerHovered by remember { mutableStateOf(false) }
+	var dividerDrag by remember { mutableStateOf<Pair<Float, Dp>?>(null) }
 	CompositionLocalProvider(
-		LocalParameterNameWidth provides nameWidth,
+		LocalParameterNameWidth provides shownNameWidth,
 		LocalInlineEditorRegions provides renameEditorRegions,
 		LocalParameterPhysicsStatus provides ParameterPhysicsStatus(physicsOutputs, physicsControlled),
 	) {
@@ -623,6 +640,38 @@ internal fun ParametersListView(
 					modifier = Modifier
 						.fillMaxSize()
 						.onGloballyPositioned { containerCoordinates = it }
+						// The name divider is one column through every row, so the list hovers and drags it
+						// as a whole and the highlight runs unbroken across folders and row gaps.
+						.onPointerEvent(PointerEventType.Move, pass = PointerEventPass.Initial) { event ->
+							val change = event.changes.firstOrNull() ?: return@onPointerEvent
+							val drag = dividerDrag
+							if (drag != null) {
+								val next = drag.second + with(density) { (change.position.x - drag.first).toDp() }
+								nameWidth = next.coerceIn(nameWidthRange.start, nameWidthRange.endInclusive)
+								AppSettings.parameterNameWidth = nameWidth.value
+								change.consume()
+							} else {
+								val rowsBottom = itemBoundsMap.values.maxOfOrNull { it.bottom } ?: 0f
+								dividerHovered = !dragState.isPressed && change.position.y <= rowsBottom &&
+									abs(change.position.x - dividerCenter) <= dividerHalfWidth
+							}
+						}
+						.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) { event ->
+							val change = event.changes.firstOrNull() ?: return@onPointerEvent
+							if (dividerHovered && event.button == PointerButton.Primary) {
+								dividerDrag = change.position.x to shownNameWidth
+								change.consume()
+							}
+						}
+						.onPointerEvent(PointerEventType.Release, pass = PointerEventPass.Initial) { event ->
+							if (dividerDrag != null) {
+								dividerDrag = null
+								event.changes.forEach { it.consume() }
+							}
+						}
+						.onPointerEvent(PointerEventType.Exit) {
+							if (dividerDrag == null) dividerHovered = false
+						}
 						.onPointerEvent(PointerEventType.Move) { event ->
 							val pos = event.changes.firstOrNull()?.position ?: return@onPointerEvent
 							dragState.onMove(pos, itemBoundsMap.values)
@@ -634,9 +683,13 @@ internal fun ParametersListView(
 						}
 						.pointerHoverIcon(
 							PointerIcon(
-								if (dragState.isDragging) Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
-								else Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR),
+								when {
+									dividerHovered || dividerDrag != null -> Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)
+									dragState.isDragging -> Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
+									else -> Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
+								},
 							),
+							overrideDescendants = dividerHovered || dividerDrag != null,
 						),
 				) {
 				LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(end = 6.dp)) {
@@ -848,6 +901,19 @@ internal fun ParametersListView(
 							}
 							Divider(color = colors.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
 						}
+					}
+				}
+
+				if ((dividerHovered || dividerDrag != null) && !dragState.isDragging) {
+					val rowsTop = itemBoundsMap.values.minOfOrNull { it.top }?.coerceAtLeast(0f) ?: 0f
+					val rowsBottom = itemBoundsMap.values.maxOfOrNull { it.bottom } ?: 0f
+					Canvas(Modifier.fillMaxSize()) {
+						drawLine(
+							colors.accent,
+							Offset(dividerCenter, rowsTop),
+							Offset(dividerCenter, rowsBottom.coerceAtMost(size.height)),
+							strokeWidth = 1.5.dp.toPx(),
+						)
 					}
 				}
 
@@ -1356,6 +1422,8 @@ private val ParamRowInputSpacer = 2.dp
 private val ParamRowResetWidth = 14.dp
 private val ParamRowHandleWidth = 14.dp
 private val ParamRowDepthIndent = 8
+/** Where the name column starts in a depth-0 row: row padding, then the link slot. */
+private val ParamRowNameStart = 2.dp + ParamRowLinkWidth + ParamRowLinkSpacer
 
 private val ParamTrackInsetHorizontal = 6.dp
 private val ParamPadInsetVertical = 14.dp
@@ -1617,46 +1685,27 @@ internal fun ParameterTooltip(text: String) {
 	}
 }
 
-/** Width of the name column, shared by every row so one divider drag moves them all. */
-private val LocalParameterNameWidth = compositionLocalOf<MutableState<Dp>> { mutableStateOf(ParamRowNameWidth) }
+/** Width of the name column at depth 0; deeper rows are narrower by their indent so the divider lines up. */
+private val LocalParameterNameWidth = compositionLocalOf { ParamRowNameWidth }
 
-/** Thin line between the names and the tracks; drag it to trade width between the two. */
+/** Thin line between the names and the tracks; the list hovers and drags it for every row at once. */
 @Composable
 private fun ParameterNameDivider(pad: Boolean = false) {
 	val colors = LocalToolColors.current
-	val density = LocalDensity.current
-	val nameWidth = LocalParameterNameWidth.current
-	val interaction = remember { MutableInteractionSource() }
-	val hovered by interaction.collectIsHoveredAsState()
-	var dragging by remember { mutableStateOf(false) }
 	Box(
 		modifier = Modifier
 			.width(ParamRowDividerWidth)
-			.fillMaxHeight()
-			.hoverable(interaction)
-			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
-			.pointerInput(nameWidth, density) {
-				detectHorizontalDragGestures(
-					onDragStart = { dragging = true },
-					onDragEnd = { dragging = false },
-					onDragCancel = { dragging = false },
-				) { change, dx ->
-					change.consume()
-					val next = nameWidth.value + with(density) { dx.toDp() }
-					nameWidth.value = next.coerceIn(ParamRowNameWidthRange.start, ParamRowNameWidthRange.endInclusive)
-					AppSettings.parameterNameWidth = nameWidth.value.value
-				}
-			},
+			.fillMaxHeight(),
 		contentAlignment = Alignment.Center,
 	) {
 		Box(
 			Modifier
-				.width(if (hovered || dragging) 1.5.dp else 0.5.dp)
+				.width(0.5.dp)
 				.then(if (pad) Modifier.fillMaxHeight().padding(
 					top = ParamPadInsetVertical,
 					bottom = ParamPadInsetVertical + ParamRowDividerWidth,
 				) else Modifier.fillMaxHeight(0.7f))
-				.background(if (hovered || dragging) colors.accent else colors.divider),
+				.background(colors.divider),
 		)
 	}
 }
@@ -1701,7 +1750,7 @@ private fun ParameterRowItem(
 			modifier = Modifier.width(ParamRowLinkWidth),
 		)
 		Spacer(Modifier.width(ParamRowLinkSpacer))
-		EditableParameterName(param, isLocked, currentValue, state, viewModel, related)
+		EditableParameterName(param, depth, isLocked, currentValue, state, viewModel, related)
 		ParameterNameDivider()
 		ParameterTrack(
 			value = currentValue.coerceIn(param.min, param.max),
@@ -1784,8 +1833,8 @@ private fun LinkedParameterPad(
 		)
 		Spacer(Modifier.width(ParamRowLinkSpacer))
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			EditableParameterName(horizontal, xLocked, xValue, state, viewModel, horizontal.id in relatedIds)
-			EditableParameterName(vertical, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
+			EditableParameterName(horizontal, depth, xLocked, xValue, state, viewModel, horizontal.id in relatedIds)
+			EditableParameterName(vertical, depth, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
 		}
 		ParameterNameDivider(pad = true)
 		Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -2153,6 +2202,7 @@ private fun formatParamValue(value: Float): String =
 @Composable
 private fun EditableParameterName(
     param: Parameter,
+    depth: Int,
     locked: Boolean,
     value: Float,
     state: PSD2LiveState,
@@ -2168,7 +2218,7 @@ private fun EditableParameterName(
     TooltipArea(
         tooltip = { ParameterTooltip(param.name + if (physicsOutput) " · " +
             tr(if (controlled) "parameters.physicsControlled" else "parameters.physicsOutput") else "") },
-        modifier = Modifier.width(LocalParameterNameWidth.current.value),
+        modifier = Modifier.width(LocalParameterNameWidth.current - (depth * ParamRowDepthIndent).dp),
         delayMillis = 400,
     ) {
     Row(verticalAlignment = Alignment.CenterVertically) {

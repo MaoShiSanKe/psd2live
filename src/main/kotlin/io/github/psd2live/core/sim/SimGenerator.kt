@@ -87,6 +87,33 @@ object SimGenerator {
         }
     }
 
+    private val physicsGroupId = ParameterGroupId("ParamGroupPhysics")
+
+    /**
+     * [ids] moved from the top of the parameter tree to the top of the physics folder, wherever the user has
+     * put it. At the top, as at the root, so panel edits replayed before the simulation land as they were made.
+     * Without a physics folder they stay at the root.
+     */
+    private fun withPhysicsGroup(model: PuppetModel, ids: List<ParameterId>): PuppetModel {
+        if (ids.isEmpty()) return model
+        val moved = ids.toSet()
+        var placed = false
+        fun place(nodes: List<ParameterNode>): List<ParameterNode> = nodes.mapNotNull { node ->
+            when (node) {
+                is ParameterNode.Param -> node.takeIf { it.id !in moved }
+                is ParameterNode.Group -> {
+                    val children = place(node.children)
+                    if (node.id == physicsGroupId && !placed) {
+                        placed = true
+                        node.copy(children = ids.map { ParameterNode.Param(it) } + children)
+                    } else node.copy(children = children)
+                }
+            }
+        }
+        val tree = place(model.parameterTree)
+        return if (placed) model.copy(parameterTree = tree) else model
+    }
+
     fun applyOne(model: PuppetModel, sim: RigSimEdit): Pair<PuppetModel, List<String>> {
         val bake = sim.bake?.takeIf { sim.enabled } ?: return model to emptyList()
         val issues = ArrayList<String>()
@@ -94,6 +121,7 @@ object SimGenerator {
         val blend = usesBlendShapes(model, sim)
         val vertical = verticalParameterId(sim)
         val sideways = bake.modes.count { it.axis.parameter != vertical }
+        val created = ArrayList<ParameterId>()
         for ((k, mode) in bake.modes.withIndex()) {
             val id = ParameterId(mode.axis.parameter)
             if (current.parameters.any { it.id == id }) continue
@@ -103,11 +131,13 @@ object SimGenerator {
                 else -> "${sim.name} ${k + 1}"
             }
             current = current.withParameterCreated(id, name, if (blend) ParameterKind.BLEND_SHAPE else ParameterKind.NORMAL)
+            created += id
             current = current.copy(parameters = current.parameters.map {
                 if (it.id != id) it
                 else it.copy(min = mode.axis.keys.first(), max = mode.axis.keys.last(), default = 0f, keys = if (blend) mode.axis.keys.toList() else it.keys)
             })
         }
+        current = withPhysicsGroup(current, created)
         // Static corrections first: blend shapes add to the grid as it is at the default pose. The modes
         // swing as far as the simulation times the exaggeration; the statics stay exact.
         for (axis in bake.statics + bake.modes.map { exaggerated(it.axis, sim.exaggeration) }) {

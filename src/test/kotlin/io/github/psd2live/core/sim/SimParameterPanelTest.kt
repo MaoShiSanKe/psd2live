@@ -46,6 +46,19 @@ class SimParameterPanelTest {
             .map { assertIs<ParameterNode.Param>(it).id })
     }
 
+    @Test fun generatedAxesGoIntoThePhysicsFolderWhereverItIs() {
+        val hair = ParameterId("ParamHairFront")
+        val physics = ParameterNode.Group(ParameterGroupId("ParamGroupPhysics"), "Physics", true, listOf(ParameterNode.Param(hair)))
+        val outer = ParameterNode.Group(ParameterGroupId("Outer"), "Outer", true, listOf(physics))
+        val tree = base.copy(parameters = listOf(Parameter(hair, "Hair", -1f, 1f, 0f)), parameterTree = listOf(outer))
+        val model = SimGenerator.apply(tree, listOf(sim))
+        val placed = assertIs<ParameterNode.Group>(assertIs<ParameterNode.Group>(model.parameterTree.single()).children.single())
+        assertEquals(listOf(x, y, hair), placed.children.map { assertIs<ParameterNode.Param>(it).id })
+
+        val bare = SimGenerator.apply(tree.copy(parameterTree = listOf(ParameterNode.Param(hair))), listOf(sim))
+        assertTrue(bare.parameterTree.all { it is ParameterNode.Param })
+    }
+
     @Test fun editorJournalKeepsMovesAndLinksAfterSavingAndRebuilding() {
         checkEditorJournal(sim)
     }
@@ -54,7 +67,14 @@ class SimParameterPanelTest {
         checkEditorJournal(sim.copy(blendShapes = true), ParameterKind.BLEND_SHAPE)
     }
 
-    private fun checkEditorJournal(simulation: RigSimEdit, expectedKind: ParameterKind = ParameterKind.NORMAL) {
+    @Test fun editorJournalMatchesRebuildsWithAPhysicsFolder() {
+        val hair = ParameterId("ParamHairFront")
+        checkEditorJournal(sim, start = base.copy(parameters = listOf(Parameter(hair, "Hair", -1f, 1f, 0f)), parameterTree = listOf(
+            ParameterNode.Group(ParameterGroupId("ParamGroupPhysics"), "Physics", true, listOf(ParameterNode.Param(hair))))))
+    }
+
+    private fun checkEditorJournal(simulation: RigSimEdit, expectedKind: ParameterKind = ParameterKind.NORMAL, start: PuppetModel = base) {
+        val base = start
         var overlay = RigEditOverlay(simEdits = listOf(simulation))
         // Use the same compile -> persist -> rebuild path as the editor's authorRig call.
         for (edit in listOf(folder, move(x), move(y), link(true), link(false), link(true))) {
