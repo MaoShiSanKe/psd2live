@@ -32,6 +32,11 @@ object PhysicsGenerator {
 			}
 
 			fun enabled(config: PipelineConfig) = Presets(config.physicsFrontHair, config.physicsBackHair, config.physicsEyeJelly)
+
+			/** [present] without the hair the model preset simulates: that hair has no legacy pendulum. */
+			fun present(analysis: PipelineAnalysis?, simulatedFront: Boolean, simulatedBack: Boolean) = present(analysis).let {
+				it.copy(frontHair = it.frontHair && !simulatedFront, backHair = it.backHair && !simulatedBack)
+			}
 		}
 	}
 

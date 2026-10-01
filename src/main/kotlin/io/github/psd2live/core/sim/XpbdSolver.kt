@@ -130,18 +130,6 @@ class LongRangeConstraints(val particle: IntArray, val root: IntArray, val maxDi
     }
 }
 
-/** Something particles cannot enter. Implementations update their own geometry between frames. */
-interface SimCollider {
-    /**
-     * Pushes particle ([x], [y]) out when it is inside; writes the resolved position to [out] and returns
-     * true, or returns false when it was outside.
-     */
-    fun resolve(x: Float, y: Float, out: FloatArray): Boolean
-
-    /** Collider motion over the last frame at a point, for friction; zero for a still collider. */
-    fun velocityAt(x: Float, y: Float, out: FloatArray) { out[0] = 0f; out[1] = 0f }
-}
-
 /** Global settings of one solve. */
 data class SimSettings(
     /** Gravity in px/s², world space (y up). */
@@ -153,13 +141,11 @@ data class SimSettings(
     val substeps: Int = 16,
     /** Compliance of a pin with weight 1 is 0 (rigid); a softer pin scales this by (1 - w) / w. */
     val pinCompliance: Float = 1e-4f,
-    /** Friction against colliders, 0..1: the share of relative tangential motion removed on contact. */
-    val friction: Float = 0.2f,
 ) {
     init {
         require(substeps in 1..128) { "Substeps must be within 1..128" }
-        require(listOf(gravityX, gravityY, windX, windY, pinCompliance, friction).all(Float::isFinite))
-        require(pinCompliance >= 0f && friction in 0f..1f)
+        require(listOf(gravityX, gravityY, windX, windY, pinCompliance).all(Float::isFinite))
+        require(pinCompliance >= 0f)
     }
 }
 
@@ -176,9 +162,6 @@ class XpbdSolver(
     val pinWeight: FloatArray = FloatArray(state.count),
     /** Compliance toward the goal shape per particle; [Float.POSITIVE_INFINITY] or no entry is none. */
     val goalCompliance: FloatArray = FloatArray(state.count) { Float.POSITIVE_INFINITY },
-    /** Particles that collide; all particles when null. */
-    val colliding: BooleanArray? = null,
-    var colliders: List<SimCollider> = emptyList(),
     var settings: SimSettings = SimSettings(),
 ) {
     private val n = state.count
@@ -187,13 +170,9 @@ class XpbdSolver(
     private val weldLambda = FloatArray(welds.size * 2)
     private val pinLambda = FloatArray(n * 2)
     private val goalLambda = FloatArray(n * 2)
-    private val scratch = FloatArray(2)
-    private val colliderVelocity = FloatArray(2)
-    private val contact = BooleanArray(n)
 
     init {
         require(pinWeight.size == n && goalCompliance.size == n) { "Per-particle arrays must match the particle count" }
-        require(colliding == null || colliding.size == n)
     }
 
     /** Pinned particles are those with a full pin; they move only with their anchor. */
@@ -222,7 +201,6 @@ class XpbdSolver(
             solveWelds(h)
             solveGoals(h, angle)
             solveLongRange()
-            solveCollisions()
             updateVelocities(h)
         }
         s.settle()
@@ -347,39 +325,11 @@ class XpbdSolver(
         }
     }
 
-    private fun solveCollisions() {
-        if (colliders.isEmpty()) return
-        val s = state
-        for (i in 0 until n) {
-            contact[i] = false
-            if (kinematic(i) || (colliding != null && !colliding[i])) continue
-            for (collider in colliders) {
-                if (collider.resolve(s.x[i], s.y[i], scratch)) {
-                    s.x[i] = scratch[0]; s.y[i] = scratch[1]
-                    contact[i] = true
-                }
-            }
-        }
-    }
-
     private fun updateVelocities(h: Float) {
         val s = state
-        val friction = settings.friction
         for (i in 0 until n) {
             s.vx[i] = (s.x[i] - s.px[i]) / h
             s.vy[i] = (s.y[i] - s.py[i]) / h
-            if (contact[i] && friction > 0f) {
-                // Remove a share of the motion relative to the collider; what is left keeps the particle
-                // sliding along the surface instead of sticking.
-                var relX = s.vx[i]
-                var relY = s.vy[i]
-                for (collider in colliders) {
-                    collider.velocityAt(s.x[i], s.y[i], colliderVelocity)
-                    relX -= colliderVelocity[0]; relY -= colliderVelocity[1]
-                }
-                s.vx[i] -= relX * friction
-                s.vy[i] -= relY * friction
-            }
         }
     }
 

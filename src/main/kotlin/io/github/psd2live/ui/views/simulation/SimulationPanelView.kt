@@ -50,7 +50,6 @@ import io.github.psd2live.core.PhysicsSourceType
 import io.github.psd2live.core.sim.GlueRole
 import io.github.psd2live.core.sim.RigSimEdit
 import io.github.psd2live.core.sim.SimBake
-import io.github.psd2live.core.sim.SimColliderRef
 import io.github.psd2live.core.sim.SimGenerator
 import io.github.psd2live.core.sim.SimKind
 import io.github.psd2live.core.sim.SimMaterial
@@ -94,7 +93,7 @@ import org.umamo.runtime.model.VertexGroupKind
 import java.util.Locale
 
 /** The panel's foldable sections: the body list and the selected body's editor sections. */
-private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "colliders", "glue", "groups")
+private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "glue", "groups")
 
 /** Whether a simulation exports, and as its current setup. */
 private enum class BakeState { BAKED, STALE, UNBAKED, DISABLED }
@@ -423,26 +422,6 @@ private fun SimulationEditor(
 		}, Modifier.fillMaxWidth(), itemLabel = { it ?: tr("sim.addInput") }, height = 22.dp)
 	}
 
-	PhysicsSection(tr("sim.colliders"), section("colliders"), { toggle("colliders") }, count = sim.colliders.size, icon = icon(SimSectionIcon.COLLIDERS)) {
-		for (collider in sim.colliders) {
-			val groups = puppet.vertexGroups.filter { it.drawableId.raw == collider.drawableId && it.kind == VertexGroupKind.COLLIDER }.map { it.name }
-			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-				Text(collider.drawableId, style = caption, color = colors.textPrimary,
-					maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-				CompactDropdown(listOf<String?>(null) + groups, collider.group, { group ->
-					commit(sim.copy(colliders = sim.colliders.map { if (it === collider) it.copy(group = group) else it }))
-				}, Modifier.width(96.dp), itemLabel = { it ?: tr("sim.wholeMesh") }, height = 22.dp)
-				RemoveButton { commit(sim.copy(colliders = sim.colliders - collider)) }
-			}
-		}
-		val candidates = selectedMeshes(state).filter { it !in sim.targets && sim.colliders.none { c -> c.drawableId == it } }
-		CompactButton(if (candidates.isEmpty()) tr("sim.collidersHint") else tr("sim.addColliders", candidates.size), {
-			commit(sim.copy(colliders = sim.colliders + candidates.map { id ->
-				SimColliderRef(id, puppet.vertexGroups.firstOrNull { it.drawableId.raw == id && it.kind == VertexGroupKind.COLLIDER }?.name)
-			}))
-		}, Modifier.fillMaxWidth(), enabled = candidates.isNotEmpty(), height = 22.dp)
-	}
-
 	val glues = puppet.glues.filter { it.meshA.raw in sim.targets || it.meshB.raw in sim.targets }
 	PhysicsSection(tr("sim.glue"), section("glue"), { toggle("glue") }, count = glues.size, icon = icon(SimSectionIcon.GLUE)) {
 		if (glues.isEmpty()) Text(tr("sim.noGlue"), style = caption, color = colors.textMuted)
@@ -549,18 +528,13 @@ private fun BakeEditor(
 	}
 	if (sim.blendShapes == true && !puppet.runtimeTarget.supports(RuntimeFeature.MeshWarpBlendShapes))
 		Text(tr("sim.blendShapesUnavailable"), style = caption, color = colors.textMuted)
-	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-		FieldLabel(tr("sim.staticInputs"), tooltip = tr("sim.staticInputsTip"))
-		CompactCheckbox(sim.staticInputs == null, { auto -> commit(sim.copy(staticInputs = if (auto) null else emptyList())) }, label = tr("sim.staticAuto"))
-	}
-	val statics = sim.staticInputs
-	if (statics != null) {
-		for (parameter in statics) RemovableRow(parameter) { commit(sim.copy(staticInputs = statics - parameter)) }
-		val available = puppet.parameters.map { it.id.raw }.filter { it !in statics && bake?.parameters?.contains(it) != true }
-		if (statics.size < RigSimEdit.MAX_STATIC_INPUTS && available.isNotEmpty()) CompactDropdown(listOf<String?>(null) + available, null, { id ->
-			if (id != null) commit(sim.copy(staticInputs = statics + id))
-		}, Modifier.fillMaxWidth(), itemLabel = { it ?: tr("sim.addStaticInput") }, height = 22.dp)
-	}
+	FieldLabel(tr("sim.staticInputs"), tooltip = tr("sim.staticInputsTip"))
+	val statics = sim.staticInputs.orEmpty()
+	for (parameter in statics) RemovableRow(parameter) { commit(sim.copy(staticInputs = (statics - parameter).ifEmpty { null })) }
+	val available = puppet.parameters.map { it.id.raw }.filter { it !in statics && bake?.parameters?.contains(it) != true }
+	if (statics.size < RigSimEdit.MAX_STATIC_INPUTS && available.isNotEmpty()) CompactDropdown(listOf<String?>(null) + available, null, { id ->
+		if (id != null) commit(sim.copy(staticInputs = statics + id))
+	}, Modifier.fillMaxWidth(), itemLabel = { it ?: tr("sim.addStaticInput") }, height = 22.dp)
 	if (bake != null) {
 		for (mode in bake.modes) Text(tr("sim.bakedMode", mode.axis.parameter, String.format(Locale.US, "%.1f", mode.amplitude)), style = caption, color = colors.textMuted)
 		if (bake.statics.isNotEmpty()) Text(tr("sim.bakedStatics", bake.statics.joinToString { it.parameter }), style = caption, color = colors.textMuted)
@@ -591,7 +565,7 @@ private fun DraftSlider(title: String, tooltip: String, value: Float, range: Clo
 }
 
 /** The kinds a simulation reads per vertex, in the order they are usually painted. */
-private val SIM_GROUP_KINDS = listOf(VertexGroupKind.PIN, VertexGroupKind.COLLIDE, VertexGroupKind.STIFFNESS, VertexGroupKind.GOAL,
+private val SIM_GROUP_KINDS = listOf(VertexGroupKind.PIN, VertexGroupKind.STIFFNESS, VertexGroupKind.GOAL,
 	VertexGroupKind.MASS, VertexGroupKind.DAMPING)
 
 /** Whether the targets have each kind's group, and Paint to open the weight brush on it. */
@@ -609,13 +583,4 @@ private fun GroupsEditor(viewModel: PSD2LiveViewModel, puppet: PuppetModel, sim:
 			CompactButton(tr("sim.paint"), { viewModel.beginVertexGroupPaint(sim.targets.first(), kind) }, height = 22.dp)
 		}
 	}
-}
-
-/** The meshes of the selected layers. */
-private fun selectedMeshes(state: PSD2LiveState): List<String> {
-	val model = state.previewModel ?: return emptyList()
-	val layers = state.selectedLayerIds.ifEmpty { setOfNotNull(state.selectedLayerId) }
-	return model.rig.layerIdByDrawableId.filter { (drawable, layer) ->
-		layer in layers && model.rig.puppet.drawables.any { it.id.raw == drawable && it.mesh != null }
-	}.keys.sorted()
 }

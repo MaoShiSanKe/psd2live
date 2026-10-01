@@ -63,6 +63,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -537,6 +539,55 @@ class PSD2LiveViewModel : AutoCloseable {
         runSimulationMutation("Deleted simulation $id") { workspace, head -> workspace.deleteSimulation(id, head) }
     }
 
+    private val _modelPresetReport = MutableStateFlow<kotlinx.serialization.json.JsonObject?>(null)
+    /** What the last model preset made: its simulations, the garments it read and each bake. */
+    val modelPresetReport: StateFlow<kotlinx.serialization.json.JsonObject?> = _modelPresetReport.asStateFlow()
+
+    /** Applies [preset] to every recognized part, or with [selectedOnly] to the selected layers, as one history node. */
+    internal fun applyModelPreset(preset: io.github.psd2live.core.sim.ModelPresets.Preset, selectedOnly: Boolean) {
+        val current = _state.value
+        val layers = if (selectedOnly) current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) } else emptySet()
+        if (selectedOnly && layers.isEmpty()) return
+        _simulationStatus.value = SimulationStatus.Idle
+        runSimulationMutation("Applied model preset ${preset.jsonName}") { workspace, head ->
+            val (result, report) = workspace.applyModelPreset(preset, layers, head, io.github.psd2live.agent.MutationAuthor.USER)
+            _modelPresetReport.value = report
+            (report["bakes"] as? kotlinx.serialization.json.JsonObject)?.values?.firstNotNullOfOrNull { bake ->
+                ((bake as? kotlinx.serialization.json.JsonObject)?.get("error") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                ?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
+            result
+        }
+    }
+
+    /** Drops the [front] or back hair simulation preset and brings back the legacy sway. */
+    internal fun restoreClassicHair(front: Boolean) {
+        if (_state.value.simulationPreviewId in io.github.psd2live.core.sim.ModelPresets.PRESET_SIMS) setSimulationPreview(null)
+        runSimulationMutation("Restored classic hair sway") { workspace, head ->
+            workspace.restoreClassicHair(front, head, io.github.psd2live.agent.MutationAuthor.USER)
+        }
+    }
+
+    fun setCanvasCreationPreset(preset: CanvasCreationPreset) {
+        updateState { it.copy(canvasCreation = preset) }
+        markWorkspaceChanged()
+    }
+
+    /** New warps on [editor] take [preset]'s lattice and attachment from now on. */
+    private fun applyCanvasCreationPreset(preset: CanvasCreationPreset, editor: CanvasEditor) {
+        editor.warpCreateGridRows = preset.warpRows
+        editor.warpCreateGridCols = preset.warpCols
+        editor.warpCreateBezierRows = preset.bezierRows
+        editor.warpCreateBezierCols = preset.bezierCols
+        io.github.psd2live.ui.WarpAddTo.entries.firstOrNull { it.name == preset.warpAddTo }?.let { editor.warpAddTo = it }
+    }
+
+    /** Puts the active canvas in Edit with the create warp or rotation tool, ready to place one. */
+    internal fun beginCanvasCreation(rotation: Boolean) {
+        setCanvasMode(_state.value.activeCanvas.id, CanvasMode.EDIT)
+        applyCanvasCreationPreset(_state.value.canvasCreation, canvasEditor)
+        canvasEditor.activateTool(if (rotation) io.github.psd2live.ui.CanvasTool.CREATE_ROTATION else io.github.psd2live.ui.CanvasTool.CREATE_WARP)
+    }
+
     /** A new simulation of the meshes of the selected layers; returns its ID, or null with nothing selected. */
     internal fun createSimulationFromSelection(kind: io.github.psd2live.core.sim.SimKind): String? {
         val current = _state.value
@@ -718,7 +769,9 @@ class PSD2LiveViewModel : AutoCloseable {
             canvasEditors.clear()
             editorGeneration = current.projectOpenGeneration
         }
-        return canvasEditors.getOrPut(current.activeWorkspace.id to canvasId) { CanvasEditor(this, current.activeWorkspace.id, canvasId) }
+        return canvasEditors.getOrPut(current.activeWorkspace.id to canvasId) {
+            CanvasEditor(this, current.activeWorkspace.id, canvasId).also { applyCanvasCreationPreset(current.canvasCreation, it) }
+        }
     }
     internal val canvasEditor: CanvasEditor get() = canvasEditorFor(uiState.value.activeCanvas.id)
 
@@ -2192,9 +2245,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun physicsGroups(state: PSD2LiveState = _state.value): List<PhysicsGroup> {
 		val model = state.previewModel ?: return emptyList()
 		val key = listOf(model.analysis, model.rig.puppet.parameters, state.rigEdits.physicsEdits, state.rigEdits.disabledPhysicsIds, state.rigEdits.physicsOrder,
-			state.rigEdits.skeleton, state.rigEdits.swingEdits, state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly)
+			state.rigEdits.skeleton, state.rigEdits.swingEdits, state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly,
+			state.hairSimulationFront, state.hairSimulationBack)
 		physicsCatalogCache?.let { (k, groups) -> if (k == key) return groups }
-		val groups = PhysicsCatalog.groups(PhysicsGenerator.Presets.present(model.analysis),
+		val groups = PhysicsCatalog.groups(PhysicsGenerator.Presets.present(model.analysis, state.hairSimulationFront, state.hairSimulationBack),
 			PhysicsGenerator.Presets(state.physicsFrontHair, state.physicsBackHair, state.physicsEyeJelly),
 			state.rigEdits, model.rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
 		physicsCatalogCache = key to groups
@@ -2763,8 +2817,13 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	fun setTextureSubExpanded(expanded: Boolean) {
-		updateState { it.copy(textureSubExpanded = expanded) }
+	fun setSimulationPresetsExpanded(expanded: Boolean) {
+		updateState { it.copy(simulationPresetsExpanded = expanded) }
+	    markWorkspaceChanged()
+	}
+
+	fun setCanvasCreationExpanded(expanded: Boolean) {
+		updateState { it.copy(canvasCreationExpanded = expanded) }
 	    markWorkspaceChanged()
 	}
 
@@ -2773,30 +2832,14 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	fun resetSettingsToDefault() {
+	/** Back to the default presets; hair simulations stay until their classic sway is restored. */
+	fun resetModelPresetsToDefault() {
 		updateState {
 			it.copy(
-				atlasSize = 4096,
-                textureUpscale = io.github.psd2live.core.TextureUpscaleConfig(),
-				textureSubExpanded = false,
 				strengthSubExpanded = false,
 				dynamicsSubExpanded = false,
-				meshSpacing = 40,
-				meshOuterMargin = 1.0f,
-				meshEdgeMode = io.github.psd2live.core.MeshEdgeMode.SINGLE,
-				meshEdgeWidth = 10.0f,
-				meshMaxEdgeDistance = 6.0f,
-				meshInteriorDensity = 40.0f,
-				meshFillAlgorithm = io.github.psd2live.core.MeshFillAlgorithm.GRADED_POISSON,
-				meshSuppressBoundaryDiagonals = false,
-				meshFillParameters = io.github.psd2live.core.MeshFillParameters(),
-				meshOverrides = emptyMap(),
-				texturePadding = 2,
-				alphaThreshold = 8,
 				headStrength = 1.0f,
 				bodyStrength = 1.0f,
-				meshOnly = false,
-				generateDeformers = true,
 				featureDisplacementEnabled = false,
                 mouthOutlineEnabled = true,
                 mouthShape = "smile",
@@ -2813,17 +2856,21 @@ class PSD2LiveViewModel : AutoCloseable {
 				physicsFrontHair = true,
 				physicsBackHair = true,
 				physicsEyeJelly = true,
-				exportCmo3 = true,
-				exportMoc3 = true,
-				exportJson = true,
-				runtimeTarget = org.umamo.runtime.model.RuntimeTarget.Cubism50,
-				exportHiddenParts = false,
-				exportHiddenDrawables = false,
-				exportGuideImageParts = false,
-				exportIncludePhysics = true,
-				exportIncludeUserData = true,
-				exportIncludeDisplayInfo = true,
-				exportPixelsPerUnit = null,
+				canvasCreation = CanvasCreationPreset.STANDARD,
+			)
+		}
+		schedulePreviewRebuild()
+	    editorChanged()
+	}
+
+	/** The export dialog's texture atlas section back to its defaults. */
+	fun resetTextureAtlasToDefault() {
+		updateState {
+			it.copy(
+				atlasSize = 4096,
+                textureUpscale = io.github.psd2live.core.TextureUpscaleConfig(),
+				texturePadding = 2,
+				alphaThreshold = 8,
 			)
 		}
 		schedulePreviewRebuild()
@@ -4857,7 +4904,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (current != null && pipeline.canFastUpdateRig(current, source, config)) {
 				pipeline.updateRigEdits(current, config)
 			} else if (current != null && (current.analysis.source === source || current.analysis.source == source) &&
-				current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits, drawOrderOverrides = config.drawOrderOverrides) == config
+				current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits, drawOrderOverrides = config.drawOrderOverrides,
+					hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack) == config
 			) {
 				pipeline.rebuildPreview(current, config)
 			} else {
@@ -5419,6 +5467,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	// that sit lower in this class (pausedPhysics, live pose, etc.).
 	init {
 		startMotionLoop()
+		// The preset reaches every open canvas, whether it changed here or arrived with a project.
+		scope.launch {
+			state.map { it.canvasCreation }.distinctUntilChanged().collect { preset ->
+				canvasEditors.values.forEach { applyCanvasCreationPreset(preset, it) }
+			}
+		}
 	}
 
 	override fun close() {

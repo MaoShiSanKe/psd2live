@@ -17,7 +17,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | 骨骼与姿态 | 骨架推断、绑定、IK、预设动作与烘焙结构 | [打开](zh/guide/SKELETON.md) | 中文 | 中文 |
 | 摇摆生成 | 左右 / 上下摇摆、画布手柄、摆锤与烘焙 | [打开](zh/guide/SWING.md) | 中文 | 中文 |
 | 物理 | 物理组来源、摆锤画布、输入输出、预置与导出 | [打开](zh/guide/PHYSICS.md) | 中文 | 中文 |
-| 模拟与烘焙 | 布料 / 头发的 2D 模拟、顶点权重组、胶水角色、碰撞体，烘焙为参数、关键形与摆锤 | [打开](zh/guide/SIMULATION.md) | 中文 | 中文 |
+| 模拟与烘焙 | 布料 / 头发的 2D 模拟、顶点权重组、胶水角色，烘焙为参数、关键形与摆锤 | [打开](zh/guide/SIMULATION.md) | 中文 | 中文 |
 | 变形路径（实验性） | 路径的创建、绑定与导出方式 | [打开](zh/guide/DEFORM_PATHS.md) | 中文 | 中文 |
 | 纹理高清化 | 本地 nunif 配置、参数与效果检查 | [打开](zh/guide/TEXTURE_UPSCALE.md) | 中文 | 中文 |
 
@@ -45,7 +45,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 
 | 文档 | 内容 |
 | --- | --- |
-| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、25 个公开工具、调用示例、状态与历史 |
+| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、26 个公开工具、调用示例、状态与历史 |
 | [Agent 设计与验收](zh/agent/AGENT_DESIGN.md) | 分工边界、工具设计原则、任务验收步骤 |
 | [UI / MCP 能力对照](zh/agent/UI_MCP_PARITY_ISSUE_13.md) | 每项能力在界面与 MCP 中的入口 |
 | [能力实测](zh/STATUS.md) | 真实任务的实测记录与记录格式 |

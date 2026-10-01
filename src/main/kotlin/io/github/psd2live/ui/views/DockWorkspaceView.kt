@@ -1016,7 +1016,7 @@ private fun DockModuleContent(
 		"animationEditor" -> AnimationEditorView(state, vm)
 		"settings" -> {
 			Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-				ModelSettingsSection(
+				ModelPresetsSection(
 					state,
 					vm,
 					state.modelSettingsExpanded,

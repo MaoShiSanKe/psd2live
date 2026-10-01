@@ -163,22 +163,6 @@ class SimulationTest {
         assertTrue(distance <= 100f * 1.02f + 0.5f, "tip reached $distance px from the root, limit ${100f * 1.02f}")
     }
 
-    @Test fun colliderMeshPushesCollidingVerticesOut() {
-        val cloth = grid(2, 6, 10f)
-        // A block right under the cloth's lower half, only its triangles in the COLLIDER group.
-        val leg = grid(2, 2, 15f, left = -5f, top = 35f)
-        val collider = VertexGroup("legs", DrawableId("leg"), VertexGroupKind.COLLIDER, FloatArray(leg.vertexCount) { 1f })
-        val source = model(drawable("cloth", cloth), drawable("leg", leg), groups = listOf(topPin("cloth", cloth, 2), collider))
-        val scene = hangingScene(source) { it.copy(colliders = listOf(SimColliderRef("leg", "legs", 1f))) }
-        repeat(120) { scene.drive(source, emptyMap(), 1f / 60f) }
-        val out = scene.positions(DrawableId("cloth"))!!
-        val region = TriangleRegionCollider(leg.indices, 0f).also { it.update(world(leg), 1f / 60f) }
-        val probe = FloatArray(2)
-        for (v in 0 until cloth.vertexCount) {
-            assertFalse(region.resolve(out[v * 2], out[v * 2 + 1], probe), "vertex $v ended inside the collider")
-        }
-    }
-
     // Glue roles
 
     private fun gluedPair(role: GlueRole): Pair<PuppetModel, SimScene> {
@@ -210,10 +194,27 @@ class SimulationTest {
 
     @Test fun simEditJsonRoundTrips() {
         val edit = RigSimEdit("skirt", "Skirt", SimKind.CLOTH, listOf("a", "b"),
-            groups = mapOf(VertexGroupKind.PIN to "waist"), glueRoles = mapOf("a|c" to GlueRole.PIN, "a|b" to GlueRole.CONSTRAINT),
-            colliders = listOf(SimColliderRef("leg", "legs", 3f)))
+            groups = mapOf(VertexGroupKind.PIN to "waist"), glueRoles = mapOf("a|c" to GlueRole.PIN, "a|b" to GlueRole.CONSTRAINT))
         assertEquals(edit, RigSimEdit.fromJson(edit.toJson()))
         assertEquals(SimMaterial.preset(SimKind.HAIR), edit.patched(buildJsonObject { put("kind", "hair") }).material)
+    }
+
+    @Test fun retiredCollisionSettingsAreDroppedOnLoad() {
+        val old = buildJsonObject {
+            put("id", "skirt"); put("name", "Skirt"); put("kind", "cloth"); putJsonArray("targets") { add("cloth") }
+            putJsonObject("groups") { put("pin", "waist"); put("collide", "sides") }
+            putJsonArray("colliders") { addJsonObject { put("mesh", "leg"); put("margin", 2f) } }
+        }
+        assertEquals(mapOf(VertexGroupKind.PIN to "waist"), RigSimEdit.fromJson(old).groups)
+        val cloth = grid(2, 2, 10f)
+        val source = model(drawable("cloth", cloth))
+        val put = buildJsonObject {
+            put("op", "vertex_group_put"); put("target", "mesh:cloth"); put("name", "sides"); put("kind", "collide")
+            putJsonArray("weights") { repeat(cloth.vertexCount) { add(1f) } }
+        }
+        val loaded = VertexGroupJournal.apply(source, put)
+        assertTrue(loaded.vertexGroups.isEmpty())
+        assertTrue(VertexGroupJournal.apply(loaded, VertexGroupJournal.delete("cloth", "sides")).vertexGroups.isEmpty())
     }
 
     // Authoring and persistence

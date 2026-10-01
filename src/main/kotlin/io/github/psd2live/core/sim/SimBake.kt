@@ -138,15 +138,14 @@ class SimBakeResult(
 object SimBake {
     /**
      * What a bake of [edit] depends on in [model]: the settings, the targets' rest meshes, their vertex
-     * groups, the glues touching them and the colliders' meshes. A bake's own keys change none of these,
+     * groups and the glues touching them. A bake's own keys change none of these,
      * so the model with or without them gives the same answer.
      */
     fun fingerprint(model: PuppetModel, edit: RigSimEdit): String {
         val text = StringBuilder()
         val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake" - "exaggeration")
         text.append(settings.toString())
-        val meshes = edit.targets + edit.colliders.map { it.drawableId }
-        for (raw in meshes) {
+        for (raw in edit.targets) {
             val drawable = model.drawables.firstOrNull { it.id.raw == raw }
             val mesh = drawable?.mesh
             text.append("|mesh:").append(raw).append(':').append(mesh?.vertexCount ?: -1)

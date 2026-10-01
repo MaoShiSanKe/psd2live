@@ -78,25 +78,8 @@ data class SimMaterial(
     }
 }
 
-/** A mesh that pushes simulated vertices out; [group] names its COLLIDER vertex group, null the whole mesh. */
-data class SimColliderRef(val drawableId: String, val group: String? = null, val margin: Float = 2f) {
-    init {
-        require(drawableId.isNotBlank()) { "Collider mesh is required" }
-        require(margin.isFinite() && margin >= 0f) { "Collider margin must be >= 0" }
-    }
-
-    fun toJson() = buildJsonObject {
-        put("mesh", drawableId); group?.let { put("group", it) }; put("margin", margin)
-    }
-
-    companion object {
-        fun fromJson(o: JsonObject) = SimColliderRef(o.getValue("mesh").jsonPrimitive.content,
-            o["group"]?.jsonPrimitive?.contentOrNull, o.number("margin") ?: 2f)
-    }
-}
-
 /**
- * One simulated body: ArtMesh [targets] simulated together, held by pins and glue, pushed by colliders.
+ * One simulated body: ArtMesh [targets] simulated together, held by pins and glue.
  *
  * [groups] names the vertex group used for each kind; a kind without an entry uses the target's first
  * group of that kind, and none at all means the material value everywhere (no pins, for [VertexGroupKind.PIN]).
@@ -109,15 +92,13 @@ data class RigSimEdit(
     val material: SimMaterial = SimMaterial.preset(kind),
     val groups: Map<VertexGroupKind, String> = emptyMap(),
     val glueRoles: Map<String, GlueRole> = emptyMap(),
-    val colliders: List<SimColliderRef> = emptyList(),
     /** Parameters that move the rig during training and preview; the bake reads them. Empty uses the head and body angles. */
     val inputs: List<PhysicsInput> = emptyList(),
     val enabled: Boolean = true,
     /** Dynamic modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum each. */
     val modes: Int = 2,
     /**
-     * Parameters whose pose is baked exactly, as corrections on their own axes (a leg pushing the skirt).
-     * Null picks the parameters that move a collider.
+     * Parameters whose pose is baked exactly, as corrections on their own axes. Null bakes none.
      */
     val staticInputs: List<String>? = null,
     /** Keys on each mode parameter and static axis, odd within [KEY_COUNTS]: more follow arcs and pushes more closely. */
@@ -140,7 +121,6 @@ data class RigSimEdit(
     init {
         require(listOf(id, name).all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Simulation ID and name are required" }
         require(targets.isNotEmpty() && targets.distinct().size == targets.size && targets.all { it.isNotBlank() }) { "Simulation needs distinct target meshes" }
-        require(colliders.none { it.drawableId in targets }) { "A simulated mesh cannot also be its own collider" }
         require(inputs.map { it.parameter }.distinct().size == inputs.size) { "A parameter feeds a simulation once" }
         require(modes in 1..MAX_MODES) { "A simulation bakes 1..$MAX_MODES modes" }
         require(staticInputs == null || staticInputs.size <= MAX_STATIC_INPUTS && staticInputs.distinct().size == staticInputs.size) {
@@ -159,7 +139,6 @@ data class RigSimEdit(
         put("material", material.toJson())
         if (groups.isNotEmpty()) putJsonObject("groups") { groups.forEach { (k, v) -> put(k.jsonName, v) } }
         if (glueRoles.isNotEmpty()) putJsonObject("glue_roles") { glueRoles.forEach { (k, v) -> put(k, v.jsonName) } }
-        if (colliders.isNotEmpty()) putJsonArray("colliders") { colliders.forEach { add(it.toJson()) } }
         if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
         if (!enabled) put("enabled", false)
         if (modes != 2) put("modes", modes)
@@ -183,9 +162,9 @@ data class RigSimEdit(
             targets = o["targets"]?.jsonArray?.map { it.jsonPrimitive.content } ?: targets,
             material = o["material"]?.jsonObject?.let { SimMaterial.fromJson(it, if (nextKind != kind) SimMaterial.preset(nextKind) else material) }
                 ?: if (nextKind != kind) SimMaterial.preset(nextKind) else material,
-            groups = o["groups"]?.jsonObject?.map { (k, v) -> VertexGroupKind.parse(k) to v.jsonPrimitive.content }?.toMap() ?: groups,
+            groups = o["groups"]?.jsonObject?.filterKeys { it.lowercase() !in VertexGroupKind.RETIRED }
+                ?.map { (k, v) -> VertexGroupKind.parse(k) to v.jsonPrimitive.content }?.toMap() ?: groups,
             glueRoles = o["glue_roles"]?.jsonObject?.map { (k, v) -> k to GlueRole.parse(v.jsonPrimitive.content) }?.toMap() ?: glueRoles,
-            colliders = o["colliders"]?.jsonArray?.map { SimColliderRef.fromJson(it.jsonObject) } ?: colliders,
             inputs = o["inputs"]?.jsonArray?.map { PhysicsInput.fromJson(it.jsonObject) } ?: inputs,
             enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: enabled,
             modes = o["modes"]?.jsonPrimitive?.intOrNull ?: modes,

@@ -33,7 +33,7 @@ The catalog has 18 topics. The beginner path contains the 17 lessons below; the 
 
 | Lesson | Topic | Remember |
 | --- | --- | --- |
-| 1 | Basic workflow | Import layered artwork, inspect parts and settings, then choose export formats. |
+| 1 | Basic workflow | Import layered artwork, inspect parts and model presets, then choose export formats; texture atlas settings are in the export dialog. |
 | 2 | Workspace | Edit changes the model; Preview shows it; History restores versions. Each canvas tab has its own camera and overlays. |
 | 3 | Hierarchy and mode bar | Select, search and reparent objects. Drop transparent artwork on the tree and confirm placement. Drawing order and parent deformation are different. |
 | 4 | Layer types and variants | Presets apply part algorithms; toggle variants show/hide; exclusive variants share a parameter with different association IDs. |

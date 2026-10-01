@@ -4,7 +4,7 @@
 
 **Generate a Live2D model from a layered PSD, then refine, rig, animate, simulate and export it in one desktop workspace.**
 
-![PSD2Live editing workspace: hierarchy on the left, the canvas in Deform mode showing the front-hair mesh, model settings and the layer classification table on the right](../imgs/overview.webp)
+![PSD2Live editing workspace: hierarchy on the left, the canvas in Deform mode showing the front-hair mesh, model presets and the layer classification table on the right](../imgs/overview.webp)
 
 PSD2Live recognizes parts from layer names and generates meshes, a deformer hierarchy, head, body and facial parameters, basic motions and physics. The generated model is a starting point: keep shaping it on the canvas, cut and subdivide meshes, paint textures, build a skeleton and edit motion curves, then export a `.cmo3` for further work in Cubism Editor or a `.moc3` runtime bundle.
 
@@ -23,7 +23,7 @@ PSD2Live recognizes parts from layer names and generates meshes, a deformer hier
 | Artwork and variants | Transparent image placement, toggle and exclusive variants, layer painting and edge cleanup, optional 2× / 4× texture upscaling |
 | Animation | Timeline, keyframe and curve editing with live preview; preset crouch, wave, cheer and other motions when a skeleton is available |
 | Projects | Single-file `.psd2live` projects, branching history, tabs, six workspace presets (Edit, Mesh, Rigging, Animation, Preview, Physics), light and dark themes, Photoshop / Blender / Cubism keymaps |
-| Agents | Authenticated local MCP server with 25 public tools for observation, shapes, artwork, parameters, skeletons, motions, physics, simulation, export and history |
+| Agents | Authenticated local MCP server with 26 public tools for observation, shapes, artwork, parameters, skeletons, motions, physics, simulation, export and history |
 
 <table>
 <tr>

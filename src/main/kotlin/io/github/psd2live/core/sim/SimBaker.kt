@@ -3,7 +3,6 @@ package io.github.psd2live.core.sim
 import io.github.psd2live.core.PhysicsEngine
 import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.RigEditOverlay
-import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.render.eval.drawableLocalPosed
 import org.umamo.render.eval.drawableSpaceMapping
 import org.umamo.runtime.model.DrawableId
@@ -19,9 +18,9 @@ import kotlin.math.sqrt
 /**
  * Reduces a simulation to parameters, keyforms and pendulums (see [SimBakeResult]).
  *
- * 1. Static response: for each static input's keys the rig is posed, the body settles against its
- *    colliders, and what is left against the rig becomes corrections on that parameter's own axis, so the
- *    exported model is pushed exactly as far as the pose asks.
+ * 1. Static response: for each static input's keys the rig is posed, the body settles under
+ *    gravity, and what is left against the rig becomes corrections on that parameter's own axis, so the
+ *    exported model hangs exactly as the pose asks.
  * 2. Training: the dynamic inputs play [SimMotionLibrary]'s motion - the model dragged, shaken, nodded
  *    and swaying over the inputs' full ranges - each piece from rest and all of them at once on separate
  *    copies of the body; each frame records how far the body is from the rig (minus the static
@@ -83,7 +82,7 @@ object SimBaker {
 
         // 1. Static response, every key of every static input settled on its own body.
         options.progress(0.02f)
-        val staticAxes = staticInputs(model, edit).mapNotNull { raw ->
+        val staticAxes = edit.staticInputs.orEmpty().mapNotNull { raw ->
             val parameter = parameters[raw]?.takeIf { it.kind == ParameterKind.NORMAL } ?: return@mapNotNull null
             staticKeys(parameter, edit.keys).takeIf { it.size >= 2 }?.let { parameter to it }
         }
@@ -230,28 +229,6 @@ object SimBaker {
         options.progress(1f)
         return SimBakeResult(fingerprint, space.counts, statics, spanned, physics,
             (1.0 - missed / checkTotal).toFloat(), percentile(errors.toList(), 0.95f), peak, clipped, jerk)
-    }
-
-    /** [edit]'s static inputs, or when it names none, the parameters that move a collider most (at most four). */
-    fun staticInputs(model: PuppetModel, edit: RigSimEdit): List<String> {
-        edit.staticInputs?.let { return it }
-        if (edit.colliders.isEmpty()) return emptyList()
-        val evaluator = CpuDeformationEvaluator()
-        val colliders = edit.colliders.map { DrawableId(it.drawableId) }
-        val rest = evaluator.evaluate(model, emptyMap()).worldPositions
-        fun moved(pose: Map<ParameterId, Float>): Float {
-            val world = evaluator.evaluate(model, pose).worldPositions
-            var most = 0f
-            for (id in colliders) {
-                val a = rest[id] ?: continue
-                val b = world[id] ?: continue
-                for (v in 0 until minOf(a.size, b.size) / 2) most = maxOf(most, hypot(a[v * 2] - b[v * 2], a[v * 2 + 1] - b[v * 2 + 1]))
-            }
-            return most
-        }
-        return model.parameters.filter { it.kind == ParameterKind.NORMAL && it.max > it.min }
-            .map { p -> p.id.raw to maxOf(moved(mapOf(p.id to p.min)), moved(mapOf(p.id to p.max))) }
-            .filter { it.second > 2f }.sortedByDescending { it.second }.take(RigSimEdit.MAX_STATIC_INPUTS).map { it.first }
     }
 
     /** [count] keys over [parameter]'s range, half on each side of its default (the default itself is one). */

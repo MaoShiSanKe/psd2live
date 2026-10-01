@@ -109,7 +109,7 @@ internal enum class CanvasTool(val action: ShortcutAction) {
     SUBDIVIDE(ShortcutAction.TOOL_SUBDIVIDE),
     /** The knife: click anchors along a cut, connect them, commit with Enter. */
     KNIFE(ShortcutAction.TOOL_KNIFE),
-    /** Paints a simulation vertex group (pin, collider, stiffness...) on the edited meshes. */
+    /** Paints a simulation vertex group (pin, stiffness, goal...) on the edited meshes. */
     WEIGHT_PAINT(ShortcutAction.TOOL_WEIGHT_PAINT),
     /** Drags a linear gradient into the same vertex group the weight brush paints. */
     WEIGHT_GRADIENT(ShortcutAction.TOOL_WEIGHT_GRADIENT),
@@ -347,8 +347,8 @@ internal val WEIGHT_TOOLS = setOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRA
  * editor bakes or previews, so it is not offered.
  */
 internal val PAINTED_GROUP_KINDS = listOf(
-    VertexGroupKind.PIN, VertexGroupKind.COLLIDE, VertexGroupKind.COLLIDER, VertexGroupKind.STIFFNESS,
-    VertexGroupKind.GOAL, VertexGroupKind.MASS, VertexGroupKind.DAMPING,
+    VertexGroupKind.PIN, VertexGroupKind.STIFFNESS, VertexGroupKind.GOAL,
+    VertexGroupKind.MASS, VertexGroupKind.DAMPING,
 )
 
 /** The two tools of Skeleton mode. */

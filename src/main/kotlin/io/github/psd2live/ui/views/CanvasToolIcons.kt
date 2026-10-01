@@ -655,20 +655,6 @@ internal fun DrawScope.drawVertexGroupKindIcon(kind: VertexGroupKind, color: Col
             pen.ring(9f, 6f, 3.6f)
             pen.line(9f, 9.6f, 9f, 15.4f)
         }
-        // A vertex meeting a surface and turned back.
-        VertexGroupKind.COLLIDE -> {
-            pen.line(14.6f, 3f, 14.6f, 15f)
-            pen.dot(6f, 9f, 2.2f)
-            pen.line(9.2f, 9f, 12f, 9f)
-            pen.chevron(12f, 9f, 1f, 0f, 2.6f)
-        }
-        // A solid that pushes what lands on it away.
-        VertexGroupKind.COLLIDER -> {
-            pen.fillBox(3f, 10f, 12f, 5.4f, 1.2f, pen.soft)
-            pen.box(3f, 10f, 12f, 5.4f, 1.2f)
-            pen.line(9f, 7.6f, 9f, 2.8f)
-            pen.chevron(9f, 2.8f, 0f, -1f, 2.6f)
-        }
         // A spring.
         VertexGroupKind.STIFFNESS -> pen.outline(pen.path {
             m(2.4f, 9f); l(4.4f, 9f); l(6f, 4f); l(8.4f, 14f); l(10.8f, 4f); l(13.2f, 14f); l(14.4f, 9f); l(15.6f, 9f)
@@ -701,7 +687,7 @@ internal fun DrawScope.drawVertexGroupKindIcon(kind: VertexGroupKind, color: Col
 }
 
 /** The simulation panel's sections. */
-internal enum class SimSectionIcon { BAKE, MATERIAL, INPUTS, COLLIDERS, GLUE, GROUPS }
+internal enum class SimSectionIcon { BAKE, MATERIAL, INPUTS, GLUE, GROUPS }
 
 @Composable
 internal fun SimSectionIconView(icon: SimSectionIcon, color: Color, size: Dp = 12.dp) {
@@ -738,7 +724,6 @@ internal fun DrawScope.drawSimSectionIcon(icon: SimSectionIcon, color: Color) {
             pen.line(2.6f, 12.4f, 15.4f, 12.4f)
             pen.dot(11.8f, 12.4f, 2.2f)
         }
-        SimSectionIcon.COLLIDERS -> pen.scope.drawVertexGroupKindIcon(VertexGroupKind.COLLIDER, color)
         SimSectionIcon.GLUE -> pen.glue()
         // Three vertices, each weighted differently.
         SimSectionIcon.GROUPS -> {

@@ -2,7 +2,7 @@
 
 [文档目录](../../README.md) · [English](../../en/spec/DEFORMER_AND_PARAMETER_SPEC.md) · [日本語](../../ja/spec/DEFORMER_AND_PARAMETER_SPEC.md) · [PSD 素材与命名](PSD_LAYER_SPEC.md)
 
-本页描述自动生成的默认结构与编辑约定。实际对象取决于素材、模型设置和后续编辑，应以层级树、参数面板或 MCP inspect 返回值为准。
+本页描述自动生成的默认结构与编辑约定。实际对象取决于素材、模型预设和后续编辑，应以层级树、参数面板或 MCP inspect 返回值为准。
 
 ## 结构
 

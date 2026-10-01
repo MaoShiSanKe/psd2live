@@ -3,6 +3,8 @@ package io.github.psd2live.core
 import io.github.psd2live.i18n.tr
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import org.umamo.edit.withDeformerDeleted
+import org.umamo.edit.withParameterDeleted
 import org.umamo.format.art.LayerBlend
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.ChannelGrids
@@ -909,7 +911,7 @@ object RigBuilder {
 			atlas = puppetAtlas,
 			sources = artSources,
 			deformPaths = builtDeformPaths,
-		).withDerivedRenderRoot()
+		).withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
 		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
 		val skeletonPuppet = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
 			?.let { SkeletonRig.apply(puppet, it, analysis.anchors.character, handEditedTopology(config)) } ?: puppet
@@ -925,6 +927,22 @@ object RigBuilder {
 			warnings,
 			faceRig.initialAngleZ,
 		)
+	}
+
+	/**
+	 * A hair kind the model preset simulates drops its legacy sway: the physics warp unwraps into the follow
+	 * warp, which has the same frame, and its parameter goes, so the simulation bake is the only motion. The
+	 * parameter goes first: that collapses the warp to its rest lattice, which the unwrap then maps through.
+	 */
+	private fun withoutLegacyHairSway(puppet: PuppetModel, config: PipelineConfig): PuppetModel {
+		var model = puppet
+		if (config.hairSimulationFront) {
+			model = model.withParameterDeleted(StandardParameters.HAIR_FRONT).withDeformerDeleted(frontHairPhysicsWarpId)
+		}
+		if (config.hairSimulationBack) {
+			model = model.withParameterDeleted(StandardParameters.HAIR_BACK).withDeformerDeleted(backHairPhysicsWarpId)
+		}
+		return model
 	}
 
 	/** Drawables whose topology the user edited by hand; the skeleton must not renumber their vertices. */

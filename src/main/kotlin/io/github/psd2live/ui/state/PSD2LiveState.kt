@@ -434,6 +434,8 @@ data class PSD2LiveState(
 	val physicsFrontHair: Boolean = true,
 	val physicsBackHair: Boolean = true,
 	val physicsEyeJelly: Boolean = true,
+	val hairSimulationFront: Boolean = false,
+	val hairSimulationBack: Boolean = false,
 	val exportCmo3: Boolean = true,
 	val exportMoc3: Boolean = true,
 	val exportJson: Boolean = true,
@@ -450,7 +452,10 @@ data class PSD2LiveState(
 	val physicsSubExpanded: Boolean = false,
 	val dynamicsSubExpanded: Boolean = false,
 	val projectOutputsExpanded: Boolean = false,
-	val textureSubExpanded: Boolean = false,
+	val simulationPresetsExpanded: Boolean = true,
+	val canvasCreationExpanded: Boolean = false,
+	/** Defaults a new warp takes on the canvas; a workspace preference, not rig data. */
+	val canvasCreation: CanvasCreationPreset = CanvasCreationPreset.STANDARD,
 	val strengthSubExpanded: Boolean = false,
 	val advancedExpanded: Boolean = false,
 	val isAnalyzing: Boolean = false,
@@ -636,6 +641,8 @@ data class PSD2LiveState(
 			physicsFrontHair = physicsFrontHair,
 			physicsBackHair = physicsBackHair,
 			physicsEyeJelly = physicsEyeJelly,
+			hairSimulationFront = hairSimulationFront,
+			hairSimulationBack = hairSimulationBack,
 			exportCmo3 = exportCmo3,
 			exportMoc3 = exportMoc3,
 			exportJson = exportJson,
@@ -755,5 +762,24 @@ data class PSD2LiveState(
 			size = size shl 1
 		}
 		return size.coerceIn(256, 16384)
+	}
+}
+
+/** The lattice a new warp gets on the canvas and where it attaches; [warpAddTo] names a `WarpAddTo`. */
+data class CanvasCreationPreset(
+	val warpRows: Int = 5,
+	val warpCols: Int = 5,
+	val bezierRows: Int = 2,
+	val bezierCols: Int = 2,
+	val warpAddTo: String = "PARENT_OF_SELECTED",
+) {
+	/** The built-in preset these values are, or null for custom ones. */
+	val builtIn: String? get() = BUILT_IN.entries.firstOrNull { it.value.copy(warpAddTo = warpAddTo) == this }?.key
+
+	companion object {
+		val COARSE = CanvasCreationPreset(3, 3, 1, 1)
+		val STANDARD = CanvasCreationPreset()
+		val FINE = CanvasCreationPreset(9, 9, 3, 3)
+		val BUILT_IN = linkedMapOf("coarse" to COARSE, "standard" to STANDARD, "fine" to FINE)
 	}
 }
