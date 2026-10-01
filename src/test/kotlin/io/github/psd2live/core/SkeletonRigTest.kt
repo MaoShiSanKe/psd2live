@@ -154,7 +154,7 @@ class SkeletonRigTest {
 		// Torso and skirt hang from the breath warp, in its normalized space, as the rig builder hangs them.
 		val torso = strip("torso", 250f, 60f, 290f, 40f, 10f).copy(parentDeformerId = breathId)
 		val skirt = strip("skirt", 250f, 330f, 450f, 50f, 10f).copy(parentDeformerId = breathId)
-		// A shoe left on the body warp, bound to no bone, as the rig builder leaves an unsplit pair of legs.
+		// A shoe bound to no bone, beside the body chain: the rig builder stands unsplit legs in the legs warp.
 		val shoe = strip("shoe", 250f, 460f, 490f, 40f, 10f)
 		val source = PuppetModel(emptyList(), emptyList(), listOf(body(), breath()), listOf(arm, torso, skirt, shoe),
 			listOf(arm, torso, skirt, shoe).map { OrgChild.Drawable(it.id) }, null)
@@ -174,15 +174,15 @@ class SkeletonRigTest {
 			for (i in expected.indices) assertEquals(expected[i], actual[i], 0.05f, "rest coordinate $i of " + d.id.raw)
 		}
 		// The torso bend ends the body chain, so every bend above reaches every mesh and bone below it; the
-		// legs bend beside the breath.
+		// legs get no bend of their own.
 		val parent = baked.deformers.associate { it.id.raw to it.parent?.raw }
 		assertEquals("DeformBodyXY", parent["DeformBodyZBreath"])
 		assertEquals("DeformBodyZBreath", parent["DeformSkelTorso"])
-		assertEquals("DeformBodyXY", parent["DeformSkelLegs"])
+		assertTrue("DeformSkelLegs" !in parent)
 		assertEquals("DeformSkelTorso", parent["DeformSkel_upper"])
 		assertEquals("DeformSkelTorso", baked.drawables.single { it.id == torso.id }.parentDeformerId?.raw)
 		assertEquals("DeformSkelTorso", baked.drawables.single { it.id == skirt.id }.parentDeformerId?.raw)
-		assertEquals("DeformSkelLegs", baked.drawables.single { it.id == shoe.id }.parentDeformerId?.raw)
+		assertEquals("DeformBodyXY", baked.drawables.single { it.id == shoe.id }.parentDeformerId?.raw)
 
 		// The breath stretches the body, and the arm rides it: its shoulder lifts with the torso beside it.
 		val breathing = canvas(baked, mapOf("ParamBreath" to 1f))
@@ -224,13 +224,9 @@ class SkeletonRigTest {
 		val p = rotate(skirtRest[hem * 2], skirtRest[hem * 2 + 1], 250f, 300f, 10f)
 		assertEquals(p.first, hips.getValue(skirt.id)[hem * 2], 0.5f)
 		assertEquals(p.second, hips.getValue(skirt.id)[hem * 2 + 1], 0.5f)
-		// The feet turn with the hips exactly as the skirt does.
+		// The feet stay on the floor.
 		val shoeRest = rest.getValue(shoe.id)
-		for (v in 0 until shoeRest.size / 2) {
-			val q = rotate(shoeRest[v * 2], shoeRest[v * 2 + 1], 250f, 300f, 10f)
-			assertEquals(q.first, hips.getValue(shoe.id)[v * 2], 0.5f, "shoe x $v")
-			assertEquals(q.second, hips.getValue(shoe.id)[v * 2 + 1], 0.5f, "shoe y $v")
-		}
+		for (i in shoeRest.indices) assertEquals(shoeRest[i], hips.getValue(shoe.id)[i], 0.05f, "shoe $i")
 		assertEquals(torsoRest[0], hips.getValue(torso.id)[0], 0.05f)
 		// The pose tool draws the upper body where its warp put it.
 		val chest = io.github.psd2live.ui.SkeletonPoseTool.posed(baked, spec, mapOf(ParameterId(waist.parameterId) to 15f))

@@ -13,15 +13,15 @@ typealias MotionTrack = MotionCurve
  *
  * Every skeleton preset is its pose parameter moving (see [SkeletonPoses]): the rig already says what a
  * crouch or a tail swing does to each joint and each mesh, so a motion only says when. Besides the body
- * parameters the idle only drives the upper body's sway; nothing writes geometry, so preview and export
- * describe the same motion, and a limb's own parameter stays free for the hand, the pose tool or physics.
+ * parameters and the poses the idle sways the upper body and lets the arms hang loose on their own
+ * parameters, short of any physics drives; nothing writes geometry, so preview and export describe the
+ * same motion.
  *
  * Curves are sparse eased keys (see [MotionCurveMath]); the gestures that read the figure's own body are
  * worked out by [MotionSynth].
  */
 object SkeletonMotions {
-	/** One loop of the idle. Six seconds is long enough that the phases do not read as a pattern. */
-	const val IDLE_DURATION = 6f
+	const val IDLE_DURATION = MotionSynth.IDLE_DURATION
 	const val TAIL_SWING_DURATION = 3f
 	const val CROUCH_DURATION = MotionSynth.CROUCH_DURATION
 	const val WEIGHT_SHIFT_DURATION = MotionSynth.WEIGHT_SHIFT_DURATION
@@ -53,64 +53,14 @@ object SkeletonMotions {
 	)
 
 	/**
-	 * The resting idle: the whole body on two clocks, a weight cycle and a breath twice as fast, every part
-	 * following the one that drives it a little late, the way weight travels up a standing body.
-	 *
-	 * - The hips lead the weight cycle from one foot to the other. The upper body leans back over them,
-	 *   the body turns and bends after it, the head tilts against the lean to keep the eyes level and
-	 *   turns last, and the arms, tail and wings trail the part they hang from.
-	 * - The breath lifts the chest, and the body and then the head nod a little after it.
-	 *
-	 * The body tracks hold without a skeleton too. A pose whose bones are all in [exclude] - driven by
-	 * physics, typically - is left out so the two do not fight.
+	 * The resting idle (see [MotionSynth.idle]): breathing, the weight drifting from foot to foot and the
+	 * arms hanging at ease, every part a little behind the one that carries it.
 	 *
 	 * The two leg poses never play together: each is solved with the other at rest, and their shapes only
 	 * add, so a crouch on a shifted weight would bend the knees too far and slide the feet. The idle keeps
 	 * to the weight, and each leg one-shot holds the other leg pose at rest while it plays.
 	 */
-	fun idle(spec: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> = played(spec, idleTracks(spec, exclude))
-
-	/** The [idle] with its gestures still on their poses. */
-	private fun idleTracks(spec: SkeletonSpec?, exclude: Set<String>): List<MotionTrack> {
-		// Lags are fractions of a cycle behind the part that drives the track.
-		fun weightCycle(id: String, amplitude: Float, lag: Float) = sine(id, amplitude, cycles = 1, phase = -lag * TAU)
-		fun breathCycle(id: String, amplitude: Float, lag: Float, bias: Float = 0f) =
-			sine(id, amplitude, cycles = 2, phase = -HALF_PI - lag * TAU, bias = bias)
-		val body = listOf(
-			breathCycle(StandardParameters.BREATH.raw, amplitude = 0.5f, lag = 0f, bias = 0.5f),
-			breathCycle(StandardParameters.BODY_Y.raw, amplitude = 0.8f, lag = 0.06f),
-			breathCycle(StandardParameters.ANGLE_Y.raw, amplitude = 1.5f, lag = 0.14f),
-			weightCycle(StandardParameters.BODY_X.raw, amplitude = 2f, lag = 0.08f),
-			weightCycle(StandardParameters.BODY_Z.raw, amplitude = -1.5f, lag = 0.12f),
-			weightCycle(StandardParameters.ANGLE_Z.raw, amplitude = 2.5f, lag = 0.2f),
-			weightCycle(StandardParameters.ANGLE_X.raw, amplitude = 3f, lag = 0.26f),
-		)
-		if (spec?.enabled != true) return body
-		val poses = SkeletonPoses.available(spec).filterNot { pose ->
-			SkeletonPoses.drivenParameters(spec, pose).let { it.isNotEmpty() && exclude.containsAll(it) }
-		}
-		val posed = poses.mapNotNull { pose ->
-			val id = pose.id.raw
-			when (pose) {
-				SkeletonPoses.weight -> weightCycle(id, amplitude = 0.5f, lag = 0f)
-				SkeletonPoses.armSway -> weightCycle(id, amplitude = 0.8f, lag = 0.22f)
-				SkeletonPoses.tailSwing -> sine(id, amplitude = 0.4f, cycles = 2, phase = -0.3f * TAU)
-				SkeletonPoses.wingFlap -> breathCycle(id, amplitude = 0.8f, lag = 0.1f)
-				else -> null
-			}
-		}
-		// On top of the counter-lean the weight pose already bakes, the upper body sways a little late.
-		val sway = SkeletonRig.limbBones(spec).filter { it.role == BoneRole.UPPER_BODY && it.parameterId !in exclude }.map { bone ->
-			weightCycle(bone.parameterId, amplitude = (UPPER_BODY_SWAY * bone.direction).coerceIn(bone.minAngle, bone.maxAngle), lag = 0.12f)
-		}
-		return (body + posed.clamped() + sway).distinctBy { it.parameterId }
-	}
-
-	/** Degrees the upper body sways with the weight in the idle, leaning back over the hips. */
-	private const val UPPER_BODY_SWAY = 1.5f
-
-	private const val TAU = (2.0 * PI).toFloat()
-	private const val HALF_PI = (PI / 2.0).toFloat()
+	fun idle(spec: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> = played(spec, MotionSynth.idle(spec, exclude))
 
 	/** A deliberate tail swing, faster and wider than the one folded into the idle. */
 	fun tailSwing(spec: SkeletonSpec?): List<MotionTrack> =
@@ -158,15 +108,14 @@ object SkeletonMotions {
 	/**
 	 * The idle standing knock-kneed with the hands drawn a little together (see [MotionSynth.tucked]). The
 	 * knees hold [SkeletonPoses.kneesIn], so the weight cycle - another leg pose - drops out and the body
-	 * tracks alone carry the sway.
+	 * tracks carry the sway; the arms still hang loose about the tucked pose.
 	 */
 	fun idleCute(spec: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> {
 		val available = SkeletonPoses.available(spec)
 		if (SkeletonPoses.kneesIn !in available) return emptyList()
-		val held = available.filter { it.legs }.associate { it.id.raw to if (it == SkeletonPoses.kneesIn) 0.3f else 0f } +
-			MotionSynth.tucked(spec, 0.3f).filterKeys { it !in exclude }
-		return played(spec, idleTracks(spec, exclude).filterNot { it.parameterId in held } +
-			held.map { (id, value) -> MotionCurveMath.linear(id, listOf(0f to value, IDLE_DURATION to value)) })
+		val hold = available.filter { it.legs }.associate { it.id.raw to if (it == SkeletonPoses.kneesIn) 0.3f else 0f } +
+			MotionSynth.tucked(spec, 0.3f)
+		return played(spec, MotionSynth.idle(spec, exclude, hold))
 	}
 
 	/**

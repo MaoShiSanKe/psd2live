@@ -33,11 +33,13 @@ object MotionGenerator {
 		)
 	}
 
-	/** One blink partway through the idle's cycle. */
+	/** The idle's blinks: uneven gaps, one of them a double blink, as eyes left to themselves blink. */
 	private fun idleBlink(): List<Curve> = idleBlinkTracks.map(::curve)
 
-	val idleBlinkTracks: List<MotionTrack> = listOf("ParamEyeLOpen", "ParamEyeROpen").map {
-		MotionCurveMath.linear(it, listOf(0f to 1f, 2.7f to 1f, 2.78f to 0f, 2.88f to 1f, SkeletonMotions.IDLE_DURATION to 1f))
+	val idleBlinkTracks: List<MotionTrack> = listOf("ParamEyeLOpen", "ParamEyeROpen").map { id ->
+		val points = mutableListOf(0f to 1f)
+		for (start in listOf(2.7f, 6.9f, 7.25f, 10.6f)) points += listOf(start to 1f, start + 0.08f to 0f, start + 0.18f to 1f)
+		MotionCurveMath.linear(id, points + (SkeletonMotions.IDLE_DURATION to 1f))
 	}
 
 	/**

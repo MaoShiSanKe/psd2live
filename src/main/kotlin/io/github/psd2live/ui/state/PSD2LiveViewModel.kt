@@ -698,7 +698,9 @@ class PSD2LiveViewModel : AutoCloseable {
                 physicsClock = PhysicsClock.NONE
                 pointerActive = false
                 followX = 0f
+                bodyFollowX = 0f
                 followY = 0f
+                bodyFollowY = 0f
                 elapsed = 0.0
             } else if (before.previewModel !== after.previewModel ||
                 (after.activeWorkspace.pose?.authoringPose == true &&
@@ -1746,6 +1748,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	private var pointerY = 0f
 	private var followX = 0f
 	private var followY = 0f
+	/** Where the body is turned toward: the head's target reached more slowly, so the head leads and the body follows. */
+	private var bodyFollowX = 0f
+	private var bodyFollowY = 0f
 	/** The exported physics, run on the software preview so it moves as Cubism would before the SDK is up. */
 	private val softwarePhysics = SoftwarePhysics()
 	private var elapsed = 0.0
@@ -2095,7 +2100,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (enabled) {
 			softwarePhysics.reset()
 			followX = 0f
+			bodyFollowX = 0f
 			followY = 0f
+			bodyFollowY = 0f
 			motionPlayer.stop()
 		}
 		schedulePreviewRebuild()
@@ -2129,7 +2136,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		if (!enabled) {
 			followX = 0f
+			bodyFollowX = 0f
 			followY = 0f
+			bodyFollowY = 0f
 		}
 		scheduleRuntimeBundleUpdate()
 	    editorChanged()
@@ -4407,10 +4416,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		setParameterValue(id, defaultVal)
 		if (id == StandardParameters.ANGLE_X || id == StandardParameters.EYE_BALL_X || id == StandardParameters.BODY_X) {
 			followX = 0f
+			bodyFollowX = 0f
 			pointerX = 0f
 		}
 		if (id == StandardParameters.ANGLE_Y || id == StandardParameters.EYE_BALL_Y || id == StandardParameters.BODY_Y) {
 			followY = 0f
+			bodyFollowY = 0f
 			pointerY = 0f
 		}
 	}
@@ -4420,7 +4431,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		pointerX = 0f
 		pointerY = 0f
 		followX = 0f
+		bodyFollowX = 0f
 		followY = 0f
+		bodyFollowY = 0f
 		softwarePhysics.reset()
 		elapsed = 0.0
 		motionPlayer.stop()
@@ -5233,9 +5246,14 @@ class PSD2LiveViewModel : AutoCloseable {
 		val response = (dt * 7.5f).coerceAtMost(1f)
 		followX += (targetX - followX) * response
 		followY += (targetY - followY) * response
+		val bodyResponse = (dt * BODY_FOLLOW_RATE).coerceAtMost(1f)
+		bodyFollowX += (followX - bodyFollowX) * bodyResponse
+		bodyFollowY += (followY - bodyFollowY) * bodyResponse
 
 		if (!pointerActive && kotlin.math.abs(followX - targetX) < 0.001f) followX = targetX
 		if (!pointerActive && kotlin.math.abs(followY - targetY) < 0.001f) followY = targetY
+		if (!pointerActive && kotlin.math.abs(bodyFollowX - followX) < 0.001f) bodyFollowX = followX
+		if (!pointerActive && kotlin.math.abs(bodyFollowY - followY) < 0.001f) bodyFollowY = followY
 
 		val model = current.previewModel
 		if (model != null && inPreview && (anim || tracking)) {
@@ -5356,8 +5374,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		val isTracking = pointerActive && current.mouseTrackingEnabled && !current.meshOnly
 		val headAngleX = if (hasIdle || isTracking) followX * 38f else 0f
 		val headAngleY = if (hasIdle || isTracking) -followY * 24f else 0f
-		val bodyAngleX = if (hasIdle || isTracking) followX * 4f else 0f
-		val bodyAngleY = if (hasIdle || isTracking) -followY * 2f else 0f
+		// The body turns and shifts its weight toward the pointer after the head, leans in and sinks onto
+		// bent knees below it and stands up onto its toes above it (see BodyStance).
+		val bodyAngleX = if (hasIdle || isTracking) bodyFollowX * BODY_TRACKING else 0f
+		val bodyAngleY = if (hasIdle || isTracking) -bodyFollowY * BODY_TRACKING else 0f
 		val eyeBallX = if (hasIdle || isTracking) followX.coerceIn(-1f, 1f) else 0f
 		val eyeBallY = if (hasIdle || isTracking) (-followY).coerceIn(-1f, 1f) else 0f
 
@@ -5365,8 +5385,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			StandardParameters.ANGLE_X to (headAngleX + idleOf(StandardParameters.ANGLE_X)),
 			StandardParameters.ANGLE_Y to (headAngleY + idleOf(StandardParameters.ANGLE_Y)),
 			StandardParameters.ANGLE_Z to idleOf(StandardParameters.ANGLE_Z),
-			StandardParameters.BODY_X to (bodyAngleX + idleOf(StandardParameters.BODY_X)),
-			StandardParameters.BODY_Y to (bodyAngleY + idleOf(StandardParameters.BODY_Y)),
+			StandardParameters.BODY_X to (bodyAngleX + idleOf(StandardParameters.BODY_X)).coerceIn(-10f, 10f),
+			StandardParameters.BODY_Y to (bodyAngleY + idleOf(StandardParameters.BODY_Y)).coerceIn(-10f, 10f),
 			StandardParameters.BODY_Z to idleOf(StandardParameters.BODY_Z),
 			StandardParameters.EYE_BALL_X to eyeBallX,
 			StandardParameters.EYE_BALL_Y to eyeBallY,
@@ -5475,6 +5495,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		const val PAUSED_PHYSICS_REST = 1e-4f
 		/** How long paused physics stays still before the preview stops rendering it. */
 		const val PAUSED_PHYSICS_REST_SECONDS = 0.5f
+		/** How fast the body catches up with where the head looks, per second, and how far it turns there. */
+		const val BODY_FOLLOW_RATE = 2.6f
+		const val BODY_TRACKING = 8f
 		/** The fallback loop's step when the rate is unlimited. */
 		const val UNLIMITED_TICK_NANOS = 16_000_000L
 		/** Cubism's force priority: a triggered motion always replaces the one playing. */

@@ -3,6 +3,7 @@ package io.github.psd2live.core
 import java.nio.file.Path
 import kotlin.math.abs
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class MotionSynthTest {
@@ -135,6 +136,75 @@ class MotionSynthTest {
 			if (tracks.isEmpty()) continue
 			assertComfortable(spec, tracks, "tml ${preset.name}")
 			if (!preset.loop) assertSparseAndAtRest(tracks, "tml ${preset.name}")
+		}
+	}
+
+	@Test fun idleBreathesAndShiftsTheWeightWithoutRepeatingItselfAndLoops() {
+		for (chibi in listOf(false, true)) {
+			val spec = figure(chibi)
+			val idle = SkeletonMotions.idle(spec)
+			val byId = idle.associateBy { it.parameterId }
+			val period = SkeletonMotions.IDLE_DURATION
+			assertComfortable(spec, idle, "idle chibi=$chibi")
+			for (track in idle) {
+				val id = track.parameterId
+				assertTrue(track.keys.size <= 24, "idle $id has ${track.keys.size} keys")
+				assertEquals(period, track.keys.last().time, 1e-4f, "idle $id duration")
+				// The seam is smooth: the same value and the same speed either side of it.
+				assertEquals(track.keys.first().value, track.keys.last().value, 1e-3f, "idle $id seam")
+				assertEquals(MotionCurveMath.slope(track, 0f, after = true), MotionCurveMath.slope(track, period, after = false), 0.05f, "idle $id seam speed")
+			}
+			fun value(id: String, time: Float) = MotionCurveMath.value(byId.getValue(id), time)
+			// Breaths are drawn in faster than they are let out, and not all equally deep.
+			val breath = byId.getValue(StandardParameters.BREATH.raw)
+			val samples = (0..1200).map { period * it / 1200f }
+			val peaks = samples.filter { t ->
+				val v = value(breath.parameterId, t)
+				v > 0.5f && v >= value(breath.parameterId, t - 0.01f) && v >= value(breath.parameterId, t + 0.01f)
+			}
+			assertEquals(3, peaks.size, "three breaths")
+			val depths = peaks.map { value(breath.parameterId, it) }
+			assertTrue(depths.max() - depths.min() > 0.1f, "breaths of one depth")
+			val rising = samples.count { MotionCurveMath.slope(breath, it, after = true) > 0.02f }
+			val falling = samples.count { MotionCurveMath.slope(breath, it, after = true) < -0.02f }
+			assertTrue(rising < falling * 0.8f, "breathing in takes as long as breathing out")
+			// The weight's shifts are not one shift repeated: no half or third of the loop matches the next.
+			val weight = SkeletonPoses.weight.id.raw
+			for (part in listOf(period / 2f, period / 3f)) {
+				assertTrue(samples.maxOf { abs(value(weight, it) - value(weight, it + part)) } > 0.1f, "weight repeats every ${part}s")
+			}
+			// The head nods after the breath, and the forearm swings after the upper arm.
+			fun lagOf(lead: (Float) -> Float, follow: (Float) -> Float): Float = (0..60).map { it * 0.025f }.maxBy { lag ->
+				samples.sumOf { t -> (lead(t) * follow(t + lag)).toDouble() }
+			}
+			val nod = lagOf({ value(breath.parameterId, it) - 0.45f }, { value(StandardParameters.ANGLE_Y.raw, it) })
+			assertTrue(nod > 0.2f, "the head nods ${nod}s after the breath")
+			// The upper arm's swing, with the weight pose's own turn of it, leads the forearm's.
+			fun param(bone: String) = spec.bone(bone)!!.parameterId
+			val upper = param("upper_r")
+			val fore = param("fore_r")
+			val mean = { id: String -> samples.map { value(id, it) }.average().toFloat() }
+			val upperMean = mean(upper)
+			val foreMean = mean(fore)
+			val swing = lagOf({ value(upper, it) - upperMean }, { value(fore, it) - foreMean })
+			assertTrue(swing > 0.05f, "the forearm swings ${swing}s after the upper arm")
+			for (id in listOf(upper, fore, param("hand_r"), param("upper_l"))) {
+				val range = samples.maxOf { value(id, it) } - samples.minOf { value(id, it) }
+				assertTrue(range in 0.5f..9f, "$id swings $range degrees")
+			}
+		}
+	}
+
+	@Test fun cuteIdleHoldsTheTuckAndStillLetsTheArmsMove() {
+		val spec = figure()
+		val cute = SkeletonMotions.idleCute(spec).associateBy { it.parameterId }
+		val tucked = MotionSynth.tucked(spec, 0.3f)
+		val period = SkeletonMotions.IDLE_DURATION
+		for ((id, value) in tucked) {
+			val track = cute.getValue(id)
+			val values = (0..240).map { MotionCurveMath.value(track, period * it / 240f) }
+			assertTrue(abs(values.average().toFloat() - value) < 1.5f, "$id held near $value, averages ${values.average()}")
+			assertTrue(values.max() - values.min() > 0.3f, "$id stands still")
 		}
 	}
 }

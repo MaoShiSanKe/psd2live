@@ -53,6 +53,7 @@ object StandardParameters {
 	val BODY_X = ParameterId("ParamBodyAngleX")
 	val BODY_Y = ParameterId("ParamBodyAngleY")
 	val BODY_Z = ParameterId("ParamBodyAngleZ")
+	val BODY_LEAN = ParameterId("ParamBodyLean")
 	val EYE_L_OPEN = ParameterId("ParamEyeLOpen")
 	val EYE_R_OPEN = ParameterId("ParamEyeROpen")
 	val EYE_BALL_X = ParameterId("ParamEyeBallX")
@@ -74,6 +75,7 @@ object StandardParameters {
 			Parameter(BODY_X, tr("model.parameter.bodyX"), -10f, 10f, 0f),
 			Parameter(BODY_Y, tr("model.parameter.bodyY"), -10f, 10f, 0f),
 			Parameter(BODY_Z, tr("model.parameter.bodyZ"), -10f, 10f, 0f),
+			Parameter(BODY_LEAN, tr("model.parameter.bodyLean"), -10f, 10f, 0f),
 			Parameter(EYE_L_OPEN, tr("model.parameter.eyeLOpen"), 0f, 1f, 1f),
 			Parameter(EYE_R_OPEN, tr("model.parameter.eyeROpen"), 0f, 1f, 1f),
 			Parameter(EYE_BALL_X, tr("model.parameter.eyeBallX"), -1f, 1f, 0f),
@@ -172,6 +174,10 @@ object RigBuilder {
 		/** False when the config built no deformers, which leaves every mesh in canvas space. */
 		val deformersEnabled: Boolean,
 		val deformers: List<Deformer>,
+		/** How the figure stands, which places the body, lean and legs warps. */
+		val stance: BodyStance,
+		/** The frame the body warps span: the body's own parts and the neck. */
+		val bodyFrame: Bounds,
 	) {
 		/** Replace only artwork while keeping every existing deformer and normalization frame. */
 		fun withArtwork(input: PipelineAnalysis): RigContext = RigContext(
@@ -193,6 +199,8 @@ object RigBuilder {
 			skeletonEnabled = skeletonEnabled,
 			deformersEnabled = deformersEnabled,
 			deformers = deformers,
+			stance = stance,
+			bodyFrame = bodyFrame,
 		)
 		/** The layer expressed in the coordinate system its mesh and its keyforms are authored in. */
 		fun rigLayer(layer: ClassifiedLayer): ClassifiedLayer =
@@ -229,6 +237,8 @@ object RigBuilder {
 			var id = parentId.raw
 			val seen = mutableSetOf<String>()
 			while (id !in frameByDeformer && seen.add(id)) {
+				// The torso bend is an identity lattice over the breath warp; a bone's rotation takes the canvas.
+				if (id.startsWith("DeformSkelTorso")) return bodyFrame
 				if (id.startsWith("DeformSkel") || config.rigEdits.skeleton?.bones?.any { it.deformerId == id } == true) {
 					return character
 				}
@@ -239,7 +249,7 @@ object RigBuilder {
 
 		private fun inferredParentAndFrame(layer: ClassifiedLayer, config: PipelineConfig): Pair<DeformerId, Bounds> =
 			defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, face, frontHair, backHair,
-				config.rigEdits.skeleton?.enabled == true)
+				config.rigEdits.skeleton?.enabled == true, stance.legsFrame.takeIf { deformersEnabled }, bodyFrame)
 	}
 
 	/**
@@ -300,9 +310,13 @@ object RigBuilder {
 		val backHair = backHairCandidates.map { it.bounds }.takeIf { it.isNotEmpty() }?.reduce(Bounds::union)?.expanded(0.04f)
 
 		val deformersEnabled = !config.meshOnly && config.generateDeformers
+		val stance = BodyStance.of(analysis, character, config.rigEdits.skeleton, config.bodyStrength)
+		val bodyFrame = bodyFrame(analysis, stance, faceRig, character, head, face, frontHair, backHair, config.rigEdits.skeleton?.enabled == true)
 		val deformerResult = if (deformersEnabled) {
 			buildDeformers(
 				analysis,
+				stance,
+				bodyFrame,
 				rigLayerById,
 				faceRig,
 				character,
@@ -324,8 +338,10 @@ object RigBuilder {
 		}
 
 		val frameByDeformer = mutableMapOf<String, Bounds>()
-		frameByDeformer[bodyWarpId.raw] = character
-		frameByDeformer[breathWarpId.raw] = character
+		frameByDeformer[bodyWarpId.raw] = bodyFrame
+		frameByDeformer[BodyStance.leanWarpId.raw] = bodyFrame
+		stance.legsFrame?.let { frameByDeformer[BodyStance.legsWarpId.raw] = it }
+		frameByDeformer[breathWarpId.raw] = bodyFrame
 		frameByDeformer[headRotationId.raw] = character
 		frameByDeformer[headWarpId.raw] = head
 		frameByDeformer[faceWarpId.raw] = face
@@ -362,6 +378,8 @@ object RigBuilder {
 			config.rigEdits.skeleton?.enabled == true,
 			deformersEnabled,
 			deformerResult.deformers,
+			stance,
+			bodyFrame,
 		)
 	}
 
@@ -501,6 +519,8 @@ object RigBuilder {
 		frontHair: Bounds?,
 		backHair: Bounds?,
 		skeletonEnabled: Boolean = false,
+		legsFrame: Bounds? = null,
+		bodyFrame: Bounds = character,
 	): Pair<DeformerId, Bounds> = when (layer.semantic.tag) {
 		SemanticTag.FACE -> faceContourId to faceFrame
 		SemanticTag.IRIDES -> faceRig.regionFor(FaceFeature.IRIS, layer.semantic.side)?.let { gazeWarpId(it) to it.bounds }
@@ -518,12 +538,44 @@ object RigBuilder {
 			?: (faceWarpId to faceFrame)
 		SemanticTag.FRONT_HAIR -> frontHair?.let { frontHairPhysicsWarpId to it } ?: (headWarpId to head)
 		SemanticTag.BACK_HAIR -> backHair?.let { backHairPhysicsWarpId to it } ?: (headWarpId to head)
+		// The legs stand on the floor apart from the body: nothing that moves the body reaches the feet.
+		SemanticTag.LEGWEAR, SemanticTag.FOOTWEAR -> legsFrame?.let { BodyStance.legsWarpId to it } ?: (breathWarpId to bodyFrame)
 		else -> when {
 			layer.semantic.tag in faceTags -> faceWarpId to faceFrame
-			skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags -> bodyWarpId to character
-			inferredGroup(layer, anchors) == LayerGroup.HEAD -> headWarpId to head
-			else -> breathWarpId to character
+			inferredGroup(layer, anchors) == LayerGroup.HEAD && !(skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags) ->
+				headWarpId to head
+			else -> breathWarpId to bodyFrame
 		}
+	}
+
+	/**
+	 * The frame the body warps span: every part that hangs on the breath warp - the torso and its clothes,
+	 * the arms, a skirt, a tail - with the torso itself and the neck the head turns on, never the head, its
+	 * hair or the legs. A rotation passes on only its pivot, so the head needs nothing of it but the neck.
+	 */
+	private fun bodyFrame(
+		analysis: PipelineAnalysis,
+		stance: BodyStance,
+		faceRig: NinePoseFaceRig,
+		character: Bounds,
+		head: Bounds,
+		face: Bounds,
+		frontHair: Bounds?,
+		backHair: Bounds?,
+		skeletonEnabled: Boolean,
+	): Bounds {
+		val torso = stance.torso
+		val parts = analysis.layers.filter { layer ->
+			layer.opaquePixels > 0 && defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, face, frontHair, backHair,
+				skeletonEnabled, stance.legsFrame).first == breathWarpId
+		}.map { it.bounds }
+		val pivotY = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.mouthLineY).second
+		val neck = Bounds(torso.centerX - torso.halfWidth, minOf(pivotY, torso.shoulderY) - torso.length * 0.1f,
+			torso.centerX + torso.halfWidth, torso.waistY)
+		val union = (parts + neck).reduce(Bounds::union)
+		val padX = union.width * 0.04f
+		val padY = union.height * 0.03f
+		return Bounds(union.left - padX, union.top - padY, union.right + padX, union.bottom + padY)
 	}
 
 	private val faceTags = setOf(
@@ -914,7 +966,7 @@ object RigBuilder {
 		).withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
 		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
 		val skeletonPuppet = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
-			?.let { SkeletonRig.apply(puppet, it, analysis.anchors.character, handEditedTopology(config)) } ?: puppet
+			?.let { SkeletonRig.apply(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance) } ?: puppet
 		return BuiltRig(
 			skeletonPuppet,
 			pageByDrawable,
@@ -1170,33 +1222,82 @@ object RigBuilder {
 	}
 
 	/**
-	 * Body yaw keeps the two silhouette endpoints on every lattice row the same distance apart.
-	 * Perspective is expressed by an interior roll with zero endpoint weight, so +X and -X are
-	 * exact mirrors instead of the former signed global scale (`1 + kx * 0.025`).
+	 * The body's warps (see [BodyStance]): the body over [frame] at the root on Body X and Body Y, the lean
+	 * under it on its own parameter, and for a standing figure the legs, a second root beside the body.
 	 */
-	internal fun bodyWarpPoint(
-		character: Bounds,
-		u: Float,
-		v: Float,
-		bodyAngleX: Float,
-		bodyAngleY: Float,
-		strength: Float,
-	): Pair<Float, Float> {
-		val boundedStrength = strength.coerceIn(0f, 4f)
-		val yaw = bodyAngleX / 10f * boundedStrength
-		val pitch = bodyAngleY / 10f * boundedStrength
-		val torsoEnvelope = sin(PI * v).toFloat().coerceAtLeast(0f)
-		val endpointSafeRoll = 4f * u * (1f - u)
-		val endpointSafePitch = sin(2.0 * PI * v).toFloat()
-		val rowShift = yaw * character.width * 0.035f * torsoEnvelope
-		val perspectiveRoll = yaw * character.width * 0.015f * torsoEnvelope * endpointSafeRoll
-		val x = character.left + u * character.width + rowShift + perspectiveRoll
-		val y = character.top + v * character.height + pitch * character.height * 0.007f * endpointSafePitch
-		return x to y
+	internal fun bodyWarps(stance: BodyStance, frame: Bounds, bodyPartId: PartId?): List<Deformer.Warp> {
+		val bodyAxes = listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f), axis(StandardParameters.BODY_Y, -10f, 0f, 10f))
+		fun canvasOf(u: Float, v: Float) = (frame.left + u * frame.width).toDouble() to (frame.top + v * frame.height).toDouble()
+		val legs = if (!stance.standing) emptyList() else {
+			val legsFrame = stance.legsFrame!!
+			val legRows = (legsFrame.height / (stance.legLength * LEG_ROW_SPACING)).toInt().coerceIn(10, 20)
+			val legsGrid = grid(bodyAxes) { values ->
+				val solved = stance.Solved(stance.bodyPose(values[0], values[1]))
+				lattice(LEG_COLUMNS, legRows) { u, v ->
+					solved.legPoint((legsFrame.left + u * legsFrame.width).toDouble(), (legsFrame.top + v * legsFrame.height).toDouble())
+				}
+			}
+			listOf(Deformer.Warp(BodyStance.legsWarpId, tr("model.deformer.legs"), null, bodyPartId, legRows, LEG_COLUMNS, true, legsGrid))
+		}
+		// At the root the lattice is canvas pixels.
+		val bodyGrid = grid(bodyAxes) { values ->
+			lattice(BODY_COLUMNS, BODY_ROWS) { u, v ->
+				val (x, y) = canvasOf(u, v)
+				stance.bodyPoint(x, y, values[0], values[1])
+			}
+		}
+		val body = Deformer.Warp(bodyWarpId, tr("model.deformer.body"), null, bodyPartId, BODY_ROWS, BODY_COLUMNS, true, bodyGrid)
+		// Under the body the lattice is in its space over the same frame.
+		val leanGrid = grid(listOf(axis(StandardParameters.BODY_LEAN, -10f, 0f, 10f))) { values ->
+			lattice(LEAN_COLUMNS, LEAN_ROWS) { u, v ->
+				val (x, y) = canvasOf(u, v)
+				val p = stance.leanPoint(x, y, values[0])
+				doubleArrayOf((p[0] - frame.left) / frame.width, (p[1] - frame.top) / frame.height)
+			}
+		}
+		val lean = Deformer.Warp(BodyStance.leanWarpId, tr("model.deformer.bodyLean"), bodyWarpId, bodyPartId, LEAN_ROWS, LEAN_COLUMNS, true, leanGrid)
+		return legs + body + lean
 	}
 
-	/** Body Z is an odd row shift; Breath is deliberately non-negative and may expand the chest. */
+	/**
+	 * Where the torso is drawn, canvas pixels: its centre line, the shoulder and waist lines, and half its
+	 * width at the chest. The breath and the body's lean are placed by it.
+	 */
+	internal class TorsoFrame(val centerX: Float, val shoulderY: Float, val waistY: Float, val halfWidth: Float) {
+		val length: Float get() = waistY - shoulderY
+	}
+
+	/**
+	 * The torso of [analysis]: the skeleton's upper body bone when there is one - it runs from the waist up
+	 * to the shoulders - else the shoulder and hip lines the layers give, across the topwear.
+	 */
+	internal fun torsoFrame(analysis: PipelineAnalysis, character: Bounds, skeleton: SkeletonSpec?): TorsoFrame {
+		val anchors = analysis.anchors
+		val topwear = analysis.layers.filter { it.semantic.tag == SemanticTag.TOPWEAR && it.opaquePixels > 0 }
+			.map { it.bounds }.reduceOrNull(Bounds::union)
+		val torsoBone = skeleton?.takeIf { it.enabled }?.bones?.firstOrNull { it.role == BoneRole.UPPER_BODY && it.length >= 1f }
+		val centerX = torsoBone?.headX ?: topwear?.centerX ?: anchors.chinX
+		val shoulderY = (torsoBone?.let { minOf(it.headY, it.tailY) } ?: anchors.shoulderY).coerceIn(character.top, character.bottom)
+		val minimum = character.height * 0.05f
+		val waistY = (torsoBone?.let { maxOf(it.headY, it.tailY) } ?: anchors.hipY)
+			.coerceIn(shoulderY + minimum, maxOf(character.bottom, shoulderY + minimum))
+		val halfWidth = (topwear?.width?.times(0.4f) ?: (anchors.face.width * 0.45f)).coerceAtLeast(1f)
+		return TorsoFrame(centerX, shoulderY, waistY, halfWidth)
+	}
+
+	/**
+	 * The body's second warp, in the lean warp's normalized space over [character], the body warps' frame.
+	 *
+	 * - Body Z leans the upper body about the waist: each row above it shifts sideways by its height over
+	 *   the waist, easing in across a band so the bend has no crease, and the hips and legs stay put. Rows
+	 *   only shift, so a lean either way keeps every row its width.
+	 * - Breath lifts the shoulders and everything they carry - the head, the arms - with the chest lifting
+	 *   less and the waist not at all, and widens the chest a little about the body's centre line. Past the
+	 *   torso's sides the widening stops growing, so an arm or a lock of hair beside it moves bodily.
+	 */
 	internal fun bodySecondaryWarpPoint(
+		character: Bounds,
+		torso: TorsoFrame,
 		u: Float,
 		v: Float,
 		bodyAngleZ: Float,
@@ -1204,13 +1305,31 @@ object RigBuilder {
 		strength: Float,
 	): Pair<Float, Float> {
 		val boundedStrength = strength.coerceIn(0f, 2f)
-		val z = bodyAngleZ / 10f * boundedStrength
+		val x = character.left + u * character.width
+		val y = character.top + v * character.height
+		val torsoLength = torso.length
+		val lean = Math.toRadians(BODY_Z_LEAN_DEGREES * bodyAngleZ / 10.0 * boundedStrength)
+		val band = torsoLength * 0.3f
+		val above = (torso.waistY - y).coerceAtLeast(0f)
+		val lever = if (above < band) above * above / (2f * band) else above - band / 2f
+		val shift = kotlin.math.tan(lean).toFloat() * lever
 		val breath = breathValue.coerceIn(0f, 1f) * boundedStrength
-		val chest = kotlin.math.exp(-((v - 0.42f) * (v - 0.42f)) / 0.035f)
-		val x = u + z * 0.018f * sin(PI * v).toFloat() + (u - 0.5f) * breath * chest * 0.025f
-		val y = v - breath * chest * 0.012f
-		return x to y
+		val rise = smoothstep(((torso.waistY - y) / torsoLength).coerceIn(0f, 1f))
+		val lift = breath * BREATH_LIFT * torsoLength * rise
+		val chestY = torso.shoulderY + torsoLength * 0.3f
+		val chest = rise * kotlin.math.exp(-((y - chestY) / (torsoLength * 0.45f)).let { it * it })
+		val widen = (x - torso.centerX).coerceIn(-torso.halfWidth, torso.halfWidth) * breath * BREATH_WIDEN * chest
+		return (x + shift + widen - character.left) / character.width to (y - lift - character.top) / character.height
 	}
+
+	/** Degrees the upper body leans at Body Z ±10. */
+	private const val BODY_Z_LEAN_DEGREES = 3.0
+
+	/** How far a full breath lifts the shoulders, and widens the chest, as fractions of the torso's length and width. */
+	private const val BREATH_LIFT = 0.03f
+	private const val BREATH_WIDEN = 0.025f
+
+	private fun smoothstep(t: Float) = t * t * (3f - 2f * t)
 
 	internal fun headContainerPoint(
 		head: Bounds,
@@ -1274,6 +1393,8 @@ object RigBuilder {
 
 	private fun buildDeformers(
 		analysis: PipelineAnalysis,
+		stance: BodyStance,
+		bodyFrame: Bounds,
 		rigLayerById: Map<String, ClassifiedLayer>,
 		faceRig: NinePoseFaceRig,
 		character: Bounds,
@@ -1290,31 +1411,27 @@ object RigBuilder {
 		extraPartId: PartId,
 		config: PipelineConfig,
 	): DeformerBuildResult {
-		val bodyGrid = warpGrid(
-			listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f), axis(StandardParameters.BODY_Y, -10f, 0f, 10f)),
-			columns = 4,
-			rows = 6,
-		) { u, v, values ->
-			bodyWarpPoint(character, u, v, values[0], values[1], config.bodyStrength)
-		}
-		val body = Deformer.Warp(bodyWarpId, tr("model.deformer.body"), null, bodyPartId, 6, 4, true, bodyGrid)
+		val bodyWarps = bodyWarps(stance, bodyFrame, bodyPartId)
 
+		val torso = torsoFrame(analysis, character, config.rigEdits.skeleton)
 		val breathGrid = warpGrid(
 			listOf(axis(StandardParameters.BODY_Z, -10f, 0f, 10f), axis(StandardParameters.BREATH, 0f, 0.5f, 1f)),
 			columns = 4,
 			rows = 6,
 		) { u, v, values ->
-			bodySecondaryWarpPoint(u, v, values[0], values[1], config.bodyStrength)
+			bodySecondaryWarpPoint(bodyFrame, torso, u, v, values[0], values[1], config.bodyStrength)
 		}
-		val breath = Deformer.Warp(breathWarpId, tr("model.deformer.breath"), bodyWarpId, bodyPartId, 6, 4, true, breathGrid)
+		val breath = Deformer.Warp(breathWarpId, tr("model.deformer.breath"), BodyStance.leanWarpId, bodyPartId, 6, 4, true, breathGrid)
 
 		val headPivotX = faceRig.centerX
 		val headPivotY = faceRig.mouthLineY
 		val headPivotCanvas = faceRig.coordinateSpace.toCanvas(headPivotX, headPivotY)
-		val headPivotLocalX = normalizeX(headPivotCanvas.first, character)
-		val headPivotLocalY = normalizeY(headPivotCanvas.second, character)
-		val rotationGrid = oneDimGrid(StandardParameters.ANGLE_Z, floatArrayOf(-30f, 0f, 30f)) { value ->
-			RotationPivotForm(headPivotLocalX, headPivotLocalY, value, 1f)
+		val headPivotLocalX = normalizeX(headPivotCanvas.first, bodyFrame)
+		val headPivotLocalY = normalizeY(headPivotCanvas.second, bodyFrame)
+		// The head grows and shrinks with the upper body's lean, which a warp cannot pass on to a rotation.
+		val rotationGrid = grid(listOf(axis(StandardParameters.ANGLE_Z, -30f, 0f, 30f), axis(StandardParameters.BODY_LEAN, -10f, 0f, 10f))) { values ->
+			val scale = stance.leanScale(headPivotCanvas.second.toDouble(), values[1]).toFloat()
+			RotationPivotForm(headPivotLocalX, headPivotLocalY, values[0], scale)
 		}
 		val rotation = Deformer.Rotation(
 			headRotationId,
@@ -1359,7 +1476,9 @@ object RigBuilder {
 		) { u, v, values -> faceContourPoint(u, v, values[0], config.headTurnStrength, socketY) }
 		val contour = Deformer.Warp(faceContourId, tr("model.deformer.faceContour"),
 			faceWarpId, facePartId, 16, 8, true, contourGrid)
-		val deformers = mutableListOf<Deformer>(body, breath, rotation, headContainer, face, contour)
+		val deformers = mutableListOf<Deformer>()
+		deformers += bodyWarps
+		deformers += listOf(breath, rotation, headContainer, face, contour)
 		if (config.featureDisplacementEnabled) deformers += displacement
 		val pairFrames = mutableMapOf<String, Bounds>()
 		val pairedParentByLayerId = mutableMapOf<String, Pair<DeformerId, Bounds>>()
@@ -1476,7 +1595,7 @@ object RigBuilder {
 		}
 		val grouped = candidateLayers.groupBy { layer ->
 			val (defaultParentId, _) = defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, faceFrame, frontHair, backHair,
-				config.rigEdits.skeleton?.enabled == true)
+				config.rigEdits.skeleton?.enabled == true, stance.legsFrame, bodyFrame)
 			val baseName = pairBaseName(layer.source.name)
 			defaultParentId to baseName.lowercase(Locale.ROOT).trim()
 		}
@@ -1487,7 +1606,7 @@ object RigBuilder {
 
 			val (defaultParentId, defaultParentFrame) =
 				defaultParentAndFrame(pairLayers.first(), faceRig, analysis.anchors, character, head, faceFrame, frontHair, backHair,
-					config.rigEdits.skeleton?.enabled == true)
+					config.rigEdits.skeleton?.enabled == true, stance.legsFrame, bodyFrame)
 			val cleanBaseName = pairBaseName(pairLayers.first().source.name)
 			val pairId = uniquePairDeformerId(cleanBaseName, pairLayers.first().semantic.tag, usedDeformerIds)
 			val pairName = tr("model.deformer.pair", cleanBaseName)
@@ -2632,6 +2751,28 @@ object RigBuilder {
 		}
 		WarpLatticeForm(controlPoints)
 	}
+
+	/** A lattice of [columns] by [rows] cells with each point placed by [point] from its (u, v). */
+	private fun lattice(columns: Int, rows: Int, point: (u: Float, v: Float) -> DoubleArray): WarpLatticeForm {
+		val controlPoints = FloatArray((columns + 1) * (rows + 1) * 2)
+		var index = 0
+		for (row in 0..rows) for (column in 0..columns) {
+			val p = point(column.toFloat() / columns, row.toFloat() / rows)
+			controlPoints[index++] = p[0].toFloat()
+			controlPoints[index++] = p[1].toFloat()
+		}
+		return WarpLatticeForm(controlPoints)
+	}
+
+	/** Lattice sizes of the body warps: the body turns across its width, the lean only pitches about the waist. */
+	private const val BODY_COLUMNS = 12
+	private const val BODY_ROWS = 14
+	private const val LEAN_COLUMNS = 4
+	private const val LEAN_ROWS = 10
+
+	/** Columns of the legs warp, a few per leg, and its row spacing in leg lengths so the knee bends across rows. */
+	private const val LEG_COLUMNS = 8
+	private const val LEG_ROW_SPACING = 0.06
 
 	private fun Deformer.withParent(newParent: DeformerId?): Deformer = when (this) {
 		is Deformer.Warp -> copy(parent = newParent)

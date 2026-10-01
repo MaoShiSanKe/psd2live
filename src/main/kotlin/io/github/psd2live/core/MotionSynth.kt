@@ -1,9 +1,11 @@
 package io.github.psd2live.core
 
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sin
 
 /**
  * Body motions worked out for the figure at hand rather than written as fixed angles.
@@ -26,6 +28,9 @@ internal object MotionSynth {
 	const val CHEER_DURATION = 2.2f
 	const val LEG_KICK_DURATION = 2.6f
 	const val SWAY_DURATION = 3f
+
+	/** One loop of the idle: long enough for three breaths of different depths and an unhurried weight cycle. */
+	const val IDLE_DURATION = 12f
 
 	/** Keys per parameter, every one starting and ending at rest. */
 	private class Timeline(val duration: Float) {
@@ -505,4 +510,194 @@ internal object MotionSynth {
 		}
 		return t.curves()
 	}
+
+	// -----------------------------------------------------------------------------------------------
+	// The idle
+
+	/**
+	 * The two clocks a standing body keeps, as signals over one loop of [IDLE_DURATION].
+	 *
+	 * - The breath: three breaths of different lengths and depths, each drawn in quickly and let out
+	 *   slowly, with the lungs nearly empty for a moment before the next. 0 is breathed out.
+	 * - The weight: a slow cycle from one foot to the other with a second, quicker one on top - six
+	 *   seconds and four, which never fall into step within the loop - so no two shifts are alike.
+	 *   Normalized to peaks of ±1, positive toward the hips' +x.
+	 */
+	private object IdleClock {
+		private val breathCurve = MotionCurveMath.eased("breath", listOf(
+			0f to 0f, 1.6f to 0.9f, 4.2f to 0f, 5.7f to 0.72f, 8f to 0f, 9.6f to 0.95f, IDLE_DURATION to 0f,
+		), loop = true)
+
+		fun breath(time: Float): Float = MotionCurveMath.looped(breathCurve, time.toDouble(), IDLE_DURATION)
+
+		private fun rawWeight(time: Float) = wave(time, 2, 0.4f) + 0.4f * wave(time, 3, 2.2f)
+		private val weightPeak = (0 until 1200).maxOf { abs(rawWeight(IDLE_DURATION * it / 1200f)) }
+
+		fun weight(time: Float): Float = rawWeight(time) / weightPeak
+
+		/** A slow drift of the head's gaze, once around the loop. */
+		fun drift(time: Float): Float = wave(time, 1, 1.1f)
+
+		/** A sine of [cycles] whole cycles over the loop. */
+		fun wave(time: Float, cycles: Int, phase: Float): Float = sin(2.0 * PI * cycles * time / IDLE_DURATION + phase).toFloat()
+	}
+
+	/**
+	 * The resting idle, before its poses are moved onto the bones: a body standing at ease, breathing and
+	 * shifting its weight, every part following the one that carries it a little late, the way weight
+	 * travels up a standing body.
+	 *
+	 * - The breath lifts the shoulders and the chest (the body's breath warp), the body nods with it and
+	 *   the head after that.
+	 * - The hips lead the weight cycle from one foot to the other, the knees giving in turn. The body
+	 *   turns after them and leans back over them, the head tilts against the lean and turns last, drifting
+	 *   a little on its own as well.
+	 * - The arms hang relaxed: each joint swings a degree or two after the one above, the elbow and the
+	 *   hand trailing furthest, the two arms not quite in step. The tail swings lazily and the wings breathe.
+	 *
+	 * The body tracks hold without a skeleton too. A pose whose bones are all in [exclude] - driven by
+	 * physics, typically - is left out, as is any bone in it, so the two do not fight. Parameters in [hold]
+	 * stand at their value through the loop - the cute idle's knees and tucked hands - with an arm's sway
+	 * on top of the hold rather than instead of it; a held leg pose takes the weight cycle's place.
+	 */
+	fun idle(spec: SkeletonSpec?, exclude: Set<String>, hold: Map<String, Float> = emptyMap()): List<MotionCurve> {
+		fun follow(id: String, scale: Float, lag: Float, bias: Float = 0f, signal: (Float) -> Float) =
+			loopCurve(id) { bias + scale * signal(it - lag) }
+		val breath = IdleClock::breath
+		val weight = IdleClock::weight
+		// The breath's mean, so the parts that nod with it rock about their rest pose.
+		val breathMean = 0.45f
+		val body = listOf(
+			loopCurve(StandardParameters.BREATH.raw, breath),
+			follow(StandardParameters.BODY_Y.raw, 1.6f, 0.15f, -1.6f * breathMean, breath),
+			loopCurve(StandardParameters.ANGLE_Y.raw) { 2.4f * (breath(it - 0.4f) - breathMean) + 1.2f * IdleClock.wave(it, 1, 2f) },
+			follow(StandardParameters.BODY_X.raw, 2f, 0.45f, signal = weight),
+			follow(StandardParameters.BODY_Z.raw, -1.5f, 0.7f, signal = weight),
+			follow(StandardParameters.ANGLE_Z.raw, 2.5f, 1.2f, signal = weight),
+			loopCurve(StandardParameters.ANGLE_X.raw) { 2.5f * weight(it - 1.5f) + 2f * IdleClock.drift(it) },
+		)
+		if (spec?.enabled != true) return body
+		val available = SkeletonPoses.available(spec).filterNot { pose ->
+			SkeletonPoses.drivenParameters(spec, pose).let { it.isNotEmpty() && exclude.containsAll(it) }
+		}
+		val held = hold.filterKeys { it !in exclude }
+		val heldLegs = available.any { it.legs && it.id.raw in held }
+		val posed = available.mapNotNull { pose ->
+			val id = pose.id.raw
+			if (id in held) return@mapNotNull null
+			when (pose) {
+				SkeletonPoses.weight -> if (heldLegs) null else follow(id, WEIGHT_SWAY, 0f, signal = weight)
+				SkeletonPoses.tailSwing -> loopCurve(id) { 0.4f * IdleClock.wave(it, 5, -1.9f) }
+				SkeletonPoses.wingFlap -> follow(id, 1.6f, 0.1f, -1.6f * breathMean, breath)
+				else -> null
+			}.let { curve -> curve?.let { MotionCurveMath.clamped(it, pose.min, pose.max) } }
+		}
+		val swaying = posed.any { it.parameterId == SkeletonPoses.weight.id.raw }
+		val bones = SkeletonRig.limbBones(spec).filter { it.parameterId !in exclude }
+		// On top of the counter-lean the weight pose already bakes, the upper body sways a little late.
+		val sway = bones.filter { it.role == BoneRole.UPPER_BODY }.map { bone ->
+			MotionCurveMath.clamped(follow(bone.parameterId, UPPER_BODY_SWAY * bone.direction, 0.7f, signal = weight), bone.minAngle, bone.maxAngle)
+		}
+		val arms = SkeletonAnatomy.of(spec)?.let { anatomy ->
+			relaxedArms(spec, anatomy, bones.mapTo(HashSet()) { it.parameterId }, held, swaying)
+		}.orEmpty()
+		val moved = (posed + sway + arms).mapTo(HashSet()) { it.parameterId }
+		val still = held.filterKeys { it !in moved }.map { (id, value) -> MotionCurveMath.linear(id, listOf(0f to value, IDLE_DURATION to value)) }
+		return (body + posed + sway + arms + still).distinctBy { it.parameterId }
+	}
+
+	/** How far the idle shifts the weight pose, of its full range. */
+	private const val WEIGHT_SWAY = 0.5f
+
+	/** Degrees the upper body sways with the weight in the idle, leaning back over the hips. */
+	private const val UPPER_BODY_SWAY = 1.5f
+
+	/**
+	 * Arms hanging at ease, swung a little by the weight cycle, each joint a moment after the one above
+	 * with the elbow and the hand trailing furthest. When the weight pose plays it already turns the upper
+	 * arms with the hips, so only the forearm and the hand are added; otherwise the upper arm swings too,
+	 * a degree or two, less when the hands are held tucked. The swing is larger on a chibi figure and
+	 * smaller for an arm drawn held out rather than hanging, and the two arms keep slightly different time.
+	 * Only bones in [free] move, about their value in [held].
+	 */
+	private fun relaxedArms(
+		spec: SkeletonSpec,
+		anatomy: SkeletonAnatomy,
+		free: Set<String>,
+		held: Map<String, Float>,
+		swaying: Boolean,
+	): List<MotionCurve> = movingArms(spec, anatomy).withIndex().flatMap { (index, arm) ->
+		val hanging = if (arm.restUpper > 50f) 0.5f else 1f
+		val own = (if (arm.upper.parameterId in held) 1f else 2f) * (1f + 0.3f * anatomy.chibi) * hanging
+		// The shoulder's swing the joints below follow: the weight pose's turn of it, or the arm's own.
+		val shoulder = if (swaying) SkeletonPoses.WEIGHT_ARM_TURN * WEIGHT_SWAY else own
+		val lag = if (index == 0) 0f else 0.12f
+		val side = if (index == 0) 1f else 0.85f
+		// A turn of the parameter moves a hanging hand [outward] across the canvas.
+		val swing = -arm.outward * side
+		fun joint(bone: SkeletonBone?, degrees: Float, delay: Float) = bone?.parameterId?.takeIf { it in free }?.let { id ->
+			val curve = loopCurve(id) { time -> (held[id] ?: 0f) + swing * degrees * IdleClock.weight(time - lag - delay) }
+			MotionCurveMath.clamped(curve, bone.minAngle, bone.maxAngle)
+		}
+		listOfNotNull(
+			if (swaying) null else joint(arm.upper, own, 0.5f),
+			joint(arm.fore, shoulder * 0.6f, if (swaying) 0.25f else 0.75f),
+			joint(arm.hand, shoulder * 0.5f, if (swaying) 0.45f else 0.95f),
+		)
+	}
+
+	/**
+	 * [signal] over one idle loop as sparse keys: the loop's ends, every turn - eased flat, the way an
+	 * animator keys a sway - and, where two turns are far apart, the steepest point between them with its
+	 * slope. The signal must repeat over the loop; the ends then meet with the same value and slope.
+	 */
+	internal fun loopCurve(id: String, signal: (Float) -> Float): MotionCurve {
+		val period = IDLE_DURATION
+		val h = 1e-3f
+		fun slope(t: Float) = (signal(t + h) - signal(t - h)) / (2f * h)
+		val samples = 720
+		val step = period / samples
+		val turns = ArrayList<Float>()
+		var s0 = slope(0f)
+		for (i in 1..samples) {
+			val t1 = i * step
+			val s1 = slope(t1)
+			if ((s0 > 0f && s1 <= 0f) || (s0 < 0f && s1 >= 0f)) {
+				var lo = t1 - step
+				var hi = t1
+				repeat(24) {
+					val mid = (lo + hi) / 2f
+					if ((slope(mid) > 0f) == (s0 > 0f)) lo = mid else hi = mid
+				}
+				val turn = (lo + hi) / 2f
+				if (turn > MotionClips.TIME_EPSILON * 4 && turn < period - MotionClips.TIME_EPSILON * 4) turns += turn
+			}
+			s0 = s1
+		}
+		val knots = ArrayList<MotionCurveMath.Knot>()
+		fun steepest(from: Float, to: Float): Float {
+			var best = from
+			var bestSlope = -1f
+			val n = 48
+			for (i in 1 until n) {
+				val t = from + (to - from) * i / n
+				val s = abs(slope(t))
+				if (s > bestSlope) { bestSlope = s; best = t }
+			}
+			return best
+		}
+		val stops = listOf(0f) + turns + period
+		for ((i, time) in stops.withIndex()) {
+			val turn = i in 1 until stops.lastIndex
+			knots += MotionCurveMath.Knot(time, signal(time), if (turn) 0f else slope(time))
+			if (i < stops.lastIndex && stops[i + 1] - time > LONG_SPAN) {
+				val mid = steepest(time, stops[i + 1])
+				knots += MotionCurveMath.Knot(mid, signal(mid), slope(mid))
+			}
+		}
+		return MotionCurveMath.curve(id, knots)
+	}
+
+	/** Seconds between two turns of an idle curve past which it takes a key between them too. */
+	private const val LONG_SPAN = 1.6f
 }
