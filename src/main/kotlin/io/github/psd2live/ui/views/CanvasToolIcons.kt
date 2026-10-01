@@ -687,7 +687,7 @@ internal fun DrawScope.drawVertexGroupKindIcon(kind: VertexGroupKind, color: Col
 }
 
 /** The simulation panel's sections. */
-internal enum class SimSectionIcon { BAKE, MATERIAL, INPUTS, GLUE, GROUPS }
+internal enum class SimSectionIcon { BAKE, MATERIAL, INPUTS, OUTPUTS, GLUE, GROUPS }
 
 @Composable
 internal fun SimSectionIconView(icon: SimSectionIcon, color: Color, size: Dp = 12.dp) {
@@ -723,6 +723,12 @@ internal fun DrawScope.drawSimSectionIcon(icon: SimSectionIcon, color: Color) {
             pen.dot(6.4f, 5.6f, 2.2f)
             pen.line(2.6f, 12.4f, 15.4f, 12.4f)
             pen.dot(11.8f, 12.4f, 2.2f)
+        }
+        // A pendulum hanging from its pivot: what the bake drives.
+        SimSectionIcon.OUTPUTS -> {
+            pen.line(4.4f, 3f, 13.6f, 3f)
+            pen.line(9f, 3f, 12.2f, 11f)
+            pen.dot(12.6f, 12.4f, 2.6f)
         }
         SimSectionIcon.GLUE -> pen.glue()
         // Three vertices, each weighted differently.

@@ -37,7 +37,8 @@ class SimPipelineIntegrationTest {
 
         var overlay = initial.config.rigEdits.copy(authoringJournal = initial.config.rigEdits.authoringJournal + VertexGroupJournal.encode(pin))
         val grouped = overlay.applyTo(initial.baseRig.puppet)
-        overlay = SimAuthoring.put(overlay, grouped, RigSimEdit("back", "Back hair", SimKind.HAIR, listOf(back.id.raw)))
+        overlay = SimAuthoring.put(overlay, grouped, RigSimEdit("back", "Back hair", SimKind.HAIR, listOf(back.id.raw),
+            inputs = RigSimEdit.defaultInputs(grouped.parameters.mapTo(HashSet()) { it.id.raw })))
         val bake = SimAuthoring.bake(overlay, initial.baseRig.puppet, "back")
         assertTrue(bake.modes.isNotEmpty() && bake.physics != null)
         overlay = SimAuthoring.withBake(overlay, "back", bake)

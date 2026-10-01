@@ -543,6 +543,17 @@ class PSD2LiveViewModel : AutoCloseable {
             result
         }
 
+    /**
+     * Names output [outputId] (a parameter or pendulum of simulation [simId]'s bake) [name]; blank or
+     * [defaultName] goes back to the name after the body. One history node, nothing baked again.
+     */
+    internal fun renameSimulationOutput(simId: String, outputId: String, name: String, defaultName: String) {
+        val sim = _state.value.rigEdits.simEdits.firstOrNull { it.id == simId } ?: return
+        val trimmed = name.trim()
+        val names = if (trimmed.isEmpty() || trimmed == defaultName) sim.outputNames - outputId else sim.outputNames + (outputId to trimmed)
+        if (names != sim.outputNames) putSimulation(sim.copy(outputNames = names))
+    }
+
     internal fun deleteSimulation(id: String) {
         if (_state.value.simulationPreviewId == id) setSimulationPreview(null)
         runSimulationMutation("Deleted simulation $id") { workspace, head -> workspace.deleteSimulation(id, head) }
@@ -596,7 +607,8 @@ class PSD2LiveViewModel : AutoCloseable {
         }.keys.sorted()
         if (meshes.isEmpty()) return null
         val id = io.github.psd2live.core.sim.SimAuthoring.nextId(current.rigEdits, meshes)
-        putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes))
+        val available = model.rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }
+        putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes, inputs = io.github.psd2live.core.sim.RigSimEdit.defaultInputs(available)))
         return id
     }
 

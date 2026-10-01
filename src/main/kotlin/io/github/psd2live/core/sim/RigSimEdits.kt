@@ -139,7 +139,10 @@ data class RigSimEdit(
     val material: SimMaterial = SimMaterial.preset(kind),
     val groups: Map<VertexGroupKind, String> = emptyMap(),
     val glueRoles: Map<String, GlueRole> = emptyMap(),
-    /** Parameters that move the rig during training and preview; the bake reads them. Empty uses the head and body angles. */
+    /**
+     * Parameters that move the rig during training and preview; the bake reads them. Always explicit: a new
+     * body starts from [defaultInputs], and empty means nothing shakes it.
+     */
     val inputs: List<PhysicsInput> = emptyList(),
     val enabled: Boolean = true,
     /** Dynamic modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum each. */
@@ -162,6 +165,11 @@ data class RigSimEdit(
      * they are written back, so it applies without baking again and never pushes the parameters to ±1.
      */
     val exaggeration: Float = DEFAULT_EXAGGERATION,
+    /**
+     * Names given to the bake's outputs, keyed by parameter or pendulum ID; the others are named after the
+     * body. Names only: they apply without baking again.
+     */
+    val outputNames: Map<String, String> = emptyMap(),
     /** The materialized bake; the rebuild writes it back without simulating. */
     val bake: SimBakeResult? = null,
 ) {
@@ -175,6 +183,7 @@ data class RigSimEdit(
         }
         require(keys in KEY_COUNTS && keys % 2 == 1) { "A simulation bakes an odd number of keys within $KEY_COUNTS" }
         require(exaggeration in EXAGGERATIONS) { "Exaggeration is within $EXAGGERATIONS" }
+        require(outputNames.all { (k, v) -> k.isNotBlank() && v.isNotBlank() && v.none(Char::isISOControl) }) { "Output names must not be blank" }
     }
 
     /** The mode parameters' keys as the bake solves them: [keys] values evenly spread over -1..1, written out times [SimGenerator.MODE_RANGE]. */
@@ -186,7 +195,7 @@ data class RigSimEdit(
         put("material", material.toJson())
         if (groups.isNotEmpty()) putJsonObject("groups") { groups.forEach { (k, v) -> put(k.jsonName, v) } }
         if (glueRoles.isNotEmpty()) putJsonObject("glue_roles") { glueRoles.forEach { (k, v) -> put(k, v.jsonName) } }
-        if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
+        putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
         if (!enabled) put("enabled", false)
         if (modes != 2) put("modes", modes)
         staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
@@ -194,6 +203,7 @@ data class RigSimEdit(
         blendShapes?.let { put("blend_shapes", it) }
         if (!autoBake) put("auto_bake", false)
         if (exaggeration != DEFAULT_EXAGGERATION) put("exaggeration", exaggeration)
+        if (outputNames.isNotEmpty()) putJsonObject("output_names") { outputNames.forEach { (k, v) -> put(k, v) } }
         bake?.let { put("bake", it.toJson()) }
     }
 
@@ -230,6 +240,8 @@ data class RigSimEdit(
             },
             autoBake = o["auto_bake"]?.jsonPrimitive?.booleanOrNull ?: autoBake,
             exaggeration = o["exaggeration"]?.jsonPrimitive?.floatOrNull ?: exaggeration,
+            outputNames = o["output_names"]?.jsonObject?.map { (k, v) -> k to v.jsonPrimitive.content.trim() }
+                ?.filter { it.second.isNotEmpty() }?.toMap() ?: outputNames,
             bake = when (val value = o["bake"]) {
                 null -> bake
                 is JsonNull -> null
@@ -245,11 +257,21 @@ data class RigSimEdit(
         val EXAGGERATIONS = 1f..2f
         const val DEFAULT_EXAGGERATION = 1.3f
 
+        /** The inputs a new body starts from: the head and body turning and tilting, then nodding and the body rising, sinking and leaning. */
+        fun defaultInputs(available: Set<String>?): List<PhysicsInput> =
+            io.github.psd2live.core.PhysicsGenerator.headAndBodyInputs(available) +
+                SimBaker.VERTICAL_INPUTS.filter { available == null || it in available }.map { PhysicsInput(it, 40f, io.github.psd2live.core.PhysicsSourceType.X) }
+
+        /**
+         * An edit saved before inputs were always written down, where none meant the defaults, takes them as
+         * listed; those the model lacks drop out with its next edit ([SimAuthoring.put]).
+         */
         fun fromJson(o: JsonObject): RigSimEdit {
             val kind = o.string("kind")?.let(SimKind::parse) ?: SimKind.CLOTH
             val id = requireNotNull(o.string("id")) { "id is required" }
             val targets = requireNotNull(o["targets"]?.jsonArray) { "targets is required" }.map { it.jsonPrimitive.content }
-            return RigSimEdit(id, o.string("name") ?: id, kind, targets).patched(o)
+            val inputs = if ("inputs" in o) emptyList() else defaultInputs(null)
+            return RigSimEdit(id, o.string("name") ?: id, kind, targets, inputs = inputs).patched(o)
         }
     }
 }

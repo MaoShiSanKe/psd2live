@@ -92,7 +92,15 @@ internal fun PhysicsGroupEditor(
 
 	Column(Modifier.fillMaxWidth()) {
 		SectionBody {
-			GroupTitle(viewModel, state, group, groups, onSelect) { name -> edit { it.copy(name = name) } }
+			// A simulation's pendulum is renamed on the simulation, so the bake keeps driving it.
+			val simulation = if (group.origin == PhysicsOrigin.SIMULATION)
+				io.github.psd2live.core.sim.SimGenerator.simulationOf(group.id, state.rigEdits.simEdits) else null
+			GroupTitle(viewModel, state, group, groups, onSelect) { name ->
+				if (simulation != null) {
+					val baked = simulation.bake?.pendulums?.firstOrNull { it.id == group.id }?.name ?: simulation.name
+					viewModel.renameSimulationOutput(simulation.id, group.id, name, baked)
+				} else edit { it.copy(name = name) }
+			}
 
 			PendulumEditor(
 				viewModel = viewModel,

@@ -157,7 +157,11 @@ object SimBake {
      */
     fun fingerprint(model: PuppetModel, edit: RigSimEdit): String {
         val text = StringBuilder("solver:").append(SOLVER_VERSION).append('|')
-        val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake" - "exaggeration")
+        // The default inputs hash as no inputs did when that meant them, so a bake from then stays current.
+        val available = model.parameters.mapTo(HashSet()) { it.id.raw }
+        val defaults = edit.inputs.filter { it.parameter in available } == RigSimEdit.defaultInputs(available)
+        val settings = JsonObject(edit.toJson() - "name" - "enabled" - "bake" - "blend_shapes" - "auto_bake" - "exaggeration" - "output_names" -
+            listOfNotNull("inputs".takeIf { defaults }))
         text.append(settings.toString())
         for (raw in edit.targets) {
             val drawable = model.drawables.firstOrNull { it.id.raw == raw }

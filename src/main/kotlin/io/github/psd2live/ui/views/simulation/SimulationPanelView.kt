@@ -90,9 +90,13 @@ import io.github.psd2live.ui.views.PanelToolbarSeparator
 import io.github.psd2live.ui.views.PanelToolSwitch
 import io.github.psd2live.ui.views.PanelExpandCollapseButtons
 import io.github.psd2live.ui.views.PanelResetButton
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import io.github.psd2live.ui.components.CompactTextField
+import java.awt.Cursor
 
 /** The panel's foldable sections: the body list and the selected body's editor sections. */
-private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "glue", "groups")
+private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "outputs", "glue", "groups")
 
 /** Whether a simulation exports, and as its current setup. */
 private enum class BakeState { BAKED, STALE, UNBAKED, DISABLED }
@@ -401,13 +405,38 @@ private fun SimulationEditor(
 		MaterialEditor(sim.kind, sim.material) { commit(sim.copy(material = it)) }
 	}
 
-	PhysicsSection(tr("sim.inputs"), section("inputs"), { toggle("inputs") }, count = sim.inputs.size, icon = icon(SimSectionIcon.INPUTS)) {
-		if (sim.inputs.isEmpty()) Text(tr("sim.inputsDefault"), style = caption, color = colors.textMuted)
-		for (input in sim.inputs) RemovableRow(input.parameter) { commit(sim.copy(inputs = sim.inputs - input)) }
+	// The inputs are listed as they are: a new body starts with the defaults written in, and none is none.
+	val parameterNames = remember(puppet) { puppet.parameters.associate { it.id.raw to it.name } }
+	val defaultInputs = remember(parameterNames) { RigSimEdit.defaultInputs(parameterNames.keys) }
+	val resetInputs: @Composable RowScope.() -> Unit = {
+		CompactIconButton(onClick = { commit(sim.copy(inputs = defaultInputs)) }, tooltip = tr("sim.inputsReset"), size = 18.dp) {
+			IconReset(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+		}
+	}
+	PhysicsSection(tr("sim.inputs"), section("inputs"), { toggle("inputs") }, count = sim.inputs.size, icon = icon(SimSectionIcon.INPUTS),
+		trailing = resetInputs.takeIf { sim.inputs != defaultInputs && defaultInputs.isNotEmpty() }) {
+		if (sim.inputs.isEmpty()) Text(tr("sim.inputsNone"), style = caption, color = colors.warning)
+		for (input in sim.inputs) {
+			val name = parameterNames[input.parameter]
+			Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+				Text(name ?: input.parameter, style = caption, color = if (name == null) colors.warning else colors.textPrimary,
+					maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+				Text(if (name == null) tr("sim.inputMissing") else input.parameter, style = caption, color = colors.textMuted,
+					maxLines = 1, overflow = TextOverflow.Ellipsis)
+				RemoveButton { commit(sim.copy(inputs = sim.inputs - input)) }
+			}
+		}
 		val available = puppet.parameters.map { it.id.raw }.filter { id -> sim.inputs.none { it.parameter == id } }
 		if (available.isNotEmpty()) CompactDropdown(listOf<String?>(null) + available, null, { id ->
 			if (id != null) commit(sim.copy(inputs = sim.inputs + PhysicsInput(id, type = PhysicsSourceType.ANGLE)))
-		}, Modifier.fillMaxWidth(), itemLabel = { it ?: tr("sim.addInput") }, height = 22.dp)
+		}, Modifier.fillMaxWidth(), itemLabel = { id -> id?.let { "${parameterNames[it] ?: it}  ·  $it" } ?: tr("sim.addInput") }, height = 22.dp)
+	}
+
+	val bake = sim.bake
+	PhysicsSection(tr("sim.outputs"), section("outputs"), { toggle("outputs") }, count = bake?.let { it.parameters.size + it.pendulums.size } ?: 0,
+		icon = icon(SimSectionIcon.OUTPUTS)) {
+		if (bake == null) Text(tr("sim.outputsNone"), style = caption, color = colors.textMuted)
+		else OutputsEditor(viewModel, sim, bake)
 	}
 
 	val glues = puppet.glues.filter { it.meshA.raw in sim.targets || it.meshB.raw in sim.targets }
@@ -435,6 +464,49 @@ private fun RemoveButton(onRemove: () -> Unit) =
 	CompactIconButton(onClick = onRemove, tooltip = tr("sim.remove"), size = 18.dp) {
 		IconClose(modifier = Modifier.size(9.dp), tint = LocalToolColors.current.textMuted)
 	}
+
+/**
+ * What the bake writes: each mode parameter and pendulum by name and ID. Clicking a name renames it on the
+ * simulation, so the next rebuild and bake keep it; clearing it goes back to the name after the body.
+ */
+@Composable
+private fun OutputsEditor(viewModel: PSD2LiveViewModel, sim: RigSimEdit, bake: io.github.psd2live.core.sim.SimBakeResult) {
+	val colors = LocalToolColors.current
+	val caption = LocalToolTypography.current.caption.copy(fontSize = 9.5.sp)
+	val vertical = SimGenerator.verticalParameterId(sim)
+	val sideways = bake.parameters.count { it != vertical }
+	Text(tr("sim.outputParameters"), style = caption, color = colors.textMuted)
+	bake.parameters.forEachIndexed { k, id ->
+		val fallback = SimGenerator.defaultParameterName(sim, id, k, sideways)
+		OutputRow(id, sim.outputNames[id] ?: fallback) { viewModel.renameSimulationOutput(sim.id, id, it, fallback) }
+	}
+	Text(tr("sim.outputPendulums"), style = caption, color = colors.textMuted)
+	for (pendulum in bake.pendulums) {
+		OutputRow(pendulum.id, sim.outputNames[pendulum.id] ?: pendulum.name) {
+			viewModel.renameSimulationOutput(sim.id, pendulum.id, it, pendulum.name)
+		}
+	}
+}
+
+@Composable
+private fun OutputRow(id: String, name: String, onRename: (String) -> Unit) {
+	val colors = LocalToolColors.current
+	val caption = LocalToolTypography.current.caption.copy(fontSize = 9.5.sp)
+	var renaming by remember(id) { mutableStateOf(false) }
+	var draft by remember(id, name) { mutableStateOf(name) }
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		if (renaming) {
+			CompactTextField(draft, { draft = it }, modifier = Modifier.weight(1f), height = 20.dp, selectAllOnFocus = true,
+				onCommit = { onRename(draft); renaming = false },
+				onFocusLost = { if (renaming) onRename(draft); renaming = false })
+		} else {
+			Text(name, style = caption, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+				modifier = Modifier.weight(1f).clickable { renaming = true }
+					.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR))))
+		}
+		Text(id, style = caption, color = colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+	}
+}
 
 @Composable
 private fun RemovableRow(text: String, onRemove: () -> Unit) {

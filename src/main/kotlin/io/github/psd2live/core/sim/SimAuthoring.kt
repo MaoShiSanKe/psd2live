@@ -11,18 +11,27 @@ import kotlin.math.max
 
 /** Simulation edits on the overlay, shared by the GUI and MCP. */
 object SimAuthoring {
-    /** [arguments] laid over the simulation with their `id`, or a new one; validated against [model]. */
+    /**
+     * [arguments] laid over the simulation with their `id`, or a new one, which starts from the
+     * [RigSimEdit.defaultInputs] [model] has unless `inputs` is given; validated against [model].
+     */
     fun put(overlay: RigEditOverlay, model: PuppetModel, arguments: JsonObject): RigEditOverlay {
         val id = requireNotNull(arguments["id"]?.jsonPrimitive?.contentOrNull) { "id is required" }
         val existing = overlay.simEdits.firstOrNull { it.id == id }
-        val edit = existing?.patched(arguments) ?: RigSimEdit.fromJson(arguments)
+        val edit = existing?.patched(arguments) ?: RigSimEdit.fromJson(arguments).let { created ->
+            if ("inputs" in arguments) created else created.copy(inputs = RigSimEdit.defaultInputs(model.parameters.mapTo(HashSet()) { it.id.raw }))
+        }
         return put(overlay, model, edit)
     }
 
+    /** Inputs kept from before whose parameter is gone drop out; a new one must exist. */
     fun put(overlay: RigEditOverlay, model: PuppetModel, edit: RigSimEdit): RigEditOverlay {
-        validate(model, edit)
-        val index = overlay.simEdits.indexOfFirst { it.id == edit.id }
-        val next = if (index < 0) overlay.simEdits + edit else overlay.simEdits.toMutableList().also { it[index] = edit }
+        val parameters = model.parameters.mapTo(HashSet()) { it.id.raw }
+        val before = overlay.simEdits.firstOrNull { it.id == edit.id }?.inputs.orEmpty().toSet()
+        val kept = edit.copy(inputs = edit.inputs.filter { it.parameter in parameters || it !in before })
+        validate(model, kept)
+        val index = overlay.simEdits.indexOfFirst { it.id == kept.id }
+        val next = if (index < 0) overlay.simEdits + kept else overlay.simEdits.toMutableList().also { it[index] = kept }
         return overlay.copy(simEdits = next)
     }
 

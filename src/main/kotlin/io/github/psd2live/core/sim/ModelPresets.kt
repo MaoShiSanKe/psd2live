@@ -419,7 +419,8 @@ object ModelPresets {
             val allTargets = if (keepOthers && previous != null) (previous.targets + targets).distinct() else targets
             val groups = previous?.groups.orEmpty() + written[id].orEmpty()
             val edit = previous?.copy(targets = allTargets, groups = groups, enabled = true)
-                ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups)
+                ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups,
+                    inputs = RigSimEdit.defaultInputs(model.parameters.mapTo(HashSet()) { it.id.raw }))
             overlay = SimAuthoring.put(overlay, model, edit)
             simulationIds += id
         }

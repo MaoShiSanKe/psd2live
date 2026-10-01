@@ -46,16 +46,23 @@ object SimGenerator {
      */
     fun verticalParameterId(sim: RigSimEdit) = "ParamSim${SwingAuthoring.asciiStem(sim.id)}_Y"
 
+    /** What mode parameter [id], the [k]th (0-based) of [sideways] that are not the vertical one, is called unless renamed. */
+    fun defaultParameterName(sim: RigSimEdit, id: String, k: Int, sideways: Int) = when {
+        id == verticalParameterId(sim) -> "${sim.name} Y"
+        sideways == 1 -> sim.name
+        else -> "${sim.name} ${k + 1}"
+    }
+
     /** `PhysicsSim_<id>`: the pendulum of a baked simulation; a later mode with one of its own adds `_<k>`. */
     fun physicsId(sim: RigSimEdit) = "PhysicsSim_${sim.id}"
 
     /** `PhysicsSim_<id>_y`: the pendulum driving [verticalParameterId]. */
     fun verticalPhysicsId(sim: RigSimEdit) = "PhysicsSim_${sim.id}_y"
 
-    /** The pendulums of every enabled baked simulation whose parameters exist. */
+    /** The pendulums of every enabled baked simulation whose parameters exist, under the names given them. */
     fun physicsRules(sims: List<RigSimEdit>, available: Set<String>): List<RigPhysicsEdit> = sims.filter { it.enabled }.flatMap { sim ->
         sim.bake?.pendulums.orEmpty().mapNotNull { rule ->
-            rule.copy(inputs = rule.inputs.filter { it.parameter in available }, outputs = rule.outputs.filter { it.parameter in available })
+            rule.copy(name = sim.outputNames[rule.id] ?: rule.name, inputs = rule.inputs.filter { it.parameter in available }, outputs = rule.outputs.filter { it.parameter in available })
                 .takeIf { it.inputs.isNotEmpty() && it.outputs.isNotEmpty() }
         }
     }
@@ -125,11 +132,7 @@ object SimGenerator {
         for ((k, mode) in bake.modes.withIndex()) {
             val id = ParameterId(mode.axis.parameter)
             if (current.parameters.any { it.id == id }) continue
-            val name = when {
-                id.raw == vertical -> "${sim.name} Y"
-                sideways == 1 -> sim.name
-                else -> "${sim.name} ${k + 1}"
-            }
+            val name = sim.outputNames[id.raw] ?: defaultParameterName(sim, id.raw, k, sideways)
             current = current.withParameterCreated(id, name, if (blend) ParameterKind.BLEND_SHAPE else ParameterKind.NORMAL)
             created += id
             current = current.copy(parameters = current.parameters.map {

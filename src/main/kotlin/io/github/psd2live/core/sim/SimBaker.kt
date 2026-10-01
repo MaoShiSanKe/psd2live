@@ -1,7 +1,6 @@
 package io.github.psd2live.core.sim
 
 import io.github.psd2live.core.PhysicsEngine
-import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.RigEditOverlay
 import org.umamo.render.eval.drawableLocalPosed
 import org.umamo.render.eval.drawableSpaceMapping
@@ -114,7 +113,7 @@ object SimBaker {
         // straight up or down leaves every angle as it was - so the vertical inputs drive a pendulum of their
         // own, fed as translations (the one way it answers them), and a parameter of their own whose shapes are
         // how the body lags and bounces up and down.
-        val inputs = edit.inputs.map { it.parameter }.ifEmpty { defaultInputs(parameters.keys) }
+        val inputs = edit.inputs.map { it.parameter }
             .filter { input -> parameters[input]?.let { it.kind == ParameterKind.NORMAL && it.max > it.min } == true }
         require(inputs.isNotEmpty() || statics.isNotEmpty()) { "No input parameter moves ${edit.id}; add inputs to bake it" }
         val vertical = inputs.filter { it in VERTICAL_INPUTS }
@@ -355,13 +354,6 @@ object SimBaker {
         return Dynamic(modes, owned(fit.setting), fit.extra.map(::owned).filter { it.outputs.isNotEmpty() }, total,
             missed, checkTotal, errors, peak, clipped, checkPlayed.first().size, jerkEnergy(baked), jerkEnergy(simulated))
     }
-
-    /**
-     * The inputs a simulation left without its own is baked for: the head and the body turning and tilting
-     * as the hair presets have them, and nodding and the body rising and sinking, which bake apart.
-     */
-    internal fun defaultInputs(available: Set<String>): List<String> =
-        PhysicsGenerator.headAndBodyInputs(available).map { it.parameter } + VERTICAL_INPUTS.filter { it in available }
 
     /** The inputs that move the body up and down: nodding, the body rising and sinking, and leaning in. */
     internal val VERTICAL_INPUTS = listOf("ParamAngleY", "ParamBodyAngleY", "ParamBodyLean")
