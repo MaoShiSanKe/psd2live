@@ -1283,6 +1283,7 @@ internal fun BoxScope.CanvasEditorOverlay(
                 detectDragGestures(
                     onDragStart = { pos ->
                         when (subTool) {
+                            SkeletonEditSubTool.BIND -> { boxStart = pressPosition; boxEnd = pos }
                             SkeletonEditSubTool.EDIT -> {
                                 draggedJoint = hitJoint(pressPosition)
                                 if (draggedJoint == null) {
@@ -1310,7 +1311,16 @@ internal fun BoxScope.CanvasEditorOverlay(
                     },
                     onDragEnd = {
                         boxStart?.let { start -> boxEnd?.let { end ->
-                            editor.selectBones(currentSkeleton.bonesInBox(viewport.canvasX(start.x), viewport.canvasY(start.y),
+                            if (subTool == SkeletonEditSubTool.BIND) {
+                                val left = minOf(start.x, end.x); val right = maxOf(start.x, end.x)
+                                val top = minOf(start.y, end.y); val bottom = maxOf(start.y, end.y)
+                                val hits = neutralGeometry?.worldPositions.orEmpty().filter { (_, positions) ->
+                                    val xs = positions.indices.filter { it % 2 == 0 }.map { viewport.x(positions[it]).toFloat() }
+                                    val ys = positions.indices.filter { it % 2 == 1 }.map { viewport.yFromWorld(positions[it]).toFloat() }
+                                    xs.isNotEmpty() && xs.min() <= right && xs.max() >= left && ys.min() <= bottom && ys.max() >= top
+                                }.keys.mapTo(linkedSetOf()) { it.raw }
+                                editor.selectSkeletonBindingDrawables(hits, additiveSelection)
+                            } else editor.selectBones(currentSkeleton.bonesInBox(viewport.canvasX(start.x), viewport.canvasY(start.y),
                                 viewport.canvasX(end.x), viewport.canvasY(end.y)), additiveSelection)
                         } }
                         draggedJoint = null; movingBones = false; moveBefore = null; boxStart = null; boxEnd = null; finishCreation()
@@ -1338,6 +1348,10 @@ internal fun BoxScope.CanvasEditorOverlay(
             .pointerInput(editor, viewport, subTool) {
                 detectTapGestures { pos ->
                     if (subTool == SkeletonEditSubTool.NEW_BONE) return@detectTapGestures
+                    if (subTool == SkeletonEditSubTool.BIND) {
+                        editor.pickSkeletonDrawable(pos, viewport)?.let(editor::toggleSkeletonBindingDrawable)
+                        return@detectTapGestures
+                    }
                     val joint = hitJoint(pos)
                     if (joint != null) {
                         editor.selectBone(joint.first, additiveSelection)
@@ -1393,6 +1407,15 @@ internal fun BoxScope.CanvasEditorOverlay(
             }
 
             // 2. The bones themselves, the selected one on top.
+            if (subTool == SkeletonEditSubTool.BIND) for (id in editor.pendingSkeletonDrawableIds) {
+                val positions = neutralGeometry?.worldPositions?.get(DrawableId(id)) ?: continue
+                for (edge in meshOutlines[id].orEmpty()) {
+                    val a = edge.endpointLow * 2; val b = edge.endpointHigh * 2
+                    if (maxOf(a, b) + 1 >= positions.size) continue
+                    drawLine(colors.accent, Offset(viewport.x(positions[a]).toFloat(), viewport.yFromWorld(positions[a + 1]).toFloat()),
+                        Offset(viewport.x(positions[b]).toFloat(), viewport.yFromWorld(positions[b + 1]).toFloat()), strokeWidth = 3f)
+                }
+            }
             val halo = colors.windowBackground
             for (bone in skeleton.bones.sortedBy { it.id in editor.selectedBoneIds }) {
                 drawCanvasBone(screen(bone.headX, bone.headY), screen(bone.tailX, bone.tailY), boneColor(bone.id), halo,

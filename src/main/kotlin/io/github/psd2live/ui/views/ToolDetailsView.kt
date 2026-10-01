@@ -1018,6 +1018,7 @@ internal fun ToolDetailsView(
                         modifier = Modifier.fillMaxWidth(),
                         height = 24.dp,
                     )
+                    SkeletonSavedPoseControls(editor)
                 }
             }
             CanvasTool.SKELETON_EDIT -> {
@@ -1038,7 +1039,8 @@ internal fun ToolDetailsView(
                         style = typography.caption.copy(fontSize = 10.5.sp),
                         color = colors.textMuted,
                     )
-                    SkeletonTransformControls(editor)
+                    if (editor.skeletonEditSubTool == SkeletonEditSubTool.BIND) SkeletonBindingControls(editor)
+                    else SkeletonTransformControls(editor)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         CompactButton(text = tr("skeleton.panel.cancel"), onClick = { editor.cancelSkeletonEdit() },
                             enabled = editor.skeletonDraft != null, modifier = Modifier.weight(1f), height = 24.dp)

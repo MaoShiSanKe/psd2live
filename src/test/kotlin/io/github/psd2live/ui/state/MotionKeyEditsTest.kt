@@ -8,6 +8,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class MotionKeyEditsTest {
+    @Test fun insertingSavedPoseCreatesMissingCurvesAndPreservesExistingKeyInterpolation() {
+        val existing = MotionKey(1f, 5f, outHandle = io.github.psd2live.core.MotionHandle(0.4f, 0.2f))
+        val original = MotionClip("pose", "pose", curves = listOf(MotionCurve("A", listOf(existing))))
+        val inserted = MotionKeyEdits.pose(original, mapOf("A" to 30f, "new" to -20f), 1f)
+        assertEquals(existing.copy(value = 30f), inserted.curve("A")!!.keys.single())
+        assertEquals(MotionKey(1f, -20f), inserted.curve("new")!!.keys.single())
+        assertEquals(5f, original.curve("A")!!.keys.single().value)
+        assertEquals(2f, MotionKeyEdits.pose(original, mapOf("new" to 1f), 99f).curve("new")!!.keys.single().time)
+    }
     private val clip = MotionClip(
         id = "m", name = "m", duration = 2f,
         curves = listOf(

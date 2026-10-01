@@ -7,6 +7,27 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SkeletonAuthoringTest {
+    @Test fun batchBindingTransfersOwnershipAtomicallyAndCanBeUndoneByKeepingTheOriginalDraft() {
+        val original = chain().withDrawablesBound(setOf("meshA", "meshB"), "custom_1")
+        val rebound = original.withDrawablesBound(setOf("meshA", "meshB"), "custom_2")
+        assertTrue(rebound.bone("custom_1")!!.drawableIds.isEmpty())
+        assertEquals(setOf("meshA", "meshB"), rebound.bone("custom_2")!!.drawableIds.toSet())
+        assertEquals(2, original.bone("custom_1")!!.drawableIds.size)
+        val unbound = rebound.withDrawablesBound(setOf("meshA", "meshB"), null)
+        assertTrue(unbound.bones.all { it.drawableIds.isEmpty() })
+        assertFailsWith<IllegalArgumentException> { original.withDrawablesBound(setOf("meshA"), "missing") }
+    }
+
+    @Test fun namedPoseSnapshotsRoundTripOverwriteAndDeleteWithoutChangingBones() {
+        val original = chain()
+        val saved = original.withSavedPose(" bent arm ", mapOf("ParamSkel_custom_2" to 30f))
+        assertEquals(original.bones, saved.bones)
+        assertEquals(saved, SkeletonSpec.fromJson(saved.toJson()))
+        val replaced = saved.withSavedPose("bent arm", mapOf("ParamSkel_custom_2" to 60f))
+        assertEquals(60f, replaced.savedPoses.getValue("bent arm").getValue("ParamSkel_custom_2"))
+        assertEquals(original, replaced.withoutSavedPose("bent arm"))
+        assertFailsWith<IllegalArgumentException> { original.withSavedPose("bad", mapOf("p" to Float.NaN)) }
+    }
     private fun chain() = SkeletonSpec().withCustomBone(0f, 0f, 10f, 20f)
         .withCustomBone(10f, 20f, 30f, 40f, "custom_1")
         .withCustomBone(30f, 40f, 50f, 60f, "custom_2")

@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * Anatomical role of a bone.
@@ -228,9 +229,12 @@ data class SkeletonSpec(
 	val bones: List<SkeletonBone> = emptyList(),
 	val sampling: SkeletonSampling = SkeletonSampling(),
 	val symmetryAxisX: Float? = null,
+	val savedPoses: Map<String, Map<String, Float>> = emptyMap(),
 ) {
 	init {
 		require(symmetryAxisX == null || symmetryAxisX.isFinite())
+		require(savedPoses.all { (name, values) -> name.isNotBlank() && name.none(Char::isISOControl) &&
+			values.all { (id, value) -> id.isNotBlank() && value.isFinite() } })
 		require(bones.map { it.id }.distinct().size == bones.size) { "Duplicate bone IDs" }
 		val ids = bones.map { it.id }.toSet()
 		require(bones.all { it.parentId == null || it.parentId in ids }) { "Bone parent not found" }
@@ -267,6 +271,13 @@ data class SkeletonSpec(
 		val bone = bone(id) ?: return this
 		return withBone(bone.copy(name = name.trim()))
 	}
+
+	fun withSavedPose(name: String, values: Map<String, Float>): SkeletonSpec {
+		require(name.isNotBlank() && name.none(Char::isISOControl))
+		return copy(savedPoses = savedPoses + (name.trim() to values.toMap()))
+	}
+
+	fun withoutSavedPose(name: String): SkeletonSpec = copy(savedPoses = savedPoses - name)
 
 	/** Reparents without changing rest geometry, or translates the whole subtree to connect at the new tip. */
 	fun withBoneParent(id: String, parentId: String?, connect: Boolean = false): SkeletonSpec {
@@ -374,6 +385,11 @@ data class SkeletonSpec(
 		})
 	}
 
+	fun withDrawablesBound(drawableIds: Set<String>, boneId: String?): SkeletonSpec {
+		require(boneId == null || bone(boneId) != null) { "Bone not found: $boneId" }
+		return drawableIds.fold(this) { next, id -> next.withDrawableBound(id, boneId) }
+	}
+
 	fun withBone(bone: SkeletonBone): SkeletonSpec {
 		val index = bones.indexOfFirst { it.id == bone.id }
 		return copy(bones = if (index < 0) bones + bone else bones.toMutableList().also { it[index] = bone })
@@ -401,8 +417,11 @@ data class SkeletonSpec(
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 6)
+		put("version", 7)
 		symmetryAxisX?.let { put("symmetryAxisX", it) }
+		putJsonObject("savedPoses") { savedPoses.forEach { (name, values) ->
+			putJsonObject(name) { values.forEach { (id, value) -> put(id, value) } }
+		} }
 		put("enabled", enabled)
 		put("sampling", sampling.toJson())
 		putJsonArray("bones") { bones.forEach { add(it.toJson()) } }
@@ -418,6 +437,7 @@ data class SkeletonSpec(
 				bones = raw.map(SkeletonBone::fromJson),
 				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(),
 				symmetryAxisX = o["symmetryAxisX"]?.jsonPrimitive?.floatOrNull,
+				savedPoses = o["savedPoses"]?.jsonObject?.mapValues { (_, values) -> values.jsonObject.mapValues { it.value.jsonPrimitive.float } }.orEmpty(),
 			)
 			return migrateAnchors(spec, raw.associate { it.getValue("id").jsonPrimitive.content to it.getValue("role").jsonPrimitive.content })
 		}

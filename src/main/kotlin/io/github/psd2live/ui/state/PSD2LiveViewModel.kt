@@ -2539,6 +2539,17 @@ class PSD2LiveViewModel : AutoCloseable {
 		motionEditor.selection = clip.curves.mapTo(HashSet()) { MotionKeyRef(it.parameterId, time) }
 	}
 
+	fun insertSavedSkeletonPose(name: String) {
+		val current = _state.value
+		val saved = current.rigEdits.skeleton?.savedPoses?.get(name) ?: return
+		val clip = editingMotionClip() ?: return
+		val parameters = current.previewModel?.rig?.puppet?.parameters.orEmpty().associateBy { it.id.raw }
+		val values = saved.mapNotNull { (id, value) -> parameters[id]?.let { id to value.coerceIn(it.min, it.max) } }.toMap()
+		val time = motionEditor.playhead.coerceIn(0f, clip.duration)
+		updateEditingClip { MotionKeyEdits.pose(it, values, time) }
+		motionEditor.selection = values.keys.mapTo(linkedSetOf()) { MotionKeyRef(it, time) }
+	}
+
 	fun deleteSelectedMotionKeys() {
 		val selection = motionEditor.selection.takeIf { it.isNotEmpty() } ?: return
 		updateEditingClip { MotionKeyEdits.delete(it, selection) }

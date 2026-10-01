@@ -417,6 +417,7 @@ private fun IconPen.inflate() {
 private fun IconPen.skeletonEditSubTool(subTool: SkeletonEditSubTool) {
     when (subTool) {
         SkeletonEditSubTool.EDIT -> skeletonEdit()
+        SkeletonEditSubTool.BIND -> glue()
         SkeletonEditSubTool.NEW_BONE -> {
             scope.drawBoneIcon(p(3.5f, 13f), p(11f, 5.5f), color, stroke = 1.2f * s, headRadius = 1.6f * s)
             line(11.5f, 13.5f, 16.5f, 13.5f)

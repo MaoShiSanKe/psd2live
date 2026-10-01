@@ -131,6 +131,7 @@ internal enum class SkeletonEditSubTool(val labelKey: String, val hintKey: Strin
     EDIT("skeleton.tool.edit", "skeleton.edit.hint"),
     NEW_BONE("skeleton.tool.new", "skeleton.tool.new.hint"),
     EXTRUDE("skeleton.tool.extrude", "skeleton.tool.extrude.hint"),
+    BIND("skeleton.tool.bind", "skeleton.tool.bind.hint"),
 }
 
 internal enum class SkeletonPoseSubTool(val labelKey: String) {
@@ -459,6 +460,8 @@ internal class CanvasEditor(
 	var transformBoneDescendants by mutableStateOf(false)
 	var editBonesSymmetrically by mutableStateOf(false)
 	var transferCopiedBoneBindings by mutableStateOf(false)
+	var pendingSkeletonDrawableIds by mutableStateOf<Set<String>>(emptySet())
+		private set
 
 	/** The authored armature, enabled or not, once it has bones. */
 	val committedSkeleton: io.github.psd2live.core.SkeletonSpec?
@@ -550,6 +553,7 @@ internal class CanvasEditor(
 	private fun openSkeletonDraft() {
 		val spec = committedSkeleton ?: return
 		skeletonDraft = spec
+		pendingSkeletonDrawableIds = emptySet()
 		if (selectedBoneId == null || spec.bone(selectedBoneId!!) == null) selectedBoneId = spec.bones.firstOrNull { !it.role.anchor }?.id
 		viewModel.resetAllParameters()
 	}
@@ -612,6 +616,22 @@ internal class CanvasEditor(
 	}
 
 	fun restoreSkeletonDraft(spec: io.github.psd2live.core.SkeletonSpec) { if (skeletonDraft != null) skeletonDraft = spec }
+
+	fun selectSkeletonBindingDrawables(ids: Set<String>, additive: Boolean = false) {
+		pendingSkeletonDrawableIds = if (additive) pendingSkeletonDrawableIds + ids else ids
+	}
+
+	fun toggleSkeletonBindingDrawable(id: String) {
+		pendingSkeletonDrawableIds = if (id in pendingSkeletonDrawableIds) pendingSkeletonDrawableIds - id else pendingSkeletonDrawableIds + id
+	}
+
+	fun applySkeletonBindingBatch(unbind: Boolean = false) {
+		val draft = skeletonDraft ?: return
+		val bone = if (unbind) null else selectedBoneId ?: return
+		val valid = model.drawables.map { it.id.raw }.toSet()
+		skeletonDraft = draft.withDrawablesBound(pendingSkeletonDrawableIds.intersect(valid), bone)
+		pendingSkeletonDrawableIds = emptySet()
+	}
 
 	fun setBoneSymmetryAxis(x: Float) { if (x.isFinite()) skeletonDraft = skeletonDraft?.copy(symmetryAxisX = x) }
 
@@ -750,6 +770,23 @@ internal class CanvasEditor(
 	/** Every bone and leg pose back at rest. */
 	fun resetSkeletonPose() {
 		viewModel.setParameterValues(SkeletonPoseTool.rest(bakedSkeleton))
+	}
+
+	fun saveSkeletonPose(name: String) {
+		if (name.isBlank() || name.any(Char::isISOControl)) return
+		val spec = committedSkeleton ?: return
+		val values = model.parameters.associate { p -> p.id.raw to (state.parameterValues[p.id] ?: p.default).coerceIn(p.min, p.max) }
+		viewModel.setSkeleton(spec.withSavedPose(name, values))
+	}
+
+	fun applySavedSkeletonPose(name: String) {
+		val saved = committedSkeleton?.savedPoses?.get(name) ?: return
+		viewModel.setParameterValues(model.parameters.mapNotNull { p -> saved[p.id.raw]?.let { p.id to it.coerceIn(p.min, p.max) } }.toMap())
+	}
+
+	fun deleteSavedSkeletonPose(name: String) {
+		val spec = committedSkeleton ?: return
+		viewModel.setSkeleton(spec.withoutSavedPose(name))
 	}
 
 	fun bindDrawableToSelectedBone(drawableId: String) {
@@ -5120,7 +5157,21 @@ internal class CanvasEditor(
 
 	fun pickSkeletonDrawable(pos: Offset, viewport: CanvasViewport): String? {
 		val layerId = pickLayer(pos, viewport) ?: return null
-		return state.previewModel?.rig?.layerIdByDrawableId?.entries?.firstOrNull { it.value == layerId }?.key
+		val preview = state.previewModel ?: return null
+		val geometry = RigCanvasSupport.evaluate(preview)
+		val x = viewport.canvasX(pos.x); val y = -viewport.canvasY(pos.y)
+		return preview.rig.puppet.drawables.asReversed().firstOrNull { drawable ->
+			if ((preview.rig.layerIdByDrawableId[drawable.id.raw] ?: drawable.id.raw) != layerId) return@firstOrNull false
+			val positions = geometry.worldPositions[drawable.id] ?: return@firstOrNull false
+			val indices = drawable.mesh?.indices ?: return@firstOrNull false
+			fun cross(a: Int, b: Int) = (positions[b * 2] - positions[a * 2]) * (y - positions[a * 2 + 1]) -
+				(positions[b * 2 + 1] - positions[a * 2 + 1]) * (x - positions[a * 2])
+			indices.indices.step(3).any { i ->
+				val a = indices[i]; val b = indices[i + 1]; val c = indices[i + 2]
+				val ab = cross(a, b); val bc = cross(b, c); val ca = cross(c, a)
+				(ab >= 0f && bc >= 0f && ca >= 0f) || (ab <= 0f && bc <= 0f && ca <= 0f)
+			}
+		}?.id?.raw
 	}
 
     /**
