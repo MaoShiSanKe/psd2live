@@ -133,13 +133,13 @@ internal object AgentPathTools {
         val mesh = requireNotNull(drawable.mesh) { "Drawable has no mesh" }
         val rawActive = model.deformPaths.singleOrNull { it.id == pathId } ?: error("Deform path not found: $pathId")
         val active = rawActive.copy(
-            width = customWidth?.takeIf { it > 0f } ?: rawActive.width,
-            hardness = customHardness?.coerceIn(0f, 1f) ?: rawActive.hardness,
+            width = customWidth?.takeIf { it >= 0f } ?: rawActive.width,
+            hardness = customHardness?.coerceIn(0f, 100f) ?: rawActive.hardness,
         )
         val paths = model.deformPaths.map { if (it.id == pathId) active else it }
 
         val base = mesh.positions
-        val deformed = DeformPathTools.deform(base, paths, pathId, moved)
+        val deformed = DeformPathTools.deform(base, paths, pathId, moved, org.umamo.render.eval.DeformPathMetrics.canvasScale(model, drawable))
         val origPoints = DeformPathTools.positions(active, base)
         val origCurve = DeformPathTools.curve(origPoints, active.points.map { it.corner }, active.closed)
         val movedCurve = DeformPathTools.curve(moved, active.points.map { it.corner }, active.closed)
@@ -244,8 +244,8 @@ internal object AgentPathTools {
             val drawWidth = showWidth && active.width > 0f
             val drawHardness = showHardness && active.width > 0f && active.hardness > 0f
             if (drawWidth || drawHardness) {
-                val outerRadiusPx = active.width * scale
-                val innerRadiusPx = outerRadiusPx * active.hardness.coerceIn(0f, 1f)
+                val outerRadiusPx = active.width / org.umamo.render.eval.DeformPathMetrics.canvasScale(model, drawable) * scale
+                val innerRadiusPx = outerRadiusPx * (active.safeHardness / 100f)
                 for ((px, py) in moved) {
                     val cx = sx(px); val cy = sy(py)
                     if (drawHardness && innerRadiusPx > 1f) {
@@ -410,13 +410,13 @@ internal object AgentPathTools {
         require(moved.size == rawActive.points.size) { "moved_points count (${moved.size}) must match path points (${rawActive.points.size})" }
 
         val active = rawActive.copy(
-            width = customWidth?.takeIf { it > 0f } ?: rawActive.width,
-            hardness = customHardness?.coerceIn(0f, 1f) ?: rawActive.hardness,
+            width = customWidth?.takeIf { it >= 0f } ?: rawActive.width,
+            hardness = customHardness?.coerceIn(0f, 100f) ?: rawActive.hardness,
         )
         val paths = model.deformPaths.map { if (it.id == pathId) active else it }
 
         val base = mesh.positions
-        val deformed = DeformPathTools.deform(base, paths, pathId, moved)
+        val deformed = DeformPathTools.deform(base, paths, pathId, moved, org.umamo.render.eval.DeformPathMetrics.canvasScale(model, drawable))
 
         val count = base.size / 2
         var maxDisp = 0.0
@@ -477,14 +477,13 @@ internal object AgentPathTools {
         val rawPoints = arguments.getValue("points").jsonArray
         val boundPoints = parsePoints(rawPoints, mesh.positions, mesh.indices)
 
-        val extent = RigGeometryTools.bounds(mesh.positions).let { max(it[2], it[3]) }
-        val width = arguments["width"]?.jsonPrimitive?.floatOrNull ?: (extent * 0.12f)
-        val hardness = arguments["hardness"]?.jsonPrimitive?.floatOrNull ?: 0.5f
+        val width = arguments["width"]?.jsonPrimitive?.floatOrNull ?: DeformPath.DEFAULT_WIDTH
+        val hardness = arguments["hardness"]?.jsonPrimitive?.floatOrNull ?: DeformPath.DEFAULT_HARDNESS
         val closed = arguments["closed"]?.jsonPrimitive?.booleanOrNull ?: false
         val level = arguments["level"]?.jsonPrimitive?.intOrNull ?: 2
 
         val command = buildJsonObject {
-            put("op", "path_put")
+            put("op", "path_put"); put("path_units", "cubism")
             put("id", id)
             put("target", target)
             put("width", width)

@@ -1279,9 +1279,9 @@ internal class CanvasEditor(
     /** Which parameter the live adjustment latched onto; null until the drag clears the lock threshold. */
     var brushAxis by mutableStateOf<BrushAdjustAxis?>(null)
         private set
-    var pathWidth by mutableStateOf(0.12f)
+    var pathWidth by mutableStateOf(DeformPath.DEFAULT_WIDTH)
     var pathLevel by mutableStateOf(2)
-    var pathHardness by mutableStateOf(0.5f)
+    var pathHardness by mutableStateOf(DeformPath.DEFAULT_HARDNESS)
     var pathClosed by mutableStateOf(false)
     var activePath by mutableStateOf<String?>(null)
     var pathPoint by mutableStateOf(-1)
@@ -4229,7 +4229,6 @@ internal class CanvasEditor(
         val t = target() ?: return
         if (draft.size < 2 || t.kind != "mesh") return
         try {
-            val extent = RigGeometryTools.bounds(t.geometry.points).let { max(it[2], it[3]) }
             val previous = paths().firstOrNull { it.id == draftPathId }
             val points = draft.mapIndexed { i, p -> DeformPathTools.bind(t.geometry.points, t.indices, p.first, p.second, previous?.points?.getOrNull(i)?.corner ?: false) }
             val path = previous?.copy(points = points, closed = if (previous.closed) previous.closed else pathClosed)
@@ -4237,7 +4236,7 @@ internal class CanvasEditor(
                     UUID.randomUUID().toString(),
                     DrawableId(t.id),
                     points,
-                    extent * pathWidth,
+                    pathWidth,
                     hardness = pathHardness,
                     closed = pathClosed && points.size >= 3,
                     editLevel = pathLevel,
@@ -6044,7 +6043,7 @@ internal class CanvasEditor(
                     if (hierarchyMode == EditHierarchyMode.DEFORM) {
                         val points = DeformPathTools.positions(path, t.geometry.points).toMutableList()
                         points[pathPoint] = dest
-                        val cmd = geometryCommand(t, DeformPathTools.deform(t.geometry.points, source.deformPaths, path.id, points))
+                        val cmd = geometryCommand(t, DeformPathTools.deform(t.geometry.points, source.deformPaths, path.id, points, org.umamo.render.eval.DeformPathMetrics.canvasScale(source, source.drawables.single { it.id == path.drawableId })))
                         preview = RigAuthoringJournal.apply(source, cmd)
                         pending = cmd
                     } else {

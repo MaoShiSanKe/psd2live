@@ -880,12 +880,13 @@ internal fun ToolDetailsView(
                                 Text(tr("editor.width"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
                                 CompactNumberSpinner(
                                     value = active.width.toDouble(),
-                                    onValueChange = { w -> editor.changePath { it.copy(width = w.toFloat()) } },
+                                    onValueChange = { w -> editor.changePath { it.copy(width = w.toFloat().coerceAtLeast(0f)) } },
                                     modifier = Modifier.weight(1f),
-                                    min = 0.001,
-                                    max = 10000.0,
-                                    decimals = 3,
-                                    step = 0.01,
+                                    min = 0.0,
+                                    max = 100000.0,
+                                    decimals = 2,
+                                    step = 1.0,
+                                    unit = "px",
                                     enabled = editor.editable,
                                     height = 24.dp,
                                 )
@@ -894,11 +895,13 @@ internal fun ToolDetailsView(
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(tr("editor.hardness"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
                                 CompactNumberSpinner(
-                                    value = (active.hardness * 100).toDouble(),
-                                    onValueChange = { h -> editor.changePath { it.copy(hardness = h.toFloat() / 100f) } },
+                                    value = active.hardness.toDouble(),
+                                    onValueChange = { h -> editor.changePath { it.copy(hardness = h.toFloat().coerceIn(0f, 100f)) } },
                                     modifier = Modifier.weight(1f),
                                     min = 0.0,
                                     max = 100.0,
+                                    decimals = 2,
+                                    unit = "%",
                                     enabled = editor.editable,
                                     height = 24.dp,
                                 )
