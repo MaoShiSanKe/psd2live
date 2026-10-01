@@ -46,7 +46,12 @@ object SkeletonAuthoring {
             if (mirrorAxis != null && b.id in mapping) next = next.copy(mirrorId = mapping.getValue(b.id))
             next
         }
-        return Result(spec.copy(bones = originals + additions, symmetryAxisX = mirrorAxis ?: spec.symmetryAxisX), mapping.values.toSet())
+        val copiedTargets = source.mapNotNull { b -> spec.ikTargets[b.id]?.let { target ->
+            mapping.getValue(b.id) to target.copy(x = if (mirrorAxis != null) 2 * mirrorAxis - target.x else target.x + dx,
+                y = if (mirrorAxis != null) target.y else target.y + dy)
+        } }.toMap()
+        return Result(spec.copy(bones = originals + additions, symmetryAxisX = mirrorAxis ?: spec.symmetryAxisX,
+            ikTargets = spec.ikTargets + copiedTargets), mapping.values.toSet())
     }
 
     fun subdivide(spec: SkeletonSpec, id: String, segments: Int): Result {
@@ -71,7 +76,8 @@ object SkeletonAuthoring {
             if (b.mirrorId == id) next = next.copy(mirrorId = null)
             next
         }
-        return Result(spec.copy(bones = others + chain), ids.toSet())
+        val targets = (spec.ikTargets - id) + (spec.ikTargets[id]?.let { mapOf(ids.last() to it) } ?: emptyMap())
+        return Result(spec.copy(bones = others + chain, ikTargets = targets), ids.toSet())
     }
 
     /** Merge a connected non-branching child into its parent; bindings and grandchildren survive. */
@@ -96,7 +102,8 @@ object SkeletonAuthoring {
             if (next.mirrorId == id || next.mirrorId == parent.id) next = next.copy(mirrorId = null)
             next
         }
-        return Result(spec.copy(bones = bones), setOf(parent.id))
+        val targets = (spec.ikTargets - id) + (spec.ikTargets[id]?.let { mapOf(parent.id to it) } ?: emptyMap())
+        return Result(spec.copy(bones = bones, ikTargets = targets), setOf(parent.id))
     }
 
     /** Mirrors only partners outside the explicit selection, avoiding double transforms. */

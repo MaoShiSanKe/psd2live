@@ -719,21 +719,34 @@ internal class CanvasEditor(
 	/** Bone under the pointer while the pose tool is armed, and the bone being dragged. */
 	var poseHover by mutableStateOf<BoneHit?>(null)
 	var poseDrag by mutableStateOf<BoneHit?>(null)
+	private var draggingIkTargetId: String? = null
+	private var ikTargetDragOrigin: io.github.psd2live.core.SkeletonSpec? = null
+	private var ikTargetDragValues: Map<ParameterId, Float>? = null
 
 	/** Whether the pose tool shades each skinned mesh by the bones it follows. */
 	var showSkeletonWeights by mutableStateOf(false)
 
 	private var posedCache: Triple<PuppetModel, Map<ParameterId, Float>, List<PosedBone>>? = null
+	private var posedCacheSpec: io.github.psd2live.core.SkeletonSpec? = null
 
 	/** The bones where the current pose holds them, cached per model and pose: hover asks on every move. */
 	fun posedBones(): List<PosedBone> {
 		val puppet = model
 		val values = state.parameterValues
-		posedCache?.let { (m, v, bones) -> if (m === puppet && v == values) return bones }
-		return SkeletonPoseTool.posed(puppet, bakedSkeleton, values).also { posedCache = Triple(puppet, values, it) }
+		posedCache?.let { (m, v, bones) -> if (m === puppet && v == values && posedCacheSpec === bakedSkeleton) return bones }
+		return SkeletonPoseTool.posed(puppet, bakedSkeleton, values).also { posedCache = Triple(puppet, values, it); posedCacheSpec = bakedSkeleton }
 	}
 
 	fun beginPose(pos: Offset, viewport: CanvasViewport): Boolean {
+		val targets = bakedSkeleton?.ikTargets.orEmpty()
+		val target = targets.entries.firstOrNull { (_, t) -> t.enabled &&
+			(Offset(viewport.x(t.x).toFloat(), (viewport.offsetY + t.y * viewport.scale).toFloat()) - pos).getDistance() <= 10f }
+		if (target != null) {
+			draggingIkTargetId = target.key; ikTargetDragOrigin = committedSkeleton
+			ikTargetDragValues = state.parameterValues
+			poseDrag = BoneHit(target.key, true); selectedBoneId = target.key
+			viewModel.beginEditorGesture(); return true
+		}
 		poseDrag = SkeletonPoseTool.hit(posedBones(), pos, viewport)
 		poseDrag?.let { selectedBoneId = it.boneId }
 		if (poseDrag != null) viewModel.beginEditorGesture()
@@ -741,6 +754,10 @@ internal class CanvasEditor(
 	}
 
 	fun dragPose(pos: Offset, viewport: CanvasViewport, ik: Boolean) {
+		draggingIkTargetId?.let { id ->
+			updateIkTarget(id, io.github.psd2live.core.SkeletonIkTarget(viewport.canvasX(pos.x), viewport.canvasY(pos.y)))
+			return
+		}
 		val hit = poseDrag ?: return
 		val spec = bakedSkeleton ?: return
 		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), state.parameterValues,
@@ -751,6 +768,7 @@ internal class CanvasEditor(
 	fun endPose() {
 		if (poseDrag != null) {
 			poseDrag = null
+			draggingIkTargetId = null; ikTargetDragOrigin = null; ikTargetDragValues = null
 			viewModel.endEditorGesture()
 		}
 	}
@@ -776,7 +794,7 @@ internal class CanvasEditor(
 		if (name.isBlank() || name.any(Char::isISOControl)) return
 		val spec = committedSkeleton ?: return
 		val values = model.parameters.associate { p -> p.id.raw to (state.parameterValues[p.id] ?: p.default).coerceIn(p.min, p.max) }
-		viewModel.setSkeleton(spec.withSavedPose(name, values))
+		viewModel.setSkeletonPoseMetadata(spec.withSavedPose(name, values))
 	}
 
 	fun applySavedSkeletonPose(name: String) {
@@ -786,7 +804,30 @@ internal class CanvasEditor(
 
 	fun deleteSavedSkeletonPose(name: String) {
 		val spec = committedSkeleton ?: return
-		viewModel.setSkeleton(spec.withoutSavedPose(name))
+		viewModel.setSkeletonPoseMetadata(spec.withoutSavedPose(name))
+	}
+
+	fun setSelectedBoneIk(settings: io.github.psd2live.core.SkeletonIkSettings) {
+		val spec = skeletonDraft ?: committedSkeleton ?: return
+		val bone = spec.bone(selectedBoneId ?: return) ?: return
+		val next = spec.withBone(bone.copy(ik = settings))
+		if (skeletonDraft != null) skeletonDraft = next else {
+			viewModel.setSkeletonPoseMetadata(next)
+			viewModel.setParameterValues(io.github.psd2live.core.SkeletonPoseSolver.solveTargets(model, next, state.parameterValues))
+		}
+	}
+
+	fun pinSelectedBone() {
+		val posed = posedBones().firstOrNull { it.bone.id == selectedBoneId } ?: return
+		updateIkTarget(posed.bone.id, io.github.psd2live.core.SkeletonIkTarget(posed.tailX, posed.tailY))
+	}
+
+	fun updateIkTarget(id: String, target: io.github.psd2live.core.SkeletonIkTarget?) {
+		val spec = committedSkeleton ?: return
+		val next = spec.withIkTarget(id, target)
+		viewModel.setSkeletonPoseMetadata(next)
+		val constrained = io.github.psd2live.core.SkeletonPoseSolver.solveTargets(model, next, state.parameterValues)
+		viewModel.setParameterValues(constrained)
 	}
 
 	fun bindDrawableToSelectedBone(drawableId: String) {
@@ -2344,6 +2385,11 @@ internal class CanvasEditor(
 
     fun cancel() {
         if (busy) return
+        if (draggingIkTargetId != null) {
+            ikTargetDragOrigin?.let(viewModel::setSkeletonPoseMetadata)
+            ikTargetDragValues?.let(viewModel::setParameterValues)
+            endPose()
+        }
         // Every tip edits pixels as it goes, so an abandoned gesture has to give them back.
         val session = paintSession
         if (isPainting && session != null) {

@@ -2685,6 +2685,18 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
+	/** Pose metadata changes neither baked geometry nor runtime assets. Keep preview config synchronized. */
+	fun setSkeletonPoseMetadata(spec: io.github.psd2live.core.SkeletonSpec) {
+		val preview = _state.value.previewModel
+		val previous = preview?.config?.rigEdits?.skeleton
+		fun geometry(s: io.github.psd2live.core.SkeletonSpec) = s.copy(savedPoses = emptyMap(), ikTargets = emptyMap(),
+			bones = s.bones.map { it.copy(ik = io.github.psd2live.core.SkeletonIkSettings()) })
+		if (previous == null || geometry(previous) != geometry(spec)) { setSkeleton(spec); return }
+		updateState { current -> current.copy(rigEdits = current.rigEdits.copy(skeleton = spec),
+			previewModel = current.previewModel?.let { it.copy(config = it.config.copy(rigEdits = it.config.rigEdits.copy(skeleton = spec))) }) }
+		editorChanged()
+	}
+
 	fun setExportCmo3(enabled: Boolean) {
 		updateState { it.copy(exportCmo3 = enabled) }
 	    editorChanged()
@@ -4198,6 +4210,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setParameterValue(id: ParameterId, value: Float) {
+		if (_state.value.previewModel?.config?.rigEdits?.skeleton?.ikTargets?.any { it.value.enabled } == true) {
+			setParameterValues(mapOf(id to value)); return
+		}
 		val model = _state.value.previewModel
 		val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
 		val clamped = if (param != null) value.coerceIn(param.min, param.max) else value
@@ -4227,7 +4242,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (values.isEmpty()) return
 		val model = _state.value.previewModel
 		val parameters = model?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
-		val clampedMap = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
+		val requested = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
+		val constrained = model?.let { io.github.psd2live.core.SkeletonPoseSolver.solveTargets(it.rig.puppet,
+			it.config.rigEdits.skeleton, _state.value.parameterValues + requested) }.orEmpty()
+		val clampedMap = requested + constrained
 		if (updateParameterScrub(clampedMap)) return
 		motionEditor.playing = false
 		motionPlayer.stop()

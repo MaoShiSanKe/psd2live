@@ -85,6 +85,7 @@ data class SkeletonBone(
 	/** Duplicated semantic bones keep their role but drive an independent parameter. */
 	val parameterOverride: String? = null,
 	val mirrorId: String? = null,
+	val ik: SkeletonIkSettings = SkeletonIkSettings(),
 ) {
 	init {
 		require(id.isNotBlank() && id.none(Char::isISOControl)) { "Bone ID must not be blank" }
@@ -148,6 +149,7 @@ data class SkeletonBone(
 		connected?.let { put("connected", it) }
 		parameterOverride?.let { put("parameterOverride", it) }
 		mirrorId?.let { put("mirror", it) }
+		put("ik", ik.toJson())
 	}
 
 	companion object {
@@ -184,6 +186,7 @@ data class SkeletonBone(
 				connected = o["connected"]?.jsonPrimitive?.booleanOrNull,
 				parameterOverride = o["parameterOverride"]?.jsonPrimitive?.contentOrNull,
 				mirrorId = o["mirror"]?.jsonPrimitive?.contentOrNull,
+				ik = o["ik"]?.jsonObject?.let(SkeletonIkSettings::fromJson) ?: SkeletonIkSettings(),
 			)
 		}
 	}
@@ -230,6 +233,7 @@ data class SkeletonSpec(
 	val sampling: SkeletonSampling = SkeletonSampling(),
 	val symmetryAxisX: Float? = null,
 	val savedPoses: Map<String, Map<String, Float>> = emptyMap(),
+	val ikTargets: Map<String, SkeletonIkTarget> = emptyMap(),
 ) {
 	init {
 		require(symmetryAxisX == null || symmetryAxisX.isFinite())
@@ -237,6 +241,7 @@ data class SkeletonSpec(
 			values.all { (id, value) -> id.isNotBlank() && value.isFinite() } })
 		require(bones.map { it.id }.distinct().size == bones.size) { "Duplicate bone IDs" }
 		val ids = bones.map { it.id }.toSet()
+		require(ikTargets.keys.all { it in ids }) { "IK target bone not found" }
 		require(bones.all { it.parentId == null || it.parentId in ids }) { "Bone parent not found" }
 		val byId = bones.associateBy { it.id }
 		for (bone in bones) {
@@ -278,6 +283,11 @@ data class SkeletonSpec(
 	}
 
 	fun withoutSavedPose(name: String): SkeletonSpec = copy(savedPoses = savedPoses - name)
+
+	fun withIkTarget(id: String, target: SkeletonIkTarget?): SkeletonSpec {
+		require(bone(id) != null)
+		return copy(ikTargets = if (target == null) ikTargets - id else ikTargets + (id to target))
+	}
 
 	/** Reparents without changing rest geometry, or translates the whole subtree to connect at the new tip. */
 	fun withBoneParent(id: String, parentId: String?, connect: Boolean = false): SkeletonSpec {
@@ -410,14 +420,15 @@ data class SkeletonSpec(
 	/** Removes a bone and re-parents its children to the removed bone's parent. */
 	fun withoutBone(boneId: String): SkeletonSpec {
 		val bone = bone(boneId) ?: return this
-		return copy(bones = bones.filter { it.id != boneId }.map {
+		return copy(ikTargets = ikTargets - boneId, bones = bones.filter { it.id != boneId }.map {
 			val next = if (it.parentId == boneId) it.copy(parentId = bone.parentId, connected = false) else it
 			if (next.mirrorId == boneId) next.copy(mirrorId = null) else next
 		})
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 7)
+		put("version", 8)
+		putJsonObject("ikTargets") { ikTargets.forEach { (id, target) -> put(id, target.toJson()) } }
 		symmetryAxisX?.let { put("symmetryAxisX", it) }
 		putJsonObject("savedPoses") { savedPoses.forEach { (name, values) ->
 			putJsonObject(name) { values.forEach { (id, value) -> put(id, value) } }
@@ -438,6 +449,7 @@ data class SkeletonSpec(
 				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(),
 				symmetryAxisX = o["symmetryAxisX"]?.jsonPrimitive?.floatOrNull,
 				savedPoses = o["savedPoses"]?.jsonObject?.mapValues { (_, values) -> values.jsonObject.mapValues { it.value.jsonPrimitive.float } }.orEmpty(),
+				ikTargets = o["ikTargets"]?.jsonObject?.mapValues { SkeletonIkTarget.fromJson(it.value.jsonObject) }.orEmpty(),
 			)
 			return migrateAnchors(spec, raw.associate { it.getValue("id").jsonPrimitive.content to it.getValue("role").jsonPrimitive.content })
 		}

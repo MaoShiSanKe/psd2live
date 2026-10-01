@@ -3634,6 +3634,17 @@ private fun SkeletonPoseLayer(editor: CanvasEditor, viewport: CanvasViewport, pa
             }
         }
         val active = editor.poseDrag ?: editor.poseHover
+        if (!passive) for ((id, target) in spec.ikTargets) {
+            val effector = bones.firstOrNull { it.bone.id == id } ?: continue
+            val p = screen(target.x, target.y)
+            val error = hypot(effector.tailX - target.x, effector.tailY - target.y)
+            val color = if (!target.enabled) colors.textMuted else if (error > effector.bone.ik.tolerancePx) colors.warning else colors.accent
+            drawLine(color.copy(alpha = 0.6f), screen(effector.tailX, effector.tailY), p,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 3f)))
+            drawCircle(color, 7f, p, style = Stroke(1.5f))
+            drawLine(color, p - Offset(10f, 0f), p + Offset(10f, 0f), strokeWidth = 1.5f)
+            drawLine(color, p - Offset(0f, 10f), p + Offset(0f, 10f), strokeWidth = 1.5f)
+        }
         for (posed in bones) {
             val lit = active?.boneId == posed.bone.id ||
                 (passive && editor.skeletonSelected && editor.selectedBoneId == posed.bone.id)

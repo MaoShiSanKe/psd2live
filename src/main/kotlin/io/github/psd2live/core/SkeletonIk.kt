@@ -72,11 +72,22 @@ internal object SkeletonIk {
 		lower: DoubleArray,
 		upper: DoubleArray,
 		iterations: Int = 32,
+		tolerance: Double = 0.05,
+		initialTurns: DoubleArray? = null,
 	): DoubleArray {
 		val bones = joints.size / 2 - 1
 		require(bones >= 1 && lower.size == bones && upper.size == bones)
+		require(iterations > 0 && tolerance.isFinite() && tolerance >= 0.0 && (initialTurns == null || initialTurns.size == bones))
 		val points = joints.copyOf()
 		val turned = DoubleArray(bones)
+		if (initialTurns != null) for (bone in 0 until bones) {
+			val delta = initialTurns[bone].coerceIn(lower[bone], upper[bone])
+			turned[bone] = delta
+			for (joint in bone + 1..bones) {
+				val p = rotate(points[joint * 2], points[joint * 2 + 1], points[bone * 2], points[bone * 2 + 1], delta)
+				points[joint * 2] = p[0]; points[joint * 2 + 1] = p[1]
+			}
+		}
 		repeat(iterations) {
 			for (bone in bones - 1 downTo 0) {
 				val px = points[bone * 2]
@@ -95,7 +106,7 @@ internal object SkeletonIk {
 					points[joint * 2 + 1] = moved[1]
 				}
 			}
-			if (hypot(points[bones * 2] - tx, points[bones * 2 + 1] - ty) < 0.05) return turned
+			if (hypot(points[bones * 2] - tx, points[bones * 2 + 1] - ty) < tolerance) return turned
 		}
 		return turned
 	}

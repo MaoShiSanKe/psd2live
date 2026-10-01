@@ -121,7 +121,7 @@ internal object SkeletonPoseSolver {
 		val limbIds = bones.mapTo(HashSet()) { it.bone.id }
 		// A limb's IK stops at the body bone it hangs from: pulling a hand should not tilt the torso.
 		val chain = generateSequence(grabbed.bone) { bone -> SkeletonRig.limbParent(spec, bone, limbIds)?.takeUnless { it.role.body } }
-			.take(IK_CHAIN).mapNotNull { byId[it.id] }.toList().asReversed()
+			.take(grabbed.bone.ik.chainLength).mapNotNull { byId[it.id] }.toList().asReversed()
 		val joints = DoubleArray((chain.size + 1) * 2)
 		chain.forEachIndexed { i, posed ->
 			joints[i * 2] = posed.headX.toDouble()
@@ -132,17 +132,52 @@ internal object SkeletonPoseSolver {
 		// Limits on each bone's turn in world degrees, from where its parameter sits now to its limits.
 		val lower = DoubleArray(chain.size)
 		val upper = DoubleArray(chain.size)
+		val seeds = DoubleArray(chain.size)
 		chain.forEachIndexed { i, posed ->
 			val bone = posed.bone
 			val a = (bone.minAngle - current(bone)) * bone.direction
 			val b = (bone.maxAngle - current(bone)) * bone.direction
 			lower[i] = minOf(a, b).toDouble()
 			upper[i] = maxOf(a, b).toDouble()
+			val bend = grabbed.bone.ik.bendDirection
+			if (bend != 0 && i > 0) {
+				val previous = chain[i - 1]
+				val angle = SkeletonIk.wrap(SkeletonIk.heading((posed.tailX - posed.headX).toDouble(), (posed.tailY - posed.headY).toDouble()) -
+					SkeletonIk.heading((previous.tailX - previous.headX).toDouble(), (previous.tailY - previous.headY).toDouble()))
+				lower[i] = maxOf(lower[i], (if (bend > 0) 0.0 else -180.0) - angle)
+				upper[i] = minOf(upper[i], (if (bend > 0) 180.0 else 0.0) - angle)
+				if (lower[i] > upper[i]) { lower[i] = 0.0; upper[i] = 0.0 }
+				if (kotlin.math.abs(angle) < 0.01) {
+					seeds[i] = bend.toDouble()
+					// Counter-turn the root so CCD cannot immediately straighten the seeded joint again.
+					seeds[0] = -bend * 0.5
+				}
+			}
 		}
-		val turns = SkeletonIk.ccd(joints, x.toDouble(), y.toDouble(), lower, upper)
+		val turns = SkeletonIk.ccd(joints, x.toDouble(), y.toDouble(), lower, upper,
+			grabbed.bone.ik.iterations, grabbed.bone.ik.tolerancePx.toDouble(), seeds)
 		return chain.withIndex().associate { (i, posed) ->
 			val bone = posed.bone
 			ParameterId(bone.parameterId) to (current(bone) + turns[i].toFloat() / bone.direction).coerceIn(bone.minAngle, bone.maxAngle)
 		}
+	}
+
+	/** Fixed targets are authoring constraints; actual parameter results are what animation/export stores. */
+	fun solveTargets(model: PuppetModel, spec: SkeletonSpec?, values: Map<ParameterId, Float>): Map<ParameterId, Float> {
+		if (spec?.enabled != true || spec.ikTargets.isEmpty()) return emptyMap()
+		val targets = spec.topological().mapNotNull { bone -> spec.ikTargets[bone.id]?.takeIf { it.enabled }?.let { bone.id to it } }
+		var next = values
+		repeat(8) {
+			var satisfied = true
+			for ((id, target) in targets) {
+				val posed = posed(model, spec, next)
+				val effector = posed.firstOrNull { it.bone.id == id } ?: continue
+				if (kotlin.math.hypot(effector.tailX - target.x, effector.tailY - target.y) <= effector.bone.ik.tolerancePx) continue
+				satisfied = false
+				next = next + drag(spec, posed, BoneHit(id, true), target.x, target.y, next, true)
+			}
+			if (satisfied) return next.filter { (id, value) -> value != values[id] }
+		}
+		return next.filter { (id, value) -> value != values[id] }
 	}
 }
