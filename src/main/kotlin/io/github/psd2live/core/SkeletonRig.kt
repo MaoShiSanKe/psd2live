@@ -317,27 +317,26 @@ internal object SkeletonRig {
 	}
 
 	/**
-	 * Every limb rotation hung straight from the body warps, growing and shrinking with the upper body's
-	 * lean (see [BodyStance.leanScale]): a warp passes a rotation its pivot and its turn but never its
+	 * Every limb rotation hung straight from the body warps, growing and shrinking with the body's lean and
+	 * proportions (see [BodyStance.limbScale]): a warp passes a rotation its pivot and its turn but never its
 	 * scale, so an arm would otherwise stay its size while the chest it hangs from comes toward the viewer.
-	 * The lean joins its axes, keyed as the lean warp keys it.
+	 * The lean warp's axes join its own, keyed as the lean warp keys them.
 	 */
 	private fun withLean(model: PuppetModel, bones: List<SkeletonBone>, stance: BodyStance): PuppetModel {
-		val bodyY = StandardParameters.BODY_LEAN
-		val leans = (model.deformers.firstOrNull { it.id == BodyStance.leanWarpId } as? Deformer.Warp)?.geometryGrid?.axes?.any { it.parameterId == bodyY } == true
-		if (!leans) return model
+		val axes = (model.deformers.firstOrNull { it.id == BodyStance.leanWarpId } as? Deformer.Warp)?.geometryGrid?.axes
+			?.takeIf { it.size == 2 && it[0].parameterId == StandardParameters.BODY_LEAN } ?: return model
 		val hosts = setOf(torsoWarpId, breathId, BodyStance.leanWarpId, bodyId)
-		val keys = floatArrayOf(-10f, 0f, 10f)
+		val combos = axes[0].keys.indices.flatMap { a -> axes[1].keys.indices.map { b -> intArrayOf(a, b) } }
 		val byDeformer = bones.associateBy { it.deformerId }
 		return model.copy(deformers = model.deformers.map { deformer ->
 			if (deformer !is Deformer.Rotation || deformer.parent !in hosts) return@map deformer
 			val bone = byDeformer[deformer.id.raw] ?: return@map deformer
 			val grid = deformer.geometryGrid ?: return@map deformer
-			if (grid.axes.any { it.parameterId == bodyY }) return@map deformer
-			val scales = keys.map { stance.leanScale(bone.headY.toDouble(), it).toFloat() }
+			if (grid.axes.any { axis -> axes.any { it.parameterId == axis.parameterId } }) return@map deformer
+			val scales = combos.map { c -> stance.limbScale(bone.headY.toDouble(), axes[0].keys[c[0]], axes[1].keys[c[1]]).toFloat() }
 			if (scales.all { abs(it - 1f) < 5e-3f }) return@map deformer
-			deformer.copy(geometryGrid = KeyformGrid(grid.axes + KeyformAxis(bodyY, keys), grid.cells.flatMap { cell ->
-				keys.indices.map { k -> KeyformCell(cell.coordinate + k, cell.form.let { RotationPivotForm(it.originX, it.originY, it.angle, it.scale * scales[k]) }) }
+			deformer.copy(geometryGrid = KeyformGrid(grid.axes + axes, grid.cells.flatMap { cell ->
+				combos.indices.map { n -> KeyformCell(cell.coordinate + combos[n], cell.form.let { RotationPivotForm(it.originX, it.originY, it.angle, it.scale * scales[n]) }) }
 			}))
 		})
 	}
@@ -900,7 +899,8 @@ internal object SkeletonRig {
 	}
 
 	/**
-	 * A warp under each leg bone of [homes] over the meshes that hang from it, keyed on Body X and Body Y.
+	 * A warp under each leg bone of [homes] over the meshes that hang from it, keyed on Body X, Body Y and
+	 * the proportions.
 	 *
 	 * The legs warp moves the hips and bends the knees with the body parameters (see [BodyStance]), but a
 	 * rotation deformer passes on only its pivot and its angle, so a leg skinned to bones would stand still
@@ -921,6 +921,7 @@ internal object SkeletonRig {
 		val axes = listOf(
 			KeyformAxis(StandardParameters.BODY_X, floatArrayOf(-10f, 0f, 10f)),
 			KeyformAxis(StandardParameters.BODY_Y, floatArrayOf(-10f, 0f, 10f)),
+			KeyformAxis(StandardParameters.PROPORTION, floatArrayOf(-10f, 0f, 10f)),
 		)
 		var model = base
 		for ((bone, drawables) in homes) {
@@ -951,21 +952,22 @@ internal object SkeletonRig {
 			val restCanvas = FloatArray(restPoints.size)
 			for (i in restPoints.indices step 2) rest.apply(restPoints[i], restPoints[i + 1], restCanvas, i)
 			val cells = ArrayList<KeyformCell<WarpLatticeForm>>()
-			for ((yi, y) in axes[1].keys.withIndex()) for ((xi, x) in axes[0].keys.withIndex()) {
-				if (x == 0f && y == 0f) {
-					cells += KeyformCell(intArrayOf(xi, yi), WarpLatticeForm(restPoints.copyOf()))
+			for ((si, size) in axes[2].keys.withIndex()) for ((yi, y) in axes[1].keys.withIndex()) for ((xi, x) in axes[0].keys.withIndex()) {
+				if (x == 0f && y == 0f && size == 0f) {
+					cells += KeyformCell(intArrayOf(xi, yi, si), WarpLatticeForm(restPoints.copyOf()))
 					continue
 				}
 				val solved = stance.Solved(stance.bodyPose(x, y))
-				val world = worlds(model, mapOf(StandardParameters.BODY_X to x, StandardParameters.BODY_Y to y), setOf(boneId)).getValue(boneId)
+				val values = mapOf(StandardParameters.BODY_X to x, StandardParameters.BODY_Y to y, StandardParameters.PROPORTION to size)
+				val world = worlds(model, values, setOf(boneId)).getValue(boneId)
 				val points = FloatArray(restPoints.size)
 				for (i in restPoints.indices step 2) {
-					val target = solved.legPoint(restCanvas[i].toDouble(), restCanvas[i + 1].toDouble())
+					val target = stance.legsAt(solved.legPoint(restCanvas[i].toDouble(), restCanvas[i + 1].toDouble()), size)
 					val local = inverse(world, target[0].toFloat(), target[1].toFloat(), floatArrayOf(restPoints[i], restPoints[i + 1]))
 					points[i] = local[0]
 					points[i + 1] = local[1]
 				}
-				cells += KeyformCell(intArrayOf(xi, yi), WarpLatticeForm(points))
+				cells += KeyformCell(intArrayOf(xi, yi, si), WarpLatticeForm(points))
 			}
 			val id = DeformerId(bone.deformerId + "Stance")
 			val warp = Deformer.Warp(id, tr("model.deformer.legStance", bone.name), boneId, rotation.partId, rows, columns, true,

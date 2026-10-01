@@ -20,10 +20,11 @@ import kotlin.math.sqrt
  *   neck, near the axis, hardly moves, so the head stays in the middle of the body. Body Y opens the shoulders a little going down and stretches the back
  *   going up. Under both the whole body moves with the hips: a little sideways on Body X, down onto bent
  *   knees and up onto straightened legs on Body Y.
- * - **The lean** ([leanPoint]): a warp under the body on a parameter of its own, the body bowing in three
- *   dimensions toward the viewer or back - the pelvis a little about the hips, the upper body the rest
- *   about the waist - and seen in perspective, with each arm in a warp of its own hanging from its
- *   shoulder ([armPoint]).
+ * - **The lean and the proportions** ([leanPoint]): a warp under the body on two parameters of its own.
+ *   The lean bows the body in three dimensions toward the viewer or back - the pelvis a little about the
+ *   hips, the upper body the rest about the waist - seen in perspective; the proportions draw the head
+ *   larger over a shorter torso toward a chibi, or the other way. Each arm hangs from its shoulder in a
+ *   warp of its own ([armPoint]).
  * - **The legs** ([legPoint]): a warp over the legs alone. Its lowest rows, the feet, stay where they are
  *   drawn; everything above them follows two-bone legs whose hips move with the body. A knee bends
  *   forward, toward the viewer, so a front-facing thigh shortens rather than swinging out sideways, and
@@ -365,65 +366,164 @@ internal class BodyStance private constructor(
 	}
 
 	/**
-	 * Where canvas point ([x], [y]) goes on the body leaning at [lean] (-10..10), toward the viewer at
-	 * positive values and back at negative ones. The body is a solid ([surfaceDepth]) bowing in three
-	 * dimensions and seen in perspective from the viewer of [torsoPoint]: the pelvis tilts a share of the
-	 * lean ([PELVIS_SHARE]) about the hip joints, carrying the skirt with it, and the upper body the rest
-	 * about the waist, eased in across it. Leaning in, the chest and the head come closer, lower and larger
-	 * - the front of the chest more than its sides, so it rounds out - and the skirt below the hips swings
-	 * back a little; leaning back, the other way. Arms hang apart ([armPoint]).
+	 * Where canvas point ([x], [y]) goes on the body leaning at [lean] and drawn in the proportions of
+	 * [size] (each -10..10). The proportions come first ([sized]), then the lean, so a chibi body leans as
+	 * one.
+	 *
+	 * The lean bows the body toward the viewer at positive values and back at negative ones. The body is a
+	 * solid ([surfaceDepth]) bowing in three dimensions and seen in perspective from in front of it: the
+	 * pelvis tilts a share of the lean ([PELVIS_SHARE]) about the hip joints, carrying the skirt with it, and
+	 * the upper body the rest about the waist, eased in across it. Leaning in, the chest foreshortens and
+	 * comes down, a little nearer and larger, and the skirt below the hips swings
+	 * back a little; leaning back, the other way. The head rides the neck upright, keeping its shape, and
+	 * the arms hang apart ([armPoint]).
 	 */
-	fun leanPoint(x: Double, y: Double, lean: Float): DoubleArray {
-		val pitch = lean / 10.0 * strength
-		if (pitch == 0.0) return doubleArrayOf(x, y)
-		val p = leaned(x, y, pitch)
+	fun leanPoint(x: Double, y: Double, lean: Float, size: Float = 0f): DoubleArray {
+		val p = shaped(x, y, lean, size)
 		return doubleArrayOf(p[0], p[1])
 	}
 
 	/**
-	 * Where canvas point ([x], [y]) of an arm hanging from the shoulder at canvas x [shoulderX] goes leaning
-	 * at [lean]: it hangs straight down whatever the body does, so it moves with its shoulder as one piece,
-	 * drawn as much larger as the shoulder is, instead of bending with the body it hangs beside.
+	 * Where canvas point ([x], [y]) of an arm hanging from the shoulder at canvas x [shoulderX] goes at
+	 * [lean] and [size]: it hangs straight down whatever the body does, so it moves with its shoulder as one
+	 * piece, drawn as much larger as the shoulder is - and shorter as the body is on a chibi - instead of
+	 * bending with the body it hangs beside.
 	 */
-	fun armPoint(x: Double, y: Double, shoulderX: Double, lean: Float): DoubleArray {
-		val pitch = lean / 10.0 * strength
-		if (pitch == 0.0) return doubleArrayOf(x, y)
+	fun armPoint(x: Double, y: Double, shoulderX: Double, lean: Float, size: Float = 0f): DoubleArray {
 		val shoulderY = torso.shoulderY.toDouble()
-		val shoulder = leaned(shoulderX, shoulderY, pitch)
-		return doubleArrayOf(shoulder[0] + (x - shoulderX) * shoulder[2], shoulder[1] + (y - shoulderY) * shoulder[2])
+		val shoulder = shaped(shoulderX, shoulderY, lean, size)
+		val k = shoulder[2] * limbSize(size)
+		return doubleArrayOf(shoulder[0] + (x - shoulderX) * k, shoulder[1] + (y - shoulderY) * k)
 	}
 
-	/** How much larger the body is drawn at canvas height [y] on its centre line leaning at [lean]. */
-	fun leanScale(y: Double, lean: Float): Double {
-		val pitch = lean / 10.0 * strength
-		if (pitch == 0.0) return 1.0
-		return leaned(torso.centerX.toDouble(), y, pitch)[2]
+	/** How much larger the body is drawn at canvas height [y] on its centre line at [lean] and [size]. */
+	fun leanScale(y: Double, lean: Float, size: Float = 0f): Double =
+		shaped(torso.centerX.toDouble(), y, lean, size)[2]
+
+	/**
+	 * How much larger a limb hanging from the body at canvas height [y] is drawn at [lean] and [size]: as the
+	 * head where it hangs from the head, else as the arms ([armPoint]).
+	 */
+	fun limbScale(y: Double, lean: Float, size: Float = 0f): Double {
+		val k = leanScale(y, lean, size)
+		return if (y < neckY - torso.length * HEAD_BAND) k else k * limbSize(size)
 	}
+
+	/** Where the neck turns into the head, canvas y: the head above it is drawn as one rigid piece. */
+	private val neckY: Double get() = torso.shoulderY - torso.length * NECK_RISE
+
+	/** ([x], [y]) at [lean] and [size]: its canvas x and y and how much larger it is drawn. */
+	private fun shaped(x: Double, y: Double, lean: Float, size: Float): DoubleArray {
+		val proportion = (size / 10.0).coerceIn(-1.0, 1.0)
+		val pitch = lean / 10.0 * strength
+		val p = if (proportion == 0.0) doubleArrayOf(x, y, 1.0) else sized(x, y, proportion)
+		if (pitch == 0.0) return p
+		val q = leaned(p[0], p[1], pitch)
+		return doubleArrayOf(q[0], q[1], p[2] * q[2])
+	}
+
+	/**
+	 * ([x], [y]) in the proportions of [proportion] (-1..1): toward a chibi at positive values - the head
+	 * larger ([HEAD_GROW]), the chest wider ([CHEST_GROW]) over a shorter torso ([BODY_SHRINK]), and the
+	 * legs and the skirt shorter ([LEG_SHRINK], see [shortened]), carrying everything above them down - and
+	 * toward a taller figure at negative ones. The head grows from the neck as one piece, so it still sits
+	 * on the shoulders, and the feet stay where they are.
+	 */
+	private fun sized(x: Double, y: Double, proportion: Double): DoubleArray {
+		val length = torso.length.toDouble()
+		val waist = torso.waistY.toDouble()
+		val head = 1 + HEAD_GROW * proportion
+		val chest = 1 + CHEST_GROW * proportion
+		val body = 1 - BODY_SHRINK * proportion
+		// Heights above the waist are drawn at a rate easing from 1 to the body's across the waist and from
+		// the body's to the head's across the neck; the drawn height is that rate summed up from below.
+		val h = waist - y
+		val waistBand = length * WAIST_BAND
+		val neck = waist - neckY
+		val headBand = length * HEAD_BAND
+		val drawn = (body - 1) * 2 * waistBand * ramp((h + waistBand) / (2 * waistBand)) +
+			(head - body) * headBand * ramp((h - neck) / headBand)
+		// Widths grow from the waist to the chest's at the shoulders, and to the head's across the neck.
+		val k = 1 + (chest - 1) * smooth(h / length) + (head - chest) * smooth((h - neck) / headBand)
+		val cx = torso.centerX.toDouble()
+		val lower = if (y >= waist) shortened(y, proportion) else y + shortened(waist, proportion) - waist
+		return doubleArrayOf(cx + (x - cx) * k, lower - drawn, k)
+	}
+
+	/**
+	 * Canvas height [y] with the legs drawn in the proportions of [proportion] (-1..1): everything between
+	 * the ankles and the waist drawn [LEG_SHRINK] shorter toward a chibi, or longer toward a taller figure,
+	 * the feet below the ankles where they are. Without legs nothing changes.
+	 */
+	private fun shortened(y: Double, proportion: Double): Double {
+		if (!standing || y >= ankleY) return y
+		return ankleY - (ankleY - y) * (1 - LEG_SHRINK * proportion)
+	}
+
+	/** Where the legs end in the feet, canvas y: the ankles' mean height. */
+	private val ankleY: Double get() = legs.map { it.ankleY }.average()
+
+	/**
+	 * Where canvas point ([x], [y]), already put by the legs' pose, goes with the legs drawn at [size]
+	 * (-10..10): shorter toward a chibi, their tops coming down with the body ([leanPoint]), the feet still.
+	 */
+	fun legsAt(p: DoubleArray, size: Float): DoubleArray {
+		val proportion = (size / 10.0).coerceIn(-1.0, 1.0)
+		if (proportion == 0.0) return p
+		return doubleArrayOf(p[0], shortened(p[1], proportion))
+	}
+
+	/** How much larger an arm is drawn at [size]: as much shorter as the torso. */
+	private fun limbSize(size: Float): Double = 1 - BODY_SHRINK * (size / 10.0).coerceIn(-1.0, 1.0)
 
 	/** ([x], [y]) on the body pitched by [pitch] (-1..1 times the strength): its canvas x and y and how much larger it is drawn. */
 	private fun leaned(x: Double, y: Double, pitch: Double): DoubleArray {
-		val theta = Math.toRadians(LEAN_DEGREES * pitch)
+		val band = torso.length * HEAD_BAND
+		val up = smooth((neckY - y) / band)
+		if (up <= 0.0) return bowed(x, y, pitch)
+		// The head rides the neck: moved and scaled as the neck is, never foreshortened with the chest.
+		val cx = torso.centerX.toDouble()
+		val neck = bowed(cx, neckY, pitch)
+		val k = neck[2]
+		val rigid = doubleArrayOf(neck[0] + (x - cx) * k, neck[1] - (neckY - y) * k, k)
+		if (up >= 1.0) return rigid
+		val body = bowed(x, y, pitch)
+		return DoubleArray(3) { body[it] + (rigid[it] - body[it]) * up }
+	}
+
+	/**
+	 * ([x], [y]) on the body bowed by [pitch] as a solid: its canvas x and y and how much larger it is drawn.
+	 * The spine bends along an arc: the pelvis's share of the lean below the waist, the full lean above it,
+	 * easing from one to the other across the waist, so the waist curves rather than folding.
+	 */
+	private fun bowed(x: Double, y: Double, pitch: Double): DoubleArray {
+		val theta = Math.toRadians((if (pitch >= 0.0) LEAN_DEGREES else LEAN_BACK_DEGREES) * pitch)
 		val length = torso.length.toDouble()
 		val waist = torso.waistY.toDouble()
 		val pivot = maxOf(hipY, waist)
 		val z0 = surfaceDepth(x, y)
-		// Pitched toward the viewer about a pivot at canvas height pivotY and depth pivotZ: up is -y, near is +z.
-		fun pitched(py: Double, pz: Double, pivotY: Double, pivotZ: Double, angle: Double): DoubleArray {
-			val h = pivotY - py
-			val d = pz - pivotZ
-			val c = cos(angle)
-			val s = sin(angle)
-			return doubleArrayOf(pivotY - (h * c - d * s), pivotZ + h * s + d * c)
-		}
 		val pelvis = theta * PELVIS_SHARE
-		val tilted = pitched(y, z0, pivot, 0.0, pelvis)
-		val waistAt = pitched(waist, 0.0, pivot, 0.0, pelvis)
-		val bowed = pitched(tilted[0], tilted[1], waistAt[0], waistAt[1], theta - pelvis)
-		val band = length * WAIST_BAND
-		val w = smooth((waist - y + band) / (2 * band))
-		val wy = tilted[0] + (bowed[0] - tilted[0]) * w
-		val wz = tilted[1] + (bowed[1] - tilted[1]) * w
-		val camera = CAMERA_DISTANCE * length
+		val band = length * BEND_BAND
+		val bend = pivot - waist
+		// The spine's pitch at height [s] above the pivot, toward the viewer.
+		fun angle(s: Double) = pelvis + (theta - pelvis) * smooth((s - bend + band) / (2 * band))
+		// Walk the spine up from the pivot to the point's height: up is -y, near is +z.
+		val h = pivot - y
+		val step = h / SPINE_STEPS
+		var up = 0.0
+		var near = 0.0
+		for (i in 0 until SPINE_STEPS) {
+			val a = angle((i + 0.5) * step)
+			up += cos(a) * step
+			near += sin(a) * step
+		}
+		// The surface stands off the spine along its normal, as deep as the solid is there. The spine bends
+		// halfway to the front, through the soft belly, so the front shortens about as the back lengthens.
+		val axis = torso.halfWidth * YAW_RADIUS * TORSO_DEPTH * BEND_AXIS
+		val a = angle(h)
+		val wy = pivot - (up - (z0 - axis) * sin(a))
+		val wz = axis + near + (z0 - axis) * cos(a)
+		val camera = LEAN_CAMERA_DISTANCE * length
 		val cameraY = torso.shoulderY - length * CAMERA_HEIGHT
 		val k = (camera - z0) / (camera - wz)
 		val cx = torso.centerX.toDouble()
@@ -482,9 +582,40 @@ internal class BodyStance private constructor(
 		private const val STAND_STRETCH = 0.015
 		private const val STAND_NARROW = 0.015
 
-		/** Degrees the body bows at a full lean, and the share of them the pelvis takes about the hip joints. */
-		private const val LEAN_DEGREES = 15.0
+		/**
+		 * Degrees the body bows at a full lean in and a full lean back, and the share of them the pelvis takes
+		 * about the hip joints. The lean is seen from further off than the turn, so it reads as the chest
+		 * bowing rather than growing.
+		 */
+		private const val LEAN_DEGREES = 28.0
+		private const val LEAN_BACK_DEGREES = 12.0
 		private const val PELVIS_SHARE = 0.3
+		private const val LEAN_CAMERA_DISTANCE = 9.0
+
+		/** How far above the shoulders the head's rigid piece begins, and the band it eases in over, in torso lengths. */
+		private const val NECK_RISE = 0.08
+		private const val HEAD_BAND = 0.1
+
+		/**
+		 * At full chibi proportions the head is drawn this much larger, the chest this much wider at the
+		 * shoulders, the torso and the arms this much shorter, and the legs this much shorter.
+		 */
+		private const val HEAD_GROW = 0.15
+		private const val CHEST_GROW = 0.08
+		private const val BODY_SHRINK = 0.06
+		private const val LEG_SHRINK = 0.1
+
+		/**
+		 * Half width of the band about the waist where the spine bends from the pelvis's pitch to the full
+		 * lean, in torso lengths: the front of the body, inside the bend, shortens as fast as it turns.
+		 */
+		private const val BEND_BAND = 0.6
+
+		/** How far toward the front of the torso the spine bends, as a share of its depth at the chest. */
+		private const val BEND_AXIS = 0.5
+
+		/** Steps the bowing spine is walked in. */
+		private const val SPINE_STEPS = 24
 
 		/** Half width of the band about the waist where the upper body's lean eases in, in torso lengths. */
 		private const val WAIST_BAND = 0.35
@@ -587,6 +718,13 @@ internal class BodyStance private constructor(
 		}
 
 		/** A height over the waist eased in across [band]: nothing below the waist, the full lever above the band. */
+		/** The integral of [smooth] from 0 to [t]: 0 below 0, then the eased ramp, then t - 1/2 past 1. */
+		private fun ramp(t: Double): Double = when {
+			t <= 0.0 -> 0.0
+			t >= 1.0 -> t - 0.5
+			else -> t * t * t - t * t * t * t / 2
+		}
+
 		private fun lever(above: Double, band: Double): Double = when {
 			above <= -band -> 0.0
 			above >= band -> above

@@ -2,9 +2,14 @@ package io.github.psd2live.core
 
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.Deformer
+import org.umamo.runtime.model.DeformerId
 import org.umamo.runtime.model.DrawableId
+import org.umamo.runtime.model.KeyformAxis
+import org.umamo.runtime.model.KeyformCell
+import org.umamo.runtime.model.KeyformGrid
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
+import org.umamo.runtime.model.WarpLatticeForm
 import java.nio.file.Path
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -111,20 +116,21 @@ class BodyStanceTest {
 	}
 
 	@Test fun theLeanBowsTheBodyInThreeDimensions() {
-		// Leaning in, the shoulders come lower and wider and the head larger; leaning back, higher and smaller.
+		// Leaning in, the shoulders come lower and wider and the head larger; leaning back, smaller.
 		val shoulder = stance.leanPoint(120.0, 260.0, 10f)
 		assertTrue(shoulder[1] > 260.0 + 5.0, "shoulders come down: ${shoulder[1]}")
 		assertTrue(shoulder[0] < 120.0 - 3.0, "shoulders widen: ${shoulder[0]}")
 		assertTrue(stance.leanScale(150.0, 10f) > 1.04)
 		val back = stance.leanPoint(120.0, 260.0, -10f)
-		assertTrue(back[1] < 260.0, "leaning back the shoulders rise: ${back[1]}")
+		assertTrue(abs(back[1] - 260.0) < 4.0, "leaning back the shoulders stay about where they are: ${back[1]}")
 		assertTrue(stance.leanScale(150.0, -10f) < 0.98)
-		// The chest is a solid: its front, nearer the viewer, comes closer and grows more than its sides.
-		fun width(x: Double, y: Double): Double { val a = stance.leanPoint(x - 2.0, y, 10f); val b = stance.leanPoint(x + 2.0, y, 10f); return b[0] - a[0] }
-		assertTrue(width(200.0, 330.0) > width(200.0 + stance.torso.halfWidth * 1.05, 330.0) + 0.02, "the front rounds out")
-		// The skirt below the hips goes with the pelvis, back and up a little, rather than staying folded flat.
-		val hem = stance.leanPoint(200.0, 620.0, 10f)
-		assertTrue(hem[1] < 620.0 - 1.0, "the hem swings back: ${hem[1]}")
+		// The skirt below the hips goes back with the pelvis rather than staying folded flat.
+		assertTrue(stance.leanScale(620.0, 10f) < 0.995, "the hem goes back: ${stance.leanScale(620.0, 10f)}")
+		// The chest foreshortens; the head rides the neck whole, as tall as it is wide.
+		assertTrue(stance.leanPoint(200.0, 250.0, 10f)[1] - stance.leanPoint(200.0, 450.0, 10f)[1] > -200.0 * 0.95, "the chest foreshortens")
+		val top = stance.leanPoint(200.0, 50.0, 10f)
+		val chin = stance.leanPoint(200.0, 200.0, 10f)
+		assertEquals(stance.leanScale(120.0, 10f), (chin[1] - top[1]) / 150.0, 1e-6)
 		// An arm moves with its shoulder as one piece: its points keep their offsets, all scaled alike.
 		val shoulderX = (stance.torso.centerX - stance.torso.halfWidth).toDouble()
 		val elbow = stance.armPoint(100.0, 380.0, shoulderX, 10f)
@@ -136,6 +142,58 @@ class BodyStanceTest {
 		assertEquals(140.0 * k, hand[1] - elbow[1], 1e-6)
 		assertEquals(1.0, stance.leanScale(150.0, 0f))
 		assertEquals(120.0, stance.leanPoint(120.0, 260.0, 0f)[0])
+	}
+
+	@Test fun theLeanCurvesTheWaistRatherThanFoldingIt() {
+		// Every stretch of the centre line from the waist up foreshortens about alike: none is squeezed more
+		// than the bow itself would.
+		var previous = stance.leanPoint(200.0, 460.0, 10f)[1]
+		val rates = (440 downTo 260 step 20).map { y ->
+			val p = stance.leanPoint(200.0, y.toDouble(), 10f)[1]
+			((previous - p) / 20.0).also { previous = p }
+		}
+		assertTrue(rates.min() > 0.78 && rates.max() < 0.95, rates.toString())
+		assertTrue(rates.max() - rates.min() < 0.1, rates.toString())
+	}
+
+	@Test fun theFaceBowsWithTheLean() {
+		// A head warp on Angle X and Angle Y takes the lean as an axis: leaning in, its lattice is the one it
+		// has with the face turned down a little, read between its keys; at no lean it is its own.
+		val axes = listOf(KeyformAxis(StandardParameters.ANGLE_X, floatArrayOf(-45f, 0f, 45f)), KeyformAxis(StandardParameters.ANGLE_Y, floatArrayOf(-30f, 0f, 30f)))
+		val cells = (0..2).flatMap { x -> (0..2).map { y -> KeyformCell(intArrayOf(x, y), WarpLatticeForm(floatArrayOf(x.toFloat(), y * 30f))) } }
+		val warp = Deformer.Warp(DeformerId("DeformFace"), "face", null, null, 0, 0, true, KeyformGrid(axes, cells))
+		val leaned = RigBuilder.withFaceLean(listOf(warp)).single() as Deformer.Warp
+		val grid = leaned.geometryGrid!!
+		assertEquals(StandardParameters.BODY_LEAN, grid.axes.last().parameterId)
+		fun at(x: Int, y: Int, lean: Int) = grid.cells.single { it.coordinate.contentEquals(intArrayOf(x, y, lean)) }.form.controlPoints[1]
+		assertEquals(30f, at(1, 1, 1))
+		assertTrue(at(1, 1, 2) < 30f - 5f, "leaning in the face turns down: ${at(1, 1, 2)}")
+		assertTrue(at(1, 1, 0) > 30f + 3f, "leaning back it turns up: ${at(1, 1, 0)}")
+		assertEquals(0f, at(1, 0, 2))
+	}
+
+	@Test fun theProportionsDrawAChibiOrATallerFigure() {
+		// Toward a chibi the head grows from the neck as one piece, the chest widens and the torso, the arms
+		// and the legs shorten, the body coming down onto them; the feet stay.
+		val head = stance.leanScale(120.0, 0f, 10f)
+		assertTrue(head > 1.1, "the head grows: $head")
+		val top = stance.leanPoint(200.0, 50.0, 0f, 10f)
+		val chin = stance.leanPoint(200.0, 200.0, 0f, 10f)
+		assertEquals(head, (chin[1] - top[1]) / 150.0, 1e-6)
+		val shoulder = stance.leanPoint(120.0, 250.0, 0f, 10f)
+		val waist = stance.leanPoint(120.0, 450.0, 0f, 10f)
+		assertTrue(shoulder[0] < 120.0 - 4.0, "the chest widens: ${shoulder[0]}")
+		assertTrue(waist[1] - shoulder[1] < 200.0 * 0.96, "the torso shortens: ${waist[1] - shoulder[1]}")
+		assertTrue(waist[1] > 450.0 + 30.0, "the body comes down: ${waist[1]}")
+		val hem = stance.leanPoint(200.0, 620.0, 0f, 10f)[1]
+		assertEquals(920.0 - 300.0 * 0.9, hem, 1e-6)
+		assertEquals(940.0, stance.legsAt(doubleArrayOf(160.0, 940.0), 10f)[1])
+		assertEquals(hem, stance.legsAt(doubleArrayOf(160.0, 620.0), 10f)[1], 1e-9)
+		assertTrue(stance.limbScale(300.0, 0f, 10f) < stance.leanScale(300.0, 0f, 10f) * 0.95, "the arms shorten")
+		// Toward a taller figure, the other way.
+		assertTrue(stance.leanScale(120.0, 0f, -10f) < 0.9)
+		assertTrue(stance.leanPoint(120.0, 450.0, 0f, -10f)[1] < 450.0 - 30.0)
+		assertTrue(stance.leanPoint(120.0, 250.0, 0f, -10f)[0] > 120.0 + 4.0)
 	}
 
 	@Test fun aFigureWithoutLegsTurnsAboveTheWaistOnly() {
@@ -187,7 +245,10 @@ class BodyStanceTest {
 			val chain = ancestry(puppet, DrawableId(id))
 			assertEquals("DeformArmHang_" + (if (armLayers[layer] == Side.LEFT) "L" else "R"), chain.first())
 			assertTrue("DeformBodyLean" in chain, chain.toString())
+			val hang = puppet.deformers.single { it.id.raw == chain.first() } as Deformer.Warp
+			assertEquals(listOf("ParamBodyLean", "ParamProportion"), hang.geometryGrid!!.axes.map { it.parameterId.raw })
 		}
+		assertSoles(puppet, legMeshes, mapOf(StandardParameters.PROPORTION to 10f, StandardParameters.BODY_LEAN to 10f))
 		assertTrue(RigIntegrityValidator.validateDirectionalWarpDimensions("tml", puppet).isEmpty(), RigIntegrityValidator.validateDirectionalWarpDimensions("tml", puppet).joinToString("\n"))
 
 		// With its skeleton, the leg poses stand on the same feet.

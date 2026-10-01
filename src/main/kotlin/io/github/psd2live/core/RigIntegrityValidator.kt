@@ -211,9 +211,9 @@ object RigIntegrityValidator {
 
 		for (rotation in puppet.deformers.filterIsInstance<Deformer.Rotation>()) {
 			val grid = rotation.geometryGrid ?: continue
-			val lean = grid.axes.indexOfFirst { it.parameterId == StandardParameters.BODY_LEAN }
+			val shaping = grid.axes.indices.filter { grid.axes[it].parameterId == StandardParameters.BODY_LEAN || grid.axes[it].parameterId == StandardParameters.PROPORTION }
 			for (cell in grid.cells) {
-				if (lean >= 0 && grid.axes[lean].keys[cell.coordinate[lean]] != 0f) continue
+				if (shaping.any { grid.axes[it].keys[cell.coordinate[it]] != 0f }) continue
 				val form: RotationPivotForm = cell.form
 				if (!form.scale.isFinite() || abs(form.scale - 1f) > 1e-5f) {
 					warnings += tr("validation.directionalRotationScale", label, rotation.id.raw, cell.coordinate.contentToString(), form.scale)

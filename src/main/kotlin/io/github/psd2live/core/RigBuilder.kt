@@ -55,6 +55,7 @@ object StandardParameters {
 	val BODY_Y = ParameterId("ParamBodyAngleY")
 	val BODY_Z = ParameterId("ParamBodyAngleZ")
 	val BODY_LEAN = ParameterId("ParamBodyLean")
+	val PROPORTION = ParameterId("ParamProportion")
 	val EYE_L_OPEN = ParameterId("ParamEyeLOpen")
 	val EYE_R_OPEN = ParameterId("ParamEyeROpen")
 	val EYE_BALL_X = ParameterId("ParamEyeBallX")
@@ -77,6 +78,7 @@ object StandardParameters {
 			Parameter(BODY_Y, tr("model.parameter.bodyY"), -10f, 10f, 0f),
 			Parameter(BODY_Z, tr("model.parameter.bodyZ"), -10f, 10f, 0f),
 			Parameter(BODY_LEAN, tr("model.parameter.bodyLean"), -10f, 10f, 0f),
+			Parameter(PROPORTION, tr("model.parameter.proportion"), -10f, 10f, 0f),
 			Parameter(EYE_L_OPEN, tr("model.parameter.eyeLOpen"), 0f, 1f, 1f),
 			Parameter(EYE_R_OPEN, tr("model.parameter.eyeROpen"), 0f, 1f, 1f),
 			Parameter(EYE_BALL_X, tr("model.parameter.eyeBallX"), -1f, 1f, 0f),
@@ -945,7 +947,7 @@ object RigBuilder {
 		val puppet = PuppetModel(
 			parameters = StandardParameters.all + uniqueCustomParams,
 			parts = parts,
-			deformers = deformers,
+			deformers = withFaceLean(deformers),
 			drawables = maskedDrawables,
 			rootChildren = listOf(OrgChild.Part(headPartId), OrgChild.Part(extraPartId), OrgChild.Part(bodyPartId)),
 			rootPartId = null,
@@ -1224,7 +1226,8 @@ object RigBuilder {
 
 	/**
 	 * The body's warps (see [BodyStance]): the body over [frame] at the root on Body X and Body Y, the lean
-	 * under it on its own parameter, and for a standing figure the legs, a second root beside the body.
+	 * and the proportions under it on their own parameters, and for a standing figure the legs, a second root
+	 * beside the body, on Body X, Body Y and the proportions.
 	 */
 	internal fun bodyWarps(stance: BodyStance, frame: Bounds, bodyPartId: PartId?): List<Deformer.Warp> {
 		val bodyAxes = listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f), axis(StandardParameters.BODY_Y, -10f, 0f, 10f))
@@ -1232,10 +1235,11 @@ object RigBuilder {
 		val legs = if (!stance.standing) emptyList() else {
 			val legsFrame = stance.legsFrame!!
 			val legRows = (legsFrame.height / (stance.legLength * LEG_ROW_SPACING)).toInt().coerceIn(10, 20)
-			val legsGrid = grid(bodyAxes) { values ->
+			// The legs shorten and lengthen with the proportions too, the body coming down with them.
+			val legsGrid = grid(bodyAxes + axis(StandardParameters.PROPORTION, -10f, 0f, 10f)) { values ->
 				val solved = stance.Solved(stance.bodyPose(values[0], values[1]))
 				lattice(LEG_COLUMNS, legRows) { u, v ->
-					solved.legPoint((legsFrame.left + u * legsFrame.width).toDouble(), (legsFrame.top + v * legsFrame.height).toDouble())
+					stance.legsAt(solved.legPoint((legsFrame.left + u * legsFrame.width).toDouble(), (legsFrame.top + v * legsFrame.height).toDouble()), values[2])
 				}
 			}
 			listOf(Deformer.Warp(BodyStance.legsWarpId, tr("model.deformer.legs"), null, bodyPartId, legRows, LEG_COLUMNS, true, legsGrid))
@@ -1249,10 +1253,10 @@ object RigBuilder {
 		}
 		val body = Deformer.Warp(bodyWarpId, tr("model.deformer.body"), null, bodyPartId, BODY_ROWS, BODY_COLUMNS, true, bodyGrid)
 		// Under the body the lattice is in its space over the same frame.
-		val leanGrid = grid(listOf(axis(StandardParameters.BODY_LEAN, -10f, 0f, 10f))) { values ->
+		val leanGrid = grid(leanAxes()) { values ->
 			lattice(LEAN_COLUMNS, LEAN_ROWS) { u, v ->
 				val (x, y) = canvasOf(u, v)
-				val p = stance.leanPoint(x, y, values[0])
+				val p = stance.leanPoint(x, y, values[0], values[1])
 				doubleArrayOf((p[0] - frame.left) / frame.width, (p[1] - frame.top) / frame.height)
 			}
 		}
@@ -1429,9 +1433,9 @@ object RigBuilder {
 		val headPivotCanvas = faceRig.coordinateSpace.toCanvas(headPivotX, headPivotY)
 		val headPivotLocalX = normalizeX(headPivotCanvas.first, bodyFrame)
 		val headPivotLocalY = normalizeY(headPivotCanvas.second, bodyFrame)
-		// The head grows and shrinks with the upper body's lean, which a warp cannot pass on to a rotation.
-		val rotationGrid = grid(listOf(axis(StandardParameters.ANGLE_Z, -30f, 0f, 30f), axis(StandardParameters.BODY_LEAN, -10f, 0f, 10f))) { values ->
-			val scale = stance.leanScale(headPivotCanvas.second.toDouble(), values[1]).toFloat()
+		// The head grows and shrinks with the lean and the proportions, which a warp cannot pass on to a rotation.
+		val rotationGrid = grid(listOf(axis(StandardParameters.ANGLE_Z, -30f, 0f, 30f)) + leanAxes()) { values ->
+			val scale = stance.leanScale(headPivotCanvas.second.toDouble(), values[1], values[2]).toFloat()
 			RotationPivotForm(headPivotLocalX, headPivotLocalY, values[0], scale)
 		}
 		val rotation = Deformer.Rotation(
@@ -1654,9 +1658,9 @@ object RigBuilder {
 	}
 
 	/**
-	 * A warp for each arm on the body's lean, as artists give each arm a warp of its own: an arm hangs
-	 * straight down from its shoulder whatever the body does ([BodyStance.armPoint]), but drawn beside the
-	 * skirt it would bend with the body in the lean warp. At each key its lattice holds every point where
+	 * A warp for each arm on the body's lean and proportions, as artists give each arm a warp of its own: an
+	 * arm hangs straight down from its shoulder whatever the body does ([BodyStance.armPoint]), but drawn
+	 * beside the skirt it would bend with the body in the lean warp. At each key its lattice holds every point where
 	 * the arm puts the point it covers at rest, read back through its parent as the body leans there. The
 	 * arm's layers move under it: [parents] and [frames] receive it.
 	 */
@@ -1670,10 +1674,11 @@ object RigBuilder {
 		partId: PartId,
 		defaultParent: (ClassifiedLayer) -> Pair<DeformerId, Bounds>,
 	): List<Deformer.Warp> {
-		val lean = StandardParameters.BODY_LEAN
-		val keys = floatArrayOf(-10f, 0f, 10f)
-		val worlds = keys.associateWith { value ->
-			buildDeformerWorlds(deformers, { if (it == lean) value else 0f }, { 0f })
+		val axes = leanAxes()
+		val combos = axes[0].keys.indices.flatMap { a -> axes[1].keys.indices.map { b -> intArrayOf(a, b) } }
+		val worlds = combos.map { c ->
+			val values = axes.indices.associate { axes[it].parameterId to axes[it].keys[c[it]] }
+			buildDeformerWorlds(deformers, { values[it] ?: 0f }, { 0f })
 		}
 		val torso = stance.torso
 		val warps = ArrayList<Deformer.Warp>()
@@ -1682,30 +1687,32 @@ object RigBuilder {
 			if (arms.isEmpty()) continue
 			val hosts = arms.map { parents[it.source.id.raw] ?: defaultParent(it) }.distinct()
 			val (parentId, parentFrame) = hosts.singleOrNull() ?: continue
-			if (keys.any { worlds.getValue(it)[parentId] == null }) continue
+			if (worlds.any { it[parentId] == null }) continue
 			val union = arms.map { rigLayerById.getValue(it.source.id.raw).bounds }.reduce(Bounds::union)
 			val frame = union.expanded(0.06f)
 			val shoulderX = torso.centerX + (if (frame.centerX >= torso.centerX) 1f else -1f) * torso.halfWidth
 			val rest = mapBounds(frame, parentFrame)
-			val cells = keys.mapIndexed { k, value ->
-				val world = worlds.getValue(value).getValue(parentId)
+			val cells = combos.mapIndexed { n, c ->
+				val lean = axes[0].keys[c[0]]
+				val size = axes[1].keys[c[1]]
+				val world = worlds[n].getValue(parentId)
 				val points = FloatArray((ARM_HANG_COLUMNS + 1) * (ARM_HANG_ROWS + 1) * 2)
 				for (row in 0..ARM_HANG_ROWS) for (column in 0..ARM_HANG_COLUMNS) {
 					val i = (row * (ARM_HANG_COLUMNS + 1) + column) * 2
 					val u = column.toFloat() / ARM_HANG_COLUMNS
 					val v = row.toFloat() / ARM_HANG_ROWS
 					val local = floatArrayOf(rest.left + u * rest.width, rest.top + v * rest.height)
-					if (value == 0f) { points[i] = local[0]; points[i + 1] = local[1]; continue }
-					val target = stance.armPoint((frame.left + u * frame.width).toDouble(), (frame.top + v * frame.height).toDouble(), shoulderX.toDouble(), value)
+					if (lean == 0f && size == 0f) { points[i] = local[0]; points[i + 1] = local[1]; continue }
+					val target = stance.armPoint((frame.left + u * frame.width).toDouble(), (frame.top + v * frame.height).toDouble(), shoulderX.toDouble(), lean, size)
 					val back = SkeletonRig.inverse(world, target[0].toFloat(), target[1].toFloat(), local)
 					points[i] = back[0]
 					points[i + 1] = back[1]
 				}
-				KeyformCell(intArrayOf(k), WarpLatticeForm(points))
+				KeyformCell(c, WarpLatticeForm(points))
 			}
 			val id = DeformerId("DeformArmHang_" + (if (side == Side.LEFT) "L" else "R"))
 			warps += Deformer.Warp(id, tr("model.deformer.armHang", arms.first().source.name),
-				parentId, partId, ARM_HANG_ROWS, ARM_HANG_COLUMNS, true, KeyformGrid(listOf(KeyformAxis(lean, keys)), cells))
+				parentId, partId, ARM_HANG_ROWS, ARM_HANG_COLUMNS, true, KeyformGrid(axes, cells))
 			frames[id.raw] = frame
 			for (layer in arms) parents[layer.source.id.raw] = id to frame
 		}
@@ -2542,7 +2549,7 @@ object RigBuilder {
 			group("ParamGroupEyes", tr("model.group.eyes"), listOf(StandardParameters.EYE_L_OPEN, StandardParameters.EYE_R_OPEN, StandardParameters.EYE_BALL_X, StandardParameters.EYE_BALL_Y, StandardParameters.EYE_BALL_FORM)),
 			group("ParamGroupBrows", tr("model.group.brows"), listOf(StandardParameters.BROW_L_Y, StandardParameters.BROW_R_Y)),
 			group("ParamGroupMouth", tr("model.group.mouth"), listOf(StandardParameters.MOUTH_FORM, StandardParameters.MOUTH_OPEN)),
-			group("ParamGroupBody", tr("model.group.body"), listOf(StandardParameters.BODY_X, StandardParameters.BODY_Y, StandardParameters.BODY_Z, StandardParameters.BREATH)),
+			group("ParamGroupBody", tr("model.group.body"), listOf(StandardParameters.BODY_X, StandardParameters.BODY_Y, StandardParameters.BODY_Z, StandardParameters.BODY_LEAN, StandardParameters.PROPORTION, StandardParameters.BREATH)),
 			group("ParamGroupPhysics", tr("model.group.physics"), listOf(StandardParameters.HAIR_FRONT, StandardParameters.HAIR_BACK)),
 		)
 		return if (customParameters.isNotEmpty()) {
@@ -2785,6 +2792,48 @@ object RigBuilder {
 	private fun normalizeY(y: Float, frame: Bounds): Float = (y - frame.top) / frame.height.coerceAtLeast(1e-4f)
 
 	private fun axis(parameter: ParameterId, vararg keys: Float) = KeyformAxis(parameter, keys)
+
+	/**
+	 * The head's warps keyed on Angle Y with the lean joining their axes, so the face bows with the body:
+	 * leaning in it turns down by [LEAN_FACE_DOWN] degrees of Angle Y, leaning back up by [LEAN_FACE_UP].
+	 * At each lean key a cell holds the warp's own lattice at Angle Y moved so, read between its keys as
+	 * the runtime would and held at its ends; every such warp moves alike, so the face turns as one.
+	 */
+	internal fun withFaceLean(deformers: List<Deformer>): List<Deformer> = deformers.map { deformer ->
+		if (deformer !is Deformer.Warp) return@map deformer
+		val grid = deformer.geometryGrid ?: return@map deformer
+		val yi = grid.axes.indexOfFirst { it.parameterId == StandardParameters.ANGLE_Y }
+		if (yi < 0 || grid.axes[yi].keys.size < 2 || grid.axes.any { it.parameterId == StandardParameters.BODY_LEAN }) return@map deformer
+		val keys = grid.axes[yi].keys
+		val byCoordinate = grid.cells.associateBy { it.coordinate.toList() }
+		val leans = floatArrayOf(-10f, 0f, 10f)
+		val shifts = floatArrayOf(LEAN_FACE_UP, 0f, -LEAN_FACE_DOWN)
+		fun at(cell: KeyformCell<WarpLatticeForm>, index: Int) =
+			byCoordinate[cell.coordinate.copyOf().also { it[yi] = index }.toList()]?.form ?: cell.form
+		val cells = grid.cells.flatMap { cell ->
+			leans.indices.map { l ->
+				val form = if (shifts[l] == 0f) cell.form else {
+					val target = (keys[cell.coordinate[yi]] + shifts[l]).coerceIn(keys.first(), keys.last())
+					var j = 0
+					while (j < keys.size - 2 && target > keys[j + 1]) j++
+					val t = ((target - keys[j]) / (keys[j + 1] - keys[j])).coerceIn(0f, 1f)
+					val a = at(cell, j).controlPoints
+					val b = at(cell, j + 1).controlPoints
+					WarpLatticeForm(FloatArray(a.size) { a[it] + (b[it] - a[it]) * t })
+				}
+				KeyformCell(cell.coordinate + l, form)
+			}
+		}
+		deformer.copy(geometryGrid = KeyformGrid(grid.axes + KeyformAxis(StandardParameters.BODY_LEAN, leans), cells))
+	}
+
+	/** Degrees of Angle Y the face turns down at a full lean in, and up at a full lean back. */
+	private const val LEAN_FACE_DOWN = 12f
+	private const val LEAN_FACE_UP = 8f
+
+	/** The lean warp's axes: the lean and the proportions, three keys each. */
+	internal fun leanAxes(): List<KeyformAxis> =
+		listOf(axis(StandardParameters.BODY_LEAN, -10f, 0f, 10f), axis(StandardParameters.PROPORTION, -10f, 0f, 10f))
 
 	private fun <T> oneDimGrid(parameter: ParameterId, keys: FloatArray, form: (Float) -> T): KeyformGrid<T> =
 		KeyformGrid(listOf(KeyformAxis(parameter, keys)), keys.indices.map { index -> KeyformCell(intArrayOf(index), form(keys[index])) })
