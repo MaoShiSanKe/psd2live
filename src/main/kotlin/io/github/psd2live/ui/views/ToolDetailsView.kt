@@ -1029,18 +1029,15 @@ internal fun ToolDetailsView(
                         style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
                         color = colors.textPrimary,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        SkeletonEditSubTool.entries.forEach { sub ->
-                            CompactToggleChip(text = tr(sub.labelKey), selected = editor.skeletonEditSubTool == sub,
-                                onToggle = { editor.skeletonEditSubTool = sub }, height = 24.dp, modifier = Modifier.weight(1f))
-                        }
-                    }
+                    CompactDropdown(SkeletonEditSubTool.entries, editor.skeletonEditSubTool, { editor.skeletonEditSubTool = it },
+                        itemLabel = { tr(it.labelKey) }, modifier = Modifier.fillMaxWidth())
                     Text(
                         text = tr(editor.skeletonEditSubTool.hintKey),
                         style = typography.caption.copy(fontSize = 10.5.sp),
                         color = colors.textMuted,
                     )
                     if (editor.skeletonEditSubTool == SkeletonEditSubTool.BIND) SkeletonBindingControls(editor)
+                    else if (editor.skeletonEditSubTool == SkeletonEditSubTool.WEIGHTS) SkeletonWeightControls(editor)
                     else SkeletonTransformControls(editor)
                     SkeletonIkControls(editor)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

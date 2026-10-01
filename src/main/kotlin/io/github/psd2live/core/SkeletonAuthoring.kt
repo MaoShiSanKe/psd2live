@@ -50,8 +50,18 @@ object SkeletonAuthoring {
             mapping.getValue(b.id) to target.copy(x = if (mirrorAxis != null) 2 * mirrorAxis - target.x else target.x + dx,
                 y = if (mirrorAxis != null) target.y else target.y + dy)
         } }.toMap()
+        val manual = spec.manualWeights.toMutableMap()
+        val weightMapping = spec.bones.associate { it.id to (if (mirrorAxis != null) it.mirrorId ?: it.id else it.id) } + mapping
+        for (b in source) for (drawable in b.drawableIds) {
+            val weights = spec.manualWeights[drawable] ?: continue
+            val target = if (mirrorAxis != null) drawableMirrors[drawable] else drawable.takeIf { transferBindings }
+            if (target == null) continue
+            var copied = weights.remapBones(weightMapping)
+            if (mirrorAxis != null) copied = copied.copy(positions = copied.positions.mapIndexed { i, v -> if (i % 2 == 0) 2 * mirrorAxis - v else v })
+            manual[target] = copied
+        }
         return Result(spec.copy(bones = originals + additions, symmetryAxisX = mirrorAxis ?: spec.symmetryAxisX,
-            ikTargets = spec.ikTargets + copiedTargets), mapping.values.toSet())
+            ikTargets = spec.ikTargets + copiedTargets, manualWeights = manual), mapping.values.toSet())
     }
 
     fun subdivide(spec: SkeletonSpec, id: String, segments: Int): Result {
@@ -77,7 +87,8 @@ object SkeletonAuthoring {
             next
         }
         val targets = (spec.ikTargets - id) + (spec.ikTargets[id]?.let { mapOf(ids.last() to it) } ?: emptyMap())
-        return Result(spec.copy(bones = others + chain, ikTargets = targets), ids.toSet())
+        val affected = spec.manualWeights.filterValues { map -> map.weights.any { id in it } }.keys
+        return Result(spec.copy(bones = others + chain, ikTargets = targets, manualWeights = spec.manualWeights - affected), ids.toSet())
     }
 
     /** Merge a connected non-branching child into its parent; bindings and grandchildren survive. */
@@ -103,7 +114,8 @@ object SkeletonAuthoring {
             next
         }
         val targets = (spec.ikTargets - id) + (spec.ikTargets[id]?.let { mapOf(parent.id to it) } ?: emptyMap())
-        return Result(spec.copy(bones = bones, ikTargets = targets), setOf(parent.id))
+        return Result(spec.copy(bones = bones, ikTargets = targets,
+            manualWeights = spec.manualWeights.mapValues { it.value.remapBones(mapOf(id to parent.id)) }), setOf(parent.id))
     }
 
     /** Mirrors only partners outside the explicit selection, avoiding double transforms. */

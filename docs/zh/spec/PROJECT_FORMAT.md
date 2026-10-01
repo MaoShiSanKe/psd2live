@@ -25,6 +25,8 @@
 
 ## 保存和恢复
 
+骨骼数据位于配置的 `rigEdits.skeleton`，当前骨骼子结构版本为 9（工程归档版本仍为 1）。骨骼保存显式 `connected`（缺省兼容旧坐标推断）、副本 `parameterOverride`、`mirror` 配对和 `ik` 求解设置；骨架保存 `symmetryAxisX`、命名 `savedPoses`、以骨骼 ID 为键的 `ikTargets`，以及以画元 ID 为键的 `manualWeights`。手工权重包含静止画布 `positions`、`triangles` 和每顶点骨骼 ID → 权重的 `weights`，使加密顶点通过三角形插值读取。旧工程缺省读取为空手工权重、无固定目标和默认 IK 设置，仍可继续编辑。
+
 保存捕获不可变状态，按顺序写入同目录临时文件、校验清单，再原子替换目标。不支持原子替换时报告失败并保留旧工程。捕获后发生的新编辑仍属于未保存内容。
 
 当前内容与 HEAD 相同时，普通保存不新增历史；显式 `checkpoint` 可在未变化时留点。保存失败不应被当作已持久化，需检查界面错误。

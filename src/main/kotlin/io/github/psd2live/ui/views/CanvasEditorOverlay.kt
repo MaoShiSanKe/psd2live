@@ -1264,6 +1264,11 @@ internal fun BoxScope.CanvasEditorOverlay(
         var boxStart by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
         var boxEnd by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
         var moveBefore by remember { mutableStateOf<io.github.psd2live.core.SkeletonSpec?>(null) }
+        var weightStrokeActive by remember(viewport, subTool) { mutableStateOf(false) }
+        var weightPointer by remember(viewport, subTool) { mutableStateOf<Offset?>(null) }
+        val weightMap = remember(skeleton, preview?.rig?.puppet, editor.skeletonWeightDrawableId, subTool) {
+            if (subTool == SkeletonEditSubTool.WEIGHTS) editor.activeSkeletonWeights() else null
+        }
         fun clearCreation() { creationHead = null; creationTail = null; creationParent = null }
         fun finishCreation() {
             val head = creationHead
@@ -1275,6 +1280,8 @@ internal fun BoxScope.CanvasEditorOverlay(
             clearCreation()
         }
         Canvas(Modifier.fillMaxSize()
+            .onPointerEvent(PointerEventType.Move) { if (subTool == SkeletonEditSubTool.WEIGHTS) weightPointer = it.changes.first().position }
+            .onPointerEvent(PointerEventType.Exit) { weightPointer = null }
             .onPointerEvent(PointerEventType.Press) { event ->
                 pressPosition = event.changes.first().position
                 additiveSelection = event.keyboardModifiers.isShiftPressed
@@ -1283,6 +1290,12 @@ internal fun BoxScope.CanvasEditorOverlay(
                 detectDragGestures(
                     onDragStart = { pos ->
                         when (subTool) {
+                            SkeletonEditSubTool.WEIGHTS -> {
+                                moveBefore = editor.skeletonDraft
+                                editor.pickSkeletonDrawable(pressPosition, viewport)?.let(editor::selectSkeletonWeightDrawable)
+                                weightStrokeActive = editor.prepareSkeletonWeightStroke()
+                                if (weightStrokeActive) editor.paintSkeletonWeights(pressPosition, viewport)
+                            }
                             SkeletonEditSubTool.BIND -> { boxStart = pressPosition; boxEnd = pos }
                             SkeletonEditSubTool.EDIT -> {
                                 draggedJoint = hitJoint(pressPosition)
@@ -1323,14 +1336,22 @@ internal fun BoxScope.CanvasEditorOverlay(
                             } else editor.selectBones(currentSkeleton.bonesInBox(viewport.canvasX(start.x), viewport.canvasY(start.y),
                                 viewport.canvasX(end.x), viewport.canvasY(end.y)), additiveSelection)
                         } }
-                        draggedJoint = null; movingBones = false; moveBefore = null; boxStart = null; boxEnd = null; finishCreation()
+                        draggedJoint = null; movingBones = false; weightStrokeActive = false; moveBefore = null; boxStart = null; boxEnd = null; finishCreation()
                     },
                     onDragCancel = {
                         moveBefore?.let(editor::restoreSkeletonDraft)
-                        draggedJoint = null; movingBones = false; moveBefore = null; boxStart = null; boxEnd = null; clearCreation()
+                        draggedJoint = null; movingBones = false; weightStrokeActive = false; moveBefore = null; boxStart = null; boxEnd = null; clearCreation()
                     },
                 ) { change, amount ->
-                    if (creationHead != null) {
+                    if (subTool == SkeletonEditSubTool.WEIGHTS) {
+                        weightPointer = change.position
+                        if (weightStrokeActive) {
+                            val spacing = (editor.skeletonWeightRadius * viewport.scale.toFloat() * 0.25f).coerceAtLeast(1f)
+                            val steps = kotlin.math.ceil(amount.getDistance() / spacing).toInt().coerceIn(1, 64)
+                            for (step in 1..steps) editor.paintSkeletonWeights(change.position - amount * (1f - step.toFloat() / steps), viewport)
+                        }
+                        change.consume()
+                    } else if (creationHead != null) {
                         creationTail = change.position
                         change.consume()
                     } else if (movingBones) {
@@ -1348,6 +1369,11 @@ internal fun BoxScope.CanvasEditorOverlay(
             .pointerInput(editor, viewport, subTool) {
                 detectTapGestures { pos ->
                     if (subTool == SkeletonEditSubTool.NEW_BONE) return@detectTapGestures
+                    if (subTool == SkeletonEditSubTool.WEIGHTS) {
+                        editor.pickSkeletonDrawable(pos, viewport)?.let(editor::selectSkeletonWeightDrawable)
+                        if (editor.prepareSkeletonWeightStroke()) editor.paintSkeletonWeights(pos, viewport)
+                        return@detectTapGestures
+                    }
                     if (subTool == SkeletonEditSubTool.BIND) {
                         editor.pickSkeletonDrawable(pos, viewport)?.let(editor::toggleSkeletonBindingDrawable)
                         return@detectTapGestures
@@ -1407,6 +1433,14 @@ internal fun BoxScope.CanvasEditorOverlay(
             }
 
             // 2. The bones themselves, the selected one on top.
+            if (subTool == SkeletonEditSubTool.WEIGHTS && weightMap != null) {
+                for (v in weightMap.weights.indices) {
+                    val value = (weightMap.weights[v][editor.selectedBoneId] ?: 0f).coerceIn(0f, 1f)
+                    drawCircle(androidx.compose.ui.graphics.lerp(Color(0xFF386BDB), Color(0xFFFF754A), value), 2.8f,
+                        screen(weightMap.positions[v * 2], weightMap.positions[v * 2 + 1]))
+                }
+                weightPointer?.let { p -> drawCircle(colors.accent, editor.skeletonWeightRadius * viewport.scale.toFloat(), p, style = Stroke(1.5f)) }
+            }
             if (subTool == SkeletonEditSubTool.BIND) for (id in editor.pendingSkeletonDrawableIds) {
                 val positions = neutralGeometry?.worldPositions?.get(DrawableId(id)) ?: continue
                 for (edge in meshOutlines[id].orEmpty()) {

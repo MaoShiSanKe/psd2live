@@ -234,6 +234,7 @@ data class SkeletonSpec(
 	val symmetryAxisX: Float? = null,
 	val savedPoses: Map<String, Map<String, Float>> = emptyMap(),
 	val ikTargets: Map<String, SkeletonIkTarget> = emptyMap(),
+	val manualWeights: Map<String, SkeletonWeightMap> = emptyMap(),
 ) {
 	init {
 		require(symmetryAxisX == null || symmetryAxisX.isFinite())
@@ -386,7 +387,13 @@ data class SkeletonSpec(
 	/** Rebinds [drawableId] to [boneId] alone, or unbinds it when [boneId] is null. */
 	fun withDrawableBound(drawableId: String, boneId: String?): SkeletonSpec {
 		require(boneId == null || bone(boneId) != null) { "Bone not found: $boneId" }
-		return copy(bones = bones.map { b ->
+		fun skinRoot(id: String?): String? {
+			val start = id?.let(::bone) ?: return null
+			return generateSequence(start) { b -> b.parentId?.let(::bone)?.takeUnless { it.role.body || it.role.anchor } }.last().id
+		}
+		val previous = bones.firstOrNull { drawableId in it.drawableIds }?.id
+		val retained = if (skinRoot(previous) == skinRoot(boneId) && boneId != null) manualWeights else manualWeights - drawableId
+		return copy(manualWeights = retained, bones = bones.map { b ->
 		when {
 			b.id == boneId -> if (drawableId in b.drawableIds) b else b.copy(drawableIds = b.drawableIds + drawableId)
 			drawableId in b.drawableIds -> b.copy(drawableIds = b.drawableIds - drawableId)
@@ -399,6 +406,9 @@ data class SkeletonSpec(
 		require(boneId == null || bone(boneId) != null) { "Bone not found: $boneId" }
 		return drawableIds.fold(this) { next, id -> next.withDrawableBound(id, boneId) }
 	}
+
+	fun withManualWeights(drawableId: String, weights: SkeletonWeightMap?): SkeletonSpec =
+		copy(manualWeights = if (weights == null) manualWeights - drawableId else manualWeights + (drawableId to weights))
 
 	fun withBone(bone: SkeletonBone): SkeletonSpec {
 		val index = bones.indexOfFirst { it.id == bone.id }
@@ -420,14 +430,16 @@ data class SkeletonSpec(
 	/** Removes a bone and re-parents its children to the removed bone's parent. */
 	fun withoutBone(boneId: String): SkeletonSpec {
 		val bone = bone(boneId) ?: return this
-		return copy(ikTargets = ikTargets - boneId, bones = bones.filter { it.id != boneId }.map {
+		return copy(ikTargets = ikTargets - boneId, manualWeights = manualWeights.mapValues { it.value.remapBones(mapOf(boneId to bone.parentId)) },
+			bones = bones.filter { it.id != boneId }.map {
 			val next = if (it.parentId == boneId) it.copy(parentId = bone.parentId, connected = false) else it
 			if (next.mirrorId == boneId) next.copy(mirrorId = null) else next
 		})
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 8)
+		put("version", 9)
+		putJsonObject("manualWeights") { manualWeights.forEach { (id, map) -> put(id, map.toJson()) } }
 		putJsonObject("ikTargets") { ikTargets.forEach { (id, target) -> put(id, target.toJson()) } }
 		symmetryAxisX?.let { put("symmetryAxisX", it) }
 		putJsonObject("savedPoses") { savedPoses.forEach { (name, values) ->
@@ -450,6 +462,7 @@ data class SkeletonSpec(
 				symmetryAxisX = o["symmetryAxisX"]?.jsonPrimitive?.floatOrNull,
 				savedPoses = o["savedPoses"]?.jsonObject?.mapValues { (_, values) -> values.jsonObject.mapValues { it.value.jsonPrimitive.float } }.orEmpty(),
 				ikTargets = o["ikTargets"]?.jsonObject?.mapValues { SkeletonIkTarget.fromJson(it.value.jsonObject) }.orEmpty(),
+				manualWeights = o["manualWeights"]?.jsonObject?.mapValues { SkeletonWeightMap.fromJson(it.value.jsonObject) }.orEmpty(),
 			)
 			return migrateAnchors(spec, raw.associate { it.getValue("id").jsonPrimitive.content to it.getValue("role").jsonPrimitive.content })
 		}

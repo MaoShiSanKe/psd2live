@@ -102,6 +102,25 @@ class SkeletonRigTest {
 		assertEquals(DeformerId("DeformSkel_upper"), baked.drawables.single().parentDeformerId)
 	}
 
+	@Test fun authoredWeightsDriveActualBakedMotionIncludingRefinedVertices() {
+		val mesh = strip("arm", 100f, 95f, 435f, 18f, 20f)
+		val positions = rest(mesh)
+		val weights = SkeletonWeightMap(positions.toList(), mesh.mesh!!.indices.toList(), List(positions.size / 2) { mapOf("fore" to 1f) })
+		val spec = arm("arm").withManualWeights("arm", weights)
+		val restored = SkeletonSpec.fromJson(spec.toJson())
+		val baked = SkeletonRig.apply(legacy(mesh), restored, frame)
+		val neutral = canvas(baked).getValue(mesh.id)
+		val moved = canvas(baked, mapOf(restored.bone("fore")!!.parameterId to 30f)).getValue(mesh.id)
+		for (v in neutral.indices step 2) {
+			val expected = rotate(neutral[v], neutral[v + 1], 100f, 250f, 30f)
+			assertEquals(expected.first, moved[v], 0.1f, "manual weighted vertex $v x")
+			assertEquals(expected.second, moved[v + 1], 0.1f, "manual weighted vertex $v y")
+		}
+		val automatic = SkeletonRig.apply(legacy(mesh), arm("arm"), frame)
+		val autoMoved = canvas(automatic, mapOf(restored.bone("fore")!!.parameterId to 30f)).getValue(mesh.id)
+		assertTrue(abs(autoMoved[0] - moved[0]) > 10f)
+	}
+
 	@Test fun structurallyEditedArmaturesBakeWithStableRestMeshesAndUniqueParameters() {
 		val mesh = strip("arm", 100f, 95f, 435f, 18f, 10f)
 		val original = arm("arm")

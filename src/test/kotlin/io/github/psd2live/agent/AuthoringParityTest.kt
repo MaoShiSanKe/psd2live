@@ -104,10 +104,20 @@ class AuthoringParityTest {
         assertEquals("next", created.structuredContent?.get("state")?.jsonPrimitive?.content)
         val read = call("skeleton", buildJsonObject { put("mode", "get") })
         assertEquals("body", read.structuredContent?.get("spec")?.jsonObject?.get("bones")?.jsonArray?.single()?.jsonObject?.get("id")?.jsonPrimitive?.content)
+        workspace.armature = workspace.armature!!.copy(
+            bones = workspace.armature!!.bones.map { it.copy(connected = false, parameterOverride = "ParamBodyCopy", mirrorId = "partner") },
+            symmetryAxisX = 16f,
+            savedPoses = mapOf("Rest" to mapOf("ParamBodyCopy" to 0f)),
+            ikTargets = mapOf("body" to io.github.psd2live.core.SkeletonIkTarget(0f, 10f)),
+            manualWeights = mapOf("mesh" to io.github.psd2live.core.SkeletonWeightMap(
+                listOf(0f, 0f), emptyList(), listOf(mapOf("body" to 1f)))),
+        )
+        val authored = workspace.armature!!
         val roundTrippedSkeleton = call("skeleton", buildJsonObject {
-            put("mode", "put"); put("state", "head"); put("spec", read.structuredContent!!.getValue("spec"))
+            put("mode", "put"); put("state", "head"); put("spec", authored.toJson())
         })
         assertFalse(roundTrippedSkeleton.isError == true)
+        assertEquals(authored, workspace.armature)
         val written = call("motion", buildJsonObject {
             put("mode", "put"); put("state", "head")
             put("clip", buildJsonObject { put("id", "custom"); put("name", "Custom") })

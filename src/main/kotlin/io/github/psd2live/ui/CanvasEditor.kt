@@ -132,6 +132,7 @@ internal enum class SkeletonEditSubTool(val labelKey: String, val hintKey: Strin
     NEW_BONE("skeleton.tool.new", "skeleton.tool.new.hint"),
     EXTRUDE("skeleton.tool.extrude", "skeleton.tool.extrude.hint"),
     BIND("skeleton.tool.bind", "skeleton.tool.bind.hint"),
+    WEIGHTS("skeleton.tool.weights", "skeleton.tool.weights.hint"),
 }
 
 internal enum class SkeletonPoseSubTool(val labelKey: String) {
@@ -462,6 +463,20 @@ internal class CanvasEditor(
 	var transferCopiedBoneBindings by mutableStateOf(false)
 	var pendingSkeletonDrawableIds by mutableStateOf<Set<String>>(emptySet())
 		private set
+	var skeletonWeightDrawableId by mutableStateOf<String?>(null)
+		private set
+	var skeletonWeightSourceId by mutableStateOf<String?>(null)
+	var skeletonWeightBrushMode by mutableStateOf(io.github.psd2live.core.SkeletonWeightBrushMode.ADD)
+	var skeletonWeightRadius by mutableStateOf(40f)
+	var skeletonWeightStrength by mutableStateOf(0.2f)
+	var skeletonWeightReplaceValue by mutableStateOf(1f)
+	var skeletonWeightInfluences by mutableStateOf(2)
+	var skeletonWeightCutoff by mutableStateOf(0.001f)
+	var skeletonWeightTransferMode by mutableStateOf(io.github.psd2live.core.SkeletonWeightTransferMode.INTERPOLATE)
+	var skeletonWeightTransferTolerance by mutableStateOf(10f)
+	var mirrorSkeletonWeights by mutableStateOf(false)
+	var skeletonWeightBoneMapping by mutableStateOf<Map<String, String>>(emptyMap())
+		private set
 
 	/** The authored armature, enabled or not, once it has bones. */
 	val committedSkeleton: io.github.psd2live.core.SkeletonSpec?
@@ -631,6 +646,86 @@ internal class CanvasEditor(
 		val valid = model.drawables.map { it.id.raw }.toSet()
 		skeletonDraft = draft.withDrawablesBound(pendingSkeletonDrawableIds.intersect(valid), bone)
 		pendingSkeletonDrawableIds = emptySet()
+	}
+
+	fun selectSkeletonWeightDrawable(id: String?) {
+		skeletonWeightDrawableId = id
+		skeletonWeightBoneMapping = emptyMap()
+	}
+
+	fun activeSkeletonWeights(): io.github.psd2live.core.SkeletonWeightMap? = skeletonDraft?.let { spec ->
+		skeletonWeightDrawableId?.let { io.github.psd2live.core.SkeletonManualWeights.capture(spec, model, it) }
+	}
+
+	fun prepareSkeletonWeightStroke(): Boolean {
+		val spec = skeletonDraft ?: return false
+		val id = skeletonWeightDrawableId ?: return false
+		if (selectedBoneId !in io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, id)) return false
+		val map = activeSkeletonWeights() ?: return false
+		skeletonDraft = spec.withManualWeights(id, map)
+		return true
+	}
+
+	fun paintSkeletonWeights(pos: Offset, viewport: CanvasViewport) {
+		val spec = skeletonDraft ?: return
+		val id = skeletonWeightDrawableId ?: return
+		val bone = selectedBoneId ?: return
+		if (bone !in io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, id)) return
+		val map = spec.manualWeights[id] ?: return
+		val painted = io.github.psd2live.core.SkeletonManualWeights.paint(spec, map, bone,
+			viewport.canvasX(pos.x), viewport.canvasY(pos.y), skeletonWeightRadius, skeletonWeightStrength,
+			skeletonWeightBrushMode, skeletonWeightReplaceValue)
+		skeletonDraft = spec.withManualWeights(id, painted)
+	}
+
+	fun cleanupSkeletonWeights() {
+		val spec = skeletonDraft ?: return
+		val id = skeletonWeightDrawableId ?: return
+		val map = activeSkeletonWeights() ?: return
+		val fallback = io.github.psd2live.core.SkeletonManualWeights.capture(spec.withManualWeights(id, null), model, id) ?: return
+		skeletonDraft = spec.withManualWeights(id, io.github.psd2live.core.SkeletonManualWeights.cleanup(spec, map, fallback,
+			skeletonWeightInfluences, skeletonWeightCutoff))
+	}
+
+	fun resetSkeletonWeights() { skeletonWeightDrawableId?.let { id -> skeletonDraft = skeletonDraft?.withManualWeights(id, null) } }
+
+	fun setSkeletonWeightBoneMapping(source: String, target: String) { skeletonWeightBoneMapping = skeletonWeightBoneMapping + (source to target) }
+
+	fun effectiveSkeletonWeightBoneMapping(): Map<String, String> {
+		val spec = skeletonDraft ?: return emptyMap()
+		val target = skeletonWeightDrawableId ?: return emptyMap()
+		val source = skeletonWeightSourceId ?: return emptyMap()
+		val targetIds = io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, target)
+		val sourceIds = io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, source)
+		return sourceIds.mapNotNull { id ->
+			if (id in skeletonWeightBoneMapping) return@mapNotNull skeletonWeightBoneMapping[id]?.takeIf { it in targetIds }?.let { id to it }
+			val bone = spec.bone(id) ?: return@mapNotNull null
+			val side = when (bone.side) { io.github.psd2live.core.Side.LEFT -> io.github.psd2live.core.Side.RIGHT
+				io.github.psd2live.core.Side.RIGHT -> io.github.psd2live.core.Side.LEFT; io.github.psd2live.core.Side.NONE -> io.github.psd2live.core.Side.NONE }
+			val partner = bone.mirrorId?.takeIf { mirrorSkeletonWeights && it in targetIds }
+				?: id.takeIf { !mirrorSkeletonWeights && it in targetIds }
+				?: targetIds.filter { t -> spec.bone(t)?.let { b -> b.role == bone.role && b.chainIndex == bone.chainIndex &&
+					(!mirrorSkeletonWeights || b.side == side) } == true }.singleOrNull()
+			partner?.let { id to it }
+		}.toMap()
+	}
+
+	fun skeletonWeightTransferPreview(): io.github.psd2live.core.SkeletonManualWeights.Transfer? {
+		val spec = skeletonDraft ?: return null
+		val source = skeletonWeightSourceId?.let { io.github.psd2live.core.SkeletonManualWeights.capture(spec, model, it) } ?: return null
+		val targetId = skeletonWeightDrawableId ?: return null
+		val target = io.github.psd2live.core.SkeletonManualWeights.capture(spec.withManualWeights(targetId, null), model, targetId) ?: return null
+		if (skeletonWeightTransferMode == io.github.psd2live.core.SkeletonWeightTransferMode.TOPOLOGY &&
+			(source.weights.size != target.weights.size || source.triangles != target.triangles)) return null
+		return io.github.psd2live.core.SkeletonManualWeights.transfer(source, target, effectiveSkeletonWeightBoneMapping(),
+			skeletonWeightTransferMode, skeletonWeightTransferTolerance,
+			if (mirrorSkeletonWeights) spec.symmetryAxisX ?: model.canvasWidth / 2f else null)
+	}
+
+	fun applySkeletonWeightTransfer() {
+		val id = skeletonWeightDrawableId ?: return
+		val result = skeletonWeightTransferPreview() ?: return
+		skeletonDraft = skeletonDraft?.withManualWeights(id, result.map)
 	}
 
 	fun setBoneSymmetryAxis(x: Float) { if (x.isFinite()) skeletonDraft = skeletonDraft?.copy(symmetryAxisX = x) }
