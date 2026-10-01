@@ -6,6 +6,7 @@ import io.github.psd2live.ui.theme.ThemeCodec
 import java.awt.GraphicsEnvironment
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.util.prefs.Preferences
 
 /**
@@ -21,6 +22,30 @@ object AppSettings {
 
 	private val preferences by lazy {
 		Preferences.userRoot().node(PREFS_NODE_NAME)
+	}
+
+	/** Panel dimensions are in dp; like colour dragging, writes sync asynchronously. */
+	var parameterNameWidth: Float
+		get() = runCatching { preferences.getFloat("parameter_name_width", 40f) }
+			.getOrDefault(40f).let { if (it.isFinite()) it.coerceIn(24f, 240f) else 40f }
+		set(value) {
+			if (value.isFinite()) runCatching { preferences.putFloat("parameter_name_width", value.coerceIn(24f, 240f)) }
+		}
+
+	private fun parameterPadHeightKey(horizontalId: String, verticalId: String): String {
+		val pair = "${horizontalId.length}:$horizontalId$verticalId"
+		val digest = MessageDigest.getInstance("SHA-256").digest(pair.toByteArray(Charsets.UTF_8))
+		return "param_pad_h_" + digest.joinToString("") { "%02x".format(it) }
+	}
+
+	fun parameterPadHeight(horizontalId: String, verticalId: String): Float = runCatching {
+		preferences.getFloat(parameterPadHeightKey(horizontalId, verticalId), 84f)
+	}.getOrDefault(84f).let { if (it.isFinite()) it.coerceIn(64f, 320f) else 84f }
+
+	fun setParameterPadHeight(horizontalId: String, verticalId: String, height: Float) {
+		if (height.isFinite()) runCatching {
+			preferences.putFloat(parameterPadHeightKey(horizontalId, verticalId), height.coerceIn(64f, 320f))
+		}
 	}
 
 	data class DisplayMetrics(

@@ -85,6 +85,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -138,6 +139,7 @@ import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.ParameterLabelColor
 import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.state.PSD2LiveState
+import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -424,6 +426,7 @@ internal fun ParametersListView(
     val activeRelatedFilter = relatedOnly && owner != null
 	val query = state.parameterSearchQuery.trim().lowercase()
 	val openOverrides = remember { mutableStateMapOf<String, Boolean>() }
+	val padHeights = remember { mutableStateMapOf<Pair<ParameterId, ParameterId>, Dp>() }
 	var renamingGroupId by remember { mutableStateOf<String?>(null) }
 	var renameDraft by remember { mutableStateOf("") }
 	var renameOriginal by remember { mutableStateOf("") }
@@ -504,7 +507,7 @@ internal fun ParametersListView(
 	}
 	val listState = rememberLazyListState()
 
-	val nameWidth = remember { mutableStateOf(ParamRowNameWidth) }
+	val nameWidth = remember { mutableStateOf(AppSettings.parameterNameWidth.dp) }
 	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth, LocalInlineEditorRegions provides renameEditorRegions) {
 	Column(
 		modifier = Modifier
@@ -774,6 +777,12 @@ internal fun ParametersListView(
 										LinkedParameterPad(
 											horizontal = row.horizontal,
 											vertical = row.vertical,
+											padHeight = padHeights[row.horizontal.id to row.vertical.id]
+												?: AppSettings.parameterPadHeight(row.horizontal.id.raw, row.vertical.id.raw).dp,
+											onPadHeightChange = {
+												padHeights[row.horizontal.id to row.vertical.id] = it
+												AppSettings.setParameterPadHeight(row.horizontal.id.raw, row.vertical.id.raw, it.value)
+											},
 											depth = row.depth,
 											state = state,
 											viewModel = viewModel,
@@ -1610,6 +1619,7 @@ private fun ParameterNameDivider() {
 					change.consume()
 					val next = nameWidth.value + with(density) { dx.toDp() }
 					nameWidth.value = next.coerceIn(ParamRowNameWidthRange.start, ParamRowNameWidthRange.endInclusive)
+					AppSettings.parameterNameWidth = nameWidth.value.value
 				}
 			},
 		contentAlignment = Alignment.Center,
@@ -1690,10 +1700,13 @@ private fun ParameterRowItem(
 	}
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LinkedParameterPad(
 	horizontal: Parameter,
 	vertical: Parameter,
+	padHeight: Dp,
+	onPadHeightChange: (Dp) -> Unit,
 	depth: Int,
 	state: PSD2LiveState,
 	viewModel: PSD2LiveViewModel,
@@ -1712,13 +1725,20 @@ private fun LinkedParameterPad(
 	val xValue = liveValue(horizontal, state, viewModel)
 	val yValue = liveValue(vertical, state, viewModel)
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+	val density = LocalDensity.current
+	val currentPadHeight by rememberUpdatedState(padHeight)
+	val changePadHeight by rememberUpdatedState(onPadHeightChange)
+	var resizeCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+	val resizeInteraction = remember { MutableInteractionSource() }
+	val resizeHovered by resizeInteraction.collectIsHoveredAsState()
+	var resizing by remember { mutableStateOf(false) }
 
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
 			.onGloballyPositioned { rowCoords = it }
 			.padding(start = (2 + depth * ParamRowDepthIndent).dp, end = 0.dp, top = 3.dp, bottom = 3.dp)
-			.height(84.dp),
+			.height(padHeight),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		// Cubism: tall interlocking two-chain link spanning both axis rows.
@@ -1736,29 +1756,71 @@ private fun LinkedParameterPad(
 			EditableParameterName(vertical, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
 		}
 		ParameterNameDivider()
-		ParameterPad2D(
-			horizontal = horizontal,
-			vertical = vertical,
-			xValue = xValue,
-			yValue = yValue,
-			xLocked = xLocked,
-			yLocked = yLocked,
-			horizontalKeys = horizontalKeys,
-            highlightedX = highlightedX,
-            highlightedY = highlightedY,
-			verticalKeys = verticalKeys,
-			modifier = Modifier.weight(1f).fillMaxHeight(),
-			onChange = { x, y ->
-				val values = buildMap {
-					if (!xLocked) put(horizontal.id, x)
-					if (!yLocked) put(vertical.id, y)
+		Column(Modifier.weight(1f).fillMaxHeight()) {
+			ParameterPad2D(
+				horizontal = horizontal,
+				vertical = vertical,
+				xValue = xValue,
+				yValue = yValue,
+				xLocked = xLocked,
+				yLocked = yLocked,
+				horizontalKeys = horizontalKeys,
+	            highlightedX = highlightedX,
+	            highlightedY = highlightedY,
+				verticalKeys = verticalKeys,
+				modifier = Modifier.weight(1f).fillMaxWidth(),
+				onChange = { x, y ->
+					val values = buildMap {
+						if (!xLocked) put(horizontal.id, x)
+						if (!yLocked) put(vertical.id, y)
+					}
+					viewModel.setParameterValues(values)
+				},
+				onHoverKey = onKeyHover,
+				onGestureStart = viewModel::beginParameterScrub,
+				onGestureEnd = viewModel::endParameterScrub,
+			)
+			TooltipArea(tooltip = { ParameterTooltip(tr("parameters.padHeightTooltip")) }) {
+				Box(
+					Modifier.fillMaxWidth().height(ParamRowDividerWidth)
+						.onGloballyPositioned { resizeCoords = it }
+						.hoverable(resizeInteraction)
+						.semantics { contentDescription = tr("parameters.padHeightTooltip") }
+						.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.S_RESIZE_CURSOR)))
+						.pointerInput(density) {
+							awaitEachGesture {
+								val down = awaitFirstDown()
+								val splitter = resizeCoords ?: return@awaitEachGesture
+								if (!splitter.isAttached) return@awaitEachGesture
+								val startMouseY = splitter.positionInWindow().y + down.position.y
+								val startHeight = currentPadHeight
+								down.consume()
+								resizing = true
+								try {
+									while (true) {
+										val event = awaitPointerEvent()
+										val change = event.changes.firstOrNull { it.id == down.id } ?: break
+										if (!change.pressed) break
+										change.consume()
+										if (splitter.isAttached) {
+											val mouseY = splitter.positionInWindow().y + change.position.y
+											val delta = with(density) { (mouseY - startMouseY).toDp() }
+											changePadHeight((startHeight + delta).coerceIn(64.dp, 320.dp))
+										}
+									}
+								} finally {
+									resizing = false
+								}
+							}
+						},
+					contentAlignment = Alignment.Center,
+				) {
+					Box(Modifier.fillMaxWidth(0.7f)
+						.height(if (resizeHovered || resizing) 1.5.dp else 0.5.dp)
+						.background(if (resizeHovered || resizing) colors.accent else colors.divider))
 				}
-				viewModel.setParameterValues(values)
-			},
-			onHoverKey = onKeyHover,
-			onGestureStart = viewModel::beginParameterScrub,
-			onGestureEnd = viewModel::endParameterScrub,
-		)
+			}
+		}
 		Column(
 			modifier = Modifier.width(ParamRowInputWidth),
 			verticalArrangement = Arrangement.spacedBy(8.dp),
