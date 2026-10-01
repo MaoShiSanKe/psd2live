@@ -203,6 +203,8 @@ internal fun ExportActionSection(
 			}
 		}
 
+		TextureAtlasSettingsSection(state, viewModel)
+
 		ExportLabeledRow(label = tr("export.sdkTarget")) {
 			CompactDropdown(
 				items = exportRuntimeTargets,

@@ -181,6 +181,9 @@ data class PipelineConfig(
 	val physicsFrontHair: Boolean = true,
 	val physicsBackHair: Boolean = true,
 	val physicsEyeJelly: Boolean = true,
+	/** The hair model preset simulates this hair: the legacy sway warp, parameter and pendulum are not built. */
+	val hairSimulationFront: Boolean = false,
+	val hairSimulationBack: Boolean = false,
 	val exportCmo3: Boolean = true,
 	val exportMoc3: Boolean = true,
 	val exportJson: Boolean = true,

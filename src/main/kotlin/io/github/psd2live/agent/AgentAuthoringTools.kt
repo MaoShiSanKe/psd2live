@@ -387,6 +387,23 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
                 a["wind"]?.jsonArray?.let { it[0].jsonPrimitive.float to it[1].jsonPrimitive.float })
         }
     }
+    tool("model_preset", "Model presets, each one undoable step that ends baked. front_hair / back_hair: one hair simulation (preset_front_hair / preset_back_hair) over every hair mesh of that kind, " +
+        "each strand pinned at its own root; the legacy hair sway (ParamHairFront/Back, its warp and pendulum) is removed for that hair. classic_front_hair / classic_back_hair undo that: the preset simulation goes and the legacy sway returns. " +
+        "clothing: reads each bottomwear layer as a skirt or trousers (name first, then the alpha silhouette: a gap between legs from the crotch to the hem), finds the waist, crotch and hem, " +
+        "and writes preset_pin (waist held, hem free; trousers per leg), preset_collide (skirt sides and hem; trouser hems), preset_mass and preset_wind (growing to the hem); " +
+        "skirts become preset_skirt with the leg and foot meshes as colliders, trousers preset_trousers. auto_weights recomputes those groups for the given layers, or every simulated mesh, and bakes the simulations they feed. " +
+        "layers narrows a preset to those layer ids; omitted applies it to every recognized part. A mesh in a simulation of the user's own is refused. Reports the garments read and each bake.",
+        buildJsonObject {
+            put("preset", choices("front_hair", "back_hair", "clothing", "auto_weights", "classic_front_hair", "classic_back_hair")); put("state", string())
+            put("layers", arraySchema(string(), 0, 256))
+        }, listOf("preset", "state"), true) { a ->
+        when (val preset = a.text("preset")) {
+            "classic_front_hair", "classic_back_hair" -> workspace.restoreClassicHair(preset == "classic_front_hair", a.text("state")).compact()
+            else -> workspace.applyModelPreset(io.github.psd2live.core.sim.ModelPresets.Preset.parse(preset),
+                a["layers"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(), a.text("state"))
+                .let { (result, report) -> JsonObject(result.compact() + report) }
+        }
+    }
     tool("vertex_group", "Editor-only per-vertex 0..1 weights on an ArtMesh that the simulation reads (never exported). kind: pin, collide, collider, stiffness, mass, damping, wind, goal. " +
         "rule: fill (every vertex value), outline (outline vertices value), gradient (along from->to canvas px, start at from to end at to), glue (vertices glued to another mesh take their glue weight x value), region (inside rect [x0, y0, x1, y1] canvas px). " +
         "mode combines with the existing group: replace (default), max, min, add, subtract. delete=true removes the group. inspect scope=vertex_groups lists groups.",

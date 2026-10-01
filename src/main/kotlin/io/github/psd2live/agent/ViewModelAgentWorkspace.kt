@@ -1,5 +1,6 @@
 package io.github.psd2live.agent
 
+import io.github.psd2live.core.withRigEdits
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.LayerClassificationOverride
 import io.github.psd2live.core.TextureUpscaleConfig
@@ -1343,6 +1344,62 @@ class ViewModelAgentWorkspace(
         }
         return result to report
     }
+
+    override suspend fun applyModelPreset(preset: io.github.psd2live.core.sim.ModelPresets.Preset, layers: Set<String>, expectedHead: String,
+        author: MutationAuthor): Pair<AgentWorkspaceMutationResult, kotlinx.serialization.json.JsonObject> {
+        var report = kotlinx.serialization.json.JsonObject(emptyMap())
+        val result = mutateRigKeyform(expectedHead, null, "Applied model preset ${preset.jsonName}", "presets", author) { document, puppet ->
+            val state = viewModel.state.value
+            val preview = requireNotNull(state.previewModel) { "No rig preview is available" }
+            require(layers.all { id -> preview.analysis.layers.any { it.source.id.raw == id } }) { "Unknown layer in preset selection" }
+            // A hair preset retires the legacy sway first, so the weights and the bake read the rig without it.
+            val flag = when (preset) {
+                io.github.psd2live.core.sim.ModelPresets.Preset.FRONT_HAIR -> "hairSimulationFront"
+                io.github.psd2live.core.sim.ModelPresets.Preset.BACK_HAIR -> "hairSimulationBack"
+                else -> null
+            }
+            var next = document
+            var base = preview.baseRig
+            var rig = puppet
+            if (flag != null && document.settings[flag]?.jsonPrimitive?.booleanOrNull != true) {
+                next = document.copy(settings = kotlinx.serialization.json.JsonObject(document.settings + (flag to kotlinx.serialization.json.JsonPrimitive(true))))
+                base = io.github.psd2live.core.RigBuilder.build(preview.analysis, preview.atlas, next.toConfig(state))
+                rig = base.withRigEdits(next.rigEdits).puppet
+            }
+            val applied = io.github.psd2live.core.sim.ModelPresets.apply(next.rigEdits, rig, preview.analysis, base.layerIdByDrawableId,
+                preset, layers, next.toConfig(state).alphaThreshold)
+            var overlay = applied.overlay
+            val failures = LinkedHashMap<String, String>()
+            for (id in applied.simulationIds) {
+                val (rebaked, failure) = viewModel.trackSimulationBake(id) { progress, cancelled ->
+                    io.github.psd2live.core.sim.SimAuthoring.rebaked(overlay, base.puppet, id, progress, cancelled)
+                }
+                if (failure != null) failures[id] = failure
+                overlay = rebaked
+            }
+            report = kotlinx.serialization.json.buildJsonObject {
+                applied.toJson().forEach { (key, value) -> put(key, value) }
+                putJsonObject("bakes") {
+                    for (id in applied.simulationIds) {
+                        val bake = overlay.simEdits.firstOrNull { it.id == id }?.bake
+                        failures[id]?.let { put(id, kotlinx.serialization.json.buildJsonObject { put("error", it) }) } ?: bake?.let { put(id, it.summary()) }
+                    }
+                }
+            }
+            val baked = overlay.simEdits.any { it.id in applied.simulationIds && it.bake != null }
+            next.copy(rigEdits = overlay, settings = if (!baked) next.settings else kotlinx.serialization.json.JsonObject(next.settings +
+                ("generatePhysics" to kotlinx.serialization.json.JsonPrimitive(true))))
+        }
+        return result to report
+    }
+
+    override suspend fun restoreClassicHair(front: Boolean, expectedHead: String, author: MutationAuthor) =
+        mutateRigKeyform(expectedHead, null, if (front) "Restored classic front hair sway" else "Restored classic back hair sway", "presets", author) { document, _ ->
+            val id = if (front) io.github.psd2live.core.sim.ModelPresets.FRONT_HAIR_SIM else io.github.psd2live.core.sim.ModelPresets.BACK_HAIR_SIM
+            val overlay = if (document.rigEdits.simEdits.any { it.id == id }) io.github.psd2live.core.sim.SimAuthoring.remove(document.rigEdits, id) else document.rigEdits
+            document.copy(rigEdits = overlay, settings = kotlinx.serialization.json.JsonObject(document.settings +
+                ((if (front) "hairSimulationFront" else "hairSimulationBack") to kotlinx.serialization.json.JsonPrimitive(false))))
+        }
 
     override suspend fun deleteSimulation(id: String, expectedHead: String) =
         mutateRigKeyform(expectedHead, null, "Deleted simulation $id", id) { document, _ ->

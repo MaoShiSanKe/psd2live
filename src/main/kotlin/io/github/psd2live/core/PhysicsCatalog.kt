@@ -47,7 +47,7 @@ object PhysicsCatalog {
 	}
 
 	fun groups(analysis: PipelineAnalysis?, config: PipelineConfig, available: Set<String>): List<PhysicsGroup> =
-		groups(PhysicsGenerator.Presets.present(analysis), PhysicsGenerator.Presets.enabled(config), config.rigEdits, available)
+		groups(PhysicsGenerator.Presets.present(analysis, config.hairSimulationFront, config.hairSimulationBack), PhysicsGenerator.Presets.enabled(config), config.rigEdits, available)
 
 	/** What exports, in evaluation order: nothing when physics is off or the model is mesh-only. */
 	fun active(analysis: PipelineAnalysis?, config: PipelineConfig, available: Set<String>): List<RigPhysicsEdit> =

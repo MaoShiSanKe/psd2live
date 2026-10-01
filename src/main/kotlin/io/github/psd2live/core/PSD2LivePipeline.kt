@@ -96,7 +96,8 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 		progress: ProgressListener = ProgressListener { _, _ -> },
 	): RigPreviewModel {
-		if (current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits, drawOrderOverrides = config.drawOrderOverrides) == config) {
+		if (current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits, drawOrderOverrides = config.drawOrderOverrides,
+				hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack) == config) {
 			val baseRig = RigBuilder.build(current.analysis, current.atlas, config, meshCache)
 			val rig = baseRig.withRigEdits(config.rigEdits)
 			val bundle = buildRuntimeBundle("psd2live-preview", current.analysis, current.atlas, rig, config).first
