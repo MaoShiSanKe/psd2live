@@ -54,7 +54,6 @@ import io.github.psd2live.core.SkeletonSpec
 import io.github.psd2live.core.SkeletonWeights
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CanvasEditor
-import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.SkeletonPalette
 import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.components.CompactButton
@@ -122,8 +121,6 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 			}
 		} else null
 	}
-	val posing = editor.skeletonSelected && editor.hierarchyMode == EditHierarchyMode.SKELETON &&
-		editor.tool == io.github.psd2live.ui.CanvasTool.SKELETON_POSE
 	val rig = state.previewModel?.rig
 	// Meshes are listed by their layer's name - what the layers panel and a split named them - rather than
 	// the drawable id a split piece is given internally.
@@ -168,26 +165,11 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 			} else {
 				if (committed == null) {
 					CompactButton(text = tr("skeleton.tree.create"), onClick = { editor.beginSkeletonEdit() }, isPrimary = true, height = 20.dp)
-				} else {
-					CompactToggleChip(
-						text = tr("skeleton.tree.pose"),
-						selected = posing,
-						onToggle = { if (posing) editor.setHierarchyMode(EditHierarchyMode.SELECT) else editor.beginSkeletonPose() },
-						enabled = enabled,
-						height = 20.dp,
-					)
-					CompactButton(text = tr("skeleton.tree.edit"), onClick = { editor.beginSkeletonEdit() }, height = 20.dp)
 				}
 				if (committed != null && enabled) {
 					CompactIconButton(onClick = { editor.resetSkeletonPose() }, size = 20.dp, tooltip = tr("animation.resetPose")) {
 						IconReset(Modifier.size(11.dp), tint = colors.textMuted)
 					}
-					CompactToggleChip(
-						text = tr("skeleton.tree.weights"),
-						selected = editor.showSkeletonWeights,
-						onToggle = { editor.showSkeletonWeights = !editor.showSkeletonWeights },
-						height = 20.dp,
-					)
 				}
 			}
 			Spacer(Modifier.weight(1f))
