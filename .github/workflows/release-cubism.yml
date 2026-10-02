@@ -454,8 +454,8 @@ jobs:
           body: |
             ## 主要更新
 
-            - 新增前后分层功能：支持将图层拆分为前层与后层，并通过胶水保持变形同步，方便处理衣领、头发等穿插遮挡。详见 [前后分层图文教程](https://github.com/tsunehimatoi/psd2live/blob/master/docs/zh/guide/DEPTH_SPLIT.md)。
-            - 参数快照支持悬停预览：鼠标悬停快照即可在画布中半透明预览保存姿态，无需立即加载。
+            - 模拟烘焙可调性增强：可为每个输入设置训练范围；上下参数支持自动 / 开 / 关；每个模态输出可单独改参数 ID、范围与增益且无需重新烘焙；物理面板对模拟摆锤的修改在重新烘焙或输出变更后按三方合并保留。详见 [模拟与烘焙](https://github.com/tsunehimatoi/psd2live/blob/master/docs/zh/guide/SIMULATION.md)。
+            - 修复了物理模拟 Y 表现异常的问题
 
             ## 下载
 
