@@ -2,7 +2,7 @@
 
 [中文首页](../README.md) · [English](en/README.md) · [日本語](ja/README.md)
 
-学习操作请先用程序内的 **帮助 → 教程…**（`F1`）：零基础路线 17 课，Cubism 经验者路线 12 课。下列文档用于回看操作和查阅技术细节。中文为主要语言；尚无译文的页面在英文、日文列中标注为中文参考。
+学习操作请先用程序内的 **帮助 → 教程…**（`F1`）：零基础路线 18 课，Cubism 经验者路线 13 课。下列文档用于回看操作和查阅技术细节。中文为主要语言；尚无译文的页面在英文、日文列中标注为中文参考。
 
 For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the primary documentation language; pages without a translation link to the Chinese reference.
 

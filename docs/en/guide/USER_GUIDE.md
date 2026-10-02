@@ -29,7 +29,7 @@ The UI is organized into workspace tabs, each with its own canvases and panel la
 
 ## Tutorial paths
 
-The catalog has 18 topics. The beginner path contains the 17 lessons below; the experienced path starts with a Cubism-to-PSD2Live terminology bridge and skips selected introductory lessons.
+The catalog has 19 topics. The beginner path contains the 18 lessons below; the experienced path starts with a Cubism-to-PSD2Live terminology bridge and skips selected introductory lessons. Every chapter except Basic workflow first asks you to import a PSD or open a project when no model is open.
 
 | Lesson | Topic | Remember |
 | --- | --- | --- |
@@ -45,11 +45,12 @@ The catalog has 18 topics. The beginner path contains the 17 lessons below; the 
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
 | 12 | Tool details | Configure the current tool; canvas context menus also change with mode and tool. |
-| 13 | Skeleton rigging and posing | Build chains, bind ArtMeshes, inspect smoothed weights and IK, and configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
-| 14 | Animation editor | Edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
+| 13 | Skeleton rigging and editing | Create, extrude, duplicate and mirror bones in Skeleton mode, batch-bind ArtMeshes, pose with FK/IK, paint and clean skin weights and save poses; configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
+| 14 | Animation editor | Tune generated motions with each preset's knobs; edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
-| 16 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset. |
-| 17 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
+| 16 | Cloth and hair simulation | Create bodies, paint vertex groups in Simulate mode, choose a material preset and inputs, and bake into parameters, keyforms and a Cubism pendulum; only the bake exports. |
+| 17 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset. |
+| 18 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
 
 ## Important distinctions
 

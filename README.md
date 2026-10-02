@@ -59,7 +59,7 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 
 <img src="docs/imgs/import-split.webp" width="560" alt="批量按网格拆分图层对话框：legwear、footwear、eyelash、front hair 各被识别为两个部件">
 
-**第一次使用，请打开「帮助 → 教程…」（`F1`）。** 程序内教程会高亮对应控件并按你当前的快捷键提示操作，分为零基础（17 课）和 Cubism 经验者（12 课）两条路线。[操作速查](docs/zh/guide/USER_GUIDE.md)是它的文字版。
+**第一次使用，请打开「帮助 → 教程…」（`F1`）。** 程序内教程会高亮对应控件并按你当前的快捷键提示操作，分为零基础（18 课）和 Cubism 经验者（13 课）两条路线。[操作速查](docs/zh/guide/USER_GUIDE.md)是它的文字版。
 
 ## 准备素材
 

@@ -146,7 +146,7 @@ fun FrameWindowScope.PSD2LiveApp(
 
 	fun startInteractiveTutorial(id: TutorialId = TutorialId.BASIC, path: TutorialPath = TutorialPath.defaultFor(id)) {
 		helpDialogTab = null
-		tutorial = InteractiveTutorialState().start(id, path)
+		tutorial = InteractiveTutorialState().start(id, path, hasModel = state.previewModel != null)
 	}
 
 	fun stopInteractiveTutorial() {
@@ -162,7 +162,7 @@ fun FrameWindowScope.PSD2LiveApp(
 	}
 
 	fun continueNextTutorial() {
-		tutorial = tutorial.continueNextTutorial()
+		tutorial = tutorial.continueNextTutorial(hasModel = state.previewModel != null)
 	}
 
 	fun openTutorialCatalog() {
@@ -306,6 +306,11 @@ fun FrameWindowScope.PSD2LiveApp(
 			isDraggingOver ||
 			tutorial.active
 
+		// The mesh split offer that follows an import is a modal inside the workspace; the tour steps
+		// aside until it is answered so neither covers the other.
+		val tutorialPaused = viewModel.pendingMeshSplit != null || viewModel.pendingBatchMeshSplit != null
+		val tutorialShown = tutorial.active && !tutorialPaused
+
 		// Tutorial step side-effects and auto-advance
 		LaunchedEffect(
 			tutorial.active,
@@ -355,7 +360,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				.fillMaxSize()
 				.border(BorderStroke(1.dp, colors.border))
 				.onPreviewKeyEvent { event ->
-					if (tutorial.active && event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+					if (tutorialShown && event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
 						stopInteractiveTutorial()
 						return@onPreviewKeyEvent true
 					}
@@ -391,6 +396,7 @@ fun FrameWindowScope.PSD2LiveApp(
 					if (tutorial.active) {
 						return@onPreviewKeyEvent when (action) {
 							ShortcutAction.OPEN_PSD -> { onOpenPsdAction(); true }
+							ShortcutAction.OPEN_PROJECT -> { onOpenProjectAction(); true }
 							ShortcutAction.OPEN_HELP -> { stopInteractiveTutorial(); true }
 							else -> true // consume other app shortcuts during the tour
 						}
@@ -521,12 +527,12 @@ fun FrameWindowScope.PSD2LiveApp(
 						onShowAbout = { helpDialogTab = HelpTab.ABOUT },
 						onShowHelp = { tab -> helpDialogTab = tab },
 						onOpenTutorialCatalog = { openTutorialCatalog() },
-						tutorialMenuForce = if (tutorial.active) tutorial.step.forcesMenu else null,
-						tutorialHighlightTarget = if (tutorial.active) {
+						tutorialMenuForce = if (tutorialShown) tutorial.step.forcesMenu else null,
+						tutorialHighlightTarget = if (tutorialShown) {
 							tutorial.step.effectiveTargetId(state)
 						} else null,
-						tutorialId = if (tutorial.active) tutorial.tutorialId else null,
-						tutorialStep = if (tutorial.active) tutorial.step else null,
+						tutorialId = if (tutorialShown) tutorial.tutorialId else null,
+						tutorialStep = if (tutorialShown) tutorial.step else null,
 						tutorialStepIndex = tutorial.stepIndex,
 						tutorialReviewing = tutorial.reviewing,
 						tutorialIsFirstStep = tutorial.isFirstStep,
@@ -580,7 +586,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				)
 			}
 
-			if (tutorial.active && !tutorial.step.coachBesideMenu) {
+			if (tutorialShown && !tutorial.step.coachBesideMenu) {
 				// Menu steps render their overlay inside the menu popup.
 				val step = tutorial.step
 				val prereqOk = step.prerequisiteMet(state)

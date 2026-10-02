@@ -454,6 +454,7 @@ private fun DockTree(node: DockNode, session: DockSession, modifier: Modifier, w
 				"animation" -> Modifier.tutorialTarget(TutorialTargetId.ANIMATION_DOCK)
 				"animationEditor" -> Modifier.tutorialTarget(TutorialTargetId.ANIMATION_EDITOR_DOCK)
 				"physics" -> Modifier.tutorialTarget(TutorialTargetId.PHYSICS_DOCK)
+				"simulation" -> Modifier.tutorialTarget(TutorialTargetId.SIMULATION_DOCK)
 				else -> Modifier
 			},
 		)

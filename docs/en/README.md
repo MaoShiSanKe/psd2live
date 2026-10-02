@@ -61,7 +61,7 @@ The Linux native preview does not support pure Wayland without XWayland, aarch64
 
 <img src="../imgs/import-split.webp" width="560" alt="Batch split dialog: legwear, footwear, eyelash and front hair are each detected as two parts">
 
-**New to PSD2Live? Open Help → Tutorials… (`F1`).** The interactive tutorials highlight each control and use your current shortcuts. There is a beginner path (17 lessons) and a path for Cubism users (12 lessons); the [user guide](guide/USER_GUIDE.md) is the text companion.
+**New to PSD2Live? Open Help → Tutorials… (`F1`).** The interactive tutorials highlight each control and use your current shortcuts. There is a beginner path (18 lessons) and a path for Cubism users (13 lessons); the [user guide](guide/USER_GUIDE.md) is the text companion.
 
 ## Preparing artwork
 

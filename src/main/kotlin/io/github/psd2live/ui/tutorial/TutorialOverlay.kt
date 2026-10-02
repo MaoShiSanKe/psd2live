@@ -185,10 +185,11 @@ fun TutorialCoachCard(
 	val displayIndex = actionable.indexOfFirst { it.key == step.key }.takeIf { it >= 0 }
 		?: stepIndex.coerceAtMost(actionable.lastIndex)
 	val stepTotal = actionable.size.coerceAtLeast(1)
-	val progressLabel = if (step.isDone) {
-		tr("tutorial.basic.progress.done")
-	} else {
-		tr("tutorial.basic.progress", displayIndex + 1, stepTotal)
+	val progressLabel = when {
+		step.isDone -> tr("tutorial.basic.progress.done")
+		// The open-model step comes before the chapter's own numbered steps.
+		step.i18nScope != null -> tr("tutorial.common.progress.prepare")
+		else -> tr("tutorial.basic.progress", displayIndex + 1, stepTotal)
 	}
 	val nextId = nextTutorialId
 	val bodyStyle = typography.caption.copy(fontSize = 11.5.sp, lineHeight = 16.sp)
@@ -257,6 +258,7 @@ fun TutorialCoachCard(
 					when {
 						!prerequisiteMet -> "tutorial.common.hint.prerequisite"
 						step.allowsNext || reviewing -> "tutorial.basic.hint.manual"
+						!step.skippable -> "tutorial.common.hint.required"
 						else -> "tutorial.basic.hint.auto"
 					},
 				),
@@ -312,6 +314,7 @@ fun TutorialCoachCard(
 					!prerequisiteMet -> { /* finish selection first — no Next/Skip */ }
 					step.allowsNext || reviewing ->
 						CompactButton(text = tr("tutorial.basic.next"), onClick = onNext, isPrimary = true, height = 24.dp)
+					!step.skippable -> { /* only completing the action moves on */ }
 					else ->
 						CompactButton(text = tr("tutorial.basic.skip"), onClick = onSkip, height = 24.dp)
 				}

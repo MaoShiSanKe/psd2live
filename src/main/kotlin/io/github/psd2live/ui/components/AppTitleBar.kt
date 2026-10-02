@@ -233,7 +233,8 @@ fun AppTitleBar(
 			) {
 				val showMenuCoach = tutorialId != null && tutorialStep != null &&
 					(tutorialHighlightTarget == TutorialTargetId.FILE_IMPORT ||
-						tutorialHighlightTarget == TutorialTargetId.FILE_EXPORT)
+						tutorialHighlightTarget == TutorialTargetId.FILE_EXPORT ||
+						tutorialHighlightTarget == TutorialTargetId.FILE_MENU_BODY)
 				AppSeamlessDropdownMenu(
 					expanded = activeMenu == "file" || tutorialMenuForce == "file",
 					onDismissRequest = {
