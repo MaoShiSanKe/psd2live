@@ -103,6 +103,8 @@ enum class TutorialCompletion {
 	EDIT_TAB,
 	HISTORY_TAB,
 	EXPORT_DIALOG,
+	/** At least one simulation body exists, made by a model preset or by hand. */
+	HAS_SIMULATION,
 }
 
 data class TutorialStep(
@@ -118,6 +120,8 @@ data class TutorialStep(
 	val ensureHistoryTab: Boolean = false,
 	val ensureHierarchyVisible: Boolean = false,
 	val expandModelSettings: Boolean = false,
+	/** Unfold the Physics & Simulation group of the model presets panel. */
+	val expandSimulationPresets: Boolean = false,
 	val setHierarchyMode: EditHierarchyMode? = null,
 	/** Highlight the hierarchy and ask the user to pick a mesh/deformer before continuing. */
 	val requireSelection: Boolean = false,
@@ -143,7 +147,8 @@ data class TutorialStep(
 			TutorialCompletion.PREVIEW_TAB,
 			TutorialCompletion.EDIT_TAB,
 			TutorialCompletion.HISTORY_TAB,
-			TutorialCompletion.EXPORT_DIALOG -> false
+			TutorialCompletion.EXPORT_DIALOG,
+			TutorialCompletion.HAS_SIMULATION -> false
 		}
 }
 
@@ -229,6 +234,7 @@ fun TutorialStep.isComplete(
 	TutorialCompletion.EDIT_TAB -> appState.activeCanvas.mode == CanvasMode.EDIT
 	TutorialCompletion.HISTORY_TAB -> appState.historyPanelShown
 	TutorialCompletion.EXPORT_DIALOG -> appState.showExportDialog
+	TutorialCompletion.HAS_SIMULATION -> appState.rigEdits.simEdits.isNotEmpty()
 }
 
 fun TutorialStep.prerequisiteMet(appState: PSD2LiveState): Boolean = when {
@@ -257,6 +263,7 @@ private fun step(
 	ensureHistoryTab: Boolean = false,
 	ensureHierarchyVisible: Boolean = false,
 	expandModelSettings: Boolean = false,
+	expandSimulationPresets: Boolean = false,
 	setHierarchyMode: EditHierarchyMode? = null,
 	requireSelection: Boolean = false,
 	requireLayerSelection: Boolean = false,
@@ -274,6 +281,7 @@ private fun step(
 	ensureHistoryTab = ensureHistoryTab,
 	ensureHierarchyVisible = ensureHierarchyVisible,
 	expandModelSettings = expandModelSettings,
+	expandSimulationPresets = expandSimulationPresets,
 	setHierarchyMode = setHierarchyMode,
 	requireSelection = requireSelection,
 	requireLayerSelection = requireLayerSelection,
@@ -540,11 +548,20 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 	TutorialId.SIMULATION to TutorialDefinition(
 		TutorialId.SIMULATION,
 		listOf(
+			step("presets", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
+			step("generate", TutorialTargetId.MODEL_SETTINGS, TutorialCompletion.HAS_SIMULATION, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true, showAction = true),
+			step("hairModes", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
+			step("clothing", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
 			step("bodies", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
-			step("weights", TutorialTargetId.MODE_BAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true, ensureHierarchyVisible = true, selectDock = "hierarchy", showAction = true),
-			step("material", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("weights", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true, ensureHierarchyVisible = true, selectDock = "hierarchy", showAction = true),
+			step("weightKinds", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true),
+			step("glue", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("material", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
+			step("materialValues", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("inputs", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("bakeSettings", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
 			step("bake", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
-			step("preview", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "simulation"),
+			step("preview", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
 			step("done", isDone = true, preferSideBubble = false),
 		),
 	),

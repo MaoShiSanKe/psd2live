@@ -67,7 +67,7 @@ class InteractiveTutorialCatalogTest {
 		assertEquals(tutorialDefinition(TutorialId.SIMULATION).steps.first(), gated.advance().step)
 
 		assertEquals("openFile", InteractiveTutorialState().start(TutorialId.BASIC, hasModel = false).step.key)
-		assertEquals("bodies", InteractiveTutorialState().start(TutorialId.SIMULATION, hasModel = true).step.key)
+		assertEquals("presets", InteractiveTutorialState().start(TutorialId.SIMULATION, hasModel = true).step.key)
 
 		var state = InteractiveTutorialState().start(TutorialId.PHYSICS)
 		while (!state.isDoneStep) state = state.advance()
@@ -164,7 +164,14 @@ class InteractiveTutorialCatalogTest {
 		assertTrue(tutorialDefinition(TutorialId.ANIMATION).steps.any { it.key == "autoKey" })
 		assertEquals(TutorialTargetId.PHYSICS_DOCK, tutorialDefinition(TutorialId.PHYSICS).steps.first().targetId)
 		assertTrue(tutorialDefinition(TutorialId.PHYSICS).steps.any { it.targetId == TutorialTargetId.CANVAS_VIEWPORT })
-		assertEquals(TutorialTargetId.SIMULATION_DOCK, tutorialDefinition(TutorialId.SIMULATION).steps.first().targetId)
+		val simulation = tutorialDefinition(TutorialId.SIMULATION).steps
+		assertEquals(TutorialTargetId.MODEL_SETTINGS, simulation.first().targetId)
+		assertTrue(simulation.first().expandSimulationPresets)
+		val generate = simulation.first { it.key == "generate" }
+		assertEquals(TutorialCompletion.HAS_SIMULATION, generate.completion)
+		assertTrue(generate.skippable && !generate.allowsNext)
+		assertTrue(simulation.indexOf(generate) < simulation.indexOfFirst { it.targetId == TutorialTargetId.SIMULATION_DOCK })
+		assertTrue(simulation.any { it.key == "weightKinds" })
 		assertTrue(tutorialDefinition(TutorialId.SIMULATION).steps.any { it.setHierarchyMode == EditHierarchyMode.SIMULATE && it.requireLayerSelection })
 		TutorialPath.entries.forEach { assertEquals(TutorialId.SIMULATION, it.nextAfter(TutorialId.PHYSICS), it.name) }
 	}

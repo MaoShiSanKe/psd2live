@@ -337,6 +337,9 @@ fun FrameWindowScope.PSD2LiveApp(
 			if (step.expandModelSettings) {
 				viewModel.setInspectorCollapsed(false)
 			}
+			if (step.expandSimulationPresets && !state.simulationPresetsExpanded) {
+				viewModel.setSimulationPresetsExpanded(true)
+			}
 			// Don't force a mode that needs a target until the user finishes selecting.
 			if (step.prerequisiteMet(state)) {
 				step.setHierarchyMode?.let { mode ->
