@@ -98,6 +98,9 @@ import io.github.psd2live.ui.theme.ThemeCodec
 import kotlin.math.sin
 
 class PSD2LiveViewModel : AutoCloseable {
+    /** Transient hover input; changing it invalidates the canvas without writing document state. */
+    private var parameterSnapshotHover by mutableStateOf<ParameterSnapshotPreview?>(null)
+
     internal data class MeshSplitOffer(
         val layerId: String,
         val layerName: String,
@@ -730,6 +733,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 ) pruneCanvasSessions(next) else next
             }
             val after = _state.value
+            pruneParameterSnapshotPreview(after)
             if (before.activeWorkspace.id != after.activeWorkspace.id ||
                 before.projectOpenGeneration != after.projectOpenGeneration) {
                 motionEditor.playing = false
@@ -764,6 +768,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 manualMeshSplitRequests.clear()
             }
             _state.value = next
+            pruneParameterSnapshotPreview(next)
             _uiState.value = next
         }
     }
@@ -4801,6 +4806,32 @@ class PSD2LiveViewModel : AutoCloseable {
 				previewParameterValues = defaults)
 		}
 		markWorkspaceChanged()
+	}
+
+	private fun pruneParameterSnapshotPreview(current: PSD2LiveState) {
+		val hover = parameterSnapshotHover ?: return
+		if (hover.generation != current.projectOpenGeneration || hover.workspaceId != current.activeWorkspace.id ||
+			hover.canvasId != current.activeCanvas.id || current.previewModel == null ||
+			current.parameterSnapshots.none { it.id == hover.snapshotId }) parameterSnapshotHover = null
+	}
+
+	internal fun previewParameterSnapshot(id: String): ParameterSnapshotPreview? {
+		val current = _state.value
+		if (current.previewModel == null || current.parameterSnapshots.none { it.id == id }) return null
+		return ParameterSnapshotPreview(id, current.projectOpenGeneration, current.activeWorkspace.id,
+			current.activeCanvas.id).also { parameterSnapshotHover = it }
+	}
+
+	internal fun clearParameterSnapshotPreview(preview: ParameterSnapshotPreview) {
+		if (parameterSnapshotHover === preview) parameterSnapshotHover = null
+	}
+
+	internal fun parameterSnapshotPreviewFor(canvasId: String): ParameterSnapshot? {
+		val hover = parameterSnapshotHover ?: return null
+		val current = _state.value
+		if (hover.generation != current.projectOpenGeneration || hover.workspaceId != current.activeWorkspace.id ||
+			hover.canvasId != canvasId || hover.canvasId != current.activeCanvas.id) return null
+		return current.parameterSnapshots.firstOrNull { it.id == hover.snapshotId }
 	}
 
 	/** Saves every parameter as the parameters panel shows it, the live pose included while previewing. */

@@ -88,6 +88,7 @@ import io.github.psd2live.ui.visibleCanvasGuideIds
 import io.github.psd2live.ui.state.forCanvas
 import io.github.psd2live.ui.state.FramePacer
 import io.github.psd2live.ui.state.previewPanelState
+import io.github.psd2live.ui.state.previewValues
 import kotlinx.coroutines.delay
 import io.github.psd2live.ui.state.frameIntervalNanos
 import io.github.psd2live.ui.state.CanvasBackgroundKind
@@ -278,6 +279,12 @@ fun CanvasViewportComposable(
 		if (mode == CanvasMode.EDIT && previewModel != null) RigCanvasSupport.evaluate(previewModel, geometryPose)
 		else null
 	}
+	val snapshotPreview = viewModel.parameterSnapshotPreviewFor(canvasId)
+	val snapshotGeometry = remember(previewModel, snapshotPreview) {
+		if (previewModel != null && snapshotPreview != null)
+			RigCanvasSupport.evaluate(previewModel, snapshotPreview.previewValues(previewModel.rig.puppet.parameters))
+		else null
+	}
 	val guideState = if (allowSelectionChrome) canvasState else canvasState.copy(
 		selectedLayerId = null,
 		selectedLayerIds = emptySet(),
@@ -300,6 +307,8 @@ fun CanvasViewportComposable(
 	DisposableEffect(editingPainter) { onDispose { editingPainter?.close() } }
 	val artworkCache = remember { CachedSkiaPicture() }
 	DisposableEffect(artworkCache) { onDispose { artworkCache.close() } }
+	val snapshotArtworkCache = remember { CachedSkiaPicture() }
+	DisposableEffect(snapshotArtworkCache) { onDispose { snapshotArtworkCache.close() } }
 	val guideCache = remember { CanvasGuideImageCache() }
 	val sdkFrame by frameFlow.collectAsState()
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
@@ -1028,7 +1037,8 @@ fun CanvasViewportComposable(
 				nativeFrame.image.width == w && nativeFrame.image.height == h
 
 			val currentSdkBitmap = sdkBitmap
-			if (canUseNativeSdk) {
+			// A snapshot hover temporarily replaces the current model, including its guides and paint tiles.
+			if (canUseNativeSdk && snapshotGeometry == null) {
 				// Native rendering can finish several frames after a pan. Reproject its last
 				// image immediately so the visible artwork follows the local camera while
 				// the latest native frame is still in flight.
@@ -1045,7 +1055,7 @@ fun CanvasViewportComposable(
 					translate(left, top)
 					scale(ratio, ratio, pivot = Offset.Zero)
 				}) { drawImage(currentSdkBitmap) }
-			} else {
+			} else if (snapshotGeometry == null) {
 				// Paint is an isolated document-canvas session: its live tiles belong only on the Edit
 				// tab, and only until Apply writes them into RigPreviewModel. The Preview tab always
 				// keeps showing the last committed atlas, never an in-progress stroke.
@@ -1340,9 +1350,25 @@ fun CanvasViewportComposable(
 					}
 				}
 			}
+			// One faded layer for the whole saved pose, sharing the canvas camera and visibility.
+			// Composite after rendering its parts so overlapping meshes do not darken the ghost.
+			if (snapshotGeometry != null && editingPainter != null) drawIntoCanvas { target ->
+				val key = listOf(editingPainter, model, snapshotGeometry, viewport, w, h,
+					targetVisibleLayerIds, canvasState.drawOrderOverrides)
+				snapshotArtworkCache.draw(target.skiaCanvas, key, w, h) { recording ->
+					org.jetbrains.skia.Paint().use { fade ->
+						fade.setAlphaf(0.6f)
+						val saved = recording.saveLayer(org.jetbrains.skia.Rect.makeWH(w.toFloat(), h.toFloat()), fade)
+						try {
+							editingPainter.paint(recording, model, snapshotGeometry, viewport,
+								visibleLayerIds = targetVisibleLayerIds, drawOrderOverrides = canvasState.drawOrderOverrides)
+						} finally { recording.restoreToCount(saved) }
+					}
+				}
+			}
 		}
 
-		if(mode == CanvasMode.EDIT && previewModel != null) {
+		if(mode == CanvasMode.EDIT && previewModel != null && snapshotGeometry == null) {
             val vp = viewportFor(viewSize)
             editor.viewport = vp
             CanvasEditorOverlay(
