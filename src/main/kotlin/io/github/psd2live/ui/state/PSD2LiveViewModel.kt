@@ -626,7 +626,7 @@ class PSD2LiveViewModel : AutoCloseable {
         if (meshes.isEmpty()) return null
         val id = io.github.psd2live.core.sim.SimAuthoring.nextId(current.rigEdits, meshes)
         val available = model.rig.puppet.parameters.mapTo(HashSet()) { it.id.raw }
-        putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes, inputs = io.github.psd2live.core.sim.RigSimEdit.defaultInputs(available)))
+        putSimulation(io.github.psd2live.core.sim.RigSimEdit(id, id, kind, meshes, inputs = io.github.psd2live.core.sim.RigSimEdit.defaultInputs(available, kind)))
         return id
     }
 

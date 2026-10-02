@@ -407,7 +407,7 @@ private fun SimulationEditor(
 
 	// The inputs are listed as they are: a new body starts with the defaults written in, and none is none.
 	val parameterNames = remember(puppet) { puppet.parameters.associate { it.id.raw to it.name } }
-	val defaultInputs = remember(parameterNames) { RigSimEdit.defaultInputs(parameterNames.keys) }
+	val defaultInputs = remember(parameterNames, sim.kind) { RigSimEdit.defaultInputs(parameterNames.keys, sim.kind) }
 	val resetInputs: @Composable RowScope.() -> Unit = {
 		CompactIconButton(onClick = { commit(sim.copy(inputs = defaultInputs)) }, tooltip = tr("sim.inputsReset"), size = 18.dp) {
 			IconReset(modifier = Modifier.size(11.dp), tint = colors.textMuted)

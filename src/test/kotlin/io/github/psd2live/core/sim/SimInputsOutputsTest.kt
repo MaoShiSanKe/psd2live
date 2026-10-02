@@ -34,6 +34,17 @@ class SimInputsOutputsTest {
         assertEquals(RigSimEdit.defaultInputs(names.toSet()), overlay.simEdits.single().inputs)
     }
 
+    @Test fun clothingTakesOnlyTheBodyRisingAndSinkingOfTheVerticalInputs() {
+        val all = names + listOf("ParamAngleY", "ParamBodyLean")
+        val vertical = SimBaker.VERTICAL_INPUTS.toSet()
+        fun verticalOf(kind: SimKind) = RigSimEdit.defaultInputs(all.toSet(), kind).map { it.parameter }.filter { it in vertical }
+        assertEquals(listOf("ParamBodyAngleY"), verticalOf(SimKind.CLOTH))
+        assertEquals(SimBaker.VERTICAL_INPUTS, verticalOf(SimKind.HAIR))
+        // A new clothing body starts there too.
+        val overlay = SimAuthoring.put(RigEditOverlay(), model(all), create {})
+        assertEquals(RigSimEdit.defaultInputs(all.toSet(), SimKind.CLOTH), overlay.simEdits.single().inputs)
+    }
+
     @Test fun anEmptyListMeansNoInputsAndCannotBake() {
         val overlay = SimAuthoring.put(RigEditOverlay(), model(), create { putJsonArray("inputs") {} })
         val edit = overlay.simEdits.single()

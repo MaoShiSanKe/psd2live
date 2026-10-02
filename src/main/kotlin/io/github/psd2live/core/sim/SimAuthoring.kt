@@ -19,7 +19,7 @@ object SimAuthoring {
         val id = requireNotNull(arguments["id"]?.jsonPrimitive?.contentOrNull) { "id is required" }
         val existing = overlay.simEdits.firstOrNull { it.id == id }
         val edit = existing?.patched(arguments) ?: RigSimEdit.fromJson(arguments).let { created ->
-            if ("inputs" in arguments) created else created.copy(inputs = RigSimEdit.defaultInputs(model.parameters.mapTo(HashSet()) { it.id.raw }))
+            if ("inputs" in arguments) created else created.copy(inputs = RigSimEdit.defaultInputs(model.parameters.mapTo(HashSet()) { it.id.raw }, created.kind))
         }
         return put(overlay, model, edit)
     }

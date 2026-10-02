@@ -418,9 +418,12 @@ object ModelPresets {
             val previous = overlay.simEdits.firstOrNull { it.id == id }
             val allTargets = if (keepOthers && previous != null) (previous.targets + targets).distinct() else targets
             val groups = previous?.groups.orEmpty() + written[id].orEmpty()
-            val edit = previous?.copy(targets = allTargets, groups = groups, enabled = true)
-                ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups,
-                    inputs = RigSimEdit.defaultInputs(model.parameters.mapTo(HashSet()) { it.id.raw }))
+            val available = model.parameters.mapTo(HashSet()) { it.id.raw }
+            val defaults = RigSimEdit.defaultInputs(available, kind)
+            // Inputs left at the defaults every kind once shared move to this kind's own.
+            val edit = previous?.copy(targets = allTargets, groups = groups, enabled = true,
+                inputs = if (previous.inputs == RigSimEdit.defaultInputs(available)) defaults else previous.inputs)
+                ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups, inputs = defaults)
             overlay = SimAuthoring.put(overlay, model, edit)
             simulationIds += id
         }

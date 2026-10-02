@@ -257,10 +257,18 @@ data class RigSimEdit(
         val EXAGGERATIONS = 1f..2f
         const val DEFAULT_EXAGGERATION = 1.3f
 
-        /** The inputs a new body starts from: the head and body turning and tilting, then nodding and the body rising, sinking and leaning. */
-        fun defaultInputs(available: Set<String>?): List<PhysicsInput> =
+        /**
+         * The inputs a new body starts from: the head and body turning and tilting, then nodding and the body
+         * rising, sinking and leaning. Clothing hangs from the body, so a nod does not move it, and leaning in
+         * mostly holds it in another pose, which its up-and-down pendulum cannot hold and goes limp trying to:
+         * of the vertical inputs it takes only the body rising and sinking.
+         */
+        fun defaultInputs(available: Set<String>?, kind: SimKind? = null): List<PhysicsInput> =
             io.github.psd2live.core.PhysicsGenerator.headAndBodyInputs(available) +
-                SimBaker.VERTICAL_INPUTS.filter { available == null || it in available }.map { PhysicsInput(it, 40f, io.github.psd2live.core.PhysicsSourceType.X) }
+                SimBaker.VERTICAL_INPUTS.filter { (available == null || it in available) && (kind != SimKind.CLOTH || it == CLOTH_VERTICAL_INPUT) }
+                    .map { PhysicsInput(it, 40f, io.github.psd2live.core.PhysicsSourceType.X) }
+
+        private const val CLOTH_VERTICAL_INPUT = "ParamBodyAngleY"
 
         /**
          * An edit saved before inputs were always written down, where none meant the defaults, takes them as
