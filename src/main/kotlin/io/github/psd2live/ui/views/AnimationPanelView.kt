@@ -68,7 +68,6 @@ import io.github.psd2live.core.MotionClip
 import io.github.psd2live.core.MotionClips
 import io.github.psd2live.core.MotionPresetSettings
 import io.github.psd2live.core.MotionPresets
-import io.github.psd2live.core.SkeletonSpec
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
@@ -131,11 +130,14 @@ internal fun AnimationPanelView(
 
 	val presets = state.rigEdits.motionPresets
 	val clips = state.rigEdits.motionClips
-	// Generating the idle expands its poses onto the bones: only when what it is made from changes.
-	val generated = remember(skeleton, presets, clips) {
+	val basic = state.motionBasic
+	val skeletonPresets = state.motionSkeleton
+	// Generating the idle expands its poses onto the bones: only when what it is made from changes. A group
+	// the model presets switch off is not in the model, so it is not listed.
+	val generated = remember(skeleton, presets, clips, basic, skeletonPresets) {
 		MotionClips.BUILTIN_NAMES.associateWith { name ->
 			val settings = presets[name] ?: MotionPresetSettings()
-			if (settings.deleted) null
+			if (settings.deleted || !(if (MotionClips.isSkeletonPreset(name)) skeletonPresets else basic)) null
 			else MotionClips.overrideOf(clips, name) ?: MotionPresets.clip(name, name, skeleton, settings).takeIf { it.curves.isNotEmpty() }
 		}
 	}
@@ -163,7 +165,7 @@ internal fun AnimationPanelView(
 				) {
 					IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 				}
-				NewMotionMenu(viewModel, skeleton, presets, newMenuOpen) { newMenuOpen = false }
+				NewMotionMenu(viewModel, state, newMenuOpen) { newMenuOpen = false }
 			}
 			Spacer(Modifier.weight(1f))
 			PanelShowPreviewButton(state, viewModel)
@@ -237,14 +239,16 @@ internal fun AnimationPanelView(
 @Composable
 private fun NewMotionMenu(
 	viewModel: PSD2LiveViewModel,
-	skeleton: SkeletonSpec?,
-	presets: Map<String, MotionPresetSettings>,
+	state: PSD2LiveState,
 	open: Boolean,
 	onDismiss: () -> Unit,
 ) {
+	val presets = state.rigEdits.motionPresets
 	TreeContextMenu(expanded = open, onDismissRequest = onDismiss) {
 		CompactMenuItem(text = tr("animation.newBlank"), onClick = { onDismiss(); viewModel.createMotionClip() })
-		val playable = MotionClips.BUILTIN_NAMES.filter { MotionClips.builtinTracks(it, skeleton).isNotEmpty() }
+		val playable = MotionClips.BUILTIN_NAMES.filter {
+			state.motionPresetGroupOn(it) && MotionClips.builtinTracks(it, state.rigEdits.skeleton).isNotEmpty()
+		}
 		CompactMenuDivider()
 		CompactMenuSection(tr("animation.newFromPreset"))
 		for (name in playable) {
@@ -263,14 +267,14 @@ private fun NewMotionMenu(
 
 private fun builtinEntries(viewModel: PSD2LiveViewModel, state: PSD2LiveState, generated: Map<String, MotionClip?>): List<MotionEntry> =
 	MotionClips.BUILTIN_NAMES.mapNotNull { name ->
-		// Deleted presets, and skeleton presets the current skeleton cannot play, are not listed.
+		// Deleted presets, switched-off groups and skeleton presets the current skeleton cannot play are not listed.
 		val clip = generated[name] ?: return@mapNotNull null
 		val (enabled, setEnabled) = when (name) {
 			"Idle" -> state.motionIdle to viewModel::setMotionIdle
 			"Blink" -> state.motionBlink to viewModel::setMotionBlink
 			"Nod" -> state.motionNod to viewModel::setMotionNod
 			"Shake" -> state.motionShake to viewModel::setMotionShake
-			else -> state.motionSkeleton to viewModel::setMotionSkeleton
+			else -> (state.rigEdits.motionPresets[name]?.disabled != true) to { on: Boolean -> viewModel.setMotionPresetEnabled(name, on) }
 		}
 		val edited = clip.id != name
 		MotionEntry(

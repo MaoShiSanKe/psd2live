@@ -184,9 +184,11 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 	val clips = state.rigEdits.motionClips
 	val skeleton = state.rigEdits.skeleton
 	val presets = state.rigEdits.motionPresets
-	val choices = remember(clips, skeleton, presets) {
+	val basic = state.motionBasic
+	val skeletonPresets = state.motionSkeleton
+	val choices = remember(clips, skeleton, presets, basic, skeletonPresets) {
 		val builtins = MotionClips.BUILTIN_NAMES.filter { name ->
-			presets[name]?.deleted != true &&
+			presets[name]?.deleted != true && (if (MotionClips.isSkeletonPreset(name)) skeletonPresets else basic) &&
 				(MotionClips.overrideOf(clips, name) != null || MotionClips.builtinTracks(name, skeleton).isNotEmpty())
 		}.map { name ->
 			val edited = MotionClips.overrideOf(clips, name) != null

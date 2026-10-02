@@ -424,6 +424,7 @@ data class PSD2LiveState(
     val mouthColor: Int? = null,
     val mouthThickness: Float = 1.5f,
 	val exportMotions: Boolean = true,
+	val motionBasic: Boolean = true,
 	val motionIdle: Boolean = true,
 	val motionBlink: Boolean = true,
 	val motionNod: Boolean = true,
@@ -599,8 +600,12 @@ data class PSD2LiveState(
 			workspace.copy(canvases = workspace.canvases.map { if (it.id == canvasId) transform(it) else it })
 		}
 
+	/** Whether the model presets keep generated motion [name]'s group, the basic motions or the skeleton presets. */
+	fun motionPresetGroupOn(name: String): Boolean =
+		if (io.github.psd2live.core.MotionClips.isSkeletonPreset(name)) motionSkeleton else motionBasic
+
 	fun buildConfig(): PipelineConfig {
-		val hasAnyMotion = motionIdle || motionBlink || motionNod || motionShake || motionSkeleton ||
+		val hasAnyMotion = (motionBasic && (motionIdle || motionBlink || motionNod || motionShake)) || motionSkeleton ||
 			rigEdits.motionClips.any { it.builtin == null && it.enabled }
 		return PipelineConfig(
 			atlasSize = atlasSize,
@@ -628,6 +633,7 @@ data class PSD2LiveState(
             mouthColor = mouthColor,
             mouthThickness = mouthThickness,
 			exportMotions = !meshOnly && hasAnyMotion,
+			motionBasic = motionBasic,
 			motionIdle = motionIdle,
 			motionBlink = motionBlink,
 			motionNod = motionNod,

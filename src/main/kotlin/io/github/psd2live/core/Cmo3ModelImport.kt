@@ -122,6 +122,7 @@ internal object Cmo3ModelImport {
             mouthOutlineEnabled = false, generateDeformers = false, meshOnly = false,
             physicsFrontHair = false, physicsBackHair = false, physicsEyeJelly = false,
             generatePhysics = if (replace) config.generatePhysics else true,
+            motionBasic = if (replace) config.motionBasic else false,
             motionIdle = if (replace) config.motionIdle else false, motionBlink = if (replace) config.motionBlink else false,
             motionNod = if (replace) config.motionNod else false, motionShake = if (replace) config.motionShake else false,
             motionSkeleton = if (replace) config.motionSkeleton else false,

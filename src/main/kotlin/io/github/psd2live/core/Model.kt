@@ -171,11 +171,16 @@ data class PipelineConfig(
     val mouthColor: Int? = null,
     val mouthThickness: Float = 1.5f,
 	val exportMotions: Boolean = true,
+	/** The basic motions (idle, blink, nod, shake) as a group: off, the model has none of them. */
+	val motionBasic: Boolean = true,
 	val motionIdle: Boolean = true,
 	val motionBlink: Boolean = true,
 	val motionNod: Boolean = true,
 	val motionShake: Boolean = true,
-	/** Skeleton one-shots (tail swing, crouch, weight shift), exported when the skeleton can play them. */
+	/**
+	 * The skeleton presets as a group: off, the model has none of them. On, each is exported when the skeleton
+	 * can play it and it is not switched off ([MotionPresetSettings.disabled]).
+	 */
 	val motionSkeleton: Boolean = true,
 	val generatePhysics: Boolean = true,
 	val physicsFrontHair: Boolean = true,

@@ -87,7 +87,7 @@ private fun validateAgentProjectSettings(
     val booleans = setOf(
         "meshOnly", "generateDeformers", "featureDisplacementEnabled", "mouthOutlineEnabled",
         "generatePhysics", "physicsFrontHair", "physicsBackHair", "physicsEyeJelly",
-        "exportMotions", "motionIdle", "motionBlink", "motionNod", "motionShake", "motionSkeleton",
+        "exportMotions", "motionBasic", "motionIdle", "motionBlink", "motionNod", "motionShake", "motionSkeleton",
         "exportCmo3", "exportMoc3", "exportJson", "exportHiddenParts", "exportHiddenDrawables",
         "exportGuideImageParts", "exportIncludePhysics", "exportIncludeUserData", "exportIncludeDisplayInfo",
     )

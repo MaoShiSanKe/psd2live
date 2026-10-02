@@ -2138,6 +2138,46 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
+	/**
+	 * The model presets' basic motions switch: off, idle, blink, nod and shake leave the animation panel, the
+	 * editor, the preview and the export together, each keeping its own switch and settings for when it is back.
+	 */
+	fun setMotionBasic(enabled: Boolean) {
+		updateState { current ->
+			if (enabled) return@updateState current.copy(motionBasic = true)
+			val rest = mapOf(
+				StandardParameters.ANGLE_X to 0f,
+				StandardParameters.ANGLE_Y to 0f,
+				StandardParameters.ANGLE_Z to 0f,
+				StandardParameters.BODY_X to 0f,
+				StandardParameters.BODY_Y to 0f,
+				StandardParameters.BODY_Z to 0f,
+				StandardParameters.BREATH to 0f,
+				StandardParameters.MOUTH_OPEN to 0f,
+				StandardParameters.MOUTH_FORM to 0f,
+				StandardParameters.EYE_L_OPEN to 1f,
+				StandardParameters.EYE_R_OPEN to 1f,
+			).filterKeys { key -> key !in current.lockedParameters }
+			current.copy(motionBasic = false, parameterValues = current.parameterValues + rest)
+		}
+		if (!enabled) {
+			followX = 0f
+			bodyFollowX = 0f
+			followY = 0f
+			bodyFollowY = 0f
+			closePresetGroupMotion(skeleton = false)
+		}
+		scheduleRuntimeBundleUpdate()
+		editorChanged()
+	}
+
+	/** Closes the editor on, and stops, a generated motion of the group just switched off. */
+	private fun closePresetGroupMotion(skeleton: Boolean) {
+		val names = MotionClips.BUILTIN_NAMES.filter { MotionClips.isSkeletonPreset(it) == skeleton }
+		if (names.any { motionEditor.clipId == MotionEditorState.presetClipId(it) }) closeMotionEditorClip()
+		if (names.any { it.equals(motionPlayer.activeName, ignoreCase = true) }) motionPlayer.stop()
+	}
+
 	fun setMotionIdle(enabled: Boolean) {
 		updateState { current ->
 			val next = current.copy(motionIdle = enabled)
@@ -2225,7 +2265,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			val next = current.copy(motionSkeleton = enabled)
 			next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
 		}
-		if (!enabled && PreviewMotionPlayer.isSkeletonMotion(motionPlayer.activeName)) motionPlayer.stop()
+		if (!enabled) closePresetGroupMotion(skeleton = true)
 		scheduleRuntimeBundleUpdate()
 		editorChanged()
 	}
@@ -2430,7 +2470,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** [name] as the editor and the playback see it; null once deleted or when the rig cannot play it. */
 	internal fun presetMotionClip(state: PSD2LiveState, name: String): MotionClip? {
 		val settings = state.rigEdits.motionPresets[name] ?: MotionPresetSettings()
-		if (settings.deleted) return null
+		if (settings.deleted || !state.motionPresetGroupOn(name)) return null
 		MotionClips.overrideOf(state.rigEdits.motionClips, name)?.let { return it }
 		val skeleton = state.rigEdits.skeleton
 		// The idle expands its poses onto the bones; the editor reads it every frame while it plays.
@@ -2489,6 +2529,14 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun restoreMotionPreset(name: String) {
 		updateMotionPresets { presets -> presets - name }
+	}
+
+	/** Switches one skeleton preset on or off; the basic motions have their own switches ([setMotionIdle] and on). */
+	fun setMotionPresetEnabled(name: String, enabled: Boolean) {
+		if (!enabled) motionPlayer.stop(name)
+		updateMotionPresets { presets ->
+			presets + (name to (presets[name] ?: MotionPresetSettings()).copy(disabled = !enabled))
+		}
 	}
 
 	/**
@@ -2949,6 +2997,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 mouthColor = null,
                 mouthThickness = 1.5f,
 				exportMotions = true,
+				motionBasic = true,
 				motionIdle = true,
 				motionBlink = true,
 				motionNod = true,
@@ -4812,7 +4861,7 @@ class PSD2LiveViewModel : AutoCloseable {
                     meshOnly = config.meshOnly, generateDeformers = config.generateDeformers,
                     mouthOutlineEnabled = config.mouthOutlineEnabled, generatePhysics = config.generatePhysics,
                     physicsFrontHair = false, physicsBackHair = false, physicsEyeJelly = false,
-                    motionIdle = config.motionIdle, motionBlink = config.motionBlink, motionNod = config.motionNod,
+                    motionBasic = config.motionBasic, motionIdle = config.motionIdle, motionBlink = config.motionBlink, motionNod = config.motionNod,
                     motionShake = config.motionShake, motionSkeleton = config.motionSkeleton,
                     hairSimulationFront = if (replace) before.hairSimulationFront else false,
                     hairSimulationBack = if (replace) before.hairSimulationBack else false,
@@ -5346,6 +5395,8 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * playing; the software clock plays the same tracks, and drives the preview until Cubism is up.
 	 */
 	fun triggerMotion(name: String) {
+		// A generated motion whose group the model presets switched off is not in the model.
+		if (MotionClips.BUILTIN_NAMES.any { it.equals(name, ignoreCase = true) } && !_state.value.motionPresetGroupOn(name)) return
 		motionEditor.playing = false
 		updateState { it.copy(animationEnabled = true) }
 		ensureSdkSessionLoaded()
@@ -5408,7 +5459,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val motion = if (anim) motionPlayer.advance(dt) else emptyMap()
 
 		// 2. Eye Blink (Periodic + Triggered)
-		val hasBlink = anim && current.motionBlink
+		val hasBlink = anim && current.motionBasic && current.motionBlink
 		val periodicBlink = if (hasBlink) blinkAt(elapsed % 4.6) else 1f
 		val blink = minOf(
 			periodicBlink,
@@ -5417,7 +5468,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		)
 
 		// 3. Idle Motion (Head & Body Sway, Mouse Tracking)
-		val hasIdle = anim && current.motionIdle
+		val hasIdle = anim && current.motionBasic && current.motionIdle
 		val idleX = if (hasIdle) (sin(elapsed * 0.47) * 0.12).toFloat() else 0f
 		val idleY = if (hasIdle) (sin(elapsed * 0.31 + 1.1) * 0.08).toFloat() else 0f
 		val targetX = if (pointerActive && tracking) pointerX else idleX
@@ -5539,7 +5590,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			return model.rig.puppet.parameters.associate { it.id to it.default }
 		}
 
-		val hasIdle = current.animationEnabled && current.motionIdle
+		val hasIdle = current.animationEnabled && current.motionBasic && current.motionIdle
 
 		val mouthPhase = elapsed % 5.8
 		val mouthOpen = if (mouthPhase in 1.25..2.45 && current.animationEnabled && hasIdle) {
@@ -5753,7 +5804,7 @@ internal fun parameterValuesForPreview(
 	// 1. Idle animation disabled:
 	// Silences Native SDK's hardcoded CubismBreath and Idle motion.
 	// Overrides AngleX/Y/Z, BodyAngleX/Y/Z, Breath, and Mouth to controlled values (neutral 0 unless moving mouse/motion).
-	if (!state.motionIdle) {
+	if (!state.motionBasic || !state.motionIdle) {
 		val idleSuppressedIds = listOf(
 			StandardParameters.ANGLE_X,
 			StandardParameters.ANGLE_Y,
@@ -5774,7 +5825,7 @@ internal fun parameterValuesForPreview(
 
 	// 2. Blink motion disabled:
 	// Silences Native SDK eye blinking; keeps eyes fully open (1.0f).
-	if (!state.motionBlink) {
+	if (!state.motionBasic || !state.motionBlink) {
 		if (StandardParameters.EYE_L_OPEN !in lockedParameters) {
 			overrides[StandardParameters.EYE_L_OPEN] = liveParams[StandardParameters.EYE_L_OPEN] ?: 1.0f
 		}

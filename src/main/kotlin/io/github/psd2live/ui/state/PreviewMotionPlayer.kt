@@ -6,7 +6,6 @@ import androidx.compose.runtime.setValue
 import io.github.psd2live.core.MotionClip
 import io.github.psd2live.core.MotionClips
 import io.github.psd2live.core.MotionPresetSettings
-import io.github.psd2live.core.SkeletonMotions
 import io.github.psd2live.core.SkeletonSpec
 import org.umamo.runtime.model.ParameterId
 
@@ -82,8 +81,5 @@ internal class PreviewMotionPlayer {
 			val tracks = MotionClips.builtinTracks(name, skeleton, settings = settings).takeIf { it.isNotEmpty() } ?: return null
 			return MotionClips.fromTracks("preview", name, builtin = null, loop = false, tracks = tracks)
 		}
-
-		fun isSkeletonMotion(name: String?): Boolean =
-			name != null && SkeletonMotions.presets.any { it.name.equals(name, ignoreCase = true) }
 	}
 }

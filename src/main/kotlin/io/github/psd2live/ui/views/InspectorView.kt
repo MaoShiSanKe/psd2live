@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Divider
 import androidx.compose.material.Text
@@ -80,45 +79,6 @@ import kotlin.math.roundToInt
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconPaintColorSwap
 import io.github.psd2live.ui.components.IconUndo
-
-@Composable
-private fun MotionItemWithPlay(
-	checked: Boolean,
-	onCheckedChange: (Boolean) -> Unit,
-	label: String,
-	onPlay: () -> Unit,
-	enabled: Boolean,
-	modifier: Modifier = Modifier,
-) {
-	val colors = LocalToolColors.current
-	Row(
-		modifier = modifier,
-		verticalAlignment = Alignment.CenterVertically,
-	) {
-		CompactCheckbox(
-			checked = checked,
-			onCheckedChange = onCheckedChange,
-			label = label,
-			enabled = enabled,
-			modifier = Modifier.weight(1f, fill = false),
-		)
-		Spacer(Modifier.width(3.dp))
-		Box(
-			modifier = Modifier
-				.size(15.dp)
-				.background(colors.panelElevated, RoundedCornerShape(2.dp))
-				.border(BorderStroke(0.5.dp, colors.divider), RoundedCornerShape(2.dp))
-				.clickable(enabled = enabled) { onPlay() },
-			contentAlignment = Alignment.Center,
-		) {
-			Text(
-				text = "▶",
-				fontSize = 8.sp,
-				color = if (enabled) colors.accent else colors.textDisabled,
-			)
-		}
-	}
-}
 
 @Composable
 internal fun ModelPresetsSection(
@@ -365,10 +325,18 @@ internal fun ModelPresetsSection(
 		}
 
 
-		val motionCount = listOf(state.motionIdle, state.motionBlink, state.motionNod, state.motionShake).count { it }
+		// Which generated motions the model has, by group; the animation panel lists, tunes and switches each one.
+		val motionGroups = listOfNotNull(
+			tr("settings.motion.basic").takeIf { state.motionBasic },
+			tr("settings.motion.skeleton").takeIf { state.motionSkeleton },
+		)
 		PresetFolderRow(
 			title = tr("settings.group.motions"),
-			summary = if (state.meshOnly) tr("export.disabled") else "${tr("export.motions")}: $motionCount",
+			summary = when {
+				state.meshOnly -> tr("export.disabled")
+				motionGroups.isEmpty() -> tr("settings.motion.none")
+				else -> motionGroups.joinToString(" · ")
+			},
 			expanded = state.dynamicsSubExpanded,
 			enabled = !isBusy && !state.meshOnly,
 		) { viewModel.setDynamicsSubExpanded(!state.dynamicsSubExpanded) }
@@ -380,49 +348,30 @@ internal fun ModelPresetsSection(
 					.padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 3.dp),
 				verticalArrangement = Arrangement.spacedBy(3.dp),
 			) {
-				// Motions
 				Row(
 					modifier = Modifier.fillMaxWidth(),
 					horizontalArrangement = Arrangement.spacedBy(10.dp),
 				) {
-					MotionItemWithPlay(
-						checked = state.motionIdle,
-						onCheckedChange = { viewModel.setMotionIdle(it) },
-						label = tr("export.motion.idle"),
-						onPlay = { viewModel.triggerMotion("Idle") },
+					CompactCheckbox(
+						checked = state.motionBasic,
+						onCheckedChange = viewModel::setMotionBasic,
+						label = tr("settings.motion.basic"),
 						enabled = !isBusy,
 						modifier = Modifier.weight(1f),
 					)
-					MotionItemWithPlay(
-						checked = state.motionBlink,
-						onCheckedChange = { viewModel.setMotionBlink(it) },
-						label = tr("export.motion.blink"),
-						onPlay = { viewModel.triggerMotion("Blink") },
-						enabled = !isBusy,
-						modifier = Modifier.weight(1f),
-					)
-				}
-				Row(
-					modifier = Modifier.fillMaxWidth(),
-					horizontalArrangement = Arrangement.spacedBy(10.dp),
-				) {
-					MotionItemWithPlay(
-						checked = state.motionNod,
-						onCheckedChange = { viewModel.setMotionNod(it) },
-						label = tr("export.motion.nod"),
-						onPlay = { viewModel.triggerMotion("Nod") },
-						enabled = !isBusy,
-						modifier = Modifier.weight(1f),
-					)
-					MotionItemWithPlay(
-						checked = state.motionShake,
-						onCheckedChange = { viewModel.setMotionShake(it) },
-						label = tr("export.motion.shake"),
-						onPlay = { viewModel.triggerMotion("Shake") },
+					CompactCheckbox(
+						checked = state.motionSkeleton,
+						onCheckedChange = viewModel::setMotionSkeleton,
+						label = tr("settings.motion.skeleton"),
 						enabled = !isBusy,
 						modifier = Modifier.weight(1f),
 					)
 				}
+				Text(
+					text = tr("settings.motion.hint"),
+					style = typography.caption.copy(fontSize = 10.sp),
+					color = colors.textMuted,
+				)
 			}
 		}
 

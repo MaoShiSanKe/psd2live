@@ -24,8 +24,15 @@ data class MotionPresetKnob(
 	val integer: Boolean = false,
 )
 
-/** How the user tuned one generated motion, by knob id, and whether they removed it from the model. */
-data class MotionPresetSettings(val values: Map<String, Float> = emptyMap(), val deleted: Boolean = false) {
+/**
+ * How the user tuned one generated motion, by knob id, whether they removed it from the model and, for a
+ * skeleton preset, whether it is switched off (the basic motions keep their own switches in the settings).
+ */
+data class MotionPresetSettings(
+	val values: Map<String, Float> = emptyMap(),
+	val deleted: Boolean = false,
+	val disabled: Boolean = false,
+) {
 	init {
 		require(values.values.all(Float::isFinite)) { "Motion preset settings must be finite" }
 	}
@@ -35,7 +42,7 @@ data class MotionPresetSettings(val values: Map<String, Float> = emptyMap(), val
 		return if (knob.integer || knob.toggle) raw.roundToInt().toFloat() else raw
 	}
 
-	val isDefault: Boolean get() = values.isEmpty() && !deleted
+	val isDefault: Boolean get() = values.isEmpty() && !deleted && !disabled
 }
 
 /**
@@ -187,6 +194,7 @@ object MotionPresets {
 			put(name, buildJsonObject {
 				for ((id, v) in value.values) put(id, v)
 				if (value.deleted) put("deleted", true)
+				if (value.disabled) put("disabled", true)
 			})
 		}
 	}
@@ -194,8 +202,9 @@ object MotionPresets {
 	fun fromJson(o: JsonObject?): Map<String, MotionPresetSettings> = o.orEmpty().mapNotNull { (name, element) ->
 		val fields = element.jsonObject
 		val settings = MotionPresetSettings(
-			values = fields.filterKeys { it != "deleted" }.mapNotNull { (id, v) -> v.jsonPrimitive.floatOrNull?.takeIf(Float::isFinite)?.let { id to it } }.toMap(),
+			values = fields.filterKeys { it != "deleted" && it != "disabled" }.mapNotNull { (id, v) -> v.jsonPrimitive.floatOrNull?.takeIf(Float::isFinite)?.let { id to it } }.toMap(),
 			deleted = fields["deleted"]?.jsonPrimitive?.booleanOrNull ?: false,
+			disabled = fields["disabled"]?.jsonPrimitive?.booleanOrNull ?: false,
 		)
 		if (settings.isDefault) null else name to settings
 	}.toMap()

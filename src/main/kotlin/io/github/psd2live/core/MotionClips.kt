@@ -86,8 +86,14 @@ object MotionClips {
 		}) }
 	}
 
+	/** The basic generated motions, which every rig can play; the model presets switch them as one group. */
+	val BASIC_NAMES: List<String> = listOf("Idle", "Blink", "Nod", "Shake")
+
 	/** The generated motions, in the order the panel lists them. */
-	val BUILTIN_NAMES: List<String> = listOf("Idle", "Blink", "Nod", "Shake") + SkeletonMotions.presets.map { it.name }
+	val BUILTIN_NAMES: List<String> = BASIC_NAMES + SkeletonMotions.presets.map { it.name }
+
+	/** Whether [name] is a skeleton preset rather than a basic motion. */
+	fun isSkeletonPreset(name: String): Boolean = SkeletonMotions.presets.any { it.name.equals(name, ignoreCase = true) }
 
 	/** Keys closer than this are one key. */
 	const val TIME_EPSILON = 1e-4f

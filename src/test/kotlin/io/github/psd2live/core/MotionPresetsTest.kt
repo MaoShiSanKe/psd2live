@@ -54,6 +54,7 @@ class MotionPresetsTest {
 		val saved = mapOf(
 			"Idle" to settings(MotionPresets.AMPLITUDE to 1.6f),
 			"Nod" to MotionPresetSettings(deleted = true),
+			"Crouch" to MotionPresetSettings(disabled = true),
 			"Shake" to MotionPresetSettings(),
 		)
 		assertEquals(saved - "Shake", MotionPresets.fromJson(MotionPresets.toJson(saved)))

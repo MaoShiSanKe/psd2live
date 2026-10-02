@@ -133,7 +133,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 {"request":{"mode":"pose","bone_id":"actualBoneId","target":[560,440],"ik":true}}
 ```
 
-`motion.list/get` 读取持久的 `MotionClip`，`sample` 返回指定时刻按片段插值后的参数值。`seed_builtin` 将生成动作变为可编辑的同名覆盖片段；`put` 创建或整体替换片段，使用 `get` 返回的 JSON 可以往返编辑。片段可设置时长、循环、FPS、淡入淡出和参数曲线；键支持 `LINEAR`、`BEZIER`、`STEPPED`、`INVERSE_STEPPED` 及 `in` / `out` 控制柄。`set_key` 在指定时间写入或替换键，`delete_key` 和 `remove_curve` 删除键或整条轨道。参数必须存在，键值和时间必须落在参数与片段范围内。导出动作须启用 `settings.exportMotions`；生成的骨骼预设还须启用 `settings.motionSkeleton`。
+`motion.list/get` 读取持久的 `MotionClip`，`sample` 返回指定时刻按片段插值后的参数值。`seed_builtin` 将生成动作变为可编辑的同名覆盖片段；`put` 创建或整体替换片段，使用 `get` 返回的 JSON 可以往返编辑。片段可设置时长、循环、FPS、淡入淡出和参数曲线；键支持 `LINEAR`、`BEZIER`、`STEPPED`、`INVERSE_STEPPED` 及 `in` / `out` 控制柄。`set_key` 在指定时间写入或替换键，`delete_key` 和 `remove_curve` 删除键或整条轨道。参数必须存在，键值和时间必须落在参数与片段范围内。导出动作须启用 `settings.exportMotions`；生成的基础动作（Idle、Blink、Nod、Shake）还须启用 `settings.motionBasic`，骨骼预设还须启用 `settings.motionSkeleton`。
 
 ```json
 {"request":{"mode":"put","state":"current-history-head","clip":{"id":"wave_custom","name":"WaveCustom","duration":2,"curves":[{"parameter":"ParamArmRA","keys":[{"time":0,"value":0},{"time":1,"value":45},{"time":2,"value":0}]}]}}}

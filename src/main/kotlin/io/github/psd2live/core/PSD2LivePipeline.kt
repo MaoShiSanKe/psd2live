@@ -424,17 +424,21 @@ class PSD2LivePipeline {
 						MotionGenerator.tracks(tracks, parameterIds, MotionPresets.loops(name), MotionPresets.duration(name, tracks, settings))
 					})
 				}
-				if (config.motionIdle) {
-					val physicsDriven = if (config.exportIncludePhysics) {
-						physicsGroups.flatMapTo(HashSet()) { it.outputParameters }
-					} else emptySet()
-					builtin("Idle", "Idle", physicsDriven)
+				// The model presets switch the basic motions and the skeleton presets each as one group.
+				if (config.motionBasic) {
+					if (config.motionIdle) {
+						val physicsDriven = if (config.exportIncludePhysics) {
+							physicsGroups.flatMapTo(HashSet()) { it.outputParameters }
+						} else emptySet()
+						builtin("Idle", "Idle", physicsDriven)
+					}
+					if (config.motionBlink) builtin("Blink", "Blink")
+					if (config.motionNod) builtin("Nod", "Nod")
+					if (config.motionShake) builtin("Shake", "Shake")
 				}
-				if (config.motionBlink) builtin("Blink", "Blink")
-				if (config.motionNod) builtin("Nod", "Nod")
-				if (config.motionShake) builtin("Shake", "Shake")
 				if (config.motionSkeleton) {
 					for (preset in SkeletonMotions.presets) {
+						if (config.rigEdits.motionPresets[preset.name]?.disabled == true) continue
 						// A looping preset is another idle, played from the idle group beside the plain one.
 						builtin(if (preset.loop) "Idle" else preset.name, preset.name)
 					}
@@ -469,7 +473,7 @@ class PSD2LivePipeline {
 				motions = motionMap,
 			),
 			groups = buildList {
-				if (config.motionBlink && !config.meshOnly) {
+				if (config.motionBasic && config.motionBlink && !config.meshOnly) {
 					listOf("ParamEyeLOpen", "ParamEyeROpen").filter(parameterIds::contains).takeIf(List<String>::isNotEmpty)?.let {
 						add(Model3Group("Parameter", "EyeBlink", it))
 					}

@@ -358,6 +358,7 @@ internal object WorkspaceStateCodec {
         put("mouthColor", state.mouthColor?.let(::JsonPrimitive) ?: JsonNull)
         put("mouthThickness", state.mouthThickness)
         put("exportMotions", state.exportMotions)
+        put("motionBasic", state.motionBasic)
         put("motionIdle", state.motionIdle)
         put("motionBlink", state.motionBlink)
         put("motionNod", state.motionNod)
@@ -464,6 +465,7 @@ internal object WorkspaceStateCodec {
         put("mouthColor", state.mouthColor?.let(::JsonPrimitive) ?: JsonNull)
         put("mouthThickness", state.mouthThickness)
         put("exportMotions", state.exportMotions)
+        put("motionBasic", state.motionBasic)
         put("motionIdle", state.motionIdle)
         put("motionBlink", state.motionBlink)
         put("motionNod", state.motionNod)
@@ -586,6 +588,7 @@ internal object WorkspaceStateCodec {
         mouthThickness = value["mouthThickness"]?.jsonPrimitive?.floatOrNull?.takeIf { it.isFinite() }?.coerceIn(0.5f, 8f) ?: base.mouthThickness,
         featureDisplacementEnabled = value["featureDisplacementEnabled"]?.jsonPrimitive?.boolean ?: base.featureDisplacementEnabled,
         exportMotions = value["exportMotions"]?.jsonPrimitive?.boolean ?: base.exportMotions,
+        motionBasic = value["motionBasic"]?.jsonPrimitive?.boolean ?: base.motionBasic,
         motionIdle = value["motionIdle"]?.jsonPrimitive?.boolean ?: base.motionIdle,
         motionBlink = value["motionBlink"]?.jsonPrimitive?.boolean ?: base.motionBlink,
         motionNod = value["motionNod"]?.jsonPrimitive?.boolean ?: base.motionNod,
