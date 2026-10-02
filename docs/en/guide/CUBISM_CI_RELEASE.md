@@ -40,7 +40,7 @@ Jobs `build-windows`, `build-linux`, and `release` use the GitHub Environment na
 
 ## Publishing a release
 
-Prerequisites: the SDK zip is uploaded to the private repository, and the variables, secrets and `release-cubism` environment above are configured. `<version>` below stands for the target version, such as `1.6.0`.
+Prerequisites: the SDK zip is uploaded to the private repository, and the variables, secrets and `release-cubism` environment above are configured. `<version>` below stands for the target version, such as `2.0.0`.
 
 1. **Bump the version first.** The workflow does not modify the repository. Set `version` and `packageVersion` in `build.gradle.kts`, update version strings shown in the UI, then commit and push.
 2. Open Actions → **Release Cubism** → **Run workflow** and set `version` to `<version>` (no leading `v`).
