@@ -61,6 +61,8 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 
 For collar and hair occlusion workflows, see the [illustrated front/back layering tutorial (Chinese)](../../zh/guide/DEPTH_SPLIT.md).
 
+For hair and clothing simulation, pin weights and baking, see the [illustrated simulation tutorial (Chinese)](../../zh/guide/SIMULATION_TUTORIAL.md).
+
 ## Default shortcuts
 
 These are the default (Photoshop-style) bindings. **Settings** can switch to Blender- or Cubism-style presets or rebind individual actions; **Help → Keyboard Shortcuts…** shows the current bindings.

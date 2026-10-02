@@ -19,6 +19,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | 摇摆生成 | 左右 / 上下摇摆、画布手柄、摆锤与烘焙 | [打开](zh/guide/SWING.md) | 中文 | 中文 |
 | 物理 | 物理组来源、摆锤画布、输入输出、预置与导出 | [打开](zh/guide/PHYSICS.md) | 中文 | 中文 |
 | 模拟与烘焙 | 布料 / 头发的 2D 模拟、顶点权重组、胶水角色，烘焙为参数、关键形与摆锤 | [打开](zh/guide/SIMULATION.md) | 中文 | 中文 |
+| 模拟图文教程 | 从头发与服装预设开始，调整固定点权重、重新烘焙并检查导出效果 | [打开](zh/guide/SIMULATION_TUTORIAL.md) | [中文参考](zh/guide/SIMULATION_TUTORIAL.md) | [中国語参考](zh/guide/SIMULATION_TUTORIAL.md) |
 | 变形路径（实验性） | 路径的创建、绑定与导出方式 | [打开](zh/guide/DEFORM_PATHS.md) | 中文 | 中文 |
 | 纹理高清化 | 本地 nunif 配置、参数与效果检查 | [打开](zh/guide/TEXTURE_UPSCALE.md) | 中文 | 中文 |
 
