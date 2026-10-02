@@ -14,6 +14,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | --- | --- | --- | --- | --- |
 | 操作速查 | 与程序内教程对应的文字版、常用快捷键 | [打开](zh/guide/USER_GUIDE.md) | [Open](en/guide/USER_GUIDE.md) | [開く](ja/guide/USER_GUIDE.md) |
 | 画布编辑 | 模式菜单（选择 / 变形 / 编辑 / 模拟 / 骨骼 / 绘画 / 预览）、形变、网格拓扑、Glue、权重、绘画会话 | [打开](zh/guide/CANVAS_EDITOR.md) | 中文 | 中文 |
+| 前后分层图文教程 | 衣领与脖子、头发与肩部装饰的前后遮挡，复制、黏合与橡皮擦修边 | [打开](zh/guide/DEPTH_SPLIT.md) | [中文参考](zh/guide/DEPTH_SPLIT.md) | [中国語参考](zh/guide/DEPTH_SPLIT.md) |
 | 骨骼与姿态 | 骨架推断、绑定、IK、预设动作与烘焙结构 | [打开](zh/guide/SKELETON.md) | 中文 | 中文 |
 | 摇摆生成 | 左右 / 上下摇摆、画布手柄、摆锤与烘焙 | [打开](zh/guide/SWING.md) | 中文 | 中文 |
 | 物理 | 物理组来源、摆锤画布、输入输出、预置与导出 | [打开](zh/guide/PHYSICS.md) | 中文 | 中文 |

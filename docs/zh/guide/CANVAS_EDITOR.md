@@ -1,6 +1,6 @@
 # 画布编辑速查
 
-[文档目录](../../README.md) · [操作速查](USER_GUIDE.md) · [变形路径](DEFORM_PATHS.md)
+[文档目录](../../README.md) · [操作速查](USER_GUIDE.md) · [前后分层图文教程](DEPTH_SPLIT.md) · [变形路径](DEFORM_PATHS.md)
 
 对应程序内零基础路线第 3、6–12 课。本页按主题整理画布上的编辑规则；具体按钮位置和当前快捷键以 **帮助 → 教程…** 为准。
 
