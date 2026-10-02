@@ -361,11 +361,11 @@ internal fun DockWorkspaceView(
                 onDismissAll = viewModel::dismissAllMeshSplits,
             )
         }
-        viewModel.pendingBatchMeshSplit?.let { batchOffer ->
-            io.github.psd2live.ui.components.BatchMeshSplitDialog(
-                batchOffer = batchOffer,
-                onSplit = viewModel::confirmBatchMeshSplit,
-                onDismiss = viewModel::dismissBatchMeshSplit,
+        viewModel.pendingStartScreen?.let { offer ->
+            io.github.psd2live.ui.components.StartScreenDialog(
+                offer = offer,
+                onApply = viewModel::applyStartScreen,
+                onDismiss = viewModel::dismissStartScreen,
             )
         }
     }

@@ -49,6 +49,7 @@ import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconPhysics
 import io.github.psd2live.ui.components.IconSelectedOnly
+import io.github.psd2live.ui.state.HairMode
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -132,9 +133,6 @@ private val PART_NAME_INSET = 20.dp
 
 /** Width of a part's name before its dropdown, so the hair rows line up. */
 private val HAIR_LABEL_WIDTH = 40.dp
-
-/** How a hair moves: simulated, the legacy sway, or still. */
-private enum class HairMode(val key: String) { SIMULATION("presets.hairMode.simulate"), CLASSIC("presets.classicSway"), OFF("presets.hairMode.off") }
 
 /** A muted note right of a row's control, in the warning colour when something needs attention; whole on hover. */
 @Composable

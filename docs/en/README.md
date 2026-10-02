@@ -54,12 +54,12 @@ The Linux native preview does not support pure Wayland without XWayland, aarch64
 
 ## Quick start
 
-1. **Import a PSD** with **File → Import PSD…** (`Ctrl+Shift+O`) or drop it on the window. If a layer holds several disconnected parts (such as both legs), PSD2Live offers to split it by mesh.
+1. **Import a PSD** with **File → Import PSD…** (`Ctrl+Shift+O`) or drop it on the window. The Start screen opens next: set the model presets with the Minimal / Default / Full quick choices (Default includes loose clothing simulation) and tick the layers holding several disconnected parts (such as both legs) to split by mesh. Reopen it later from Tools → Start Screen….
 2. **Check the classification** in the Layers table: part type, side and variant settings. Correct anything that was misread.
 3. **Preview and refine** in the Preview workspace, then adjust in the Edit, Rigging, Animation and Physics workspaces as needed.
 4. **Save and export**: `Ctrl+S` saves a `.psd2live` project; `Ctrl+G` opens export settings for `.cmo3` and / or the `.moc3` bundle.
 
-<img src="../imgs/import-split.webp" width="560" alt="Batch split dialog: legwear, footwear, eyelash and front hair are each detected as two parts">
+<img src="../imgs/import-split.webp" width="560" alt="Splitting layers by mesh: legwear, footwear, eyelash and front hair are each detected as two parts">
 
 **New to PSD2Live? Open Help → Tutorials… (`F1`).** The interactive tutorials highlight each control and use your current shortcuts. There is a beginner path (18 lessons) and a path for Cubism users (13 lessons); the [user guide](guide/USER_GUIDE.md) is the text companion.
 

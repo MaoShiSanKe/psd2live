@@ -306,9 +306,9 @@ fun FrameWindowScope.PSD2LiveApp(
 			isDraggingOver ||
 			tutorial.active
 
-		// The mesh split offer that follows an import is a modal inside the workspace; the tour steps
-		// aside until it is answered so neither covers the other.
-		val tutorialPaused = viewModel.pendingMeshSplit != null || viewModel.pendingBatchMeshSplit != null
+		// The start screen that follows an import, like a mesh split offer, is a modal inside the workspace;
+		// the tour steps aside until it is answered so neither covers the other.
+		val tutorialPaused = viewModel.pendingMeshSplit != null || viewModel.pendingStartScreen != null
 		val tutorialShown = tutorial.active && !tutorialPaused
 
 		// Tutorial step side-effects and auto-advance
@@ -519,7 +519,7 @@ fun FrameWindowScope.PSD2LiveApp(
 						onShowSettings = { viewModel.openSettingsDialog() },
 						onShowAgentConnection = { showAgentDialog = true },
 						onShowTextureUpscale = { viewModel.openTextureUpscaleDialog() },
-						onBatchMeshSplit = { viewModel.requestBatchMeshSplit() },
+						onStartScreen = { viewModel.requestStartScreen() },
 						onShowHistory = { viewModel.showHistoryModule() },
 						onNewEditTab = { viewModel.addWorkspace() },
 						onNewPreviewTab = { viewModel.addCanvas(CanvasMode.PREVIEW) },

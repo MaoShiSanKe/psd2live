@@ -150,7 +150,7 @@ fun AppTitleBar(
 	onShowSettings: () -> Unit = {},
 	onShowAgentConnection: () -> Unit,
 	onShowTextureUpscale: () -> Unit,
-	onBatchMeshSplit: () -> Unit = {},
+	onStartScreen: () -> Unit = {},
 	onShowHistory: () -> Unit,
 	onNewEditTab: () -> Unit = {},
 	onNewPreviewTab: () -> Unit = {},
@@ -605,13 +605,13 @@ fun AppTitleBar(
 						},
 					)
 					AppMenuItem(
-						text = tr("menu.tools.batchMeshSplit"),
+						text = tr("menu.tools.startScreen"),
 						enabled = hasInput && !isBusy,
 						onHover = { activeSubmenu = null },
 						onClick = {
 							activeMenu = null
 							activeSubmenu = null
-							onBatchMeshSplit()
+							onStartScreen()
 						},
 					)
 

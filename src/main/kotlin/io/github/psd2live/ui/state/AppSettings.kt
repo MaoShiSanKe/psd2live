@@ -200,6 +200,10 @@ object AppSettings {
 	private const val KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT = "auto_detect_mesh_splits_on_import"
 	private const val KEY_RECENT_FILES = "recent_files"
 
+	/**
+	 * Opens the start screen after a PSD import (off: the default presets apply at once) and offers the
+	 * splits of a layer import. The name and key predate the start screen.
+	 */
 	var autoDetectMeshSplitsOnImport: Boolean
 		get() = runCatching { preferences.getBoolean(KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT, true) }.getOrDefault(true)
 		set(value) {

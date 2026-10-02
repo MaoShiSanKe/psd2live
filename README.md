@@ -52,12 +52,12 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 
 ## 快速开始
 
-1. **导入 PSD**：**文件 → 导入 PSD…**（`Ctrl+Shift+O`），或把 PSD 拖进窗口。若检测到同一图层含多个独立部件（如左右腿），会提示按网格拆分。
+1. **导入 PSD**：**文件 → 导入 PSD…**（`Ctrl+Shift+O`），或把 PSD 拖进窗口。导入后打开「开始」界面：用「最小 / 默认 / 完整」快捷选项设定模型预设（默认包含宽松服装模拟），并勾选含多个独立部件（如左右腿）、需要按网格拆分的图层。之后可从「工具 → 开始界面…」再次打开。
 2. **核对识别结果**：在「图层」表格中检查每层的部件类型、侧别与差分设置，识别错的直接改。
 3. **预览与修改**：切到「预览」工作区检查动作和物理，再按需在编辑、绑定、动画、物理工作区中修改。
 4. **保存与导出**：`Ctrl+S` 保存 `.psd2live` 工程；`Ctrl+G` 打开导出设置，输出 `.cmo3` 和 / 或 `.moc3` 文件族。
 
-<img src="docs/imgs/import-split.webp" width="560" alt="批量按网格拆分图层对话框：legwear、footwear、eyelash、front hair 各被识别为两个部件">
+<img src="docs/imgs/import-split.webp" width="560" alt="按网格拆分图层：legwear、footwear、eyelash、front hair 各被识别为两个部件">
 
 **第一次使用，请打开「帮助 → 教程…」（`F1`）。** 程序内教程会高亮对应控件并按你当前的快捷键提示操作，分为零基础（18 课）和 Cubism 经验者（13 课）两条路线。[操作速查](docs/zh/guide/USER_GUIDE.md)是它的文字版。
 
