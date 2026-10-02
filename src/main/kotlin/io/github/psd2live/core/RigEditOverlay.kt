@@ -253,7 +253,7 @@ data class RigEditOverlay(
         require(validFps(physicsFps)) { "FPS must be $UNLIMITED_FPS (unlimited) or within $PHYSICS_FPS_RANGE" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
         require(simEdits.map { it.id }.distinct().size == simEdits.size) { "Duplicate simulation IDs" }
-        require(simEdits.mapNotNull { it.bake }.flatMap { it.parameters }.let { it.distinct().size == it.size }) { "Each simulation needs its own parameters" }
+        require(simEdits.flatMap { it.outputParameters }.let { it.distinct().size == it.size }) { "Each simulation needs its own parameters" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
 			"Rig parameter edits contain duplicate IDs"
@@ -282,7 +282,7 @@ data class RigEditOverlay(
 		// Generated axes do not exist until swing/simulation materialization. Replay their panel
 		// placement and links afterwards, including moves of another parameter relative to them.
 		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
-			simEdits.flatMap { it.bake?.parameters.orEmpty() }
+			simEdits.flatMap { it.outputParameters }
 		fun generatedPanelEdit(edit: kotlinx.serialization.json.JsonObject): Boolean =
 			edit["kind"]?.jsonPrimitive?.contentOrNull == "parameter" &&
 				edit["action"]?.jsonPrimitive?.contentOrNull in setOf("move", "link") &&

@@ -235,6 +235,106 @@ class SimBakeTest {
         for (i in rest.indices) assertEquals(1.5f * (a[i] - rest[i]), b[i] - rest[i], 0.05f)
     }
 
+    @Test fun outputsWriteAModeUnderAnotherIdRangeAndGain() {
+        val base = strand()
+        val overlay = RigEditOverlay(simEdits = listOf(edit().copy(modes = 1, blendShapes = false)))
+        val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), overlay.simEdits.single(), quick)
+        val plain = SimAuthoring.withBake(overlay, "hair", bake)
+        val sim = plain.simEdits.single()
+        val custom = SimAuthoring.put(plain, plain.applyTo(base), sim.copy(outputs = mapOf("ParamSimhair_1" to SimOutput("ParamHair", 10f, 2f))))
+        // Written back without baking again.
+        assertFalse(SimBake.stale(custom.applyTo(base), custom.simEdits.single()))
+        val model = custom.applyTo(base)
+        assertNull(model.parameters.firstOrNull { it.id.raw == "ParamSimhair_1" })
+        val hair = model.parameters.single { it.id.raw == "ParamHair" }
+        assertEquals(-10f to 10f, hair.min to hair.max)
+        // The same point of the swing, a third as far along the narrower range, moves the strand twice as far.
+        val evaluator = CpuDeformationEvaluator()
+        val rest = evaluator.evaluate(base, emptyMap()).worldPositions.getValue(DrawableId("hair"))
+        val a = evaluator.evaluate(plain.applyTo(base), mapOf(ParameterId("ParamSimhair_1") to 24f)).worldPositions.getValue(DrawableId("hair"))
+        val b = evaluator.evaluate(model, mapOf(ParameterId("ParamHair") to 8f)).worldPositions.getValue(DrawableId("hair"))
+        for (i in rest.indices) assertEquals(2f * (a[i] - rest[i]), b[i] - rest[i], 0.05f)
+        // The pendulum writes the new ID, its scale stretched to the range so it sweeps the same share of it.
+        val written = SimGenerator.physicsRules(custom.simEdits, model.parameters.mapTo(HashSet()) { it.id.raw }).single()
+        assertEquals("ParamHair", written.outputs.single().parameter)
+        assertEquals(bake.physics!!.outputs.single().scale / 3f, written.outputs.single().scale, 1e-4f)
+        // An ID the model already has for something else, or one of the body's own inputs, is refused.
+        assertFailsWith<IllegalArgumentException> {
+            SimAuthoring.put(plain, plain.applyTo(base), sim.copy(outputs = mapOf("ParamSimhair_1" to SimOutput(angle.raw))))
+        }
+    }
+
+    @Test fun aTrainingRangeSizesTheModesToItsSpan() {
+        val parameter = Parameter(angle, "Angle X", -30f, 30f, 0f)
+        assertEquals(Triple(-10f, 0f, 15f), SimBaker.trainingSpan(parameter, SimInputRange(-10f, 15f)))
+        // Held within the parameter and to either side of its default.
+        assertEquals(Triple(-30f, 0f, 30f), SimBaker.trainingSpan(parameter, SimInputRange(-50f, 50f)))
+        assertEquals(Triple(0f, 0f, 20f), SimBaker.trainingSpan(parameter, SimInputRange(5f, 20f)))
+        assertEquals(Triple(-30f, 0f, 30f), SimBaker.trainingSpan(parameter, null))
+
+        val base = strand()
+        fun bake(edit: RigSimEdit) = RigEditOverlay(simEdits = listOf(edit)).let { o -> SimBaker.bake(SimAuthoring.unbakedModel(o, base, "hair"), edit, quick) }
+        val full = edit().copy(modes = 1)
+        val narrow = full.copy(inputRanges = mapOf(angle.raw to SimInputRange(-10f, 10f)))
+        assertNotEquals(SimBake.fingerprint(base, full), SimBake.fingerprint(base, narrow))
+        // Shaken over ±10, the body trained there swings its parameter much farther than one trained over ±30.
+        fun peak(result: SimBakeResult): Float {
+            val engine = PhysicsEngine(result.pendulums, PhysicsEngine.ranges(base.parameters) +
+                (result.parameters.associateWith { PhysicsEngine.Range(-SimGenerator.MODE_RANGE, SimGenerator.MODE_RANGE, 0f) }))
+            var most = 0f
+            for (f in 0 until 240) {
+                val out = engine.step(mapOf(angle.raw to (10.0 * kotlin.math.sin(2 * Math.PI * 1.2 * f / 60.0)).toFloat()), 1f / 60f)
+                most = maxOf(most, abs(out[result.parameters.first()] ?: 0f))
+            }
+            return most
+        }
+        val wide = peak(bake(full)); val tight = peak(bake(narrow))
+        assertTrue(tight > wide * 1.5f, "trained over ±10 the parameter reaches $tight, over ±30 $wide")
+    }
+
+    @Test fun theUpAndDownParameterCanBeTurnedOff() {
+        val base = bouncingStrand()
+        val both = edit().copy(modes = 1, vertical = false,
+            inputs = listOf(PhysicsInput(angle.raw, 100f, PhysicsSourceType.X), PhysicsInput(bodyY.raw, 100f, PhysicsSourceType.X)))
+        val overlay = RigEditOverlay(simEdits = listOf(both))
+        val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), both, quick)
+        assertEquals(listOf("ParamSimhair_1"), bake.parameters)
+        assertTrue(bake.pendulums.none { it.id == SimGenerator.verticalPhysicsId(both) })
+        assertTrue(bake.pendulums.flatMap { it.inputs }.none { it.parameter == bodyY.raw })
+        // With nothing else shaking it there is nothing to bake.
+        val alone = both.copy(inputs = listOf(PhysicsInput(bodyY.raw, 100f, PhysicsSourceType.X)))
+        assertFailsWith<IllegalArgumentException> { SimBaker.bake(SimAuthoring.unbakedModel(overlay, base, "hair"), alone, quick) }
+    }
+
+    @Test fun anOverrideKeepsWhatTheUserChangedWhenThePendulumIsWrittenAnew() {
+        val base = RigPhysicsEdit("PhysicsSim_hair", "Hair", listOf(PhysicsInput("A")), listOf(PhysicsOutput("P", 1, 30f)),
+            listOf(PhysicsSegment(10f, 0.9f, 0.9f, 1.2f)))
+        val mine = base.copy(outputs = listOf(PhysicsOutput("P", 1, 60f)), segments = listOf(PhysicsSegment(15f, 0.9f, 0.9f, 1.2f)))
+        val theirs = base.copy(inputs = listOf(PhysicsInput("B")), outputs = listOf(PhysicsOutput("Q", 1, 45f)),
+            segments = listOf(PhysicsSegment(12f, 0.8f, 1f, 1.5f)))
+        val merged = SimAuthoring.merged(base, mine, theirs)
+        // The length the user set stays; the rest of the segment, the inputs and the renamed output follow the
+        // new pendulum, and the output keeps twice the new scale as it had twice the old.
+        assertEquals(listOf(PhysicsSegment(15f, 0.8f, 1f, 1.5f)), merged.segments)
+        assertEquals(theirs.inputs, merged.inputs)
+        assertEquals(listOf(PhysicsOutput("Q", 1, 90f)), merged.outputs)
+        // Untouched, an override is the new pendulum.
+        assertEquals(theirs, SimAuthoring.merged(base, base, theirs))
+
+        // On the overlay: a new bake carries the override over, clearing the bake takes it away.
+        val strandBase = strand()
+        val overlay = RigEditOverlay(simEdits = listOf(edit().copy(modes = 1)))
+        val bake = SimBaker.bake(SimAuthoring.unbakedModel(overlay, strandBase, "hair"), overlay.simEdits.single(), quick)
+        val baked = SimAuthoring.withBake(overlay, "hair", bake)
+        val pendulum = SimGenerator.writtenPendulums(baked.simEdits.single()).single()
+        val tuned = baked.copy(physicsEdits = listOf(pendulum.copy(segments = pendulum.segments.map { it.copy(length = it.length + 5f) })))
+        val renamed = SimAuthoring.put(tuned, tuned.applyTo(strandBase), tuned.simEdits.single().copy(outputs = mapOf("ParamSimhair_1" to SimOutput("ParamHair"))))
+        val carried = renamed.physicsEdits.single()
+        assertEquals("ParamHair", carried.outputs.single().parameter)
+        assertEquals(pendulum.segments.first().length + 5f, carried.segments.first().length)
+        assertTrue(SimAuthoring.withBake(renamed, "hair", null).physicsEdits.isEmpty())
+    }
+
     @Test fun hardMotionDoesNotPinTheModesAtTheirEnds() {
         val base = strand()
         val overlay = RigEditOverlay(simEdits = listOf(edit()))

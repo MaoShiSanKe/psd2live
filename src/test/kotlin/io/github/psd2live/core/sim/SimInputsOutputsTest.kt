@@ -45,6 +45,34 @@ class SimInputsOutputsTest {
         assertEquals(RigSimEdit.defaultInputs(all.toSet(), SimKind.CLOTH), overlay.simEdits.single().inputs)
     }
 
+    @Test fun trainingRangesTheUpAndDownSwitchAndOutputsRoundTrip() {
+        val edit = RigSimEdit("s", "s", SimKind.CLOTH, listOf("cloth"), inputs = RigSimEdit.defaultInputs(names.toSet()),
+            inputRanges = mapOf("ParamAngleX" to SimInputRange(-10f, 15f)), vertical = false,
+            outputs = mapOf("ParamSims_1" to SimOutput("ParamSkirt", 10f, 1.5f), "ParamSims_Y" to SimOutput(gain = 0f)))
+        assertEquals(edit, RigSimEdit.fromJson(edit.toJson()))
+        // A patch without them keeps them; null takes the switch back to automatic; a default output is dropped.
+        assertEquals(edit, edit.patched(buildJsonObject { put("name", "s") }))
+        assertNull(edit.patched(buildJsonObject { put("vertical", JsonNull) }).vertical)
+        assertEquals(setOf("ParamSims_1"), edit.patched(buildJsonObject { putJsonObject("outputs") {
+            putJsonObject("ParamSims_1") { put("id", "ParamSkirt") }; putJsonObject("ParamSims_Y") {}
+        } }).outputs.keys)
+        // Outputs are written back without baking again; training ranges and the switch change the bake.
+        val fingerprint = SimBake.fingerprint(model(), edit)
+        assertEquals(fingerprint, SimBake.fingerprint(model(), edit.copy(outputs = emptyMap())))
+        assertNotEquals(fingerprint, SimBake.fingerprint(model(), edit.copy(inputRanges = emptyMap())))
+        assertNotEquals(fingerprint, SimBake.fingerprint(model(), edit.copy(vertical = null)))
+        // Two modes cannot share an ID.
+        assertFailsWith<IllegalArgumentException> { edit.copy(outputs = mapOf("ParamSims_1" to SimOutput("ParamSims_2"), "ParamSims_2" to SimOutput(gain = 1f))) }
+    }
+
+    @Test fun aTrainingRangeGoesWithItsInput() {
+        val overlay = SimAuthoring.put(RigEditOverlay(), model(), create {
+            putJsonArray("inputs") { addJsonObject { put("parameter", "ParamAngleX") } }
+            putJsonObject("input_ranges") { putJsonArray("ParamAngleX") { add(-10f); add(10f) }; putJsonArray("ParamBodyAngleY") { add(-5f); add(5f) } }
+        })
+        assertEquals(setOf("ParamAngleX"), overlay.simEdits.single().inputRanges.keys)
+    }
+
     @Test fun anEmptyListMeansNoInputsAndCannotBake() {
         val overlay = SimAuthoring.put(RigEditOverlay(), model(), create { putJsonArray("inputs") {} })
         val edit = overlay.simEdits.single()

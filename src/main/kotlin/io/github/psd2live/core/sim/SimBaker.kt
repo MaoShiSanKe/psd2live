@@ -116,20 +116,25 @@ object SimBaker {
         val inputs = edit.inputs.map { it.parameter }
             .filter { input -> parameters[input]?.let { it.kind == ParameterKind.NORMAL && it.max > it.min } == true }
         require(inputs.isNotEmpty() || statics.isNotEmpty()) { "No input parameter moves ${edit.id}; add inputs to bake it" }
-        val vertical = inputs.filter { it in VERTICAL_INPUTS }
-        val sideways = inputs - vertical.toSet()
+        // Turned off, the vertical inputs take no part; on, they bake however little they move the body.
+        val vertical = if (edit.vertical == false) emptyList() else inputs.filter { it in VERTICAL_INPUTS }
+        val sideways = inputs.filter { it !in VERTICAL_INPUTS }
+        require(sideways.isNotEmpty() || vertical.isNotEmpty() || statics.isNotEmpty()) {
+            "Only vertical inputs move ${edit.id} and its up-and-down parameter is off; turn it on or add inputs"
+        }
         val fingerprint = SimBake.fingerprint(model, edit)
         val bounceId = SimGenerator.verticalPhysicsId(edit)
         val split = sideways.isNotEmpty() && vertical.isNotEmpty()
-        val main = if (inputs.isEmpty()) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
+        val main = if (sideways.isEmpty() && vertical.isEmpty()) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
             inputs = sideways.ifEmpty { vertical }, outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) },
             id = SimGenerator.physicsId(edit), translations = sideways.isEmpty(), segments = edit.modes + options.extraSegments,
             previous = options.previous, previousExtra = options.previousExtra.filter { it.id != bounceId },
-            minimum = MIN_MOTION_PX, progress = { options.progress(0.1f + it * (if (split) 0.6f else 0.85f)) })
+            minimum = if (sideways.isEmpty() && edit.vertical == true) 0f else MIN_MOTION_PX,
+            progress = { options.progress(0.1f + it * (if (split) 0.6f else 0.85f)) })
         val bounce = if (!split) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
             inputs = vertical, outputs = listOf(SimGenerator.verticalParameterId(edit)), id = bounceId, translations = true,
             segments = 1 + options.extraSegments, previous = options.previousExtra.firstOrNull { it.id == bounceId }, previousExtra = emptyList(),
-            minimum = MIN_BOUNCE_PX, progress = { options.progress(0.7f + it * 0.25f) })
+            minimum = if (edit.vertical == true) 0f else MIN_BOUNCE_PX, progress = { options.progress(0.7f + it * 0.25f) })
         val groups = listOfNotNull(main, bounce)
         require(groups.isNotEmpty() || statics.isNotEmpty()) { "${edit.id} barely moves under its inputs; nothing to bake" }
         options.progress(1f)
@@ -205,11 +210,11 @@ object SimBaker {
     ): Dynamic? {
         // 2. Training run: each piece from rest on its own body.
         val parameters = model.parameters.associateBy { it.id.raw }
-        val ranged = inputs.map { parameters.getValue(it) }
-        /** Library values (-1..1 about the default) as parameter values. */
-        fun values(piece: List<FloatArray>) = ranged.indices.map { i ->
-            val p = ranged[i]
-            FloatArray(piece[i].size) { f -> val u = piece[i][f]; if (u >= 0f) p.default + u * (p.max - p.default) else p.default + u * (p.default - p.min) }
+        val spans = inputs.map { trainingSpan(parameters.getValue(it), edit.inputRanges[it]) }
+        /** Library values (-1..1 about the default) as parameter values within each input's training span. */
+        fun values(piece: List<FloatArray>) = spans.indices.map { i ->
+            val (low, default, high) = spans[i]
+            FloatArray(piece[i].size) { f -> val u = piece[i][f]; if (u >= 0f) default + u * (high - default) else default + u * (default - low) }
         }
         val pieces = SimMotionLibrary.training(inputs.size, options.fps, options.duration).map(::values)
         val heldOutPiece = values(SimMotionLibrary.heldOut(inputs.size, options.fps, options.duration))
@@ -353,6 +358,16 @@ object SimBaker {
         fun owned(setting: io.github.psd2live.core.RigPhysicsEdit) = setting.copy(outputs = setting.outputs.filter { it.parameter in keptParameters })
         return Dynamic(modes, owned(fit.setting), fit.extra.map(::owned).filter { it.outputs.isNotEmpty() }, total,
             missed, checkTotal, errors, peak, clipped, checkPlayed.first().size, jerkEnergy(baked), jerkEnergy(simulated))
+    }
+
+    /**
+     * The low end, rest and high end [parameter] trains between: [range] within the parameter's own, which
+     * always keeps the default. Without a range, the whole parameter.
+     */
+    internal fun trainingSpan(parameter: Parameter, range: SimInputRange?): Triple<Float, Float, Float> {
+        val low = (range?.min ?: parameter.min).coerceIn(parameter.min, parameter.default)
+        val high = (range?.max ?: parameter.max).coerceIn(parameter.default, parameter.max)
+        return Triple(low, parameter.default, high)
     }
 
     /** The inputs that move the body up and down: nodding, the body rising and sinking, and leaning in. */

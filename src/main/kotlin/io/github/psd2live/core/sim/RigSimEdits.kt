@@ -126,6 +126,45 @@ enum class SimMaterialPreset(val jsonName: String, val kind: SimKind, val materi
 }
 
 /**
+ * The span of an input the bake trains on, in its parameter's units: the motion library drives it between
+ * [min] and [max] instead of the whole range, so the mode parameters reach their ends at that span.
+ */
+data class SimInputRange(val min: Float, val max: Float) {
+    init {
+        require(min.isFinite() && max.isFinite() && min < max) { "An input range needs min < max" }
+    }
+
+    fun toJson() = buildJsonArray { add(min); add(max) }
+
+    companion object {
+        fun fromJson(e: JsonElement) = e.jsonArray.let { SimInputRange(it[0].jsonPrimitive.float, it[1].jsonPrimitive.float) }
+    }
+}
+
+/**
+ * How one baked mode parameter is written back: under [id] instead of the generated one, spanning
+ * ±[range] instead of ±[SimGenerator.MODE_RANGE], and swinging [gain] times as far as simulated instead of
+ * the body's exaggeration. All three apply without baking again; null keeps the default.
+ */
+data class SimOutput(val id: String? = null, val range: Float? = null, val gain: Float? = null) {
+    init {
+        require(id == null || id.isNotBlank() && id.none { it.isWhitespace() || it.isISOControl() }) { "An output ID must not be blank or contain spaces" }
+        require(range == null || range in RigSimEdit.OUTPUT_RANGES) { "An output range is within ${RigSimEdit.OUTPUT_RANGES}" }
+        require(gain == null || gain in RigSimEdit.OUTPUT_GAINS) { "An output gain is within ${RigSimEdit.OUTPUT_GAINS}" }
+    }
+
+    val isDefault: Boolean get() = id == null && range == null && gain == null
+
+    fun toJson() = buildJsonObject {
+        id?.let { put("id", it) }; range?.let { put("range", it) }; gain?.let { put("gain", it) }
+    }
+
+    companion object {
+        fun fromJson(o: JsonObject) = SimOutput(o.string("id")?.trim()?.ifEmpty { null }, o.number("range"), o.number("gain"))
+    }
+}
+
+/**
  * One simulated body: ArtMesh [targets] simulated together, held by pins and glue.
  *
  * [groups] names the vertex group used for each kind; a kind without an entry uses the target's first
@@ -144,9 +183,16 @@ data class RigSimEdit(
      * body starts from [defaultInputs], and empty means nothing shakes it.
      */
     val inputs: List<PhysicsInput> = emptyList(),
+    /** Per input, the span the bake trains on; an input left out trains over its parameter's whole range. */
+    val inputRanges: Map<String, SimInputRange> = emptyMap(),
     val enabled: Boolean = true,
-    /** Dynamic modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum each. */
+    /** Sideways modes the bake keeps, 1..[MAX_MODES]: one parameter and one pendulum vertex each. */
     val modes: Int = 2,
+    /**
+     * Whether the vertical inputs bake into an up-and-down parameter of their own ([SimGenerator.verticalParameterId]):
+     * null when they move the body enough, true always, false never (they then take no part in the bake).
+     */
+    val vertical: Boolean? = null,
     /**
      * Parameters whose pose is baked exactly, as corrections on their own axes. Null bakes none.
      */
@@ -170,6 +216,8 @@ data class RigSimEdit(
      * body. Names only: they apply without baking again.
      */
     val outputNames: Map<String, String> = emptyMap(),
+    /** How each mode parameter is written back, keyed by the ID the bake gives it. */
+    val outputs: Map<String, SimOutput> = emptyMap(),
     /** The materialized bake; the rebuild writes it back without simulating. */
     val bake: SimBakeResult? = null,
 ) {
@@ -184,7 +232,21 @@ data class RigSimEdit(
         require(keys in KEY_COUNTS && keys % 2 == 1) { "A simulation bakes an odd number of keys within $KEY_COUNTS" }
         require(exaggeration in EXAGGERATIONS) { "Exaggeration is within $EXAGGERATIONS" }
         require(outputNames.all { (k, v) -> k.isNotBlank() && v.isNotBlank() && v.none(Char::isISOControl) }) { "Output names must not be blank" }
+        require(outputs.values.none { it.isDefault }) { "An output setting must change something" }
+        require(outputs.keys.map(::outputId).let { it.distinct().size == it.size }) { "Each output needs its own ID" }
     }
+
+    /** The ID mode parameter [baked] (as the bake names it) is written under. */
+    fun outputId(baked: String): String = outputs[baked]?.id ?: baked
+
+    /** The ±range mode parameter [baked] spans. */
+    fun outputRange(baked: String): Float = outputs[baked]?.range ?: SimGenerator.MODE_RANGE
+
+    /** How much farther than simulated mode [baked] swings. */
+    fun outputGain(baked: String): Float = outputs[baked]?.gain ?: exaggeration
+
+    /** The mode parameters the bake writes, under their output IDs. */
+    val outputParameters: List<String> get() = bake?.parameters.orEmpty().map(::outputId)
 
     /** The mode parameters' keys as the bake solves them: [keys] values evenly spread over -1..1, written out times [SimGenerator.MODE_RANGE]. */
     val modeKeys: FloatArray get() = FloatArray(keys) { -1f + 2f * it / (keys - 1) }
@@ -196,14 +258,17 @@ data class RigSimEdit(
         if (groups.isNotEmpty()) putJsonObject("groups") { groups.forEach { (k, v) -> put(k.jsonName, v) } }
         if (glueRoles.isNotEmpty()) putJsonObject("glue_roles") { glueRoles.forEach { (k, v) -> put(k, v.jsonName) } }
         putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
+        if (inputRanges.isNotEmpty()) putJsonObject("input_ranges") { inputRanges.forEach { (k, v) -> put(k, v.toJson()) } }
         if (!enabled) put("enabled", false)
         if (modes != 2) put("modes", modes)
+        vertical?.let { put("vertical", it) }
         staticInputs?.let { list -> putJsonArray("static_inputs") { list.forEach { add(it) } } }
         if (keys != 5) put("keys", keys)
         blendShapes?.let { put("blend_shapes", it) }
         if (!autoBake) put("auto_bake", false)
         if (exaggeration != DEFAULT_EXAGGERATION) put("exaggeration", exaggeration)
         if (outputNames.isNotEmpty()) putJsonObject("output_names") { outputNames.forEach { (k, v) -> put(k, v) } }
+        if (outputs.isNotEmpty()) putJsonObject("outputs") { outputs.forEach { (k, v) -> put(k, v.toJson()) } }
         bake?.let { put("bake", it.toJson()) }
     }
 
@@ -225,8 +290,14 @@ data class RigSimEdit(
                 ?.map { (k, v) -> VertexGroupKind.parse(k) to v.jsonPrimitive.content }?.toMap() ?: groups,
             glueRoles = o["glue_roles"]?.jsonObject?.map { (k, v) -> k to GlueRole.parse(v.jsonPrimitive.content) }?.toMap() ?: glueRoles,
             inputs = o["inputs"]?.jsonArray?.map { PhysicsInput.fromJson(it.jsonObject) } ?: inputs,
+            inputRanges = o["input_ranges"]?.jsonObject?.mapValues { (_, v) -> SimInputRange.fromJson(v) } ?: inputRanges,
             enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: enabled,
             modes = o["modes"]?.jsonPrimitive?.intOrNull ?: modes,
+            vertical = when (val value = o["vertical"]) {
+                null -> vertical
+                is JsonNull -> null
+                else -> value.jsonPrimitive.booleanOrNull ?: vertical
+            },
             staticInputs = when (val value = o["static_inputs"]) {
                 null -> staticInputs
                 is JsonNull -> null
@@ -242,6 +313,7 @@ data class RigSimEdit(
             exaggeration = o["exaggeration"]?.jsonPrimitive?.floatOrNull ?: exaggeration,
             outputNames = o["output_names"]?.jsonObject?.map { (k, v) -> k to v.jsonPrimitive.content.trim() }
                 ?.filter { it.second.isNotEmpty() }?.toMap() ?: outputNames,
+            outputs = o["outputs"]?.jsonObject?.mapValues { (_, v) -> SimOutput.fromJson(v.jsonObject) }?.filterValues { !it.isDefault } ?: outputs,
             bake = when (val value = o["bake"]) {
                 null -> bake
                 is JsonNull -> null
@@ -256,6 +328,9 @@ data class RigSimEdit(
         val KEY_COUNTS = 3..9
         val EXAGGERATIONS = 1f..2f
         const val DEFAULT_EXAGGERATION = 1.3f
+        /** The ±range a mode parameter may span, and how much farther than simulated one may swing. */
+        val OUTPUT_RANGES = 1f..100f
+        val OUTPUT_GAINS = 0f..3f
 
         /**
          * The inputs a new body starts from: the head and body turning and tilting, then nodding and the body

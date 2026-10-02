@@ -62,9 +62,32 @@ object SimGenerator {
     /** The pendulums of every enabled baked simulation whose parameters exist, under the names given them. */
     fun physicsRules(sims: List<RigSimEdit>, available: Set<String>): List<RigPhysicsEdit> = sims.filter { it.enabled }.flatMap { sim ->
         sim.bake?.pendulums.orEmpty().mapNotNull { rule ->
-            rule.copy(name = sim.outputNames[rule.id] ?: rule.name, inputs = rule.inputs.filter { it.parameter in available }, outputs = rule.outputs.filter { it.parameter in available })
+            written(sim, rule).let { it.copy(inputs = it.inputs.filter { p -> p.parameter in available }, outputs = it.outputs.filter { o -> o.parameter in available }) }
                 .takeIf { it.inputs.isNotEmpty() && it.outputs.isNotEmpty() }
         }
+    }
+
+    /**
+     * Baked pendulum [rule] as [sim] writes it: under its given name, each output on its parameter's output
+     * ID with its scale stretched to the output's range, so the pendulum still sweeps the same share of it.
+     */
+    fun written(sim: RigSimEdit, rule: RigPhysicsEdit): RigPhysicsEdit = rule.copy(
+        name = sim.outputNames[rule.id] ?: rule.name,
+        outputs = rule.outputs.map { o -> o.copy(parameter = sim.outputId(o.parameter), scale = o.scale * sim.outputRange(o.parameter) / MODE_RANGE) },
+    )
+
+    /** Every pendulum of [sim]'s bake as written, whether or not its parameters exist. */
+    fun writtenPendulums(sim: RigSimEdit): List<RigPhysicsEdit> = sim.bake?.pendulums.orEmpty().map { written(sim, it) }
+
+    /**
+     * Baked mode [axis] as [sim] writes it: on its output ID, its keys stretched to the output's range and
+     * its shapes scaled by the output's gain.
+     */
+    internal fun written(sim: RigSimEdit, axis: SimBakedAxis): SimBakedAxis {
+        val stretch = sim.outputRange(axis.parameter) / MODE_RANGE
+        val gain = sim.outputGain(axis.parameter)
+        return SimBakedAxis(sim.outputId(axis.parameter), FloatArray(axis.keys.size) { axis.keys[it] * stretch },
+            if (gain == 1f) axis.offsets else axis.offsets.mapValues { (_, per) -> per.map { form -> FloatArray(form.size) { form[it] * gain } } })
     }
 
     /** The simulation a generated pendulum belongs to. */
@@ -72,7 +95,8 @@ object SimGenerator {
 
     /** [pose] without the parameters [sim]'s bake drives, so they sit at their defaults under the live simulation. */
     fun withoutModes(pose: Map<ParameterId, Float>, sim: RigSimEdit): Map<ParameterId, Float> {
-        val owned = sim.bake?.parameters?.toSet() ?: return pose
+        if (sim.bake == null) return pose
+        val owned = sim.outputParameters.toSet()
         return pose.filterKeys { it.raw !in owned }
     }
 
@@ -85,7 +109,7 @@ object SimGenerator {
         if (!model.runtimeTarget.supports(RuntimeFeature.MeshWarpBlendShapes)) return false
         sim.blendShapes?.let { return it }
         val modes = sim.bake?.modes?.map { it.axis.keys.size } ?: List(sim.modes) { sim.keys }
-        val own = (sim.bake?.parameters ?: (1..sim.modes).map { parameterId(sim, it) }).map(::ParameterId).toSet()
+        val own = (sim.bake?.parameters ?: (1..sim.modes).map { parameterId(sim, it) }).map { ParameterId(sim.outputId(it)) }.toSet()
         val added = modes.fold(1L) { n, keys -> n * keys }
         return sim.targets.any { target ->
             val grid = model.drawables.firstOrNull { it.id.raw == target }?.geometryGrid
@@ -129,21 +153,24 @@ object SimGenerator {
         val vertical = verticalParameterId(sim)
         val sideways = bake.modes.count { it.axis.parameter != vertical }
         val created = ArrayList<ParameterId>()
+        val modes = bake.modes.map { written(sim, it.axis) }
         for ((k, mode) in bake.modes.withIndex()) {
-            val id = ParameterId(mode.axis.parameter)
+            val baked = mode.axis.parameter
+            val keys = modes[k].keys
+            val id = ParameterId(modes[k].parameter)
             if (current.parameters.any { it.id == id }) continue
-            val name = sim.outputNames[id.raw] ?: defaultParameterName(sim, id.raw, k, sideways)
+            val name = sim.outputNames[baked] ?: defaultParameterName(sim, baked, k, sideways)
             current = current.withParameterCreated(id, name, if (blend) ParameterKind.BLEND_SHAPE else ParameterKind.NORMAL)
             created += id
             current = current.copy(parameters = current.parameters.map {
                 if (it.id != id) it
-                else it.copy(min = mode.axis.keys.first(), max = mode.axis.keys.last(), default = 0f, keys = if (blend) mode.axis.keys.toList() else it.keys)
+                else it.copy(min = keys.first(), max = keys.last(), default = 0f, keys = if (blend) keys.toList() else it.keys)
             })
         }
         current = withPhysicsGroup(current, created)
         // Static corrections first: blend shapes add to the grid as it is at the default pose. The modes
-        // swing as far as the simulation times the exaggeration; the statics stay exact.
-        for (axis in bake.statics + bake.modes.map { exaggerated(it.axis, sim.exaggeration) }) {
+        // swing as far as the simulation times their gain, over their output range; the statics stay exact.
+        for (axis in bake.statics + modes) {
             val parameter = current.parameters.firstOrNull { it.id.raw == axis.parameter }
             if (parameter == null) { issues += "${sim.id}: parameter ${axis.parameter} no longer exists"; continue }
             val asBlend = blend && axis !in bake.statics
@@ -172,10 +199,6 @@ object SimGenerator {
         }
         return current to issues.distinct()
     }
-
-    /** [axis] with every offset scaled by [gain]. */
-    internal fun exaggerated(axis: SimBakedAxis, gain: Float): SimBakedAxis = if (gain == 1f) axis else
-        SimBakedAxis(axis.parameter, axis.keys, axis.offsets.mapValues { (_, per) -> per.map { form -> FloatArray(form.size) { form[it] * gain } } })
 
     /**
      * [axis]'s offsets as a blend shape on [drawable]: each key's form is the grid at the default pose plus

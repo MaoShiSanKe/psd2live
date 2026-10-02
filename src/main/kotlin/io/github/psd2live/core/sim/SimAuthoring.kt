@@ -24,20 +24,92 @@ object SimAuthoring {
         return put(overlay, model, edit)
     }
 
-    /** Inputs kept from before whose parameter is gone drop out; a new one must exist. */
+    /**
+     * Inputs kept from before whose parameter is gone drop out; a new one must exist. Training ranges go
+     * with their inputs. An output ID may not be a parameter the model has for something else.
+     */
     fun put(overlay: RigEditOverlay, model: PuppetModel, edit: RigSimEdit): RigEditOverlay {
         val parameters = model.parameters.mapTo(HashSet()) { it.id.raw }
-        val before = overlay.simEdits.firstOrNull { it.id == edit.id }?.inputs.orEmpty().toSet()
-        val kept = edit.copy(inputs = edit.inputs.filter { it.parameter in parameters || it !in before })
+        val previous = overlay.simEdits.firstOrNull { it.id == edit.id }
+        val before = previous?.inputs.orEmpty().toSet()
+        val inputs = edit.inputs.filter { it.parameter in parameters || it !in before }
+        val kept = edit.copy(inputs = inputs, inputRanges = edit.inputRanges.filterKeys { p -> inputs.any { it.parameter == p } })
         validate(model, kept)
+        // The model at hand carries the previous bake's parameters; those are this body's to rename.
+        val own = previous?.outputParameters.orEmpty().toSet() + kept.bake?.parameters.orEmpty()
+        val others = overlay.simEdits.filter { it.id != kept.id }.flatMap { it.outputParameters }.toSet()
+        for ((baked, output) in kept.outputs) {
+            val id = output.id ?: continue
+            require(id !in others && (id !in parameters || id in own)) { "Parameter $id already exists; pick another output ID for $baked" }
+            require(kept.inputs.none { it.parameter == id }) { "$id is an input of ${kept.id}; an output cannot drive its own input" }
+        }
         val index = overlay.simEdits.indexOfFirst { it.id == kept.id }
         val next = if (index < 0) overlay.simEdits + kept else overlay.simEdits.toMutableList().also { it[index] = kept }
-        return overlay.copy(simEdits = next)
+        return rebased(overlay, overlay.copy(simEdits = next))
     }
 
+    /** Removes simulation [id], with the panel's overrides of its pendulums. */
     fun remove(overlay: RigEditOverlay, id: String): RigEditOverlay {
         require(overlay.simEdits.any { it.id == id }) { "Simulation not found: $id" }
-        return overlay.copy(simEdits = overlay.simEdits.filterNot { it.id == id })
+        return rebased(overlay, overlay.copy(simEdits = overlay.simEdits.filterNot { it.id == id }))
+    }
+
+    /**
+     * [after] with the physics panel's overrides of simulation pendulums carried over from [before]: where a
+     * pendulum is now written differently - baked again, or its outputs renamed or re-ranged - each override
+     * keeps only what the user changed and takes the rest from the new pendulum ([merged]); one the same as
+     * the new pendulum is dropped, and a pendulum that is no longer written takes its overrides, switch and
+     * place in the order with it.
+     */
+    internal fun rebased(before: RigEditOverlay, after: RigEditOverlay): RigEditOverlay {
+        val old = before.simEdits.flatMap(SimGenerator::writtenPendulums).associateBy { it.id }
+        val new = after.simEdits.flatMap(SimGenerator::writtenPendulums).associateBy { it.id }
+        if (old == new) return after
+        val gone = old.keys - new.keys
+        val edits = after.physicsEdits.mapNotNull { mine ->
+            val base = old[mine.id] ?: return@mapNotNull mine
+            val theirs = new[mine.id] ?: return@mapNotNull null
+            if (base == theirs) mine else merged(base, mine, theirs).takeIf { it != theirs }
+        }
+        return io.github.psd2live.core.PhysicsAuthoring.forget(after.copy(physicsEdits = edits), gone)
+    }
+
+    /**
+     * A three-way merge of an override: what [mine] changed from [base], laid over [theirs]. Each field the
+     * user left alone follows [theirs]; a changed one stays as set, except an output's scale, which keeps
+     * its ratio to the new one. Outputs pair with [base]'s by parameter and with [theirs] by place, so they
+     * follow a renamed parameter; outputs the user added stay, and ones the user removed stay removed.
+     */
+    internal fun merged(base: io.github.psd2live.core.RigPhysicsEdit, mine: io.github.psd2live.core.RigPhysicsEdit,
+                        theirs: io.github.psd2live.core.RigPhysicsEdit): io.github.psd2live.core.RigPhysicsEdit {
+        fun <T> pick(b: T, m: T, t: T) = if (m == b) t else m
+        val segments = when {
+            mine.segments == base.segments -> theirs.segments
+            mine.segments.size == base.segments.size && base.segments.size == theirs.segments.size -> theirs.segments.indices.map { i ->
+                val b = base.segments[i]; val m = mine.segments[i]; val t = theirs.segments[i]
+                io.github.psd2live.core.PhysicsSegment(pick(b.length, m.length, t.length), pick(b.mobility, m.mobility, t.mobility),
+                    pick(b.delay, m.delay, t.delay), pick(b.acceleration, m.acceleration, t.acceleration))
+            }
+            else -> mine.segments
+        }
+        val outputs = if (mine.outputs == base.outputs) theirs.outputs else {
+            val paired = mine.outputs.mapNotNull { m ->
+                val i = base.outputs.indexOfFirst { it.parameter == m.parameter }
+                if (i < 0) return@mapNotNull m
+                val b = base.outputs[i]
+                val t = theirs.outputs.getOrNull(i) ?: return@mapNotNull null
+                t.copy(vertex = pick(b.vertex, m.vertex, t.vertex),
+                    scale = when {
+                        m.scale == b.scale -> t.scale
+                        b.scale == 0f -> m.scale
+                        else -> t.scale * m.scale / b.scale
+                    },
+                    weight = pick(b.weight, m.weight, t.weight), type = pick(b.type, m.type, t.type), reflect = pick(b.reflect, m.reflect, t.reflect))
+            }
+            paired + theirs.outputs.drop(base.outputs.size)
+        }.map { it.copy(vertex = it.vertex.coerceAtMost(segments.size)) }.distinctBy { it.parameter }
+        return mine.copy(name = theirs.name, inputs = pick(base.inputs, mine.inputs, theirs.inputs), outputs = outputs,
+            segments = segments, normalization = pick(base.normalization, mine.normalization, theirs.normalization))
     }
 
     /** A fresh ID for a simulation on [targets]: `sim` and the first mesh's name, numbered from 2 when taken. */
@@ -167,10 +239,10 @@ object SimAuthoring {
         }
     }
 
-    /** [overlay] with [bake] as simulation [id]'s bake; null clears it. */
+    /** [overlay] with [bake] as simulation [id]'s bake, the panel's overrides of its pendulums carried over; null clears it, and them. */
     fun withBake(overlay: RigEditOverlay, id: String, bake: SimBakeResult?): RigEditOverlay {
         require(overlay.simEdits.any { it.id == id }) { "Simulation not found: $id" }
-        return overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = bake) else it })
+        return rebased(overlay, overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = bake) else it }))
     }
 
     /** The simulated vertices of every target of [scene], world space, keyed by mesh. */

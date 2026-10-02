@@ -49,9 +49,11 @@ import io.github.psd2live.core.sim.GlueRole
 import io.github.psd2live.core.sim.RigSimEdit
 import io.github.psd2live.core.sim.SimBake
 import io.github.psd2live.core.sim.SimGenerator
+import io.github.psd2live.core.sim.SimInputRange
 import io.github.psd2live.core.sim.SimKind
 import io.github.psd2live.core.sim.SimMaterial
 import io.github.psd2live.core.sim.SimMaterialPreset
+import io.github.psd2live.core.sim.SimOutput
 import io.github.psd2live.core.sim.glueKey
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
@@ -60,6 +62,7 @@ import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
+import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconClose
@@ -81,6 +84,7 @@ import io.github.psd2live.ui.views.physics.PhysicsSection
 import io.github.psd2live.ui.views.physics.RowBadge
 import io.github.psd2live.ui.views.physics.StatusDot
 import io.github.psd2live.ui.views.vertexGroupKindColor
+import org.umamo.runtime.model.Parameter
 import org.umamo.runtime.model.PuppetModel
 import org.umamo.runtime.model.RuntimeFeature
 import org.umamo.runtime.model.VertexGroupKind
@@ -423,7 +427,12 @@ private fun SimulationEditor(
 					maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
 				Text(if (name == null) tr("sim.inputMissing") else input.parameter, style = caption, color = colors.textMuted,
 					maxLines = 1, overflow = TextOverflow.Ellipsis)
-				RemoveButton { commit(sim.copy(inputs = sim.inputs - input)) }
+				RemoveButton { commit(sim.copy(inputs = sim.inputs - input, inputRanges = sim.inputRanges - input.parameter)) }
+			}
+			puppet.parameters.firstOrNull { it.id.raw == input.parameter }?.let { parameter ->
+				TrainingRangeRow(parameter, sim.inputRanges[input.parameter]) { range ->
+					commit(sim.copy(inputRanges = if (range == null) sim.inputRanges - input.parameter else sim.inputRanges + (input.parameter to range)))
+				}
 			}
 		}
 		val available = puppet.parameters.map { it.id.raw }.filter { id -> sim.inputs.none { it.parameter == id } }
@@ -459,6 +468,41 @@ private fun SimulationEditor(
 	}
 }
 
+/**
+ * The span an input trains over: its low and high end, each held to its side of the default. Matching the
+ * parameter's own range again clears it.
+ */
+@Composable
+private fun TrainingRangeRow(parameter: Parameter, range: SimInputRange?, onCommit: (SimInputRange?) -> Unit) {
+	val colors = LocalToolColors.current
+	val caption = LocalToolTypography.current.caption.copy(fontSize = 9.5.sp)
+	val low = range?.min?.coerceIn(parameter.min, parameter.default) ?: parameter.min
+	val high = range?.max?.coerceIn(parameter.default, parameter.max) ?: parameter.max
+	fun commit(min: Float, max: Float) {
+		if (min >= max) return
+		onCommit(if (min <= parameter.min && max >= parameter.max) null else SimInputRange(min, max))
+	}
+	val step = ((parameter.max - parameter.min) / 20f).toDouble()
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(start = 10.dp)) {
+		FieldLabel(tr("sim.trainingRange"), tooltip = tr("sim.trainingRangeTip"))
+		DraftNumber(low, parameter.min, parameter.default, step, Modifier.weight(1f)) { commit(it, high) }
+		Text("…", style = caption, color = colors.textMuted)
+		DraftNumber(high, parameter.default, parameter.max, step, Modifier.weight(1f)) { commit(low, it) }
+		if (range != null) CompactIconButton(onClick = { onCommit(null) }, tooltip = tr("sim.trainingRangeReset"), size = 18.dp) {
+			IconReset(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+		}
+	}
+}
+
+/** A number typed or stepped into a local draft and committed once, when the edit ends. */
+@Composable
+private fun DraftNumber(value: Float, min: Float, max: Float, step: Double, modifier: Modifier = Modifier, decimals: Int = 1, unit: String = "",
+                        onCommit: (Float) -> Unit) {
+	var draft by remember(value) { mutableStateOf(value) }
+	CompactNumberSpinner(draft.toDouble(), { draft = it.toFloat() }, modifier, min = min.toDouble(), max = max.toDouble(), step = step,
+		decimals = decimals, unit = unit, height = 20.dp, onEditEnd = { if (draft != value) onCommit(draft) })
+}
+
 @Composable
 private fun RemoveButton(onRemove: () -> Unit) =
 	CompactIconButton(onClick = onRemove, tooltip = tr("sim.remove"), size = 18.dp) {
@@ -478,12 +522,49 @@ private fun OutputsEditor(viewModel: PSD2LiveViewModel, sim: RigSimEdit, bake: i
 	Text(tr("sim.outputParameters"), style = caption, color = colors.textMuted)
 	bake.parameters.forEachIndexed { k, id ->
 		val fallback = SimGenerator.defaultParameterName(sim, id, k, sideways)
-		OutputRow(id, sim.outputNames[id] ?: fallback) { viewModel.renameSimulationOutput(sim.id, id, it, fallback) }
+		OutputRow(sim.outputId(id), sim.outputNames[id] ?: fallback) { viewModel.renameSimulationOutput(sim.id, id, it, fallback) }
+		OutputSettings(sim, id) { viewModel.setSimulationOutput(sim.id, id, it) }
 	}
 	Text(tr("sim.outputPendulums"), style = caption, color = colors.textMuted)
 	for (pendulum in bake.pendulums) {
 		OutputRow(pendulum.id, sim.outputNames[pendulum.id] ?: pendulum.name) {
 			viewModel.renameSimulationOutput(sim.id, pendulum.id, it, pendulum.name)
+		}
+	}
+}
+
+/**
+ * How mode [baked] is written: its parameter ID, its ±range and its gain over the simulated swing. All
+ * apply without baking again; the reset clears them back to the generated ID, ±30 and the exaggeration.
+ */
+@Composable
+private fun OutputSettings(sim: RigSimEdit, baked: String, onCommit: (SimOutput) -> Unit) {
+	val colors = LocalToolColors.current
+	val output = sim.outputs[baked] ?: SimOutput()
+	var draftId by remember(baked, output.id) { mutableStateOf(sim.outputId(baked)) }
+	fun commitId() {
+		val id = draftId.trim()
+		val next = output.copy(id = id.takeIf { it.isNotEmpty() && it != baked })
+		if (next != output) onCommit(next) else draftId = sim.outputId(baked)
+	}
+	Column(Modifier.padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+			FieldLabel(tr("sim.outputId"), tooltip = tr("sim.outputIdTip"))
+			CompactTextField(draftId, { draftId = it }, Modifier.weight(1f), isMono = true, height = 20.dp, selectAllOnFocus = true,
+				onCommit = ::commitId, onFocusLost = ::commitId)
+		}
+		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+			FieldLabel(tr("sim.outputRange"), tooltip = tr("sim.outputRangeTip"))
+			DraftNumber(sim.outputRange(baked), RigSimEdit.OUTPUT_RANGES.start, RigSimEdit.OUTPUT_RANGES.endInclusive, 1.0, Modifier.weight(1f), unit = "±") {
+				onCommit(output.copy(range = it.takeIf { r -> r != SimGenerator.MODE_RANGE }))
+			}
+			FieldLabel(tr("sim.outputGain"), tooltip = tr("sim.outputGainTip"))
+			DraftNumber(sim.outputGain(baked), RigSimEdit.OUTPUT_GAINS.start, RigSimEdit.OUTPUT_GAINS.endInclusive, 0.1, Modifier.weight(1f), decimals = 2, unit = "×") {
+				onCommit(output.copy(gain = it.takeIf { g -> g != sim.exaggeration }))
+			}
+			if (!output.isDefault) CompactIconButton(onClick = { onCommit(SimOutput()) }, tooltip = tr("sim.outputReset"), size = 18.dp) {
+				IconReset(modifier = Modifier.size(11.dp), tint = colors.textMuted)
+			}
 		}
 	}
 }
@@ -563,6 +644,11 @@ private fun BakeEditor(
 		FieldLabel(tr("sim.modes"), tooltip = tr("sim.modesTip"))
 		CompactDropdown((1..RigSimEdit.MAX_MODES).toList(), sim.modes, { commit(sim.copy(modes = it)) }, Modifier.weight(1f),
 			itemLabel = { "$it" }, height = 22.dp)
+	}
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.vertical"), tooltip = tr("sim.verticalTip"))
+		CompactDropdown(listOf(null, true, false), sim.vertical, { commit(sim.copy(vertical = it)) }, Modifier.weight(1f),
+			itemLabel = { tr(when (it) { null -> "sim.verticalAuto"; true -> "sim.verticalOn"; false -> "sim.verticalOff" }) }, height = 22.dp)
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		FieldLabel(tr("sim.keys"), tooltip = tr("sim.keysTip"))

@@ -566,6 +566,16 @@ class PSD2LiveViewModel : AutoCloseable {
         if (names != sim.outputNames) putSimulation(sim.copy(outputNames = names))
     }
 
+    /**
+     * Writes mode [baked] (as simulation [simId]'s bake names it) as [output] says: its ID, range and gain.
+     * One history node, nothing baked again; the default setting clears it.
+     */
+    internal fun setSimulationOutput(simId: String, baked: String, output: io.github.psd2live.core.sim.SimOutput) {
+        val sim = _state.value.rigEdits.simEdits.firstOrNull { it.id == simId } ?: return
+        val outputs = if (output.isDefault) sim.outputs - baked else sim.outputs + (baked to output)
+        if (outputs != sim.outputs) putSimulation(sim.copy(outputs = outputs))
+    }
+
     internal fun deleteSimulation(id: String) {
         if (_state.value.simulationPreviewId == id) setSimulationPreview(null)
         runSimulationMutation("Deleted simulation $id") { workspace, head -> workspace.deleteSimulation(id, head) }
