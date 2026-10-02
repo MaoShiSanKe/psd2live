@@ -249,6 +249,7 @@ internal object SkeletonRig {
 		model = pruneEmptyBones(model, joints)
 		model = foldLinkBones(model, joints, spec.sampling)
 		stance?.let { model = withLean(model, joints, it) }
+		model = withArmSwing(model, joints, standing)
 		model = withSkeletonGroup(model, bones, poses)
 		return model.withDerivedRenderRoot()
 	}
@@ -339,6 +340,49 @@ internal object SkeletonRig {
 				combos.indices.map { n -> KeyformCell(cell.coordinate + combos[n], cell.form.let { RotationPivotForm(it.originX, it.originY, it.angle, it.scale * scales[n]) }) }
 			}))
 		})
+	}
+
+	/**
+	 * Every upper arm hung straight from the body warps keyed on Body X, so the arm swings about its shoulder
+	 * as [BodyStance.armSwing] has it rather than turning with the torso: a rotation takes from the warp it
+	 * hangs on the warp's turn at its pivot, which goes the way the body turns and would carry the hand
+	 * further out. Each key takes that turn back out and adds the swing.
+	 */
+	private fun withArmSwing(model: PuppetModel, bones: List<SkeletonBone>, stance: BodyStance): PuppetModel {
+		val keys = floatArrayOf(-10f, 0f, 10f)
+		val hosts = setOf(torsoWarpId, breathId, BodyStance.leanWarpId, bodyId)
+		val byDeformer = bones.filter { it.role == BoneRole.UPPER_ARM }.associateBy { it.deformerId }
+		var result = model
+		for (deformer in model.deformers) {
+			if (deformer !is Deformer.Rotation || deformer.parent !in hosts) continue
+			byDeformer[deformer.id.raw] ?: continue
+			val grid = deformer.geometryGrid ?: continue
+			if (grid.axes.any { it.parameterId == StandardParameters.BODY_X }) continue
+			fun turned(by: Float) = result.copy(deformers = result.deformers.map { d ->
+				if (d.id != deformer.id) d else deformer.copy(geometryGrid = KeyformGrid(grid.axes, grid.cells.map { cell ->
+					KeyformCell(cell.coordinate, cell.form.let { RotationPivotForm(it.originX, it.originY, it.angle + by, it.scale) })
+				}))
+			})
+			fun angle(m: PuppetModel, x: Float) = angleOf(worlds(m, mapOf(StandardParameters.BODY_X to x), setOf(deformer.id)).getValue(deformer.id))
+			val rest = angle(result, 0f)
+			// How the key's angle reads in the world: a rotation's handle turns clockwise on the canvas.
+			val sense = SkeletonIk.wrap((angle(turned(1f), 0f) - rest).toDouble()).toFloat()
+			if (abs(sense) < 0.5f) continue
+			val offsets = keys.map { x ->
+				if (x == 0f) 0f else {
+					val inherited = SkeletonIk.wrap((angle(result, x) - rest).toDouble()).toFloat()
+					(stance.armSwing(x).toFloat() - inherited) / sense
+				}
+			}
+			if (offsets.all { abs(it) < 1e-3f }) continue
+			val swung = deformer.copy(geometryGrid = KeyformGrid(grid.axes + KeyformAxis(StandardParameters.BODY_X, keys), grid.cells.flatMap { cell ->
+				keys.indices.map { k ->
+					KeyformCell(cell.coordinate + k, cell.form.let { RotationPivotForm(it.originX, it.originY, it.angle + offsets[k], it.scale) })
+				}
+			}))
+			result = result.copy(deformers = result.deformers.map { if (it.id == deformer.id) swung else it })
+		}
+		return result
 	}
 
 	/**

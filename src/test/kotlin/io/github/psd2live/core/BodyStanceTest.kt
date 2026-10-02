@@ -12,6 +12,7 @@ import org.umamo.runtime.model.PuppetModel
 import org.umamo.runtime.model.WarpLatticeForm
 import java.nio.file.Path
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -237,7 +238,7 @@ class BodyStanceTest {
 		assertTrue(legMeshes.isNotEmpty())
 		for (id in legMeshes) assertEquals("DeformLegs", ancestry(puppet, id).last())
 		assertSoles(puppet, legMeshes, mapOf())
-		// Each arm hangs in a warp of its own on the lean, under the body's.
+		// Each arm hangs in a warp of its own on Body X and the lean, under the body's.
 		val armLayers = preview.analysis.layers.filter { it.semantic.tag == SemanticTag.HANDWEAR }.associate { it.source.id.raw to it.semantic.side }
 		val armMeshes = preview.rig.layerIdByDrawableId.filterValues { it in armLayers }
 		assertEquals(2, armMeshes.size)
@@ -246,7 +247,7 @@ class BodyStanceTest {
 			assertEquals("DeformArmHang_" + (if (armLayers[layer] == Side.LEFT) "L" else "R"), chain.first())
 			assertTrue("DeformBodyLean" in chain, chain.toString())
 			val hang = puppet.deformers.single { it.id.raw == chain.first() } as Deformer.Warp
-			assertEquals(listOf("ParamBodyLean", "ParamProportion"), hang.geometryGrid!!.axes.map { it.parameterId.raw })
+			assertEquals(listOf("ParamBodyAngleX", "ParamBodyLean", "ParamProportion"), hang.geometryGrid!!.axes.map { it.parameterId.raw })
 		}
 		assertSoles(puppet, legMeshes, mapOf(StandardParameters.PROPORTION to 10f, StandardParameters.BODY_LEAN to 10f))
 		assertTrue(RigIntegrityValidator.validateDirectionalWarpDimensions("tml", puppet).isEmpty(), RigIntegrityValidator.validateDirectionalWarpDimensions("tml", puppet).joinToString("\n"))
@@ -307,6 +308,39 @@ class BodyStanceTest {
 		assertTrue(aside[0] > stance.legLength * BodyStance.SHIFT * 0.5, "aside ${aside.toList()}")
 		assertTrue(RigIntegrityValidator.validateDirectionalWarpDimensions("tml", rig).isEmpty(),
 			RigIntegrityValidator.validateDirectionalWarpDimensions("tml", rig).joinToString("\n"))
+	}
+
+	@Test fun bodyXSwingsEachArmWholeAboutItsShoulder() {
+		val preview = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val armLayers = preview.analysis.layers.filter { it.semantic.tag == SemanticTag.HANDWEAR }.mapTo(HashSet()) { it.source.id.raw }
+		val spec = SkeletonAutoBuilder.build(preview.analysis, preview.rig)
+		val skeletal = PSD2LivePipeline().buildPreview(preview.analysis, preview.config.copy(rigEdits = preview.config.rigEdits.copy(skeleton = spec)))
+		val height = preview.analysis.anchors.character.height
+		for (built in listOf(preview, skeletal)) {
+			val puppet = built.rig.puppet
+			val arms = built.rig.layerIdByDrawableId.filterValues { it in armLayers }.keys.map(::DrawableId)
+			assertEquals(2, arms.size)
+			val rest = CpuDeformationEvaluator().evaluate(puppet, emptyMap()).worldPositions
+			for (x in listOf(-10f, 10f)) {
+				val posed = CpuDeformationEvaluator().evaluate(puppet, mapOf(StandardParameters.BODY_X to x)).worldPositions
+				for (id in arms) {
+					val a = rest.getValue(id)
+					val b = posed.getValue(id)
+					// The arm moves as one piece: every pair of its vertices keeps its distance, and turns by the swing.
+					val n = a.size / 2
+					val i = (0 until n).maxBy { a[it * 2 + 1] }
+					val j = (0 until n).minBy { a[it * 2 + 1] }
+					val before = hypot(a[j * 2] - a[i * 2], a[j * 2 + 1] - a[i * 2 + 1])
+					val after = hypot(b[j * 2] - b[i * 2], b[j * 2 + 1] - b[i * 2 + 1])
+					assertEquals(before, after, before * 0.005f, "$id length at Body X $x")
+					val turn = Math.toDegrees(atan2((b[j * 2 + 1] - b[i * 2 + 1]).toDouble(), (b[j * 2] - b[i * 2]).toDouble()) -
+						atan2((a[j * 2 + 1] - a[i * 2 + 1]).toDouble(), (a[j * 2] - a[i * 2]).toDouble()))
+					// World y points up: at Body X + the hand swings back, clockwise on screen.
+					assertEquals(-4.0 * x / 10, turn, 0.3, "$id turn at Body X $x")
+					for (v in 0 until n) assertTrue(hypot(b[v * 2] - a[v * 2], b[v * 2 + 1] - a[v * 2 + 1]) < height * 0.03f, "$id vertex $v at Body X $x")
+				}
+			}
+		}
 	}
 
 	private fun ancestry(puppet: PuppetModel, id: DrawableId): List<String> {

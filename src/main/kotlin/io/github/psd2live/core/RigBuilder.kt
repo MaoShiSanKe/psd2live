@@ -1658,9 +1658,10 @@ object RigBuilder {
 	}
 
 	/**
-	 * A warp for each arm on the body's lean and proportions, as artists give each arm a warp of its own: an
-	 * arm hangs straight down from its shoulder whatever the body does ([BodyStance.armPoint]), but drawn
-	 * beside the skirt it would bend with the body in the lean warp. At each key its lattice holds every point where
+	 * A warp for each arm on Body X and the body's lean and proportions, as artists give each arm a warp of its
+	 * own: an arm hangs straight down from its shoulder whatever the body does ([BodyStance.armPoint]), but
+	 * drawn beside the torso and the skirt it would bend with the body in the body and lean warps - drawn
+	 * larger and lower on the side the torso turns toward. At each key its lattice holds every point where
 	 * the arm puts the point it covers at rest, read back through its parent as the body leans there. The
 	 * arm's layers move under it: [parents] and [frames] receive it.
 	 */
@@ -1674,8 +1675,10 @@ object RigBuilder {
 		partId: PartId,
 		defaultParent: (ClassifiedLayer) -> Pair<DeformerId, Bounds>,
 	): List<Deformer.Warp> {
-		val axes = leanAxes()
-		val combos = axes[0].keys.indices.flatMap { a -> axes[1].keys.indices.map { b -> intArrayOf(a, b) } }
+		val axes = listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f)) + leanAxes()
+		val combos = axes[0].keys.indices.flatMap { a ->
+			axes[1].keys.indices.flatMap { b -> axes[2].keys.indices.map { c -> intArrayOf(a, b, c) } }
+		}
 		val worlds = combos.map { c ->
 			val values = axes.indices.associate { axes[it].parameterId to axes[it].keys[c[it]] }
 			buildDeformerWorlds(deformers, { values[it] ?: 0f }, { 0f })
@@ -1693,8 +1696,9 @@ object RigBuilder {
 			val shoulderX = torso.centerX + (if (frame.centerX >= torso.centerX) 1f else -1f) * torso.halfWidth
 			val rest = mapBounds(frame, parentFrame)
 			val cells = combos.mapIndexed { n, c ->
-				val lean = axes[0].keys[c[0]]
-				val size = axes[1].keys[c[1]]
+				val bodyX = axes[0].keys[c[0]]
+				val lean = axes[1].keys[c[1]]
+				val size = axes[2].keys[c[2]]
 				val world = worlds[n].getValue(parentId)
 				val points = FloatArray((ARM_HANG_COLUMNS + 1) * (ARM_HANG_ROWS + 1) * 2)
 				for (row in 0..ARM_HANG_ROWS) for (column in 0..ARM_HANG_COLUMNS) {
@@ -1702,8 +1706,9 @@ object RigBuilder {
 					val u = column.toFloat() / ARM_HANG_COLUMNS
 					val v = row.toFloat() / ARM_HANG_ROWS
 					val local = floatArrayOf(rest.left + u * rest.width, rest.top + v * rest.height)
-					if (lean == 0f && size == 0f) { points[i] = local[0]; points[i + 1] = local[1]; continue }
-					val target = stance.armPoint((frame.left + u * frame.width).toDouble(), (frame.top + v * frame.height).toDouble(), shoulderX.toDouble(), lean, size)
+					if (bodyX == 0f && lean == 0f && size == 0f) { points[i] = local[0]; points[i + 1] = local[1]; continue }
+					val target = stance.armPoint((frame.left + u * frame.width).toDouble(), (frame.top + v * frame.height).toDouble(),
+						shoulderX.toDouble(), lean, size, bodyX)
 					val back = SkeletonRig.inverse(world, target[0].toFloat(), target[1].toFloat(), local)
 					points[i] = back[0]
 					points[i + 1] = back[1]

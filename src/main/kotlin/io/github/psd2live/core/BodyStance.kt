@@ -385,16 +385,29 @@ internal class BodyStance private constructor(
 
 	/**
 	 * Where canvas point ([x], [y]) of an arm hanging from the shoulder at canvas x [shoulderX] goes at
-	 * [lean] and [size]: it hangs straight down whatever the body does, so it moves with its shoulder as one
-	 * piece, drawn as much larger as the shoulder is - and shorter as the body is on a chibi - instead of
-	 * bending with the body it hangs beside.
+	 * [lean], [size] and [bodyX]: it hangs straight down whatever the body does, so it moves with its
+	 * shoulder as one piece, drawn as much larger as the shoulder is - and shorter as the body is on a chibi -
+	 * instead of bending with the body it hangs beside. On Body X the shoulder goes where the turning torso
+	 * takes it ([bodyPoint]) and the arm swings a little the other way about it ([armSwing]), the hand
+	 * trailing the body as artists key the arms, never drawn larger or lower with the near side.
 	 */
-	fun armPoint(x: Double, y: Double, shoulderX: Double, lean: Float, size: Float = 0f): DoubleArray {
+	fun armPoint(x: Double, y: Double, shoulderX: Double, lean: Float, size: Float = 0f, bodyX: Float = 0f): DoubleArray {
 		val shoulderY = torso.shoulderY.toDouble()
 		val shoulder = shaped(shoulderX, shoulderY, lean, size)
 		val k = shoulder[2] * limbSize(size)
-		return doubleArrayOf(shoulder[0] + (x - shoulderX) * k, shoulder[1] + (y - shoulderY) * k)
+		val dx = (x - shoulderX) * k
+		val dy = (y - shoulderY) * k
+		if (bodyX == 0f) return doubleArrayOf(shoulder[0] + dx, shoulder[1] + dy)
+		val anchor = bodyPoint(shoulder[0], shoulder[1], bodyX, 0f)
+		val swing = Math.toRadians(armSwing(bodyX))
+		return doubleArrayOf(anchor[0] + dx * cos(swing) - dy * sin(swing), anchor[1] + dx * sin(swing) + dy * cos(swing))
 	}
+
+	/**
+	 * Degrees an arm swings about its shoulder at [bodyX], clockwise on the canvas: against the body's turn,
+	 * so the hand trails it.
+	 */
+	fun armSwing(bodyX: Float): Double = ARM_SWING_DEGREES * bodyX / 10.0 * strength
 
 	/** How much larger the body is drawn at canvas height [y] on its centre line at [lean] and [size]. */
 	fun leanScale(y: Double, lean: Float, size: Float = 0f): Double =
@@ -571,6 +584,9 @@ internal class BodyStance private constructor(
 		private const val YAW_RADIUS = 1.1
 		private const val TORSO_DEPTH = 0.7
 		private const val NECK_DEPTH = 0.15
+
+		/** Degrees an arm swings about its shoulder at full Body X (see [armSwing]). */
+		private const val ARM_SWING_DEGREES = 4.0
 
 		/** How far in front of the torso the viewer is, and how far above the shoulders, in torso lengths. */
 		private const val CAMERA_DISTANCE = 3.0
