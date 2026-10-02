@@ -92,7 +92,7 @@ private fun validateAgentProjectSettings(
         "exportGuideImageParts", "exportIncludePhysics", "exportIncludeUserData", "exportIncludeDisplayInfo",
     )
     require(changes.keys.all { it in ranges || it in booleans ||
-        it in setOf("textureUpscale", "mouthShape", "runtimeTarget", "meshEdgeMode", "meshFillParameters", "bodyTuning") }) {
+        it in setOf("textureUpscale", "mouthShape", "runtimeTarget", "meshEdgeMode", "meshFillParameters", "rigTuning") }) {
         "Unknown project setting"
     }
     changes.forEach { (key, value) ->
@@ -370,15 +370,15 @@ class ViewModelAgentWorkspace(
                     WorkspaceStateCodec.decodeFillParameters(document.settings["meshFillParameters"]),
                     runCatching { fill.jsonObject }.getOrNull() ?: error("meshFillParameters must be an object")))
             }
-            val mergedTuning = changes["bodyTuning"]?.let { tuning ->
-                WorkspaceStateCodec.encodeBodyTuning(WorkspaceStateCodec.mergeBodyTuning(
-                    WorkspaceStateCodec.decodeBodyTuning(document.settings["bodyTuning"]),
-                    runCatching { tuning.jsonObject }.getOrNull() ?: error("bodyTuning must be an object")))
+            val mergedTuning = changes["rigTuning"]?.let { tuning ->
+                WorkspaceStateCodec.encodeRigTuning(WorkspaceStateCodec.mergeRigTuning(
+                    WorkspaceStateCodec.decodeRigTuning(document.settings["rigTuning"] ?: document.settings["bodyTuning"]),
+                    runCatching { tuning.jsonObject }.getOrNull() ?: error("rigTuning must be an object")))
             }
             val next = kotlinx.serialization.json.JsonObject(document.settings + changes +
                 listOfNotNull(mergedUpscale?.let { "textureUpscale" to it },
                     mergedFill?.let { "meshFillParameters" to it },
-                    mergedTuning?.let { "bodyTuning" to it }).toMap())
+                    mergedTuning?.let { "rigTuning" to it }).toMap())
             validateAgentProjectSettings(next, changes)
             val decoded = WorkspaceStateCodec.decode(next, current)
             val minimumAtlas = decoded.minRequiredAtlasSize()

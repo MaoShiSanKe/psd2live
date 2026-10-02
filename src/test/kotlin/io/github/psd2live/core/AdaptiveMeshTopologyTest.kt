@@ -57,19 +57,22 @@ class AdaptiveMeshTopologyTest {
         }) }.isFailure, "out-of-range fill parameters must be rejected")
     }
 
-    @Test fun bodyTuningSurvivesProjectStateRoundTrip() {
+    @Test fun rigTuningSurvivesProjectStateRoundTrip() {
         val codec = io.github.psd2live.project.WorkspaceStateCodec
-        val tuning = BodyMotionTuning(turnDegrees = 20f, armSwingDegrees = -2f, breathLift = 5f)
-        val state = io.github.psd2live.ui.state.PSD2LiveState(bodyTuning = tuning)
-        assertEquals(tuning, codec.decode(codec.encode(state)).bodyTuning)
-        assertEquals(tuning, codec.decode(codec.settings(state)).bodyTuning)
-        assertEquals(tuning, state.buildConfig().bodyTuning)
+        val tuning = RigTuning(turnDegrees = 20f, armSwingDegrees = -2f, breathLift = 5f, gazeX = 14f, backHairTilt = 1f)
+        val state = io.github.psd2live.ui.state.PSD2LiveState(rigTuning = tuning)
+        assertEquals(tuning, codec.decode(codec.encode(state)).rigTuning)
+        assertEquals(tuning, codec.decode(codec.settings(state)).rigTuning)
+        assertEquals(tuning, state.buildConfig().rigTuning)
         // Older projects have none; a stored value past its range is clamped and an unknown one skipped.
-        assertEquals(BodyMotionTuning(), codec.decode(JsonObject(codec.encode(state).filterKeys { it != "bodyTuning" })).bodyTuning)
+        assertEquals(RigTuning(), codec.decode(JsonObject(codec.encode(state).filterKeys { it != "rigTuning" })).rigTuning)
+        // Projects saved while only the body was tunable keep it under bodyTuning.
+        val legacy = codec.encode(state).let { saved -> JsonObject(saved.filterKeys { it != "rigTuning" } + ("bodyTuning" to saved.getValue("rigTuning"))) }
+        assertEquals(tuning, codec.decode(legacy).rigTuning)
         val stored = kotlinx.serialization.json.buildJsonObject {
             put("turnDegrees", kotlinx.serialization.json.JsonPrimitive(99)); put("gone", kotlinx.serialization.json.JsonPrimitive(1))
         }
-        assertEquals(BodyMotionTuning(turnDegrees = 30f), codec.decodeBodyTuning(stored))
+        assertEquals(RigTuning(turnDegrees = 30f), codec.decodeRigTuning(stored))
     }
 
     @Test fun gradedFillsDoNotRepeatTheContourRow() {

@@ -162,8 +162,8 @@ data class PipelineConfig(
 	val alphaThreshold: Int = 8,
 	val headTurnStrength: Float = 1f,
 	val bodyStrength: Float = 1f,
-	/** How far the body parameters move the body at their full values (see [BodyMotionTuning]). */
-	val bodyTuning: BodyMotionTuning = BodyMotionTuning(),
+	/** How far the body parameters move the body at their full values (see [RigTuning]). */
+	val rigTuning: RigTuning = RigTuning(),
 	val meshOnly: Boolean = false,
 	val generateDeformers: Boolean = true,
 	val featureDisplacementEnabled: Boolean = false,

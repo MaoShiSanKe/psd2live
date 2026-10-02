@@ -186,11 +186,11 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         }
         put("paving", objectSchema(buildJsonObject { put("edgeRatio", number()); put("gradation", number()); put("maxRows", integer(0, 24)) }))
     })
-    // How far the body parameters move the body, in the units the model presets show; omitted values keep theirs.
-    val bodyTuningFields = objectSchema(buildJsonObject {
-        io.github.psd2live.core.BodyMotionTuning.fields.forEach { f ->
+    // How far the rig moves each part at the parameters' full values, in the units the model presets show; omitted values keep theirs.
+    val rigTuningFields = objectSchema(buildJsonObject {
+        io.github.psd2live.core.RigTuning.fields.forEach { f ->
             put(f.id, buildJsonObject { put("type", "number"); put("minimum", f.range.start); put("maximum", f.range.endInclusive)
-                put("description", "${f.group.name.lowercase()} group, in ${f.unit.name.lowercase().replace('_', ' ')}, default ${f.default}") })
+                put("description", "${f.group.name.lowercase()} group${if (f.advanced) " (advanced)" else ""}, in ${f.unit.name.lowercase().replace('_', ' ')}, default ${f.default}") })
         }
     })
     val projectSettingFields = objectSchema(buildJsonObject {
@@ -206,9 +206,9 @@ internal fun installAuthoringTools(server: Server, workspace: AgentWorkspace) {
         put("meshEdgeMode", choices("SINGLE", "DOUBLE", "TRIPLE"))
         put("runtimeTarget", string()); put("textureUpscale", upscaleSettings)
         put("meshFillParameters", fillParameterFields)
-        put("bodyTuning", bodyTuningFields)
+        put("rigTuning", rigTuningFields)
     })
-    tool("settings", "Update the project generation/export configuration used by the UI. Inspect scope=settings first. Rebuilds the model and commits history; textureUpscale, meshFillParameters and bodyTuning fields are merged with the existing configuration; bodyTuning sets how far the body parameters move the body (turn, open, lean, proportion, breath, depth).",
+    tool("settings", "Update the project generation/export configuration used by the UI. Inspect scope=settings first. Rebuilds the model and commits history; textureUpscale, meshFillParameters and rigTuning fields are merged with the existing configuration; rigTuning sets how far the rig moves each part at the parameters' full values (head turn and face, eyes, brows, mouth, nose and ears, hair, body turn, open, lean, proportion, breath, depth).",
         buildJsonObject { put("state", string()); put("changes", projectSettingFields) }, listOf("state", "changes"), true) { a ->
         workspace.updateProjectSettings(a.text("state"), a.getValue("changes").jsonObject).compact()
     }

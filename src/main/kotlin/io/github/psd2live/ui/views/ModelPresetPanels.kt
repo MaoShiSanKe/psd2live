@@ -40,7 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.psd2live.core.BodyMotionTuning
+import io.github.psd2live.core.RigTuning
 import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.sim.ModelPresets
 import io.github.psd2live.i18n.tr
@@ -373,90 +373,149 @@ private fun LoosenessBar(fraction: Float) {
 	}
 }
 
+
 /**
- * The body motion group of the model presets: how far each body parameter moves the body at its full value
- * ([BodyMotionTuning]), grouped by parameter. Each value has a slider and a number field in the unit the MCP
- * `settings` tool and the project file use; the group resets them all at once.
+ * The rig values of the model presets: how far the rig moves each part at the parameters' full values
+ * ([RigTuning]), grouped by part. The common values show under their group's name; the rest fold into an
+ * Advanced folder with the same groups. Each value has a slider and a number field in the unit the MCP
+ * `settings` tool and the project file use; the reset puts them all back.
  */
 @Composable
-internal fun BodyTuningPresets(state: PSD2LiveState, viewModel: PSD2LiveViewModel, isBusy: Boolean) {
+internal fun RigTuningPresets(state: PSD2LiveState, viewModel: PSD2LiveViewModel, isBusy: Boolean) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val tuning = state.bodyTuning
-	val changed = BodyMotionTuning.fields.count { it.get(tuning) != it.default }
+	val tuning = state.rigTuning
+	fun changedIn(fields: List<RigTuning.Field>) = fields.count { it.get(tuning) != it.default }
+	val changed = changedIn(RigTuning.fields)
 	PresetFolderRow(
-		title = tr("settings.group.bodyTuning"),
+		title = tr("settings.group.rigTuning"),
 		summary = when {
 			state.meshOnly -> tr("export.disabled")
-			changed == 0 -> tr("settings.bodyTuning.default")
-			else -> tr("settings.bodyTuning.changed", changed)
+			changed == 0 -> tr("settings.rigTuning.default")
+			else -> tr("settings.rigTuning.changed", changed)
 		},
-		expanded = state.bodyTuningExpanded,
+		expanded = state.rigTuningExpanded,
 		enabled = !isBusy && !state.meshOnly,
-	) { viewModel.setBodyTuningExpanded(!state.bodyTuningExpanded) }
-	if (!state.bodyTuningExpanded || state.meshOnly) return
+	) { viewModel.setRigTuningExpanded(!state.rigTuningExpanded) }
+	if (!state.rigTuningExpanded || state.meshOnly) return
 
+	@Composable
+	fun GroupHeader(group: RigTuning.Group, trailing: @Composable () -> Unit = {}) {
+		Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+			Text(
+				text = tr("settings.rigTuning.group." + group.name.lowercase()),
+				style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+				color = colors.textMuted,
+				modifier = Modifier.weight(1f),
+			)
+			trailing()
+		}
+	}
+
+	@Composable
+	fun FieldRow(field: RigTuning.Field) {
+		val value = field.get(tuning)
+		val token = "setRigTuning." + field.id
+		Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+			Hint(tr("settings.rigTuning.${field.id}.hint", "%.1f".format(field.default)), modifier = Modifier.width(76.dp)) {
+				Text(
+					text = tr("settings.rigTuning.${field.id}"),
+					style = typography.body.copy(fontSize = 10.5.sp),
+					color = if (value != field.default) colors.accent else colors.textPrimary,
+					textAlign = TextAlign.Right,
+					maxLines = 1,
+					overflow = TextOverflow.Ellipsis,
+					modifier = Modifier.fillMaxWidth(),
+				)
+			}
+			Spacer(Modifier.width(5.dp))
+			CompactSlider(
+				value = value,
+				onValueChange = { viewModel.setRigTuning(field.id, it) },
+				onValueChangeStarted = viewModel::beginEditorGesture,
+				onValueChangeFinished = viewModel::endEditorGesture,
+				valueRange = field.range,
+				enabled = !isBusy,
+				height = 14.dp,
+				modifier = Modifier.weight(1f),
+			)
+			Spacer(Modifier.width(4.dp))
+			CompactNumberSpinner(
+				onEditStart = { viewModel.beginEditorField(token) },
+				onEditEnd = { viewModel.endEditorField(token) },
+				value = value.toDouble(),
+				onValueChange = { viewModel.setRigTuning(field.id, it.toFloat()) },
+				min = field.range.start.toDouble(),
+				max = field.range.endInclusive.toDouble(),
+				step = field.step.toDouble(),
+				decimals = if (field.step < 1f) 1 else 0,
+				unit = when (field.unit) {
+					RigTuning.Unit.DEGREES -> "°"
+					RigTuning.Unit.PERCENT -> "%"
+					RigTuning.Unit.TORSO_LENGTHS -> tr("settings.unit.x")
+				},
+				enabled = !isBusy,
+				modifier = Modifier.width(60.dp),
+				height = 20.dp,
+			)
+		}
+	}
+
+	val (advanced, common) = RigTuning.fields.partition { it.advanced }
 	Column(
 		modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 3.dp),
 		verticalArrangement = Arrangement.spacedBy(2.dp),
 	) {
-		for ((group, fields) in BodyMotionTuning.fields.groupBy { it.group }) {
-			Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-				Text(
-					text = tr("settings.bodyTuning.group." + group.name.lowercase()),
-					style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-					color = colors.textMuted,
-					modifier = Modifier.weight(1f),
-				)
-				if (group == BodyMotionTuning.Group.TURN) {
-					PanelResetButton(onClick = viewModel::resetBodyTuning, enabled = !isBusy && changed > 0, tooltip = tr("settings.bodyTuning.reset"))
+		for ((index, entry) in common.groupBy { it.group }.entries.withIndex()) {
+			GroupHeader(entry.key) {
+				if (index == 0) {
+					PanelResetButton(onClick = viewModel::resetRigTuning, enabled = !isBusy && changed > 0, tooltip = tr("settings.rigTuning.reset"))
 				}
 			}
-			for (field in fields) {
-				val value = field.get(tuning)
-				val token = "setBodyTuning." + field.id
-				Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-					Hint(tr("settings.bodyTuning.${field.id}.hint", "%.1f".format(field.default)), modifier = Modifier.width(76.dp)) {
-						Text(
-							text = tr("settings.bodyTuning.${field.id}"),
-							style = typography.body.copy(fontSize = 10.5.sp),
-							color = if (value != field.default) colors.accent else colors.textPrimary,
-							textAlign = TextAlign.Right,
-							maxLines = 1,
-							overflow = TextOverflow.Ellipsis,
-							modifier = Modifier.fillMaxWidth(),
-						)
-					}
-					Spacer(Modifier.width(5.dp))
-					CompactSlider(
-						value = value,
-						onValueChange = { viewModel.setBodyTuning(field.id, it) },
-						onValueChangeStarted = viewModel::beginEditorGesture,
-						onValueChangeFinished = viewModel::endEditorGesture,
-						valueRange = field.range,
-						enabled = !isBusy,
-						height = 14.dp,
-						modifier = Modifier.weight(1f),
-					)
-					Spacer(Modifier.width(4.dp))
-					CompactNumberSpinner(
-						onEditStart = { viewModel.beginEditorField(token) },
-						onEditEnd = { viewModel.endEditorField(token) },
-						value = value.toDouble(),
-						onValueChange = { viewModel.setBodyTuning(field.id, it.toFloat()) },
-						min = field.range.start.toDouble(),
-						max = field.range.endInclusive.toDouble(),
-						step = field.step.toDouble(),
-						decimals = if (field.step < 1f) 1 else 0,
-						unit = when (field.unit) {
-							BodyMotionTuning.Unit.DEGREES -> "°"
-							BodyMotionTuning.Unit.PERCENT -> "%"
-							BodyMotionTuning.Unit.TORSO_LENGTHS -> tr("settings.unit.x")
-						},
-						enabled = !isBusy,
-						modifier = Modifier.width(60.dp),
-						height = 20.dp,
-					)
+			for (field in entry.value) FieldRow(field)
+		}
+
+		// The values seldom changed, in a folder of their own under the common ones.
+		val advancedChanged = changedIn(advanced)
+		val interaction = remember { MutableInteractionSource() }
+		val hovered by interaction.collectIsHoveredAsState()
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.padding(top = 4.dp)
+				.height(20.dp)
+				.background(if (hovered && !isBusy) colors.controlHover.copy(alpha = 0.55f) else colors.panelElevated.copy(alpha = 0.35f))
+				.hoverable(interaction)
+				.pointerHoverIcon(if (!isBusy) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
+				.clickable(enabled = !isBusy, interactionSource = interaction, indication = null) {
+					viewModel.setRigTuningAdvancedExpanded(!state.rigTuningAdvancedExpanded)
+				}
+				.padding(start = 4.dp, end = 6.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			IconChevron(expanded = state.rigTuningAdvancedExpanded, tint = colors.textMuted, modifier = Modifier.size(9.dp))
+			Spacer(Modifier.width(4.dp))
+			Text(
+				text = tr("settings.rigTuning.advanced"),
+				style = typography.body.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
+				color = colors.textPrimary,
+				modifier = Modifier.weight(1f),
+			)
+			Text(
+				text = if (advancedChanged == 0) tr("settings.rigTuning.default") else tr("settings.rigTuning.changed", advancedChanged),
+				style = typography.caption.copy(fontSize = 10.sp),
+				color = colors.textMuted,
+				maxLines = 1,
+			)
+		}
+		if (state.rigTuningAdvancedExpanded) {
+			Column(
+				modifier = Modifier.fillMaxWidth().padding(start = 10.dp),
+				verticalArrangement = Arrangement.spacedBy(2.dp),
+			) {
+				for ((group, fields) in advanced.groupBy { it.group }) {
+					GroupHeader(group)
+					for (field in fields) FieldRow(field)
 				}
 			}
 		}

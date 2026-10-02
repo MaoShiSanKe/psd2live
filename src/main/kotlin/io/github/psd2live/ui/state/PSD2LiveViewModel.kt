@@ -2222,16 +2222,16 @@ class PSD2LiveViewModel : AutoCloseable {
 	    editorChanged()
 	}
 
-	/** One of the body motion values ([io.github.psd2live.core.BodyMotionTuning.fields]), clamped to its range. */
-	fun setBodyTuning(id: String, value: Float) {
-		updateState { it.copy(bodyTuning = it.bodyTuning.with(id, value)) }
+	/** One of the rig values ([io.github.psd2live.core.RigTuning.fields]), clamped to its range. */
+	fun setRigTuning(id: String, value: Float) {
+		updateState { it.copy(rigTuning = it.rigTuning.with(id, value)) }
 		schedulePreviewRebuild()
 	    editorChanged()
 	}
 
-	/** Every body motion value back to its default. */
-	fun resetBodyTuning() {
-		updateState { it.copy(bodyTuning = io.github.psd2live.core.BodyMotionTuning()) }
+	/** Every rig value back to its default. */
+	fun resetRigTuning() {
+		updateState { it.copy(rigTuning = io.github.psd2live.core.RigTuning()) }
 		schedulePreviewRebuild()
 	    editorChanged()
 	}
@@ -3146,8 +3146,13 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	fun setBodyTuningExpanded(expanded: Boolean) {
-		updateState { it.copy(bodyTuningExpanded = expanded) }
+	fun setRigTuningExpanded(expanded: Boolean) {
+		updateState { it.copy(rigTuningExpanded = expanded) }
+	    markWorkspaceChanged()
+	}
+
+	fun setRigTuningAdvancedExpanded(expanded: Boolean) {
+		updateState { it.copy(rigTuningAdvancedExpanded = expanded) }
 	    markWorkspaceChanged()
 	}
 
@@ -3156,11 +3161,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState {
 			it.copy(
 				strengthSubExpanded = false,
-				bodyTuningExpanded = false,
+				rigTuningExpanded = false,
+				rigTuningAdvancedExpanded = false,
 				dynamicsSubExpanded = false,
 				headStrength = 1.0f,
 				bodyStrength = 1.0f,
-				bodyTuning = io.github.psd2live.core.BodyMotionTuning(),
+				rigTuning = io.github.psd2live.core.RigTuning(),
 				featureDisplacementEnabled = false,
                 mouthOutlineEnabled = true,
                 mouthShape = "smile",

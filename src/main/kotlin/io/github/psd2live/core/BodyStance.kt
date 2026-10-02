@@ -44,7 +44,7 @@ internal class BodyStance private constructor(
 	val legsFrame: Bounds?,
 	strength: Float,
 	/** How far the body parameters move the body at their full values. */
-	val tuning: BodyMotionTuning,
+	val tuning: RigTuning,
 ) {
 	/** One leg as drawn, canvas pixels: the hip joint, the knee, the ankle and the floor under the sole. */
 	class Leg(
@@ -98,9 +98,13 @@ internal class BodyStance private constructor(
 	val hipRise = tuning.rise / 100.0
 	/** Degrees the knees turn in more at full Body Y down. */
 	private val kneesIn = tuning.kneesIn.toDouble()
+	/** Degrees the knees turn in as they bend, however little the body sinks. */
+	private val kneesInRest = tuning.kneesInRest.toDouble()
 	/** The torso's turn and the arms' swing at full Body X, degrees. */
 	private val turnDegrees = tuning.turnDegrees.toDouble()
 	private val armSwingDegrees = tuning.armSwingDegrees.toDouble()
+	/** How far below the waist the torso's turn eases out, in torso lengths. */
+	private val turnFade = tuning.turnFade.toDouble()
 	/** The torso's depth over its turning width. */
 	private val torsoDepth = tuning.torsoDepth / 100.0
 	/** How far in front of the torso the turn and the lean are seen from, in torso lengths. */
@@ -139,7 +143,7 @@ internal class BodyStance private constructor(
 			shift = hipShift * x,
 			drop = hipSink * (-y).coerceAtLeast(0.0),
 			rise = hipRise * y.coerceAtLeast(0.0),
-			kneeIn = KNEE_IN_REST + kneesIn * (-y).coerceAtLeast(0.0),
+			kneeIn = kneesInRest + kneesIn * (-y).coerceAtLeast(0.0),
 		)
 	}
 
@@ -347,7 +351,7 @@ internal class BodyStance private constructor(
 	 *   toward the side it turns to, the side coming forward is drawn a little larger and lower and the one
 	 *   going back smaller, and the neck, near the axis, hardly moves. Everything above the waist turns
 	 *   alike, as artists turn the upper body, so the torso does not wring; the turn eases out over the hips
-	 *   below it ([TURN_FADE]). Past the torso's sides points move with its silhouette, so an arm stays on
+	 *   below it ([RigTuning.turnFade]). Past the torso's sides points move with its silhouette, so an arm stays on
 	 *   its shoulder.
 	 * - **Open** (Body Y): going down the shoulders open a little and the back shortens; going up it
 	 *   stretches and the shoulders draw in, as when standing tall.
@@ -362,7 +366,7 @@ internal class BodyStance private constructor(
 		var py = y
 		val above = waist - y
 		if (turn != 0.0) {
-			val yaw = Math.toRadians(turnDegrees * turn) * smooth((above + length * TURN_FADE) / (length * TURN_FADE))
+			val yaw = Math.toRadians(turnDegrees * turn) * smooth((above + length * turnFade) / (length * turnFade))
 			if (yaw != 0.0) {
 				val radius = torso.halfWidth * YAW_RADIUS
 				val neck = smooth((torso.shoulderY + length * 0.05 - y) / (length * 0.2))
@@ -597,12 +601,6 @@ internal class BodyStance private constructor(
 		/** The pelvis's tilt up over the standing leg in the weight pose, degrees. */
 		const val HIP_TILT = 3.0
 
-		/** Degrees the knees turn in as they bend, however little the body sinks. */
-		private const val KNEE_IN_REST = 10.0
-
-		/** How far below the waist the torso's turn eases out, in torso lengths. */
-		private const val TURN_FADE = 0.5
-
 		/** The turning torso's half width over its half width at the chest, and the neck's depth over it. */
 		private const val YAW_RADIUS = 1.1
 		private const val NECK_DEPTH = 0.15
@@ -642,7 +640,7 @@ internal class BodyStance private constructor(
 		 * leg and foot layers. A figure with neither stands on nothing and has no legs warp.
 		 */
 		fun of(analysis: PipelineAnalysis, character: Bounds, skeleton: SkeletonSpec?, strength: Float = 1f,
-			tuning: BodyMotionTuning = BodyMotionTuning()): BodyStance {
+			tuning: RigTuning = RigTuning()): BodyStance {
 			val torso = RigBuilder.torsoFrame(analysis, character, skeleton)
 			val legLayers = analysis.layers.filter {
 				(it.semantic.tag == SemanticTag.LEGWEAR || it.semantic.tag == SemanticTag.FOOTWEAR) && it.opaquePixels > 0
@@ -653,7 +651,7 @@ internal class BodyStance private constructor(
 		}
 
 		/** The stance of [spec] alone, its torso and legs placed by its bones. */
-		fun of(spec: SkeletonSpec, character: Bounds, strength: Float = 1f, tuning: BodyMotionTuning = BodyMotionTuning()): BodyStance {
+		fun of(spec: SkeletonSpec, character: Bounds, strength: Float = 1f, tuning: RigTuning = RigTuning()): BodyStance {
 			val upper = spec.bones.firstOrNull { it.role == BoneRole.UPPER_BODY && it.length >= 1f }
 			val shoulderY = upper?.let { minOf(it.headY, it.tailY) } ?: (character.top + character.height * 0.25f)
 			val waistY = (upper?.let { maxOf(it.headY, it.tailY) } ?: character.centerY).coerceAtLeast(shoulderY + 1f)
@@ -662,7 +660,7 @@ internal class BodyStance private constructor(
 		}
 
 		/** A stance on a skeleton's [boneLegs], the floor under the lowest of their feet and of the leg [layers]. */
-		private fun of(character: Bounds, torso: RigBuilder.TorsoFrame, boneLegs: List<SkeletonRig.Leg>, layers: List<Bounds>, strength: Float, tuning: BodyMotionTuning): BodyStance {
+		private fun of(character: Bounds, torso: RigBuilder.TorsoFrame, boneLegs: List<SkeletonRig.Leg>, layers: List<Bounds>, strength: Float, tuning: RigTuning): BodyStance {
 			val floor = (layers.map { it.bottom.toDouble() } + boneLegs.map { leg ->
 				maxOf(leg.ankleY, leg.foot?.let { maxOf(it.headY, it.tailY).toDouble() } ?: leg.ankleY)
 			}).maxOrNull() ?: 0.0
@@ -674,7 +672,7 @@ internal class BodyStance private constructor(
 		}
 
 		/** The legs warp spans [legs] and the leg [layers], padded so the soles and the hips sit inside it. */
-		private fun onLegs(character: Bounds, torso: RigBuilder.TorsoFrame, legs: List<Leg>, layers: List<Bounds>, strength: Float, tuning: BodyMotionTuning): BodyStance {
+		private fun onLegs(character: Bounds, torso: RigBuilder.TorsoFrame, legs: List<Leg>, layers: List<Bounds>, strength: Float, tuning: RigTuning): BodyStance {
 			if (legs.isEmpty()) return BodyStance(character, torso, emptyList(), null, strength, tuning)
 			val reach = legs.map { it.reach }.average()
 			val points = legs.flatMap { listOf(it.hipX to it.hipY, it.kneeX to it.kneeY, it.ankleX to it.floorY) }

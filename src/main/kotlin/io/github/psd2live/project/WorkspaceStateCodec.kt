@@ -64,26 +64,26 @@ internal object WorkspaceStateCodec {
         return result
     }
 
-    fun encodeBodyTuning(value: io.github.psd2live.core.BodyMotionTuning): JsonObject = buildJsonObject {
+    fun encodeRigTuning(value: io.github.psd2live.core.RigTuning): JsonObject = buildJsonObject {
         value.toMap().forEach { (id, v) -> put(id, v) }
     }
 
     /** Missing or unknown values keep [fallback]'s; every value is clamped to its range. */
-    fun decodeBodyTuning(
-        value: JsonElement?, fallback: io.github.psd2live.core.BodyMotionTuning = io.github.psd2live.core.BodyMotionTuning(),
-    ): io.github.psd2live.core.BodyMotionTuning {
+    fun decodeRigTuning(
+        value: JsonElement?, fallback: io.github.psd2live.core.RigTuning = io.github.psd2live.core.RigTuning(),
+    ): io.github.psd2live.core.RigTuning {
         val obj = (value as? JsonObject) ?: return fallback
-        return io.github.psd2live.core.BodyMotionTuning.fromMap(
+        return io.github.psd2live.core.RigTuning.fromMap(
             obj.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.floatOrNull?.let { k to it } }.toMap(), fallback)
     }
 
     /** Applies [changes] onto [base]; omitted values keep theirs. Rejects unknown, non-numeric or out-of-range values. */
-    fun mergeBodyTuning(
-        base: io.github.psd2live.core.BodyMotionTuning, changes: JsonObject,
-    ): io.github.psd2live.core.BodyMotionTuning = changes.entries.fold(base) { tuning, (id, value) ->
-        val field = requireNotNull(io.github.psd2live.core.BodyMotionTuning.fieldById[id]) { "Unknown bodyTuning value: $id" }
-        val number = (value as? JsonPrimitive)?.floatOrNull?.takeIf { it.isFinite() } ?: error("bodyTuning.$id must be a number")
-        require(number in field.range) { "bodyTuning.$id is outside its UI range ${field.range}" }
+    fun mergeRigTuning(
+        base: io.github.psd2live.core.RigTuning, changes: JsonObject,
+    ): io.github.psd2live.core.RigTuning = changes.entries.fold(base) { tuning, (id, value) ->
+        val field = requireNotNull(io.github.psd2live.core.RigTuning.fieldById[id]) { "Unknown rigTuning value: $id" }
+        val number = (value as? JsonPrimitive)?.floatOrNull?.takeIf { it.isFinite() } ?: error("rigTuning.$id must be a number")
+        require(number in field.range) { "rigTuning.$id is outside its UI range ${field.range}" }
         field.set(tuning, number)
     }
 
@@ -370,7 +370,7 @@ internal object WorkspaceStateCodec {
         put("alphaThreshold", state.alphaThreshold)
         put("headStrength", state.headStrength)
         put("bodyStrength", state.bodyStrength)
-        put("bodyTuning", encodeBodyTuning(state.bodyTuning))
+        put("rigTuning", encodeRigTuning(state.rigTuning))
         put("meshOnly", state.meshOnly)
         put("generateDeformers", state.generateDeformers)
         put("featureDisplacementEnabled", state.featureDisplacementEnabled)
@@ -478,7 +478,7 @@ internal object WorkspaceStateCodec {
         put("alphaThreshold", state.alphaThreshold)
         put("headStrength", state.headStrength)
         put("bodyStrength", state.bodyStrength)
-        put("bodyTuning", encodeBodyTuning(state.bodyTuning))
+        put("rigTuning", encodeRigTuning(state.rigTuning))
         put("meshOnly", state.meshOnly)
         put("generateDeformers", state.generateDeformers)
         put("featureDisplacementEnabled", state.featureDisplacementEnabled)
@@ -604,7 +604,7 @@ internal object WorkspaceStateCodec {
         alphaThreshold = value["alphaThreshold"]?.jsonPrimitive?.int ?: base.alphaThreshold,
         headStrength = value["headStrength"]?.jsonPrimitive?.float ?: base.headStrength,
         bodyStrength = value["bodyStrength"]?.jsonPrimitive?.float ?: base.bodyStrength,
-        bodyTuning = decodeBodyTuning(value["bodyTuning"], base.bodyTuning),
+        rigTuning = decodeRigTuning(value["rigTuning"] ?: value["bodyTuning"], base.rigTuning),
         meshOnly = value["meshOnly"]?.jsonPrimitive?.boolean ?: base.meshOnly,
         generateDeformers = value["generateDeformers"]?.jsonPrimitive?.boolean ?: base.generateDeformers,
         mouthOutlineEnabled = value["mouthOutlineEnabled"]?.jsonPrimitive?.boolean ?: base.mouthOutlineEnabled,

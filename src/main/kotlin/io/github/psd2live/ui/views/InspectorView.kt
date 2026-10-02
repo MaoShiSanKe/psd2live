@@ -91,7 +91,8 @@ internal fun ModelPresetsSection(
 
 	fun expandAll(expanded: Boolean) {
 		viewModel.setStrengthSubExpanded(expanded)
-		viewModel.setBodyTuningExpanded(expanded)
+		viewModel.setRigTuningExpanded(expanded)
+		viewModel.setRigTuningAdvancedExpanded(expanded)
 		viewModel.setDynamicsSubExpanded(expanded)
 		viewModel.setSimulationPresetsExpanded(expanded)
 	}
@@ -326,7 +327,7 @@ internal fun ModelPresetsSection(
 		}
 
 
-		BodyTuningPresets(state, viewModel, isBusy)
+		RigTuningPresets(state, viewModel, isBusy)
 
 
 		// Which generated motions the model has, by group; the animation panel lists, tunes and switches each one.

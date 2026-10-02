@@ -79,19 +79,19 @@ class LayerClassificationIntegrationTest {
                 assertEquals(2.0f, workspace.projectSettings().getValue("headStrength").jsonPrimitive.float)
                 // Body motion values merge one by one over the rest, and out-of-range ones are refused.
                 val tuned = workspace.updateProjectSettings(configured.historyNodeId, buildJsonObject {
-                    putJsonObject("bodyTuning") { put("armSwingDegrees", 6.0); put("turnDegrees", 8.0) }
+                    putJsonObject("rigTuning") { put("armSwingDegrees", 6.0); put("turnDegrees", 8.0) }
                 })
-                assertEquals(io.github.psd2live.core.BodyMotionTuning(armSwingDegrees = 6f, turnDegrees = 8f), viewModel.state.value.bodyTuning)
+                assertEquals(io.github.psd2live.core.RigTuning(armSwingDegrees = 6f, turnDegrees = 8f), viewModel.state.value.rigTuning)
                 val retuned = workspace.updateProjectSettings(tuned.historyNodeId, buildJsonObject {
-                    putJsonObject("bodyTuning") { put("sink", 5.0) }
+                    putJsonObject("rigTuning") { put("sink", 5.0) }
                 })
-                assertEquals(io.github.psd2live.core.BodyMotionTuning(armSwingDegrees = 6f, turnDegrees = 8f, sink = 5f), viewModel.state.value.bodyTuning)
-                assertEquals(6f, workspace.projectSettings().getValue("bodyTuning").jsonObject.getValue("armSwingDegrees").jsonPrimitive.float)
+                assertEquals(io.github.psd2live.core.RigTuning(armSwingDegrees = 6f, turnDegrees = 8f, sink = 5f), viewModel.state.value.rigTuning)
+                assertEquals(6f, workspace.projectSettings().getValue("rigTuning").jsonObject.getValue("armSwingDegrees").jsonPrimitive.float)
                 assertTrue(runCatching { workspace.updateProjectSettings(retuned.historyNodeId, buildJsonObject {
-                    putJsonObject("bodyTuning") { put("turnDegrees", 90.0) }
+                    putJsonObject("rigTuning") { put("turnDegrees", 90.0) }
                 }) }.isFailure)
                 assertTrue(runCatching { workspace.updateProjectSettings(retuned.historyNodeId, buildJsonObject {
-                    putJsonObject("bodyTuning") { put("noSuchValue", 1.0) }
+                    putJsonObject("rigTuning") { put("noSuchValue", 1.0) }
                 }) }.isFailure)
                 val meshed = workspace.setLayerMeshSettings(retuned.historyNodeId, id, buildJsonObject {
                     put("outerMargin", 3.0); put("edgeMode", "DOUBLE")

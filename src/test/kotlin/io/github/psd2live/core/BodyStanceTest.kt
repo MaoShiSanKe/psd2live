@@ -344,7 +344,7 @@ class BodyStanceTest {
 	}
 
 	@Test fun theBodyMotionValuesSetHowFarTheBodyMoves() {
-		val tuned = BodyStance.of(spec(), character, tuning = BodyMotionTuning(turnDegrees = 24f, armSwingDegrees = 0f, sink = 7f))
+		val tuned = BodyStance.of(spec(), character, tuning = RigTuning(turnDegrees = 24f, armSwingDegrees = 0f, sink = 7f))
 		assertEquals(4.0, stance.armSwing(10f), 1e-9)
 		assertEquals(0.0, tuned.armSwing(10f), 1e-9)
 		assertEquals(stance.hipSink * 2, tuned.hipSink, 1e-9)
@@ -352,13 +352,13 @@ class BodyStanceTest {
 		val chest = { s: BodyStance -> s.torsoPoint(200.0, 330.0, 10f, 0f)[0] - 200.0 }
 		assertTrue(chest(tuned) > chest(stance) * 1.5, "${chest(tuned)} vs ${chest(stance)}")
 		val (_, lift) = RigBuilder.bodySecondaryWarpPoint(character, RigBuilder.TorsoFrame(200f, 250f, 450f, 70f), 0.5f, 0.25f, 0f, 1f, 1f,
-			BodyMotionTuning(breathLift = 0f))
+			RigTuning(breathLift = 0f))
 		assertEquals(0.25f, lift, 1e-6f)
 
 		// Through the pipeline: with no turn, no hip shift and no arm swing, Body X moves nothing.
 		val preview = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
 		val still = PSD2LivePipeline().buildPreview(preview.analysis,
-			preview.config.copy(bodyTuning = BodyMotionTuning(turnDegrees = 0f, hipShift = 0f, armSwingDegrees = 0f))).rig.puppet
+			preview.config.copy(rigTuning = RigTuning(turnDegrees = 0f, hipShift = 0f, armSwingDegrees = 0f))).rig.puppet
 		val rest = CpuDeformationEvaluator().evaluate(still, emptyMap()).worldPositions
 		val turned = CpuDeformationEvaluator().evaluate(still, mapOf(StandardParameters.BODY_X to 10f)).worldPositions
 		for ((id, a) in rest) {
