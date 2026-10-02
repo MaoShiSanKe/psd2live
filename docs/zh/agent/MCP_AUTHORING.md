@@ -23,7 +23,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `layer_mesh` | 顶层 `state`、`layer_id`、`changes` 或 `reset` | 逐图层覆盖或重置自适应网格参数；用 `inspect.layers` 读取当前值 |
 | `paint` | `request.mode` | `brush/eraser/bucket/shape/clear`；画布像素坐标，一次手势一个历史节点 |
 | `preview` | 顶层 `state`、`mode` | `set/reset`；修改当前预览参数值和锁定状态，不写关键形 |
-| `settings` | 顶层 `state`、`changes` | 修改自动 Rig、网格、贴图、高清化、物理预设、动作和导出配置；先用 `inspect.settings` 读取 |
+| `settings` | 顶层 `state`、`changes` | 修改自动 Rig、网格、贴图、高清化、物理预设、动作和导出配置；`bodyTuning` 按字段合并身体动作数值（转身、上下、前后倾、大小变、身体 Z 与呼吸、立体与透视，单位与模型预设「身体动作」一致，超出范围的值会被拒绝）；先用 `inspect.settings` 读取 |
 | `export` | 顶层 `state`、`output_directory` | 导出当前工程的模型文件族，返回文件与警告；目录需为绝对路径 |
 | `export_psd` | 顶层 `state`、`path` | 使用 UI 的 PSD 写入器，支持 1/2/4 倍及生成层选项 |
 | `deform` | 顶层 `state`、`changes` | 在明确参数键上编辑 Mesh / Warp 连续形状 |

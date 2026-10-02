@@ -43,6 +43,8 @@ internal class BodyStance private constructor(
 	/** The frame the legs warp spans, from above the hip joints to below the soles; null without legs. */
 	val legsFrame: Bounds?,
 	strength: Float,
+	/** How far the body parameters move the body at their full values. */
+	val tuning: BodyMotionTuning,
 ) {
 	/** One leg as drawn, canvas pixels: the hip joint, the knee, the ankle and the floor under the sole. */
 	class Leg(
@@ -89,6 +91,36 @@ internal class BodyStance private constructor(
 
 	private val strength = strength.coerceIn(0f, 4f).toDouble()
 
+	// The [tuning] in the units the motion is worked out in: degrees, shares of a length, and lengths.
+	/** Hips sideways at full Body X, lowered at full Body Y down and raised at full up, in leg lengths. */
+	val hipShift = tuning.hipShift / 100.0
+	val hipSink = tuning.sink / 100.0
+	val hipRise = tuning.rise / 100.0
+	/** Degrees the knees turn in more at full Body Y down. */
+	private val kneesIn = tuning.kneesIn.toDouble()
+	/** The torso's turn and the arms' swing at full Body X, degrees. */
+	private val turnDegrees = tuning.turnDegrees.toDouble()
+	private val armSwingDegrees = tuning.armSwingDegrees.toDouble()
+	/** The torso's depth over its turning width. */
+	private val torsoDepth = tuning.torsoDepth / 100.0
+	/** How far in front of the torso the turn and the lean are seen from, in torso lengths. */
+	private val turnCamera = tuning.turnCameraDistance.toDouble()
+	private val leanCamera = tuning.leanCameraDistance.toDouble()
+	/** At full Body Y down the back shortens and the shoulders open, and at full up it stretches and they draw in. */
+	private val openShorten = tuning.openShorten / 100.0
+	private val openWiden = tuning.openWiden / 100.0
+	private val standStretch = tuning.standStretch / 100.0
+	private val standNarrow = tuning.standNarrow / 100.0
+	/** Degrees the body bows at a full lean in and a full lean back, and the share of them the pelvis takes. */
+	private val leanDegrees = tuning.leanDegrees.toDouble()
+	private val leanBackDegrees = tuning.leanBackDegrees.toDouble()
+	private val pelvisShare = tuning.pelvisShare / 100.0
+	/** At full chibi proportions: the head larger, the chest wider, the torso and arms shorter, the legs shorter. */
+	private val headGrow = tuning.headGrow / 100.0
+	private val chestGrow = tuning.chestGrow / 100.0
+	private val bodyShrink = tuning.bodyShrink / 100.0
+	private val legShrink = tuning.legShrink / 100.0
+
 	/** The legs' mean length, hip joint to ankle; the torso's twice over without legs. */
 	val legLength: Double = legs.map { it.reach }.average().takeIf { legs.isNotEmpty() } ?: (torso.length * 2.0)
 
@@ -104,10 +136,10 @@ internal class BodyStance private constructor(
 		val x = bodyX / 10.0 * strength
 		val y = bodyY / 10.0 * strength
 		return Pose(
-			shift = SHIFT * x,
-			drop = SINK * (-y).coerceAtLeast(0.0),
-			rise = RISE * y.coerceAtLeast(0.0),
-			kneeIn = KNEE_IN_REST + KNEES_IN * (-y).coerceAtLeast(0.0),
+			shift = hipShift * x,
+			drop = hipSink * (-y).coerceAtLeast(0.0),
+			rise = hipRise * y.coerceAtLeast(0.0),
+			kneeIn = KNEE_IN_REST + kneesIn * (-y).coerceAtLeast(0.0),
 		)
 	}
 
@@ -310,7 +342,7 @@ internal class BodyStance private constructor(
 	 * The torso's own motion on Body X and Body Y.
 	 *
 	 * - **Turn** (Body X): the torso is a solid whose cross-section is an ellipse about the centre line,
-	 *   [TORSO_DEPTH] as deep as it is wide, narrowing to the neck above the shoulders. It turns about that
+	 *   [torsoDepth] as deep as it is wide, narrowing to the neck above the shoulders. It turns about that
 	 *   line and is seen in perspective from a viewer in front of the head: the front of the chest moves
 	 *   toward the side it turns to, the side coming forward is drawn a little larger and lower and the one
 	 *   going back smaller, and the neck, near the axis, hardly moves. Everything above the waist turns
@@ -330,13 +362,13 @@ internal class BodyStance private constructor(
 		var py = y
 		val above = waist - y
 		if (turn != 0.0) {
-			val yaw = Math.toRadians(YAW_DEGREES * turn) * smooth((above + length * TURN_FADE) / (length * TURN_FADE))
+			val yaw = Math.toRadians(turnDegrees * turn) * smooth((above + length * TURN_FADE) / (length * TURN_FADE))
 			if (yaw != 0.0) {
 				val radius = torso.halfWidth * YAW_RADIUS
 				val neck = smooth((torso.shoulderY + length * 0.05 - y) / (length * 0.2))
-				val depth = radius * (TORSO_DEPTH + (NECK_DEPTH - TORSO_DEPTH) * neck)
+				val depth = radius * (torsoDepth + (NECK_DEPTH - torsoDepth) * neck)
 				val u = (x - cx) / radius
-				val camera = CAMERA_DISTANCE * length
+				val camera = turnCamera * length
 				val cameraY = torso.shoulderY - length * CAMERA_HEIGHT
 				fun seen(z0: Double, z1: Double) = (camera - z0) / (camera - z1)
 				if (abs(u) < 1.0) {
@@ -357,8 +389,8 @@ internal class BodyStance private constructor(
 		if (pitch != 0.0) {
 			val lever = lever(above, length * WAIST_BAND)
 			val shoulders = smooth(above / length)
-			val (stretch, widen) = if (pitch < 0.0) (-OPEN_SHORTEN * -pitch) to (OPEN_WIDEN * -pitch)
-			else (STAND_STRETCH * pitch) to (-STAND_NARROW * pitch)
+			val (stretch, widen) = if (pitch < 0.0) (-openShorten * -pitch) to (openWiden * -pitch)
+			else (standStretch * pitch) to (-standNarrow * pitch)
 			py -= lever * stretch
 			px = cx + (px - cx) * (1 + widen * shoulders)
 		}
@@ -372,7 +404,7 @@ internal class BodyStance private constructor(
 	 *
 	 * The lean bows the body toward the viewer at positive values and back at negative ones. The body is a
 	 * solid ([surfaceDepth]) bowing in three dimensions and seen in perspective from in front of it: the
-	 * pelvis tilts a share of the lean ([PELVIS_SHARE]) about the hip joints, carrying the skirt with it, and
+	 * pelvis tilts a share of the lean ([pelvisShare]) about the hip joints, carrying the skirt with it, and
 	 * the upper body the rest about the waist, eased in across it. Leaning in, the chest foreshortens and
 	 * comes down, a little nearer and larger, and the skirt below the hips swings
 	 * back a little; leaning back, the other way. The head rides the neck upright, keeping its shape, and
@@ -407,7 +439,7 @@ internal class BodyStance private constructor(
 	 * Degrees an arm swings about its shoulder at [bodyX], clockwise on the canvas: against the body's turn,
 	 * so the hand trails it.
 	 */
-	fun armSwing(bodyX: Float): Double = ARM_SWING_DEGREES * bodyX / 10.0 * strength
+	fun armSwing(bodyX: Float): Double = armSwingDegrees * bodyX / 10.0 * strength
 
 	/** How much larger the body is drawn at canvas height [y] on its centre line at [lean] and [size]. */
 	fun leanScale(y: Double, lean: Float, size: Float = 0f): Double =
@@ -437,17 +469,17 @@ internal class BodyStance private constructor(
 
 	/**
 	 * ([x], [y]) in the proportions of [proportion] (-1..1): toward a chibi at positive values - the head
-	 * larger ([HEAD_GROW]), the chest wider ([CHEST_GROW]) over a shorter torso ([BODY_SHRINK]), and the
-	 * legs and the skirt shorter ([LEG_SHRINK], see [shortened]), carrying everything above them down - and
+	 * larger ([headGrow]), the chest wider ([chestGrow]) over a shorter torso ([bodyShrink]), and the
+	 * legs and the skirt shorter ([legShrink], see [shortened]), carrying everything above them down - and
 	 * toward a taller figure at negative ones. The head grows from the neck as one piece, so it still sits
 	 * on the shoulders, and the feet stay where they are.
 	 */
 	private fun sized(x: Double, y: Double, proportion: Double): DoubleArray {
 		val length = torso.length.toDouble()
 		val waist = torso.waistY.toDouble()
-		val head = 1 + HEAD_GROW * proportion
-		val chest = 1 + CHEST_GROW * proportion
-		val body = 1 - BODY_SHRINK * proportion
+		val head = 1 + headGrow * proportion
+		val chest = 1 + chestGrow * proportion
+		val body = 1 - bodyShrink * proportion
 		// Heights above the waist are drawn at a rate easing from 1 to the body's across the waist and from
 		// the body's to the head's across the neck; the drawn height is that rate summed up from below.
 		val h = waist - y
@@ -465,12 +497,12 @@ internal class BodyStance private constructor(
 
 	/**
 	 * Canvas height [y] with the legs drawn in the proportions of [proportion] (-1..1): everything between
-	 * the ankles and the waist drawn [LEG_SHRINK] shorter toward a chibi, or longer toward a taller figure,
+	 * the ankles and the waist drawn [legShrink] shorter toward a chibi, or longer toward a taller figure,
 	 * the feet below the ankles where they are. Without legs nothing changes.
 	 */
 	private fun shortened(y: Double, proportion: Double): Double {
 		if (!standing || y >= ankleY) return y
-		return ankleY - (ankleY - y) * (1 - LEG_SHRINK * proportion)
+		return ankleY - (ankleY - y) * (1 - legShrink * proportion)
 	}
 
 	/** Where the legs end in the feet, canvas y: the ankles' mean height. */
@@ -487,7 +519,7 @@ internal class BodyStance private constructor(
 	}
 
 	/** How much larger an arm is drawn at [size]: as much shorter as the torso. */
-	private fun limbSize(size: Float): Double = 1 - BODY_SHRINK * (size / 10.0).coerceIn(-1.0, 1.0)
+	private fun limbSize(size: Float): Double = 1 - bodyShrink * (size / 10.0).coerceIn(-1.0, 1.0)
 
 	/** ([x], [y]) on the body pitched by [pitch] (-1..1 times the strength): its canvas x and y and how much larger it is drawn. */
 	private fun leaned(x: Double, y: Double, pitch: Double): DoubleArray {
@@ -510,12 +542,12 @@ internal class BodyStance private constructor(
 	 * easing from one to the other across the waist, so the waist curves rather than folding.
 	 */
 	private fun bowed(x: Double, y: Double, pitch: Double): DoubleArray {
-		val theta = Math.toRadians((if (pitch >= 0.0) LEAN_DEGREES else LEAN_BACK_DEGREES) * pitch)
+		val theta = Math.toRadians((if (pitch >= 0.0) leanDegrees else leanBackDegrees) * pitch)
 		val length = torso.length.toDouble()
 		val waist = torso.waistY.toDouble()
 		val pivot = maxOf(hipY, waist)
 		val z0 = surfaceDepth(x, y)
-		val pelvis = theta * PELVIS_SHARE
+		val pelvis = theta * pelvisShare
 		val band = length * BEND_BAND
 		val bend = pivot - waist
 		// The spine's pitch at height [s] above the pivot, toward the viewer.
@@ -532,11 +564,11 @@ internal class BodyStance private constructor(
 		}
 		// The surface stands off the spine along its normal, as deep as the solid is there. The spine bends
 		// halfway to the front, through the soft belly, so the front shortens about as the back lengthens.
-		val axis = torso.halfWidth * YAW_RADIUS * TORSO_DEPTH * BEND_AXIS
+		val axis = torso.halfWidth * YAW_RADIUS * torsoDepth * BEND_AXIS
 		val a = angle(h)
 		val wy = pivot - (up - (z0 - axis) * sin(a))
 		val wz = axis + near + (z0 - axis) * cos(a)
-		val camera = LEAN_CAMERA_DISTANCE * length
+		val camera = leanCamera * length
 		val cameraY = torso.shoulderY - length * CAMERA_HEIGHT
 		val k = (camera - z0) / (camera - wz)
 		val cx = torso.centerX.toDouble()
@@ -545,7 +577,7 @@ internal class BodyStance private constructor(
 
 	/**
 	 * How far the drawn surface at canvas ([x], [y]) stands toward the viewer from the body's centre plane:
-	 * the torso's cross-section is an ellipse [TORSO_DEPTH] as deep as it is wide, narrowing to the neck
+	 * the torso's cross-section is an ellipse [torsoDepth] as deep as it is wide, narrowing to the neck
 	 * above the shoulders; past its sides, nothing.
 	 */
 	private fun surfaceDepth(x: Double, y: Double): Double {
@@ -554,7 +586,7 @@ internal class BodyStance private constructor(
 		val u = (x - torso.centerX) / radius
 		if (abs(u) >= 1.0) return 0.0
 		val neck = smooth((torso.shoulderY + length * 0.05 - y) / (length * 0.2))
-		return radius * (TORSO_DEPTH + (NECK_DEPTH - TORSO_DEPTH) * neck) * sqrt(1 - u * u)
+		return radius * (torsoDepth + (NECK_DEPTH - torsoDepth) * neck) * sqrt(1 - u * u)
 	}
 
 	companion object {
@@ -562,64 +594,25 @@ internal class BodyStance private constructor(
 		val legsWarpId = DeformerId("DeformLegs")
 		val leanWarpId = DeformerId("DeformBodyLean")
 
-		/** Hips sideways at full Body X, in leg lengths. */
-		const val SHIFT = 0.025
-
 		/** The pelvis's tilt up over the standing leg in the weight pose, degrees. */
 		const val HIP_TILT = 3.0
 
-		/** Hips lowered at full Body Y down, and raised at full Body Y up, in leg lengths. */
-		const val SINK = 0.035
-		const val RISE = 0.012
-
-		/** Degrees the knees turn in as they bend: a little always, more as the body sinks. */
+		/** Degrees the knees turn in as they bend, however little the body sinks. */
 		private const val KNEE_IN_REST = 10.0
-		private const val KNEES_IN = 35.0
 
-		/** The torso's turn at full Body X, degrees, and how far below the waist it eases out, in torso lengths. */
-		private const val YAW_DEGREES = 12.0
+		/** How far below the waist the torso's turn eases out, in torso lengths. */
 		private const val TURN_FADE = 0.5
 
-		/** The turning torso's half width over its half width at the chest, and its depth and the neck's over that. */
+		/** The turning torso's half width over its half width at the chest, and the neck's depth over it. */
 		private const val YAW_RADIUS = 1.1
-		private const val TORSO_DEPTH = 0.7
 		private const val NECK_DEPTH = 0.15
 
-		/** Degrees an arm swings about its shoulder at full Body X (see [armSwing]). */
-		private const val ARM_SWING_DEGREES = 4.0
-
-		/** How far in front of the torso the viewer is, and how far above the shoulders, in torso lengths. */
-		private const val CAMERA_DISTANCE = 3.0
+		/** How far above the shoulders the viewer is, in torso lengths. */
 		private const val CAMERA_HEIGHT = 0.5
-
-		/** At full Body Y down the back shortens and the shoulders open, and at full up it stretches and they draw in. */
-		private const val OPEN_SHORTEN = 0.015
-		private const val OPEN_WIDEN = 0.02
-		private const val STAND_STRETCH = 0.015
-		private const val STAND_NARROW = 0.015
-
-		/**
-		 * Degrees the body bows at a full lean in and a full lean back, and the share of them the pelvis takes
-		 * about the hip joints. The lean is seen from further off than the turn, so it reads as the chest
-		 * bowing rather than growing.
-		 */
-		private const val LEAN_DEGREES = 28.0
-		private const val LEAN_BACK_DEGREES = 12.0
-		private const val PELVIS_SHARE = 0.3
-		private const val LEAN_CAMERA_DISTANCE = 9.0
 
 		/** How far above the shoulders the head's rigid piece begins, and the band it eases in over, in torso lengths. */
 		private const val NECK_RISE = 0.08
 		private const val HEAD_BAND = 0.1
-
-		/**
-		 * At full chibi proportions the head is drawn this much larger, the chest this much wider at the
-		 * shoulders, the torso and the arms this much shorter, and the legs this much shorter.
-		 */
-		private const val HEAD_GROW = 0.15
-		private const val CHEST_GROW = 0.08
-		private const val BODY_SHRINK = 0.06
-		private const val LEG_SHRINK = 0.1
 
 		/**
 		 * Half width of the band about the waist where the spine bends from the pelvis's pitch to the full
@@ -648,27 +641,28 @@ internal class BodyStance private constructor(
 		 * The stance of [analysis]. A skeleton's legs place the joints; without one they are read off the
 		 * leg and foot layers. A figure with neither stands on nothing and has no legs warp.
 		 */
-		fun of(analysis: PipelineAnalysis, character: Bounds, skeleton: SkeletonSpec?, strength: Float = 1f): BodyStance {
+		fun of(analysis: PipelineAnalysis, character: Bounds, skeleton: SkeletonSpec?, strength: Float = 1f,
+			tuning: BodyMotionTuning = BodyMotionTuning()): BodyStance {
 			val torso = RigBuilder.torsoFrame(analysis, character, skeleton)
 			val legLayers = analysis.layers.filter {
 				(it.semantic.tag == SemanticTag.LEGWEAR || it.semantic.tag == SemanticTag.FOOTWEAR) && it.opaquePixels > 0
 			}
 			val boneLegs = skeleton?.takeIf { it.enabled }?.let { SkeletonRig.legs(it) }.orEmpty()
-			return if (boneLegs.isNotEmpty()) of(character, torso, boneLegs, legLayers.map { it.bounds }, strength)
-			else onLegs(character, torso, drawnLegs(analysis, torso, legLayers), legLayers.map { it.bounds }, strength)
+			return if (boneLegs.isNotEmpty()) of(character, torso, boneLegs, legLayers.map { it.bounds }, strength, tuning)
+			else onLegs(character, torso, drawnLegs(analysis, torso, legLayers), legLayers.map { it.bounds }, strength, tuning)
 		}
 
 		/** The stance of [spec] alone, its torso and legs placed by its bones. */
-		fun of(spec: SkeletonSpec, character: Bounds, strength: Float = 1f): BodyStance {
+		fun of(spec: SkeletonSpec, character: Bounds, strength: Float = 1f, tuning: BodyMotionTuning = BodyMotionTuning()): BodyStance {
 			val upper = spec.bones.firstOrNull { it.role == BoneRole.UPPER_BODY && it.length >= 1f }
 			val shoulderY = upper?.let { minOf(it.headY, it.tailY) } ?: (character.top + character.height * 0.25f)
 			val waistY = (upper?.let { maxOf(it.headY, it.tailY) } ?: character.centerY).coerceAtLeast(shoulderY + 1f)
 			val torso = RigBuilder.TorsoFrame(upper?.headX ?: character.centerX, shoulderY, waistY, character.width * 0.2f)
-			return of(character, torso, SkeletonRig.legs(spec), emptyList(), strength)
+			return of(character, torso, SkeletonRig.legs(spec), emptyList(), strength, tuning)
 		}
 
 		/** A stance on a skeleton's [boneLegs], the floor under the lowest of their feet and of the leg [layers]. */
-		private fun of(character: Bounds, torso: RigBuilder.TorsoFrame, boneLegs: List<SkeletonRig.Leg>, layers: List<Bounds>, strength: Float): BodyStance {
+		private fun of(character: Bounds, torso: RigBuilder.TorsoFrame, boneLegs: List<SkeletonRig.Leg>, layers: List<Bounds>, strength: Float, tuning: BodyMotionTuning): BodyStance {
 			val floor = (layers.map { it.bottom.toDouble() } + boneLegs.map { leg ->
 				maxOf(leg.ankleY, leg.foot?.let { maxOf(it.headY, it.tailY).toDouble() } ?: leg.ankleY)
 			}).maxOrNull() ?: 0.0
@@ -676,12 +670,12 @@ internal class BodyStance private constructor(
 				Leg(leg.thigh.side, leg.thigh.headX.toDouble(), leg.thigh.headY.toDouble(), leg.shin.headX.toDouble(),
 					leg.shin.headY.toDouble(), leg.ankleX, leg.ankleY, floor.coerceAtLeast(leg.ankleY + 1.0))
 			}
-			return onLegs(character, torso, legs, layers, strength)
+			return onLegs(character, torso, legs, layers, strength, tuning)
 		}
 
 		/** The legs warp spans [legs] and the leg [layers], padded so the soles and the hips sit inside it. */
-		private fun onLegs(character: Bounds, torso: RigBuilder.TorsoFrame, legs: List<Leg>, layers: List<Bounds>, strength: Float): BodyStance {
-			if (legs.isEmpty()) return BodyStance(character, torso, emptyList(), null, strength)
+		private fun onLegs(character: Bounds, torso: RigBuilder.TorsoFrame, legs: List<Leg>, layers: List<Bounds>, strength: Float, tuning: BodyMotionTuning): BodyStance {
+			if (legs.isEmpty()) return BodyStance(character, torso, emptyList(), null, strength, tuning)
 			val reach = legs.map { it.reach }.average()
 			val points = legs.flatMap { listOf(it.hipX to it.hipY, it.kneeX to it.kneeY, it.ankleX to it.floorY) }
 			val bounds = (layers + Bounds(
@@ -692,7 +686,7 @@ internal class BodyStance private constructor(
 			val padY = (reach * 0.06).toFloat()
 			val top = minOf(bounds.top, legs.minOf { it.hipY }.toFloat()) - padY
 			val frame = Bounds(bounds.left - padX, top, bounds.right + padX, bounds.bottom + padY)
-			return BodyStance(character, torso, legs, frame, strength)
+			return BodyStance(character, torso, legs, frame, strength, tuning)
 		}
 
 		/**

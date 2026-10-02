@@ -303,9 +303,9 @@ class BodyStanceTest {
 		val up = hips(mapOf(StandardParameters.BODY_Y to 10f))
 		val aside = hips(mapOf(StandardParameters.BODY_X to 10f))
 		// World y points up.
-		assertTrue(down[1] < -stance.legLength * BodyStance.SINK * 0.5, "down ${down.toList()}")
-		assertTrue(up[1] > stance.legLength * BodyStance.RISE * 0.3, "up ${up.toList()}")
-		assertTrue(aside[0] > stance.legLength * BodyStance.SHIFT * 0.5, "aside ${aside.toList()}")
+		assertTrue(down[1] < -stance.legLength * stance.hipSink * 0.5, "down ${down.toList()}")
+		assertTrue(up[1] > stance.legLength * stance.hipRise * 0.3, "up ${up.toList()}")
+		assertTrue(aside[0] > stance.legLength * stance.hipShift * 0.5, "aside ${aside.toList()}")
 		assertTrue(RigIntegrityValidator.validateDirectionalWarpDimensions("tml", rig).isEmpty(),
 			RigIntegrityValidator.validateDirectionalWarpDimensions("tml", rig).joinToString("\n"))
 	}
@@ -340,6 +340,30 @@ class BodyStanceTest {
 					for (v in 0 until n) assertTrue(hypot(b[v * 2] - a[v * 2], b[v * 2 + 1] - a[v * 2 + 1]) < height * 0.03f, "$id vertex $v at Body X $x")
 				}
 			}
+		}
+	}
+
+	@Test fun theBodyMotionValuesSetHowFarTheBodyMoves() {
+		val tuned = BodyStance.of(spec(), character, tuning = BodyMotionTuning(turnDegrees = 24f, armSwingDegrees = 0f, sink = 7f))
+		assertEquals(4.0, stance.armSwing(10f), 1e-9)
+		assertEquals(0.0, tuned.armSwing(10f), 1e-9)
+		assertEquals(stance.hipSink * 2, tuned.hipSink, 1e-9)
+		// Twice the turn carries the front of the chest further.
+		val chest = { s: BodyStance -> s.torsoPoint(200.0, 330.0, 10f, 0f)[0] - 200.0 }
+		assertTrue(chest(tuned) > chest(stance) * 1.5, "${chest(tuned)} vs ${chest(stance)}")
+		val (_, lift) = RigBuilder.bodySecondaryWarpPoint(character, RigBuilder.TorsoFrame(200f, 250f, 450f, 70f), 0.5f, 0.25f, 0f, 1f, 1f,
+			BodyMotionTuning(breathLift = 0f))
+		assertEquals(0.25f, lift, 1e-6f)
+
+		// Through the pipeline: with no turn, no hip shift and no arm swing, Body X moves nothing.
+		val preview = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val still = PSD2LivePipeline().buildPreview(preview.analysis,
+			preview.config.copy(bodyTuning = BodyMotionTuning(turnDegrees = 0f, hipShift = 0f, armSwingDegrees = 0f))).rig.puppet
+		val rest = CpuDeformationEvaluator().evaluate(still, emptyMap()).worldPositions
+		val turned = CpuDeformationEvaluator().evaluate(still, mapOf(StandardParameters.BODY_X to 10f)).worldPositions
+		for ((id, a) in rest) {
+			val b = turned.getValue(id)
+			for (i in a.indices) assertEquals(a[i], b[i], 0.05f, "$id at Body X 10")
 		}
 	}
 

@@ -2222,6 +2222,20 @@ class PSD2LiveViewModel : AutoCloseable {
 	    editorChanged()
 	}
 
+	/** One of the body motion values ([io.github.psd2live.core.BodyMotionTuning.fields]), clamped to its range. */
+	fun setBodyTuning(id: String, value: Float) {
+		updateState { it.copy(bodyTuning = it.bodyTuning.with(id, value)) }
+		schedulePreviewRebuild()
+	    editorChanged()
+	}
+
+	/** Every body motion value back to its default. */
+	fun resetBodyTuning() {
+		updateState { it.copy(bodyTuning = io.github.psd2live.core.BodyMotionTuning()) }
+		schedulePreviewRebuild()
+	    editorChanged()
+	}
+
 	fun setTexturePadding(padding: Int) {
 		updateState { it.copy(texturePadding = padding.coerceIn(0, 32)) }
 		schedulePreviewRebuild()
@@ -3132,14 +3146,21 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
+	fun setBodyTuningExpanded(expanded: Boolean) {
+		updateState { it.copy(bodyTuningExpanded = expanded) }
+	    markWorkspaceChanged()
+	}
+
 	/** Back to the default presets; hair simulations stay until their classic sway is restored. */
 	fun resetModelPresetsToDefault() {
 		updateState {
 			it.copy(
 				strengthSubExpanded = false,
+				bodyTuningExpanded = false,
 				dynamicsSubExpanded = false,
 				headStrength = 1.0f,
 				bodyStrength = 1.0f,
+				bodyTuning = io.github.psd2live.core.BodyMotionTuning(),
 				featureDisplacementEnabled = false,
                 mouthOutlineEnabled = true,
                 mouthShape = "smile",

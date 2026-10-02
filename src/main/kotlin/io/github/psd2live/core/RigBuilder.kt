@@ -313,7 +313,7 @@ object RigBuilder {
 		val backHair = backHairCandidates.map { it.bounds }.takeIf { it.isNotEmpty() }?.reduce(Bounds::union)?.expanded(0.04f)
 
 		val deformersEnabled = !config.meshOnly && config.generateDeformers
-		val stance = BodyStance.of(analysis, character, config.rigEdits.skeleton, config.bodyStrength)
+		val stance = BodyStance.of(analysis, character, config.rigEdits.skeleton, config.bodyStrength, config.bodyTuning)
 		val bodyFrame = bodyFrame(analysis, stance, faceRig, character, head, face, frontHair, backHair, config.rigEdits.skeleton?.enabled == true)
 		val deformerResult = if (deformersEnabled) {
 			buildDeformers(
@@ -1293,6 +1293,8 @@ object RigBuilder {
 	/**
 	 * The body's second warp, in the lean warp's normalized space over [character], the body warps' frame.
 	 *
+	 * How far each goes is [tuning]'s Body Z and breath values.
+	 *
 	 * - Body Z leans the upper body about the waist: each row above it shifts sideways by its height over
 	 *   the waist, easing in across a band so the bend has no crease, and the hips and legs stay put. Rows
 	 *   only shift, so a lean either way keeps every row its width.
@@ -1308,31 +1310,25 @@ object RigBuilder {
 		bodyAngleZ: Float,
 		breathValue: Float,
 		strength: Float,
+		tuning: BodyMotionTuning = BodyMotionTuning(),
 	): Pair<Float, Float> {
 		val boundedStrength = strength.coerceIn(0f, 2f)
 		val x = character.left + u * character.width
 		val y = character.top + v * character.height
 		val torsoLength = torso.length
-		val lean = Math.toRadians(BODY_Z_LEAN_DEGREES * bodyAngleZ / 10.0 * boundedStrength)
+		val lean = Math.toRadians(tuning.bodyZDegrees * bodyAngleZ / 10.0 * boundedStrength)
 		val band = torsoLength * 0.3f
 		val above = (torso.waistY - y).coerceAtLeast(0f)
 		val lever = if (above < band) above * above / (2f * band) else above - band / 2f
 		val shift = kotlin.math.tan(lean).toFloat() * lever
 		val breath = breathValue.coerceIn(0f, 1f) * boundedStrength
 		val rise = smoothstep(((torso.waistY - y) / torsoLength).coerceIn(0f, 1f))
-		val lift = breath * BREATH_LIFT * torsoLength * rise
+		val lift = breath * tuning.breathLift / 100f * torsoLength * rise
 		val chestY = torso.shoulderY + torsoLength * 0.3f
 		val chest = rise * kotlin.math.exp(-((y - chestY) / (torsoLength * 0.45f)).let { it * it })
-		val widen = (x - torso.centerX).coerceIn(-torso.halfWidth, torso.halfWidth) * breath * BREATH_WIDEN * chest
+		val widen = (x - torso.centerX).coerceIn(-torso.halfWidth, torso.halfWidth) * breath * tuning.breathWiden / 100f * chest
 		return (x + shift + widen - character.left) / character.width to (y - lift - character.top) / character.height
 	}
-
-	/** Degrees the upper body leans at Body Z ±10. */
-	private const val BODY_Z_LEAN_DEGREES = 3.0
-
-	/** How far a full breath lifts the shoulders, and widens the chest, as fractions of the torso's length and width. */
-	private const val BREATH_LIFT = 0.03f
-	private const val BREATH_WIDEN = 0.025f
 
 	private fun smoothstep(t: Float) = t * t * (3f - 2f * t)
 
@@ -1424,7 +1420,7 @@ object RigBuilder {
 			columns = 4,
 			rows = 6,
 		) { u, v, values ->
-			bodySecondaryWarpPoint(bodyFrame, torso, u, v, values[0], values[1], config.bodyStrength)
+			bodySecondaryWarpPoint(bodyFrame, torso, u, v, values[0], values[1], config.bodyStrength, config.bodyTuning)
 		}
 		val breath = Deformer.Warp(breathWarpId, tr("model.deformer.breath"), BodyStance.leanWarpId, bodyPartId, 6, 4, true, breathGrid)
 

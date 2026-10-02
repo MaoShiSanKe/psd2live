@@ -77,7 +77,23 @@ class LayerClassificationIntegrationTest {
                     put("headStrength", 2.0); put("atlasSize", 512)
                 })
                 assertEquals(2.0f, workspace.projectSettings().getValue("headStrength").jsonPrimitive.float)
-                val meshed = workspace.setLayerMeshSettings(configured.historyNodeId, id, buildJsonObject {
+                // Body motion values merge one by one over the rest, and out-of-range ones are refused.
+                val tuned = workspace.updateProjectSettings(configured.historyNodeId, buildJsonObject {
+                    putJsonObject("bodyTuning") { put("armSwingDegrees", 6.0); put("turnDegrees", 8.0) }
+                })
+                assertEquals(io.github.psd2live.core.BodyMotionTuning(armSwingDegrees = 6f, turnDegrees = 8f), viewModel.state.value.bodyTuning)
+                val retuned = workspace.updateProjectSettings(tuned.historyNodeId, buildJsonObject {
+                    putJsonObject("bodyTuning") { put("sink", 5.0) }
+                })
+                assertEquals(io.github.psd2live.core.BodyMotionTuning(armSwingDegrees = 6f, turnDegrees = 8f, sink = 5f), viewModel.state.value.bodyTuning)
+                assertEquals(6f, workspace.projectSettings().getValue("bodyTuning").jsonObject.getValue("armSwingDegrees").jsonPrimitive.float)
+                assertTrue(runCatching { workspace.updateProjectSettings(retuned.historyNodeId, buildJsonObject {
+                    putJsonObject("bodyTuning") { put("turnDegrees", 90.0) }
+                }) }.isFailure)
+                assertTrue(runCatching { workspace.updateProjectSettings(retuned.historyNodeId, buildJsonObject {
+                    putJsonObject("bodyTuning") { put("noSuchValue", 1.0) }
+                }) }.isFailure)
+                val meshed = workspace.setLayerMeshSettings(retuned.historyNodeId, id, buildJsonObject {
                     put("outerMargin", 3.0); put("edgeMode", "DOUBLE")
                 }, reset = false)
                 assertEquals(3f, viewModel.state.value.meshOverrides.getValue(id).outerMargin)

@@ -40,11 +40,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.psd2live.core.BodyMotionTuning
 import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.sim.ModelPresets
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactDropdown
+import io.github.psd2live.ui.components.CompactNumberSpinner
+import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconPhysics
@@ -367,5 +370,95 @@ private fun LoosenessBar(fraction: Float) {
 	val colors = LocalToolColors.current
 	Box(Modifier.width(40.dp).height(4.dp).background(colors.inputBackground, RoundedCornerShape(2.dp))) {
 		Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceAtLeast(0.04f)).background(colors.accent, RoundedCornerShape(2.dp)))
+	}
+}
+
+/**
+ * The body motion group of the model presets: how far each body parameter moves the body at its full value
+ * ([BodyMotionTuning]), grouped by parameter. Each value has a slider and a number field in the unit the MCP
+ * `settings` tool and the project file use; the group resets them all at once.
+ */
+@Composable
+internal fun BodyTuningPresets(state: PSD2LiveState, viewModel: PSD2LiveViewModel, isBusy: Boolean) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val tuning = state.bodyTuning
+	val changed = BodyMotionTuning.fields.count { it.get(tuning) != it.default }
+	PresetFolderRow(
+		title = tr("settings.group.bodyTuning"),
+		summary = when {
+			state.meshOnly -> tr("export.disabled")
+			changed == 0 -> tr("settings.bodyTuning.default")
+			else -> tr("settings.bodyTuning.changed", changed)
+		},
+		expanded = state.bodyTuningExpanded,
+		enabled = !isBusy && !state.meshOnly,
+	) { viewModel.setBodyTuningExpanded(!state.bodyTuningExpanded) }
+	if (!state.bodyTuningExpanded || state.meshOnly) return
+
+	Column(
+		modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 3.dp),
+		verticalArrangement = Arrangement.spacedBy(2.dp),
+	) {
+		for ((group, fields) in BodyMotionTuning.fields.groupBy { it.group }) {
+			Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+				Text(
+					text = tr("settings.bodyTuning.group." + group.name.lowercase()),
+					style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+					color = colors.textMuted,
+					modifier = Modifier.weight(1f),
+				)
+				if (group == BodyMotionTuning.Group.TURN) {
+					PanelResetButton(onClick = viewModel::resetBodyTuning, enabled = !isBusy && changed > 0, tooltip = tr("settings.bodyTuning.reset"))
+				}
+			}
+			for (field in fields) {
+				val value = field.get(tuning)
+				val token = "setBodyTuning." + field.id
+				Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+					Hint(tr("settings.bodyTuning.${field.id}.hint", "%.1f".format(field.default)), modifier = Modifier.width(76.dp)) {
+						Text(
+							text = tr("settings.bodyTuning.${field.id}"),
+							style = typography.body.copy(fontSize = 10.5.sp),
+							color = if (value != field.default) colors.accent else colors.textPrimary,
+							textAlign = TextAlign.Right,
+							maxLines = 1,
+							overflow = TextOverflow.Ellipsis,
+							modifier = Modifier.fillMaxWidth(),
+						)
+					}
+					Spacer(Modifier.width(5.dp))
+					CompactSlider(
+						value = value,
+						onValueChange = { viewModel.setBodyTuning(field.id, it) },
+						onValueChangeStarted = viewModel::beginEditorGesture,
+						onValueChangeFinished = viewModel::endEditorGesture,
+						valueRange = field.range,
+						enabled = !isBusy,
+						height = 14.dp,
+						modifier = Modifier.weight(1f),
+					)
+					Spacer(Modifier.width(4.dp))
+					CompactNumberSpinner(
+						onEditStart = { viewModel.beginEditorField(token) },
+						onEditEnd = { viewModel.endEditorField(token) },
+						value = value.toDouble(),
+						onValueChange = { viewModel.setBodyTuning(field.id, it.toFloat()) },
+						min = field.range.start.toDouble(),
+						max = field.range.endInclusive.toDouble(),
+						step = field.step.toDouble(),
+						decimals = if (field.step < 1f) 1 else 0,
+						unit = when (field.unit) {
+							BodyMotionTuning.Unit.DEGREES -> "°"
+							BodyMotionTuning.Unit.PERCENT -> "%"
+							BodyMotionTuning.Unit.TORSO_LENGTHS -> tr("settings.unit.x")
+						},
+						enabled = !isBusy,
+						modifier = Modifier.width(60.dp),
+						height = 20.dp,
+					)
+				}
+			}
+		}
 	}
 }

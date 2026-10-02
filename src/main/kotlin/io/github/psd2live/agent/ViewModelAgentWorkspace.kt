@@ -92,7 +92,7 @@ private fun validateAgentProjectSettings(
         "exportGuideImageParts", "exportIncludePhysics", "exportIncludeUserData", "exportIncludeDisplayInfo",
     )
     require(changes.keys.all { it in ranges || it in booleans ||
-        it in setOf("textureUpscale", "mouthShape", "runtimeTarget", "meshEdgeMode", "meshFillParameters") }) {
+        it in setOf("textureUpscale", "mouthShape", "runtimeTarget", "meshEdgeMode", "meshFillParameters", "bodyTuning") }) {
         "Unknown project setting"
     }
     changes.forEach { (key, value) ->
@@ -370,9 +370,15 @@ class ViewModelAgentWorkspace(
                     WorkspaceStateCodec.decodeFillParameters(document.settings["meshFillParameters"]),
                     runCatching { fill.jsonObject }.getOrNull() ?: error("meshFillParameters must be an object")))
             }
+            val mergedTuning = changes["bodyTuning"]?.let { tuning ->
+                WorkspaceStateCodec.encodeBodyTuning(WorkspaceStateCodec.mergeBodyTuning(
+                    WorkspaceStateCodec.decodeBodyTuning(document.settings["bodyTuning"]),
+                    runCatching { tuning.jsonObject }.getOrNull() ?: error("bodyTuning must be an object")))
+            }
             val next = kotlinx.serialization.json.JsonObject(document.settings + changes +
                 listOfNotNull(mergedUpscale?.let { "textureUpscale" to it },
-                    mergedFill?.let { "meshFillParameters" to it }).toMap())
+                    mergedFill?.let { "meshFillParameters" to it },
+                    mergedTuning?.let { "bodyTuning" to it }).toMap())
             validateAgentProjectSettings(next, changes)
             val decoded = WorkspaceStateCodec.decode(next, current)
             val minimumAtlas = decoded.minRequiredAtlasSize()

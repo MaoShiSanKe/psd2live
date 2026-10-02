@@ -57,6 +57,21 @@ class AdaptiveMeshTopologyTest {
         }) }.isFailure, "out-of-range fill parameters must be rejected")
     }
 
+    @Test fun bodyTuningSurvivesProjectStateRoundTrip() {
+        val codec = io.github.psd2live.project.WorkspaceStateCodec
+        val tuning = BodyMotionTuning(turnDegrees = 20f, armSwingDegrees = -2f, breathLift = 5f)
+        val state = io.github.psd2live.ui.state.PSD2LiveState(bodyTuning = tuning)
+        assertEquals(tuning, codec.decode(codec.encode(state)).bodyTuning)
+        assertEquals(tuning, codec.decode(codec.settings(state)).bodyTuning)
+        assertEquals(tuning, state.buildConfig().bodyTuning)
+        // Older projects have none; a stored value past its range is clamped and an unknown one skipped.
+        assertEquals(BodyMotionTuning(), codec.decode(JsonObject(codec.encode(state).filterKeys { it != "bodyTuning" })).bodyTuning)
+        val stored = kotlinx.serialization.json.buildJsonObject {
+            put("turnDegrees", kotlinx.serialization.json.JsonPrimitive(99)); put("gone", kotlinx.serialization.json.JsonPrimitive(1))
+        }
+        assertEquals(BodyMotionTuning(turnDegrees = 30f), codec.decodeBodyTuning(stored))
+    }
+
     @Test fun gradedFillsDoNotRepeatTheContourRow() {
         val shapes = listOf(ellipse(320, 240, 140.0, 100.0), rectangle(320, 240, 20, 20, 300, 220))
         for ((width, height, rgba) in shapes) for (algorithm in MeshFillAlgorithm.entries - MeshFillAlgorithm.SIMPLE_TRIANGLES)
