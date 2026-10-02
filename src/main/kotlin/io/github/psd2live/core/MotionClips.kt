@@ -92,28 +92,21 @@ object MotionClips {
 	/** Keys closer than this are one key. */
 	const val TIME_EPSILON = 1e-4f
 
-	fun isLoopBuiltin(name: String): Boolean = name.equals("Idle", ignoreCase = true) ||
-		SkeletonMotions.presets.any { it.loop && it.name.equals(name, ignoreCase = true) }
+	fun isLoopBuiltin(name: String): Boolean = MotionPresets.loops(name)
 
 	/**
-	 * The tracks a generated motion plays, the same the export writes. A looping one blinks like the idle.
-	 * [exclude] keeps physics-driven parameters out of the idle.
+	 * The tracks a generated motion plays as [settings] tune it, the same the export writes. A looping one
+	 * blinks like the idle. [exclude] keeps physics-driven parameters out of the idle.
 	 */
-	fun builtinTracks(name: String, skeleton: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> =
-		when (name.lowercase()) {
-			"idle" -> SkeletonMotions.idle(skeleton, exclude) + MotionGenerator.idleBlinkTracks
-			"blink" -> MotionGenerator.blinkTracks
-			"nod" -> MotionGenerator.nodTracks
-			"shake" -> MotionGenerator.shakeTracks
-			else -> SkeletonMotions.presets.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { preset ->
-				val tracks = preset.tracks(skeleton)
-				if (preset.loop && tracks.isNotEmpty()) tracks + MotionGenerator.idleBlinkTracks else tracks
-			}.orEmpty()
-		}
+	fun builtinTracks(
+		name: String,
+		skeleton: SkeletonSpec?,
+		exclude: Set<String> = emptySet(),
+		settings: MotionPresetSettings = MotionPresetSettings(),
+	): List<MotionTrack> = MotionPresets.tracks(name, skeleton, settings, exclude)
 
-	fun builtinDuration(name: String, tracks: List<MotionTrack>): Float =
-		if (name.equals("Idle", ignoreCase = true)) SkeletonMotions.IDLE_DURATION
-		else tracks.maxOfOrNull { it.keys.last().time } ?: 0f
+	fun builtinDuration(name: String, tracks: List<MotionTrack>, settings: MotionPresetSettings = MotionPresetSettings()): Float =
+		MotionPresets.duration(name, tracks, settings)
 
 	/** The override of [builtin] in [clips], if the user edited it. */
 	fun overrideOf(clips: List<MotionClip>, builtin: String): MotionClip? =

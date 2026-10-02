@@ -105,6 +105,7 @@ import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.MotionEditorView
 import io.github.psd2live.ui.state.MotionKeyRef
+import io.github.psd2live.ui.state.MotionEditorState
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -126,8 +127,8 @@ internal fun motionCurveColor(index: Int): Color = CURVE_COLORS[index.mod(CURVE_
 
 internal fun builtinMotionTitle(name: String): String = tr("export.motion.${name.replaceFirstChar(Char::lowercase)}")
 
-/** One choice in the editor's motion picker: a generated motion or a user clip. */
-private data class MotionChoice(val builtin: String?, val clipId: String?, val label: String)
+/** One choice in the editor's motion picker: a generated motion or a user clip, by the id the editor opens. */
+private data class MotionChoice(val clipId: String?, val label: String)
 
 /**
  * The animation editor: a timeline of the clip the animation panel opened, one track per parameter, edited
@@ -182,17 +183,19 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 	val editor = viewModel.motionEditor
 	val clips = state.rigEdits.motionClips
 	val skeleton = state.rigEdits.skeleton
-	val choices = remember(clips, skeleton) {
+	val presets = state.rigEdits.motionPresets
+	val choices = remember(clips, skeleton, presets) {
 		val builtins = MotionClips.BUILTIN_NAMES.filter { name ->
-			MotionClips.overrideOf(clips, name) != null || MotionClips.builtinTracks(name, skeleton).isNotEmpty()
+			presets[name]?.deleted != true &&
+				(MotionClips.overrideOf(clips, name) != null || MotionClips.builtinTracks(name, skeleton).isNotEmpty())
 		}.map { name ->
-			val override = MotionClips.overrideOf(clips, name)
-			MotionChoice(name, override?.id, builtinMotionTitle(name) + if (override != null) " •" else "")
+			val edited = MotionClips.overrideOf(clips, name) != null
+			MotionChoice(MotionEditorState.presetClipId(name), builtinMotionTitle(name) + if (edited) " •" else "")
 		}
-		val custom = clips.filter { it.builtin == null }.map { MotionChoice(null, it.id, it.name) }
-		listOf(MotionChoice(null, null, tr("animation.editor.pick"))) + builtins + custom
+		val custom = clips.filter { it.builtin == null }.map { MotionChoice(it.id, it.name) }
+		listOf(MotionChoice(null, tr("animation.editor.pick"))) + builtins + custom
 	}
-	val selected = choices.firstOrNull { clip != null && it.clipId == clip.id } ?: choices.first()
+	val selected = choices.firstOrNull { clip != null && it.clipId == editor.clipId } ?: choices.first()
 
 	// Too many controls to fold away: a narrow editor scrolls its toolbar sideways.
 	PanelToolbar {
@@ -204,14 +207,9 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 			CompactDropdown(
 				items = choices,
 				selectedItem = selected,
-				onItemSelected = { choice ->
-					when {
-						choice.clipId != null -> viewModel.openMotionInEditor(choice.clipId)
-						choice.builtin != null -> viewModel.editBuiltinMotion(choice.builtin)
-					}
-				},
+				onItemSelected = { choice -> choice.clipId?.let { viewModel.openMotionInEditor(it) } },
 				itemLabel = { it.label },
-				itemEnabled = { it.builtin != null || it.clipId != null },
+				itemEnabled = { it.clipId != null },
 				modifier = Modifier.width(150.dp),
 				height = 22.dp,
 			)

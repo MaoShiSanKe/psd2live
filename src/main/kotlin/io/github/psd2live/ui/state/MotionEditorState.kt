@@ -37,6 +37,16 @@ internal class MotionEditorState {
 	/** The clip a key drag started from; every drag sample is applied to it, not to the previous sample. */
 	var dragOrigin: MotionClip? = null
 	var dragSelection: Set<MotionKeyRef> = emptySet()
+
+	companion object {
+		private const val PRESET_PREFIX = "preset:"
+
+		/** The editor's id for a generated motion: its override once edited, its generated tracks until then. */
+		fun presetClipId(name: String) = PRESET_PREFIX + name
+
+		/** The generated motion [clipId] names, or null for a user clip. */
+		fun presetOf(clipId: String): String? = clipId.takeIf { it.startsWith(PRESET_PREFIX) }?.removePrefix(PRESET_PREFIX)
+	}
 }
 
 internal object MotionKeyEdits {

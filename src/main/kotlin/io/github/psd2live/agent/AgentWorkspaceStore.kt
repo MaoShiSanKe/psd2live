@@ -404,6 +404,7 @@ internal class AgentWorkspaceStore(
             if (document.rigEdits.physicsFps != io.github.psd2live.core.RigEditOverlay.DEFAULT_PHYSICS_FPS) put("physicsFps", document.rigEdits.physicsFps)
             putJsonArray("swings") { document.rigEdits.swingEdits.forEach { add(it.toJson()) } }
             putJsonArray("motions") { document.rigEdits.motionClips.forEach { add(io.github.psd2live.core.MotionClips.toJson(it)) } }
+            if (document.rigEdits.motionPresets.isNotEmpty()) put("motionPresets", io.github.psd2live.core.MotionPresets.toJson(document.rigEdits.motionPresets))
             if (document.rigEdits.simEdits.isNotEmpty()) putJsonArray("simulations") { document.rigEdits.simEdits.forEach { add(it.toJson()) } }
 			putJsonArray("parameters") {
 				document.rigEdits.parameterEdits.forEach { edit ->
@@ -577,6 +578,7 @@ internal class AgentWorkspaceStore(
             physicsFps = rigEditObject["physicsFps"]?.jsonPrimitive?.intOrNull ?: io.github.psd2live.core.RigEditOverlay.DEFAULT_PHYSICS_FPS,
             swingEdits = rigEditObject.optionalArray("swings").map { io.github.psd2live.core.RigSwingEdit.fromJson(it.jsonObject) },
             motionClips = rigEditObject.optionalArray("motions").map { io.github.psd2live.core.MotionClips.fromJson(it.jsonObject) },
+            motionPresets = io.github.psd2live.core.MotionPresets.fromJson(rigEditObject["motionPresets"]?.jsonObject),
             simEdits = rigEditObject.optionalArray("simulations").map { io.github.psd2live.core.sim.RigSimEdit.fromJson(it.jsonObject) },
 			parameterEdits = rigEditObject.optionalArray("parameters").map { element ->
 				val edit = element.jsonObject

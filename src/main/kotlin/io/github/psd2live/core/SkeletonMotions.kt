@@ -62,10 +62,11 @@ object SkeletonMotions {
 	 */
 	fun idle(spec: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> = played(spec, MotionSynth.idle(spec, exclude))
 
-	/** A deliberate tail swing, faster and wider than the one folded into the idle. */
-	fun tailSwing(spec: SkeletonSpec?): List<MotionTrack> =
+	/** A deliberate tail swing, faster and wider than the one folded into the idle: [cycles] swings of [amplitude]. */
+	fun tailSwing(spec: SkeletonSpec?, amplitude: Float = 1f, cycles: Int = 3): List<MotionTrack> =
 		if (SkeletonPoses.tailSwing !in SkeletonPoses.available(spec)) emptyList()
-		else listOf(sine(SkeletonPoses.tailSwing.id.raw, amplitude = 1f, cycles = 3, phase = 0f, duration = TAIL_SWING_DURATION))
+		else listOf(sine(SkeletonPoses.tailSwing.id.raw, amplitude, cycles.coerceAtLeast(1), phase = 0f,
+			duration = TAIL_SWING_DURATION * cycles.coerceAtLeast(1) / 3f))
 
 	/** A dip and a recovery, worked out for the figure (see [MotionSynth.crouch]). */
 	fun crouch(spec: SkeletonSpec?): List<MotionTrack> =
@@ -110,11 +111,11 @@ object SkeletonMotions {
 	 * knees hold [SkeletonPoses.kneesIn], so the weight cycle - another leg pose - drops out and the body
 	 * tracks carry the sway; the arms still hang loose about the tucked pose.
 	 */
-	fun idleCute(spec: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> {
+	fun idleCute(spec: SkeletonSpec?, exclude: Set<String> = emptySet(), tuck: Float = 0.3f): List<MotionTrack> {
 		val available = SkeletonPoses.available(spec)
 		if (SkeletonPoses.kneesIn !in available) return emptyList()
-		val hold = available.filter { it.legs }.associate { it.id.raw to if (it == SkeletonPoses.kneesIn) 0.3f else 0f } +
-			MotionSynth.tucked(spec, 0.3f)
+		val hold = available.filter { it.legs }.associate { it.id.raw to if (it == SkeletonPoses.kneesIn) tuck else 0f } +
+			MotionSynth.tucked(spec, tuck)
 		return played(spec, MotionSynth.idle(spec, exclude, hold))
 	}
 
@@ -212,22 +213,24 @@ object SkeletonMotions {
 		return tracks.filterNot { it.parameterId in gestures || it.parameterId in reached } + turned
 	}
 
-	private class PreparedIdle(val spec: SkeletonSpec?, val tracks: List<MotionTrack>)
+	private class PreparedIdle(val spec: SkeletonSpec?, val settings: MotionPresetSettings, val tracks: List<MotionTrack>)
 
 	@Volatile private var preparedIdle: PreparedIdle? = null
 
 	/**
-	 * The values the idle holds at [elapsed] seconds, body parameters included. The preview evaluates the
-	 * same tracks the export writes.
+	 * The values the idle, tuned by [settings], holds at [elapsed] seconds, body parameters included. The
+	 * preview evaluates the same tracks the export writes; it blinks on its own clock, so the idle's blink
+	 * stays out.
 	 */
-	fun liveIdle(spec: SkeletonSpec?, elapsed: Double): Map<ParameterId, Float> {
+	fun liveIdle(spec: SkeletonSpec?, elapsed: Double, settings: MotionPresetSettings = MotionPresetSettings()): Map<ParameterId, Float> {
 		// Building a skeleton idle expands pose tracks into joint curves. It depends only on the
-		// immutable skeleton, while this sampler runs on every preview frame.
+		// immutable skeleton and the settings, while this sampler runs on every preview frame.
 		val cached = preparedIdle
-		val tracks = if (cached != null && cached.spec === spec) cached.tracks else synchronized(this) {
+		val tracks = if (cached != null && cached.spec === spec && cached.settings == settings) cached.tracks else synchronized(this) {
 			val current = preparedIdle
-			if (current != null && current.spec === spec) current.tracks else
-				idle(spec).also { preparedIdle = PreparedIdle(spec, it) }
+			if (current != null && current.spec === spec && current.settings == settings) current.tracks else
+				MotionPresets.tracks("Idle", spec, settings.copy(values = settings.values + (MotionPresets.BLINK to 0f)))
+					.also { preparedIdle = PreparedIdle(spec, settings, it) }
 		}
 		return tracks.associate { ParameterId(it.parameterId) to sample(it, elapsed, loop = true) }
 	}

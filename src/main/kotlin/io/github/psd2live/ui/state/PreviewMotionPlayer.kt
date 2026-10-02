@@ -5,8 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.github.psd2live.core.MotionClip
 import io.github.psd2live.core.MotionClips
-import io.github.psd2live.core.MotionGenerator
-import io.github.psd2live.core.MotionTrack
+import io.github.psd2live.core.MotionPresetSettings
 import io.github.psd2live.core.SkeletonMotions
 import io.github.psd2live.core.SkeletonSpec
 import org.umamo.runtime.model.ParameterId
@@ -27,8 +26,13 @@ internal class PreviewMotionPlayer {
 	private var elapsed = 0.0
 
 	/** Plays [name] from its start, replacing whatever is playing; false for a motion without tracks. */
-	fun start(name: String, skeleton: SkeletonSpec?, clips: List<MotionClip> = emptyList()): Boolean {
-		val next = clipOf(name, skeleton, clips)?.takeIf { it.curves.isNotEmpty() }
+	fun start(
+		name: String,
+		skeleton: SkeletonSpec?,
+		clips: List<MotionClip> = emptyList(),
+		presets: Map<String, MotionPresetSettings> = emptyMap(),
+	): Boolean {
+		val next = clipOf(name, skeleton, clips, presets)?.takeIf { it.curves.isNotEmpty() }
 		if (next == null) {
 			stop()
 			return false
@@ -59,21 +63,23 @@ internal class PreviewMotionPlayer {
 	}
 
 	companion object {
-		/** The motions the preview can play, lower case: the built-in one-shots and every skeleton preset. */
-		fun tracksOf(name: String, skeleton: SkeletonSpec?): List<MotionTrack> = when (name.lowercase()) {
-			"blink" -> MotionGenerator.blinkTracks
-			"nod" -> MotionGenerator.nodTracks
-			"shake" -> MotionGenerator.shakeTracks
-			else -> SkeletonMotions.presets.firstOrNull { it.name.equals(name, ignoreCase = true) }
-				?.tracks?.invoke(skeleton).orEmpty()
-		}
-
-		/** What [name] plays: the user's override or clip, else the generated tracks; null when nothing does. */
-		fun clipOf(name: String, skeleton: SkeletonSpec?, clips: List<MotionClip>): MotionClip? {
+		/**
+		 * What [name] plays: the user's override or clip, else the generated tracks as [presets] tune them;
+		 * null when nothing does. The idle is the running animation's, never a one-shot.
+		 */
+		fun clipOf(
+			name: String,
+			skeleton: SkeletonSpec?,
+			clips: List<MotionClip>,
+			presets: Map<String, MotionPresetSettings> = emptyMap(),
+		): MotionClip? {
 			MotionClips.overrideOf(clips, name)?.let { return it }
 			val stems = MotionClips.exportStems(clips)
 			clips.firstOrNull { it.builtin == null && stems[it.id].equals(name, ignoreCase = true) }?.let { return it }
-			val tracks = tracksOf(name, skeleton).takeIf { it.isNotEmpty() } ?: return null
+			if (name.equals("Idle", ignoreCase = true)) return null
+			val settings = presets.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value ?: MotionPresetSettings()
+			if (settings.deleted) return null
+			val tracks = MotionClips.builtinTracks(name, skeleton, settings = settings).takeIf { it.isNotEmpty() } ?: return null
 			return MotionClips.fromTracks("preview", name, builtin = null, loop = false, tracks = tracks)
 		}
 

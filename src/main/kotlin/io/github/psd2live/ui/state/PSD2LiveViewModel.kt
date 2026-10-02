@@ -14,6 +14,8 @@ import io.github.psd2live.core.MotionClip
 import io.github.psd2live.core.MotionClips
 import io.github.psd2live.core.MotionHandle
 import io.github.psd2live.core.MotionKey
+import io.github.psd2live.core.MotionPresetSettings
+import io.github.psd2live.core.MotionPresets
 import io.github.psd2live.core.MeshComponentSplit
 import io.github.psd2live.core.PackedAtlas
 
@@ -2412,9 +2414,95 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	val motionClips: List<MotionClip> get() = _state.value.rigEdits.motionClips
 
-	/** The clip the editor has open, if it still exists (an undo can remove it). */
-	fun editingMotionClip(state: PSD2LiveState = _state.value): MotionClip? =
-		motionEditor.clipId?.let { id -> state.rigEdits.motionClips.firstOrNull { it.id == id } }
+	/**
+	 * The clip the editor has open, if it still exists (an undo can remove it). A generated motion opens as
+	 * its override once edited, else as its tracks as its settings make them (see [MotionEditorState.presetClipId]).
+	 */
+	fun editingMotionClip(state: PSD2LiveState = _state.value): MotionClip? {
+		val id = motionEditor.clipId ?: return null
+		MotionEditorState.presetOf(id)?.let { return presetMotionClip(state, it) }
+		return state.rigEdits.motionClips.firstOrNull { it.id == id }
+	}
+
+	private class PresetClip(val name: String, val skeleton: io.github.psd2live.core.SkeletonSpec?, val settings: MotionPresetSettings, val clip: MotionClip)
+	@Volatile private var presetClipCache: PresetClip? = null
+
+	/** [name] as the editor and the playback see it; null once deleted or when the rig cannot play it. */
+	internal fun presetMotionClip(state: PSD2LiveState, name: String): MotionClip? {
+		val settings = state.rigEdits.motionPresets[name] ?: MotionPresetSettings()
+		if (settings.deleted) return null
+		MotionClips.overrideOf(state.rigEdits.motionClips, name)?.let { return it }
+		val skeleton = state.rigEdits.skeleton
+		// The idle expands its poses onto the bones; the editor reads it every frame while it plays.
+		presetClipCache?.takeIf { it.name == name && it.skeleton === skeleton && it.settings == settings }?.let { return it.clip }
+		val clip = MotionPresets.clip(MotionEditorState.presetClipId(name), name, skeleton, settings).takeIf { it.curves.isNotEmpty() }
+		if (clip != null) presetClipCache = PresetClip(name, skeleton, settings, clip)
+		return clip
+	}
+
+	fun motionPresetSettings(name: String): MotionPresetSettings = _state.value.rigEdits.motionPresets[name] ?: MotionPresetSettings()
+
+	/** One change to the generated motions' settings, and to their overrides, as one history step. */
+	private fun updateMotionPresets(
+		summary: String? = null,
+		clips: (List<MotionClip>) -> List<MotionClip> = { it },
+		transform: (Map<String, MotionPresetSettings>) -> Map<String, MotionPresetSettings>,
+	) {
+		updateState { current ->
+			val presets = transform(current.rigEdits.motionPresets).filterValues { !it.isDefault }
+			val nextClips = clips(current.rigEdits.motionClips)
+			if (presets == current.rigEdits.motionPresets && nextClips == current.rigEdits.motionClips) current
+			else current.copy(rigEdits = current.rigEdits.copy(motionPresets = presets, motionClips = nextClips))
+		}
+		scheduleRuntimeBundleUpdate()
+		editorChanged(summary)
+	}
+
+	/** Sets one knob of a generated motion (see [MotionPresets.knobs]). */
+	fun setMotionPresetValue(name: String, knobId: String, value: Float) {
+		val knob = MotionPresets.knobs(name).firstOrNull { it.id == knobId } ?: return
+		if (!value.isFinite()) return
+		val clamped = value.coerceIn(knob.min, knob.max)
+		updateMotionPresets { presets ->
+			val settings = presets[name] ?: MotionPresetSettings()
+			val values = if (clamped == knob.default) settings.values - knobId else settings.values + (knobId to clamped)
+			presets + (name to settings.copy(values = values))
+		}
+	}
+
+	/** Puts a generated motion back as generated: default settings and no hand edits. */
+	fun resetMotionPreset(name: String) {
+		updateMotionPresets(clips = { clips -> clips.filterNot { it.builtin.equals(name, ignoreCase = true) } }) { presets ->
+			val settings = presets[name] ?: return@updateMotionPresets presets
+			presets + (name to settings.copy(values = emptyMap()))
+		}
+	}
+
+	/** Removes a generated motion from the model; it stays restorable from the new-motion menu. */
+	fun deleteMotionPreset(name: String) {
+		if (motionEditor.clipId == MotionEditorState.presetClipId(name)) closeMotionEditorClip()
+		motionPlayer.stop(name)
+		updateMotionPresets(clips = { clips -> clips.filterNot { it.builtin.equals(name, ignoreCase = true) } }) { presets ->
+			presets + (name to MotionPresetSettings(deleted = true))
+		}
+	}
+
+	fun restoreMotionPreset(name: String) {
+		updateMotionPresets { presets -> presets - name }
+	}
+
+	/**
+	 * The panel's play button: plays or pauses [clipId] the way the editor's own button does, opening it in
+	 * the editor first, so both show the same motion, playhead and state.
+	 */
+	fun toggleMotionPlayback(clipId: String) {
+		if (motionEditor.clipId == clipId) {
+			setMotionEditorPlaying(!motionEditor.playing)
+			return
+		}
+		openMotionInEditor(clipId, focus = false)
+		setMotionEditorPlaying(true)
+	}
 
 	internal fun motionParameterRanges(): Map<String, ClosedFloatingPointRange<Float>> =
 		_state.value.previewModel?.rig?.puppet?.parameters?.associate { it.id.raw to it.min..it.max }.orEmpty()
@@ -2435,23 +2523,38 @@ class PSD2LiveViewModel : AutoCloseable {
 		} else markWorkspaceChanged()
 	}
 
-	private fun updateMotionClip(id: String, commit: Boolean = true, summary: String? = null, transform: (MotionClip) -> MotionClip) =
-		updateMotionClips(commit, summary) { clips -> clips.map { if (it.id == id) transform(it) else it } }
+	/**
+	 * One change to the clip [id]. A generated motion that is not yet edited gets its override here, in the
+	 * same step. The clip keeps its id and what it overrides whatever [transform] returns: a drag transforms
+	 * the clip it started from, which may be the generated one.
+	 */
+	private fun updateMotionClip(id: String, commit: Boolean = true, summary: String? = null, transform: (MotionClip) -> MotionClip) {
+		val preset = MotionEditorState.presetOf(id)
+		if (preset == null) {
+			updateMotionClips(commit, summary) { clips ->
+				clips.map { if (it.id == id) transform(it).copy(id = it.id, builtin = it.builtin) else it }
+			}
+			return
+		}
+		val generated = presetMotionClip(_state.value, preset) ?: return
+		updateMotionClips(commit, summary) { clips ->
+			val existing = MotionClips.overrideOf(clips, preset)
+			if (existing != null) clips.map { if (it.id == existing.id) transform(it).copy(id = it.id, builtin = it.builtin) else it }
+			else {
+				val next = transform(generated).copy(id = MotionClips.newId(clips), name = preset, builtin = preset)
+				if (next.copy(id = generated.id) == generated) clips else clips + next
+			}
+		}
+	}
 
-	/** A new clip, blank or a copy of a generated motion's tracks, opened in the editor. */
+	/** A new clip, blank or a copy of a generated motion as it plays now, opened in the editor. */
 	fun createMotionClip(fromBuiltin: String? = null): String {
 		val clips = motionClips
 		val id = MotionClips.newId(clips)
 		val clip = if (fromBuiltin != null) {
-			val tracks = MotionClips.builtinTracks(fromBuiltin, _state.value.rigEdits.skeleton)
-			MotionClips.fromTracks(
-				id = id,
-				name = MotionClips.uniqueName(clips, fromBuiltin),
-				builtin = null,
-				loop = MotionClips.isLoopBuiltin(fromBuiltin),
-				tracks = tracks,
-				duration = MotionClips.builtinDuration(fromBuiltin, tracks),
-			)
+			val source = MotionClips.overrideOf(clips, fromBuiltin)
+				?: MotionPresets.clip(id, fromBuiltin, _state.value.rigEdits.skeleton, motionPresetSettings(fromBuiltin).copy(deleted = false))
+			source.copy(id = id, name = MotionClips.uniqueName(clips, fromBuiltin), builtin = null, enabled = true)
 		} else MotionClip(id = id, name = MotionClips.uniqueName(clips, tr("animation.newMotionName")))
 		updateMotionClips { it + clip }
 		openMotionInEditor(id)
@@ -2489,24 +2592,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (next.duration != clip.duration) next.copy(curves = MotionKeyEdits.withDuration(clip, next.duration).curves) else next
 		}
 
-	/** The override of a generated motion, created from its tracks on first edit. */
-	fun ensureBuiltinOverride(name: String): String {
-		MotionClips.overrideOf(motionClips, name)?.let { return it.id }
-		val tracks = MotionClips.builtinTracks(name, _state.value.rigEdits.skeleton)
-		val id = MotionClips.newId(motionClips)
-		val clip = MotionClips.fromTracks(
-			id = id,
-			name = name,
-			builtin = name,
-			loop = MotionClips.isLoopBuiltin(name),
-			tracks = tracks,
-			duration = MotionClips.builtinDuration(name, tracks),
-		)
-		updateMotionClips { it + clip }
-		return id
-	}
-
-	fun editBuiltinMotion(name: String) = openMotionInEditor(ensureBuiltinOverride(name))
+	/** Opens a generated motion in the editor; it becomes an override only once a key changes. */
+	fun editBuiltinMotion(name: String) = openMotionInEditor(MotionEditorState.presetClipId(name))
 
 	/** Drops the override so the generated motion plays and exports again. */
 	fun resetBuiltinMotion(name: String) {
@@ -2514,7 +2601,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		deleteMotionClip(clip.id)
 	}
 
-	fun openMotionInEditor(id: String) {
+	/** Opens [id] in the editor; [focus] brings the editor's dock forward. */
+	fun openMotionInEditor(id: String, focus: Boolean = true) {
 		if (motionEditor.clipId != id) {
 			motionEditor.autoKey = false
 			motionEditor.playing = false
@@ -2523,7 +2611,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			motionEditor.playhead = 0f
 		}
 		motionEditor.clipId = id
-		requestSelectDockModule("animationEditor")
+		if (focus) requestSelectDockModule("animationEditor")
 	}
 
 	/** Selects the editor's curve for [parameterId] of the open clip. */
@@ -5269,7 +5357,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			motionPlayer.stop()
 			elapsed = 0.0
 		} else {
-			motionPlayer.start(name, current.rigEdits.skeleton, current.rigEdits.motionClips)
+			motionPlayer.start(name, current.rigEdits.skeleton, current.rigEdits.motionClips, current.rigEdits.motionPresets)
 		}
 	}
 
@@ -5461,10 +5549,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		// The idle the export writes, body parameters and skeleton poses alike; pointer follow adds on top.
 		// An edited idle plays its clip; its blink joins the periodic one rather than replacing the eyes.
 		val idleOverride = MotionClips.overrideOf(current.rigEdits.motionClips, "Idle")
+		val idleSettings = current.rigEdits.motionPresets["Idle"] ?: MotionPresetSettings()
 		val idle = when {
 			!hasIdle -> emptyMap()
+			idleSettings.deleted -> emptyMap()
 			idleOverride != null -> MotionClips.sampleAll(idleOverride, elapsed, loop = true)
-			else -> io.github.psd2live.core.SkeletonMotions.liveIdle(model.config.rigEdits.skeleton, elapsed)
+			else -> io.github.psd2live.core.SkeletonMotions.liveIdle(model.config.rigEdits.skeleton, elapsed, idleSettings)
 		}
 		// A playing motion replaces the idle on what it drives, as Cubism's forced motion does; the pointer
 		// follow still adds on top, like Cubism's look updater.

@@ -111,6 +111,7 @@ internal object Cmo3ModelImport {
             physicsFps = incoming.fps ?: if (incoming.physics.isNotEmpty()) RigEditOverlay.UNLIMITED_FPS
                 else if (replace) config.rigEdits.physicsFps else RigEditOverlay.DEFAULT_PHYSICS_FPS,
             motionClips = if (replace) config.rigEdits.motionClips else emptyList(),
+            motionPresets = if (replace) config.rigEdits.motionPresets else emptyMap(),
             swingEdits = if (replace) config.rigEdits.swingEdits else emptyList(),
             simEdits = if (replace) config.rigEdits.simEdits else emptyList(),
             authoringJournal = if (replace) current!!.rig.puppet.vertexGroups.filter { g ->

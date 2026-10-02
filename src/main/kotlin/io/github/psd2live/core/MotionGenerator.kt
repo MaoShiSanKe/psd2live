@@ -61,30 +61,83 @@ object MotionGenerator {
 	fun blink(availableParameterIds: Set<String>): String? = oneShot(blinkTracks, availableParameterIds)
 
 	/** The blink's tracks; the preview samples the same points the export writes. */
-	val blinkTracks: List<MotionTrack> = listOf("ParamEyeLOpen", "ParamEyeROpen").map {
-		MotionCurveMath.linear(it, listOf(0f to 1f, 0.35f to 1f, 0.45f to 0f, 0.58f to 1f, 1.2f to 1f))
+	val blinkTracks: List<MotionTrack> = blinkTracks()
+
+	/** A blink closing the eyes [closure] of the way, and a second, lighter one right after when [double]. */
+	fun blinkTracks(closure: Float = 1f, double: Boolean = false): List<MotionTrack> {
+		val shut = 1f - closure.coerceIn(0f, 1f)
+		val points = listOf(0f to 1f, 0.35f to 1f, 0.45f to shut, 0.58f to 1f) +
+			(if (double) listOf(0.68f to 1f - closure * 0.85f, 0.8f to 1f, 1.4f to 1f) else listOf(1.2f to 1f))
+		return listOf("ParamEyeLOpen", "ParamEyeROpen").map { MotionCurveMath.linear(it, points) }
 	}
 
 	fun nod(): String = nod(ALL_PARAMETERS)!!
 
 	fun nod(availableParameterIds: Set<String>): String? = oneShot(nodTracks, availableParameterIds)
 
-	val nodTracks: List<MotionTrack> = listOf(
-		MotionCurveMath.linear("ParamAngleY", listOf(0f to 0f, 0.55f to -18f, 1.25f to 6f, 2.0f to 0f)),
-		MotionCurveMath.linear("ParamBodyAngleY", listOf(0f to 0f, 0.55f to -4f, 1.25f to 1.5f, 2.0f to 0f)),
-		MotionCurveMath.linear("ParamEyeLOpen", listOf(0f to 1f, 0.55f to 0.75f, 1.25f to 1f, 2.0f to 1f)),
-		MotionCurveMath.linear("ParamEyeROpen", listOf(0f to 1f, 0.55f to 0.75f, 1.25f to 1f, 2.0f to 1f)),
-	)
+	val nodTracks: List<MotionTrack> = nodTracks()
+
+	/**
+	 * [count] nods: the head dips, comes partly back up between dips, each a little shallower, and after the
+	 * last overshoots upward before it settles. The body and the eyelids go with the head.
+	 */
+	fun nodTracks(count: Int = 1): List<MotionTrack> {
+		val head = mutableListOf(0f to 0f)
+		val eyes = mutableListOf(0f to 1f)
+		var time = 0.55f
+		for (index in 0 until count.coerceAtLeast(1)) {
+			head += time to -18f * (1f - 0.15f * index)
+			eyes += time to 0.75f
+			if (index < count - 1) {
+				head += time + 0.35f to -3f
+				eyes += time + 0.35f to 0.95f
+				time += 0.7f
+			}
+		}
+		head += listOf(time + 0.7f to 6f, time + 1.45f to 0f)
+		eyes += listOf(time + 0.7f to 1f, time + 1.45f to 1f)
+		val body = head.map { (t, v) -> t to v * if (v < 0f) 4f / 18f else 0.25f }
+		return listOf(
+			MotionCurveMath.linear("ParamAngleY", head),
+			MotionCurveMath.linear("ParamBodyAngleY", body),
+			MotionCurveMath.linear("ParamEyeLOpen", eyes),
+			MotionCurveMath.linear("ParamEyeROpen", eyes),
+		)
+	}
 
 	fun shake(): String = shake(ALL_PARAMETERS)!!
 
 	fun shake(availableParameterIds: Set<String>): String? = oneShot(shakeTracks, availableParameterIds)
 
-	val shakeTracks: List<MotionTrack> = listOf(
-		MotionCurveMath.linear("ParamAngleX", listOf(0f to 0f, 0.4f to -20f, 0.9f to 20f, 1.4f to -8f, 2.0f to 0f)),
-		MotionCurveMath.linear("ParamBodyAngleX", listOf(0f to 0f, 0.4f to -3f, 0.9f to 3f, 1.4f to -1.2f, 2.0f to 0f)),
-		MotionCurveMath.linear("ParamAngleZ", listOf(0f to 0f, 0.4f to 2f, 0.9f to -2f, 1.4f to 1f, 2.0f to 0f)),
-	)
+	val shakeTracks: List<MotionTrack> = shakeTracks()
+
+	/** [count] shakes of the head, each a little narrower, then a small settle; the body and the tilt follow. */
+	fun shakeTracks(count: Int = 1): List<MotionTrack> {
+		val head = mutableListOf(0f to 0f)
+		var time = 0.4f
+		for (index in 0 until count.coerceAtLeast(1)) {
+			val reach = 20f * (1f - 0.12f * index)
+			head += listOf(time to -reach, time + 0.5f to reach)
+			time += 1f
+		}
+		head += listOf(time to -8f, time + 0.6f to 0f)
+		return listOf(
+			MotionCurveMath.linear("ParamAngleX", head),
+			MotionCurveMath.linear("ParamBodyAngleX", head.map { (t, v) -> t to v * 0.15f }),
+			MotionCurveMath.linear("ParamAngleZ", head.map { (t, v) -> t to if (v == -8f) 1f else -v * 0.1f }),
+		)
+	}
+
+	/** Generated [tracks] as motion3 JSON; a [loop] lasts [duration], the cycle the tracks were made for. */
+	fun tracks(tracks: List<MotionTrack>, availableParameterIds: Set<String>, loop: Boolean, duration: Float): String? {
+		if (tracks.isEmpty()) return null
+		return buildMotionJson(
+			duration = duration,
+			loop = loop,
+			curves = tracks.map(::curve),
+			availableParameterIds = availableParameterIds,
+		)
+	}
 
 	private fun oneShot(tracks: List<MotionTrack>, availableParameterIds: Set<String>): String? = buildMotionJson(
 		duration = tracks.maxOf { it.keys.last().time },

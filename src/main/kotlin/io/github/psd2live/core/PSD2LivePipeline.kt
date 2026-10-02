@@ -413,27 +413,30 @@ class PSD2LivePipeline {
 					val json = CubismJson.normalize(motion).also { Json.parseToJsonElement(it) }
 					add(group to ("$baseName.$file.motion3.json" to json))
 				}
-				// An edited generated motion exports its clip in place of the generated one.
-				fun builtin(group: String, name: String, generated: () -> String?) {
+				// An edited generated motion exports its clip in place of the generated one; a deleted one is left out.
+				val skeleton = config.rigEdits.skeleton
+				fun builtin(group: String, name: String, exclude: Set<String> = emptySet()) {
+					val settings = config.rigEdits.motionPresets[name] ?: MotionPresetSettings()
+					if (settings.deleted) return
 					val override = MotionClips.overrideOf(clips, name)
-					add(group, name.replaceFirstChar(Char::lowercase),
-						if (override != null) MotionGenerator.clip(override, parameterIds) else generated())
+					add(group, name.replaceFirstChar(Char::lowercase), if (override != null) MotionGenerator.clip(override, parameterIds) else {
+						val tracks = MotionPresets.tracks(name, skeleton, settings, exclude)
+						MotionGenerator.tracks(tracks, parameterIds, MotionPresets.loops(name), MotionPresets.duration(name, tracks, settings))
+					})
 				}
 				if (config.motionIdle) {
 					val physicsDriven = if (config.exportIncludePhysics) {
 						physicsGroups.flatMapTo(HashSet()) { it.outputParameters }
 					} else emptySet()
-					builtin("Idle", "Idle") { MotionGenerator.idle(parameterIds, config.rigEdits.skeleton, physicsDriven) }
+					builtin("Idle", "Idle", physicsDriven)
 				}
-				if (config.motionBlink) builtin("Blink", "Blink") { MotionGenerator.blink(parameterIds) }
-				if (config.motionNod) builtin("Nod", "Nod") { MotionGenerator.nod(parameterIds) }
-				if (config.motionShake) builtin("Shake", "Shake") { MotionGenerator.shake(parameterIds) }
+				if (config.motionBlink) builtin("Blink", "Blink")
+				if (config.motionNod) builtin("Nod", "Nod")
+				if (config.motionShake) builtin("Shake", "Shake")
 				if (config.motionSkeleton) {
-					val skeleton = config.rigEdits.skeleton
 					for (preset in SkeletonMotions.presets) {
 						// A looping preset is another idle, played from the idle group beside the plain one.
-						val group = if (preset.loop) "Idle" else preset.name
-						builtin(group, preset.name) { MotionGenerator.skeleton(preset.tracks(skeleton), parameterIds, loop = preset.loop) }
+						builtin(if (preset.loop) "Idle" else preset.name, preset.name)
 					}
 				}
 				// The user's own motions: a loop joins the idles, a one-shot is its own group under its name.

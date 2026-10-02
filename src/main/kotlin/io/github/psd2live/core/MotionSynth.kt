@@ -552,7 +552,7 @@ internal object MotionSynth {
 	 * - The hips lead the weight cycle from one foot to the other, the knees giving in turn. The body
 	 *   turns after them and leans back over them, the head tilts against the lean and turns last, drifting
 	 *   a little on its own as well.
-	 * - The arms hang relaxed: each joint swings a degree or two after the one above, the elbow and the
+	 * - The arms hang relaxed: each joint swings a few degrees after the one above, the elbow and the
 	 *   hand trailing furthest, the two arms not quite in step. The tail swings lazily and the wings breathe.
 	 *
 	 * The body tracks hold without a skeleton too. A pose whose bones are all in [exclude] - driven by
@@ -569,12 +569,12 @@ internal object MotionSynth {
 		val breathMean = 0.45f
 		val body = listOf(
 			loopCurve(StandardParameters.BREATH.raw, breath),
-			follow(StandardParameters.BODY_Y.raw, 1.6f, 0.15f, -1.6f * breathMean, breath),
-			loopCurve(StandardParameters.ANGLE_Y.raw) { 2.4f * (breath(it - 0.4f) - breathMean) + 1.2f * IdleClock.wave(it, 1, 2f) },
-			follow(StandardParameters.BODY_X.raw, 2f, 0.45f, signal = weight),
-			follow(StandardParameters.BODY_Z.raw, -1.5f, 0.7f, signal = weight),
-			follow(StandardParameters.ANGLE_Z.raw, 2.5f, 1.2f, signal = weight),
-			loopCurve(StandardParameters.ANGLE_X.raw) { 2.5f * weight(it - 1.5f) + 2f * IdleClock.drift(it) },
+			follow(StandardParameters.BODY_Y.raw, 2.4f, 0.15f, -2.4f * breathMean, breath),
+			loopCurve(StandardParameters.ANGLE_Y.raw) { 3.4f * (breath(it - 0.4f) - breathMean) + 2f * IdleClock.wave(it, 1, 2f) },
+			follow(StandardParameters.BODY_X.raw, 3.5f, 0.45f, signal = weight),
+			follow(StandardParameters.BODY_Z.raw, -2.5f, 0.7f, signal = weight),
+			follow(StandardParameters.ANGLE_Z.raw, 4f, 1.2f, signal = weight),
+			loopCurve(StandardParameters.ANGLE_X.raw) { 4.5f * weight(it - 1.5f) + 3.5f * IdleClock.drift(it) },
 		)
 		if (spec?.enabled != true) return body
 		val available = SkeletonPoses.available(spec).filterNot { pose ->
@@ -587,7 +587,7 @@ internal object MotionSynth {
 			if (id in held) return@mapNotNull null
 			when (pose) {
 				SkeletonPoses.weight -> if (heldLegs) null else follow(id, WEIGHT_SWAY, 0f, signal = weight)
-				SkeletonPoses.tailSwing -> loopCurve(id) { 0.4f * IdleClock.wave(it, 5, -1.9f) }
+				SkeletonPoses.tailSwing -> loopCurve(id) { 0.55f * IdleClock.wave(it, 5, -1.9f) }
 				SkeletonPoses.wingFlap -> follow(id, 1.6f, 0.1f, -1.6f * breathMean, breath)
 				else -> null
 			}.let { curve -> curve?.let { MotionCurveMath.clamped(it, pose.min, pose.max) } }
@@ -607,16 +607,16 @@ internal object MotionSynth {
 	}
 
 	/** How far the idle shifts the weight pose, of its full range. */
-	private const val WEIGHT_SWAY = 0.5f
+	private const val WEIGHT_SWAY = 0.7f
 
 	/** Degrees the upper body sways with the weight in the idle, leaning back over the hips. */
-	private const val UPPER_BODY_SWAY = 1.5f
+	private const val UPPER_BODY_SWAY = 2.5f
 
 	/**
 	 * Arms hanging at ease, swung a little by the weight cycle, each joint a moment after the one above
 	 * with the elbow and the hand trailing furthest. When the weight pose plays it already turns the upper
 	 * arms with the hips, so only the forearm and the hand are added; otherwise the upper arm swings too,
-	 * a degree or two, less when the hands are held tucked. The swing is larger on a chibi figure and
+	 * a few degrees, less when the hands are held tucked. The swing is larger on a chibi figure and
 	 * smaller for an arm drawn held out rather than hanging, and the two arms keep slightly different time.
 	 * Only bones in [free] move, about their value in [held].
 	 */
@@ -628,7 +628,7 @@ internal object MotionSynth {
 		swaying: Boolean,
 	): List<MotionCurve> = movingArms(spec, anatomy).withIndex().flatMap { (index, arm) ->
 		val hanging = if (arm.restUpper > 50f) 0.5f else 1f
-		val own = (if (arm.upper.parameterId in held) 1f else 2f) * (1f + 0.3f * anatomy.chibi) * hanging
+		val own = (if (arm.upper.parameterId in held) 1.5f else 3f) * (1f + 0.3f * anatomy.chibi) * hanging
 		// The shoulder's swing the joints below follow: the weight pose's turn of it, or the arm's own.
 		val shoulder = if (swaying) SkeletonPoses.WEIGHT_ARM_TURN * WEIGHT_SWAY else own
 		val lag = if (index == 0) 0f else 0.12f
