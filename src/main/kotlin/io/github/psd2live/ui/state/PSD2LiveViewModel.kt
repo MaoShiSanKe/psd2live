@@ -1278,13 +1278,12 @@ class PSD2LiveViewModel : AutoCloseable {
             parentOverrides = updatedParents,
             meshOverrides = updatedMeshOverrides,
             drawOrderOverrides = updatedDrawOrders,
-            selectedLayerId = allNewIds.firstOrNull(),
+            selectedLayerId = it.selectedLayerId?.takeUnless { id -> id in splitLayerIds },
         ) }
 
         val summary = if (validDecisions.size == 1) tr("canvas.hierarchy.meshSplitDone", allNewIds.size)
             else tr("editor.meshSplit.batchDone", validDecisions.size, allNewIds.size)
         applyCommittedPaint(built, summary)
-        selectLayer(allNewIds.firstOrNull())
     }
 
     fun requestCanvasPathTool() {
