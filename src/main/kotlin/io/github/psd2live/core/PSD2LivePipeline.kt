@@ -77,7 +77,8 @@ class PSD2LivePipeline {
 	): RigPreviewModel {
 		val analysis = MouthLipLayers.prepare(CharacterAnalyzer.analyze(source, config), config)
 		val atlas = AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
-		val existingIds = current.rig.layerIdByDrawableId.map { (drawableId, layerId) -> layerId to DrawableId(drawableId) }.toMap()
+		val existingIds = current.rig.layerIdByDrawableId.map { (drawableId, layerId) -> layerId to DrawableId(drawableId) }.toMap() +
+			config.rigEdits.splitDrawableIds.mapValues { DrawableId(it.value) }
 		val ids = RigBuilder.assignSplitDrawableIds(analysis, existingIds)
 		val committedConfig = config.copy(rigEdits = config.rigEdits.copy(
 			splitDrawableIds = ids.mapValues { it.value.raw },

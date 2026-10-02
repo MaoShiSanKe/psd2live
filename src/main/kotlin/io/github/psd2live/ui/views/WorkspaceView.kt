@@ -1728,7 +1728,7 @@ private fun DrawableTreeItem(
 					if (event.button == PointerButton.Secondary) {
 						val clickPos = event.changes.firstOrNull()?.position ?: Offset.Zero
 						menuClickOffset = clickPos
-						if (layerId != null && state.selectedLayerId != layerId) {
+						if (layerId != null && !isLayerSelected) {
 							viewModel.selectLayer(layerId)
 						}
 						treeDragState.clear()
@@ -1933,6 +1933,13 @@ private fun DrawableTreeItem(
 				CompactMenuDivider()
 
 				CompactMenuSection(tr("canvas.hierarchy.menuSettings"))
+                CompactMenuItem(
+                    text = if (viewModel.depthSplitMiddleIds(drawable.id.raw).isNotEmpty())
+                        tr("editor.depthSplit.quick", drawable.name) else tr("editor.depthSplit.menu"),
+                    enabled = drawable.mesh != null && !state.isBusy && !state.canvasEditBusy,
+                    onClick = { showMenu = false; viewModel.requestDepthSplit(drawable.id.raw) },
+                    icon = { IconDrawOrder(tint = colors.textMuted, modifier = Modifier.size(13.dp)) },
+                )
 				val effectiveOrder = state.getEffectiveDrawOrder(drawable.id.raw, layerId, drawable.drawOrder)
 				val isOverridden = state.drawOrderOverrides.containsKey(layerId) || state.drawOrderOverrides.containsKey(drawable.id.raw)
 				CompactMenuItem(

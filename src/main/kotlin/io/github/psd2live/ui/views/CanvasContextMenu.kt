@@ -53,6 +53,7 @@ import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconCheck
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconDeformPath
+import io.github.psd2live.ui.components.IconDrawOrder
 import io.github.psd2live.ui.components.IconRotationDeformer
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.components.IconWarpDeformer
@@ -153,6 +154,20 @@ private fun ColumnScope.SelectModeContextMenu(
     when (editor.tool) {
         CanvasTool.SELECT, CanvasTool.LASSO_SELECT -> {
             SelectionActionsSection(editor, onDismissRequest, onAction, objectMode = true)
+            val splitTarget = editor.target()?.takeIf { it.kind == "mesh" }
+            if (splitTarget != null && editor.viewModel.depthSplitMiddleIds(splitTarget.id).isNotEmpty()) {
+                CompactMenuDivider()
+                CompactMenuItem(
+                    text = tr("editor.depthSplit.quick", editor.model.drawables.first { it.id.raw == splitTarget.id }.name),
+                    enabled = editor.editable,
+                    icon = { IconDrawOrder(modifier = Modifier.size(12.dp)) },
+                    onClick = {
+                        editor.viewModel.requestDepthSplit(splitTarget.id)
+                        onAction()
+                        onDismissRequest()
+                    },
+                )
+            }
             if (editor.target()?.kind == "mesh") {
                 CompactMenuDivider()
                 MenuSectionLabel(tr("editor.deformers"))

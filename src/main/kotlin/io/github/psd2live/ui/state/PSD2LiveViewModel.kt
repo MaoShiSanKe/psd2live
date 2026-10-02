@@ -813,7 +813,10 @@ class PSD2LiveViewModel : AutoCloseable {
         uiState.value.activeWorkspace.canvases.firstNotNullOfOrNull { canvas ->
             canvasEditorFor(canvas.id).takeIf { it.showRebuildMeshDialog }
         }
-    private fun resetCanvasPaintSessions() = canvasEditors.values.forEach { it.resetPaintSession() }
+    private fun resetCanvasPaintSessions() {
+        pendingDepthSplit = null
+        canvasEditors.values.forEach { it.resetPaintSession() }
+    }
 
 
     fun updatePuppetModel(transform: (PuppetModel) -> PuppetModel) {
@@ -1051,6 +1054,105 @@ class PSD2LiveViewModel : AutoCloseable {
         if (pendingMeshSplit?.layerId == layerId) return
         manualMeshSplitRequests += layerId
         offerMeshSplit(listOf(layerId))
+    }
+
+    internal data class DepthSplitOffer(
+        val preview: RigPreviewModel,
+        val sourceId: String,
+        val workspaceId: String,
+        val canvasId: String,
+        val initialMiddleId: String?,
+    )
+
+    internal var pendingDepthSplit by mutableStateOf<DepthSplitOffer?>(null)
+        private set
+
+    /** The context target is the only copied mesh; all other selected meshes stay between its slices. */
+    internal fun depthSplitMiddleIds(drawableId: String): List<String> {
+        val current = _state.value
+        val preview = current.previewModel ?: return emptyList()
+        val selected = current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) }
+        fun isSelected(id: String) = id in selected || preview.rig.layerIdByDrawableId[id] in selected
+        if (!isSelected(drawableId)) return emptyList()
+        return preview.rig.puppet.drawables.filter {
+            it.id.raw != drawableId && it.mesh != null && isSelected(it.id.raw)
+        }.map { it.id.raw }
+    }
+
+    internal fun requestDepthSplit(drawableId: String) {
+        val current = _state.value
+        if (current.isBusy || current.canvasEditBusy) return
+        val preview = current.previewModel ?: return
+        if (preview.config.rigEdits.importedCmo3 != null) {
+            setErrorMessage(tr("editor.depthSplit.imported")); return
+        }
+        if (preview.rig.puppet.drawables.none { it.id.raw == drawableId && it.mesh != null }) return
+        if (canvasEditor.paintSession?.isDirty == true) {
+            setErrorMessage(tr("editor.depthSplit.pendingPaint")); return
+        }
+        val middleIds = depthSplitMiddleIds(drawableId)
+        if (middleIds.isNotEmpty()) {
+            pendingDepthSplit = null
+            createDepthSplit(DepthSplitOffer(preview, drawableId, current.activeWorkspace.id,
+                current.activeCanvas.id, middleIds.first()), middleIds)
+            return
+        }
+        val others = preview.rig.puppet.drawables.filter { it.id.raw != drawableId && it.mesh != null }
+        val selected = others.firstOrNull { it.id.raw in current.selectedLayerIds ||
+            preview.rig.layerIdByDrawableId[it.id.raw] in current.selectedLayerIds }
+        val neck = others.firstOrNull { d -> preview.analysis.layers.any {
+            it.source.id.raw == preview.rig.layerIdByDrawableId[d.id.raw] && it.semantic.tag == SemanticTag.NECK
+        } }
+        pendingDepthSplit = DepthSplitOffer(preview, drawableId, current.activeWorkspace.id,
+            current.activeCanvas.id, selected?.id?.raw ?: neck?.id?.raw)
+    }
+
+    internal fun dismissDepthSplit() { pendingDepthSplit = null }
+
+    internal fun confirmDepthSplit(middleId: String) {
+        val offer = pendingDepthSplit ?: return
+        if (_state.value.canvasEditBusy) return
+        pendingDepthSplit = null
+        createDepthSplit(offer, listOf(middleId))
+    }
+
+    private fun createDepthSplit(offer: DepthSplitOffer, middleIds: List<String>) {
+        if (_state.value.previewModel !== offer.preview) {
+            setErrorMessage(tr("editor.depthSplit.changed")); return
+        }
+        val config = _state.value.buildConfig()
+        updateState { it.copy(canvasEditBusy = true, statusText = tr("editor.depthSplit.working")) }
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.Default) {
+                    io.github.psd2live.core.DepthSplit.build(pipeline, offer.preview, config, offer.sourceId, middleIds)
+                }
+                if (_state.value.previewModel !== offer.preview) {
+                    setErrorMessage(tr("editor.depthSplit.changed")); return@launch
+                }
+                val built = result.preview
+                updateState { it.copy(parentOverrides = built.config.parentOverrides,
+                    layerOverrides = built.config.layerOverrides, drawOrderOverrides = built.config.drawOrderOverrides) }
+                updateCanvasPresentation(offer.workspaceId, offer.canvasId, CanvasMode.EDIT) {
+                    it.copy(selectedLayerId = result.frontLayerId, selectedLayerIds = setOf(result.frontLayerId),
+                        selectedDeformerId = null, layerVisibility = it.layerVisibility + (result.frontLayerId to true))
+                }
+                applyCommittedPaint(built, tr("editor.depthSplit.done"))
+                yield() // History cleanup finishes before arming the new paint session.
+                if (_state.value.activeWorkspace.id == offer.workspaceId && _state.value.activeCanvas.id == offer.canvasId) {
+                    setCanvasMode(offer.canvasId, CanvasMode.EDIT)
+                    val editor = canvasEditorFor(offer.canvasId)
+                    editor.activateTool(io.github.psd2live.ui.CanvasTool.PAINT_ERASER)
+                    editor.startPaintSession(result.frontLayerId, forceReload = true)
+                    requestCanvasFocus(offer.canvasId)
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                setErrorMessage(failure.message ?: tr("editor.depthSplit.failed"))
+            } finally {
+                updateState { it.copy(canvasEditBusy = false) }
+            }
+        }
     }
 
     internal fun dismissMeshSplit() {

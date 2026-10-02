@@ -17,6 +17,7 @@ internal object RigAuthoringJournal {
     }
 
     fun apply(model: PuppetModel, edit: JsonObject): PuppetModel = when (edit.getValue("op").jsonPrimitive.content) {
+        DepthSplit.OP -> DepthSplit.apply(model, edit)
         "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> CanvasEdits.apply(model, edit)
         "path_put", "path_delete" -> DeformPathJournal.apply(model, edit)
         VertexGroupJournal.PUT, VertexGroupJournal.DELETE -> VertexGroupJournal.apply(model, edit)
@@ -129,7 +130,7 @@ internal object RigAuthoringJournal {
                     }
                 }
                 VertexGroupJournal.RULE -> VertexGroupJournal.compileRule(current, command)
-                "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> command
+                DepthSplit.OP, "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> command
                 else -> error("Unknown authoring operation: $op")
             }
             // Ask against the model *before* this command is applied: the question is whether the slot

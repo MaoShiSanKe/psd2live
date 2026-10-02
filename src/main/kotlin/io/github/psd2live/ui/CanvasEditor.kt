@@ -1855,6 +1855,10 @@ internal class CanvasEditor(
     fun promptCommitPaintSession() {
         val session = paintSession ?: return
         if (!session.isDirty) return
+        if (DepthSplit.isFrontLayer(state.previewModel, session.layerId)) {
+            commitPaintSession(rebuildMesh = false)
+            return
+        }
         showRebuildMeshDialog = true
     }
 
@@ -1940,6 +1944,10 @@ internal class CanvasEditor(
         preserveSourceRaster: Boolean = false,
     ) {
         val session = paintSession ?: return
+        if (rebuildMesh && DepthSplit.isFrontLayer(state.previewModel, session.layerId)) {
+            commitPaintSession(rebuildMesh = false, summary = summary, preserveSourceRaster = preserveSourceRaster)
+            return
+        }
         showRebuildMeshDialog = false
 
         val currentPreview = state.previewModel ?: return
@@ -1958,7 +1966,24 @@ internal class CanvasEditor(
         // A hierarchy rebuild changes only the mesh. Keep the exact saved pixels and bounds instead
         // of running the paint-commit crop step over an untouched raster.
         val existingLayer = sourceLayerFor(currentAnalysis, session.layerId)
-        if (preserveSourceRaster && existingLayer != null) {
+        if (!preserveSourceRaster && DepthSplit.isFrontLayer(currentPreview, session.layerId) && existingLayer != null) {
+            // Erasing changes alpha only. Cropping would let vertices outside the smaller tile
+            // sample neighbouring art, and rebuilding would discard the original rig and glue.
+            newBounds = existingLayer.bounds
+            val rgba = existingLayer.raster.rgba.copyOf()
+            for (y in 0 until existingLayer.raster.height) for (x in 0 until existingLayer.raster.width) {
+                val docX = newBounds.left + x
+                val docY = newBounds.top + y
+                if (docX !in 0 until docW || docY !in 0 until docH) continue
+                val argb = img.getRGB(docX, docY)
+                val index = (y * existingLayer.raster.width + x) * 4
+                rgba[index] = (argb ushr 16).toByte()
+                rgba[index + 1] = (argb ushr 8).toByte()
+                rgba[index + 2] = argb.toByte()
+                rgba[index + 3] = (argb ushr 24).toByte()
+            }
+            newRaster = LayerRaster(existingLayer.raster.width, existingLayer.raster.height, rgba)
+        } else if (preserveSourceRaster && existingLayer != null) {
             newBounds = existingLayer.bounds
             newRaster = existingLayer.raster
         } else {
@@ -2269,10 +2294,13 @@ internal class CanvasEditor(
                 if (added.isEmpty()) part else part.copy(children = part.children + added.map { OrgChild.Drawable(it.drawable.id) })
             }
         }
+        val (repackedPuppetAtlas, repackedSources) = PuppetSourceAtlas.build(effectiveAnalysis, newAtlas)
         val updatedPuppet = currentPreview.rig.puppet
             .let { puppet -> if (droppedDrawables.isEmpty()) puppet else puppet.withDrawablesDeleted(droppedDrawables) }
             .copy(
                 drawables = drawablesAfterRepack,
+                atlas = repackedPuppetAtlas,
+                sources = repackedSources,
                 parts = partsAfterRepack,
                 deformPaths = currentPreview.rig.puppet.deformPaths
                     .filterNot { it.drawableId in droppedDrawables }

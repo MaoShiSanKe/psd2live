@@ -1404,6 +1404,9 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
         // Actions
         val hasSession = editor.paintSession != null
         val uncommittedCount = editor.paintSession?.strokeCount ?: 0
+        if (io.github.psd2live.core.DepthSplit.isFrontLayer(editor.state.previewModel, editor.paintSession?.layerId)) {
+            Text(tr("editor.depthSplit.paintHint"), style = typography.caption, color = colors.textMuted)
+        }
         if (paintT != null && layerId != null) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CompactButton(

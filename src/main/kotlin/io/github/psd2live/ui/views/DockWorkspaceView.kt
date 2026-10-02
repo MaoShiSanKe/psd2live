@@ -353,6 +353,10 @@ internal fun DockWorkspaceView(
                 onKeepExisting = { pendingPaint.commitPaintSession(rebuildMesh = false) },
                 onDismiss = { pendingPaint.showRebuildMeshDialog = false })
         }
+        viewModel.pendingDepthSplit?.takeIf { it.workspaceId == workspace.id }?.let { offer ->
+            io.github.psd2live.ui.components.DepthSplitDialog(offer,
+                onConfirm = viewModel::confirmDepthSplit, onDismiss = viewModel::dismissDepthSplit)
+        }
         viewModel.pendingMeshSplit?.let { offer ->
             io.github.psd2live.ui.components.MeshSplitDialog(
                 offer = offer,

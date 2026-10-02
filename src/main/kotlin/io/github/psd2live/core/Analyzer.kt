@@ -1,18 +1,25 @@
 package io.github.psd2live.core
 
 import io.github.psd2live.i18n.tr
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import org.umamo.format.art.SourceArt
 import kotlin.math.max
 
 object CharacterAnalyzer {
 	fun analyze(source: SourceArt, config: PipelineConfig): PipelineAnalysis {
+		// A depth copy retains its original texture rectangle even when completely erased: its
+		// welded mesh must sample transparent pixels, never a neighbour's tile after a repack.
+		val depthLayerIds = config.rigEdits.authoringJournal.filter {
+			it["op"]?.jsonPrimitive?.contentOrNull == DepthSplit.OP
+		}.mapNotNullTo(HashSet()) { it["layer_id"]?.jsonPrimitive?.contentOrNull }
 		val initiallyClassified = source.layers
 			.filter { it.raster.width > 0 && it.raster.height > 0 && it.id.raw !in config.deletedLayerIds }
 			.map { layer ->
 				LayerClassifier.classify(layer, config.alphaThreshold).withOverride(
 					config.layerOverrides[layer.id.raw],
 				)
-			}
+			}.map { if (it.source.id.raw in depthLayerIds && it.opaquePixels == 0) it.copy(opaquePixels = 1) else it }
 		// Fresh layers stay intact until the UI offers a named split. Old projects may still
 		// reference generated :r/:l IDs, so retain those identities when they carry edits.
 		val layers = initiallyClassified.flatMap { original ->
