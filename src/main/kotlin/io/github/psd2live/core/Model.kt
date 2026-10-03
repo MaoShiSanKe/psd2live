@@ -101,6 +101,17 @@ data class RigAnchors(
 enum class MeshFillAlgorithm { GRADED_POISSON, ADAPTIVE_QUADTREE, SIMPLE_TRIANGLES, TRIANGLE_FRACTAL, CONTOUR_PAVING }
 enum class MeshEdgeMode { SINGLE, DOUBLE, TRIPLE }
 
+/** What the lengths in [MeshSettings] are measured in. */
+enum class MeshUnits {
+	/** Source pixels, as projects saved before mesh units: detail and cost grow with the document's resolution. */
+	PIXELS,
+	/**
+	 * Pixels of a document [MeshResolution.REFERENCE_SIDE] long: the same settings give the same mesh at any
+	 * resolution, and larger documents are meshed from a reduced raster.
+	 */
+	DOCUMENT,
+}
+
 /**
  * [edgeRatio]: first interior spacing over the contour spacing, so the fill never repeats the contour row.
  * [gradation]: spacing growth per pixel of depth, up to the interior density.
@@ -159,6 +170,8 @@ data class PipelineConfig(
 	val meshSuppressBoundaryDiagonals: Boolean = false,
 	val meshFillParameters: MeshFillParameters = MeshFillParameters(),
 	val meshOverrides: Map<String, MeshSettings> = emptyMap(),
+	/** The unit of every mesh length above and of [meshOverrides]. */
+	val meshUnits: MeshUnits = MeshUnits.DOCUMENT,
 	val alphaThreshold: Int = 8,
 	val headTurnStrength: Float = 1f,
 	val bodyStrength: Float = 1f,

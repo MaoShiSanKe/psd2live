@@ -31,19 +31,15 @@ object ComponentSplitter {
 		layer: ClassifiedLayer,
 		meshSpacing: Float = 64f,
 		alphaThreshold: Int = 8,
-	): List<ClassifiedLayer> = splitInternal(layer, meshSpacing, alphaThreshold)
-
-	fun split(
-		layer: ClassifiedLayer,
-		faceCenterX: Float,
-		alphaThreshold: Int,
-		meshSpacing: Float = 64f,
-	): List<ClassifiedLayer> = splitInternal(layer, meshSpacing, alphaThreshold)
+		/** Source pixels per mesh unit, the unit [meshSpacing] is in (see [MeshResolution]). */
+		unitScale: Float = 1f,
+	): List<ClassifiedLayer> = splitInternal(layer, meshSpacing, alphaThreshold, unitScale)
 
 	private fun splitInternal(
 		layer: ClassifiedLayer,
 		meshSpacing: Float,
 		alphaThreshold: Int,
+		unitScale: Float,
 	): List<ClassifiedLayer> {
 		if (layer.semantic.side != Side.NONE || layer.semantic.tag in nonSplittableTags) return listOf(layer)
 		val source = layer.source
@@ -66,6 +62,7 @@ object ComponentSplitter {
 			rgba = source.raster.rgba,
 			alphaThreshold = alphaThreshold,
 			spacing = effectiveSpacing,
+			unitScale = unitScale,
 		) ?: return listOf(layer)
 
 		val positions = mesh.positions

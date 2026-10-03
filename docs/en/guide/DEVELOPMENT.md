@@ -29,6 +29,7 @@ On Windows, `run-gui.bat` in the repository root also starts the GUI. Without ar
 | `--lang <zh\|en\|ja>` | system language | Log language |
 | `--atlas <size>` | 4096 | Texture atlas size |
 | `--mesh-spacing <px>` | 64 | Mesh spacing |
+| `--mesh-pixels` | off | Measure mesh lengths in source pixels instead of pixels of the document scaled to a 1024 px long side |
 | `--head-strength <value>` | 1.0 | Head deformation strength |
 | `--body-strength <value>` | 1.0 | Body deformation strength |
 | `--mesh-only` | off | Generate meshes only |

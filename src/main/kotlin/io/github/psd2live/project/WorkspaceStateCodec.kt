@@ -352,6 +352,7 @@ internal object WorkspaceStateCodec {
         put("meshFillAlgorithm", state.meshFillAlgorithm.name)
         put("meshSuppressBoundaryDiagonals", state.meshSuppressBoundaryDiagonals)
         put("meshFillParameters", encodeFillParameters(state.meshFillParameters))
+        put("meshUnits", state.meshUnits.name)
         putJsonObject("meshOverrides") {
             state.meshOverrides.toSortedMap().forEach { (k, v) ->
                 put(k, buildJsonObject {
@@ -460,6 +461,7 @@ internal object WorkspaceStateCodec {
         put("meshFillAlgorithm", state.meshFillAlgorithm.name)
         put("meshSuppressBoundaryDiagonals", state.meshSuppressBoundaryDiagonals)
         put("meshFillParameters", encodeFillParameters(state.meshFillParameters))
+        put("meshUnits", state.meshUnits.name)
         putJsonObject("meshOverrides") {
             state.meshOverrides.toSortedMap().forEach { (k, v) ->
                 put(k, buildJsonObject {
@@ -583,6 +585,10 @@ internal object WorkspaceStateCodec {
             ?.let { runCatching { MeshFillAlgorithm.valueOf(it) }.getOrNull() } ?: base.meshFillAlgorithm,
         meshSuppressBoundaryDiagonals = value["meshSuppressBoundaryDiagonals"]?.jsonPrimitive?.booleanOrNull ?: base.meshSuppressBoundaryDiagonals,
         meshFillParameters = decodeFillParameters(value["meshFillParameters"], base.meshFillParameters),
+        // Settings saved before mesh units were source pixels; keep them so the same meshes come back.
+        meshUnits = value["meshUnits"]?.jsonPrimitive?.contentOrNull
+            ?.let { runCatching { io.github.psd2live.core.MeshUnits.valueOf(it) }.getOrNull() }
+            ?: if ("meshSpacing" in value) io.github.psd2live.core.MeshUnits.PIXELS else base.meshUnits,
         meshOverrides = value["meshOverrides"]?.jsonObject?.mapNotNull { (k, v) ->
             val obj = v.jsonObject
             val outerMargin = obj["outerMargin"]?.jsonPrimitive?.floatOrNull ?: 2.0f

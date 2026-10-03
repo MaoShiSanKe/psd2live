@@ -32,7 +32,9 @@ import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.MeshEdgeMode
 import io.github.psd2live.core.MeshFillAlgorithm
 import io.github.psd2live.core.MeshFillParameters
+import io.github.psd2live.core.MeshResolution
 import io.github.psd2live.core.MeshSettings
+import io.github.psd2live.core.MeshUnits
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.ComponentPalette
 import io.github.psd2live.ui.components.CompactButton
@@ -175,7 +177,41 @@ private fun GlobalMeshSettingsEditor(
 				onEditStart = { viewModel.beginEditorField("setGlobalMeshSettings.$it") },
 				onEditEnd = { viewModel.endEditorField("setGlobalMeshSettings.$it") },
 			)
+			MeshUnitsToggle(state = state, viewModel = viewModel, enabled = !isBusy, showHints = showHints)
 		}
+	}
+}
+
+/** Whether mesh lengths follow the document's resolution; shows how many source pixels one unit is. */
+@Composable
+private fun MeshUnitsToggle(
+	state: PSD2LiveState,
+	viewModel: PSD2LiveViewModel,
+	enabled: Boolean,
+	showHints: Boolean,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val source = state.analysis?.source
+	Text(
+		tr("mesh.settings.unitsGroup"),
+		style = typography.caption.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
+		color = colors.textMuted,
+	)
+	CompactCheckbox(
+		checked = state.meshUnits == MeshUnits.DOCUMENT,
+		onCheckedChange = { viewModel.setMeshUnits(if (it) MeshUnits.DOCUMENT else MeshUnits.PIXELS) },
+		label = tr("mesh.settings.unitsDocument"),
+		enabled = enabled,
+	)
+	if (showHints || (source != null && state.meshUnits == MeshUnits.DOCUMENT)) {
+		val scale = source?.let { MeshResolution.unitScale(state.meshUnits, it.widthPx, it.heightPx) } ?: 1f
+		Text(
+			if (showHints) tr("mesh.settings.unitsHint", MeshResolution.REFERENCE_SIDE.toString())
+			else tr("mesh.settings.unitsScale", String.format(java.util.Locale.ROOT, "%.2f", scale)),
+			style = typography.caption.copy(fontSize = 9.sp),
+			color = colors.textMuted,
+		)
 	}
 }
 

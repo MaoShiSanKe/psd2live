@@ -392,8 +392,9 @@ object RigBuilder {
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
 	): PipelineAnalysis {
+		val unitScale = MeshResolution.unitScale(config, analysis.source)
 		val layers = analysis.layers.map { layer ->
-			val footprint = meshFootprint(layer, config, meshCache) ?: return@map layer
+			val footprint = meshFootprint(layer, config, meshCache, unitScale) ?: return@map layer
 			layer.copy(
 				bounds = footprint.bounds,
 				centroidX = footprint.centerX,
@@ -410,7 +411,9 @@ object RigBuilder {
 
 	private data class MeshFootprint(val bounds: Bounds, val centerX: Float, val centerY: Float)
 
-	private fun meshFootprint(layer: ClassifiedLayer, config: PipelineConfig, meshCache: PreviewMeshCache?): MeshFootprint? {
+	private fun meshFootprint(
+		layer: ClassifiedLayer, config: PipelineConfig, meshCache: PreviewMeshCache?, unitScale: Float,
+	): MeshFootprint? {
 		if (layer.opaquePixels <= 0) return null
 		val source = layer.source
 		val width = source.raster.width
@@ -426,8 +429,8 @@ object RigBuilder {
 			return rectangle()
 		}
 		val (settings, _) = meshSettings(layer, config)
-		val adaptive = if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings)
-			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings)
+		val adaptive = if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
+			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
 		// The renderer falls back to a rectangular mesh when adaptive triangulation fails.
 		if (adaptive == null) return rectangle()
 		if (adaptive.indices.isEmpty()) return null
@@ -1184,6 +1187,7 @@ object RigBuilder {
 			pageHeight,
 			config,
 			meshCache,
+			MeshResolution.unitScale(config, context.analysis.source),
 		)
 		val outlineMouth = config.mouthOutlineEnabled && !config.meshOnly &&
 			layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)
@@ -1953,18 +1957,20 @@ object RigBuilder {
 		atlasHeight: Int = atlasWidth,
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
+		unitScale: Float,
 	): MeshData {
 		val width = max(1, layer.source.raster.width)
 		val height = max(1, layer.source.raster.height)
-		val (settings, effectiveSpacing) = meshSettings(layer, config)
+		val (settings, unitSpacing) = meshSettings(layer, config)
+		val effectiveSpacing = unitSpacing * unitScale
 
 		// Authored tooth layers may contain several disconnected teeth. Keep their complete texture;
 		// the mouth clipping id supplies the visible boundary.
 		if (layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) {
 			return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
 		}
-		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings)
-		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings)
+		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
+		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
 		if (adaptive != null) {
 			val positions = FloatArray(adaptive.positions.size)
 			val canvas = FloatArray(adaptive.positions.size)

@@ -2242,6 +2242,14 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
+	/** Switches what every mesh length is measured in; the meshes are rebuilt like any global mesh change. */
+	fun setMeshUnits(units: io.github.psd2live.core.MeshUnits) {
+		if (state.value.meshUnits == units) return
+		updateState { it.copy(meshUnits = units) }
+		schedulePreviewRebuild()
+		editorChanged()
+	}
+
 	fun setPartMeshSettings(layerId: String, settings: MeshSettings) {
 		clearMeshSettingsPreviewState(layerId)
 		updateState { it.copy(meshOverrides = it.meshOverrides + (layerId to settings)) }

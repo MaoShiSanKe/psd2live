@@ -54,6 +54,8 @@ fun main(arguments: Array<String>) {
             neuralAlpha = !options.flags.contains("--no-upscale-neural-alpha"),
         ),
 		meshSpacing = options.int("--mesh-spacing", 64),
+		meshUnits = if (options.flags.contains("--mesh-pixels")) io.github.psd2live.core.MeshUnits.PIXELS
+			else io.github.psd2live.core.MeshUnits.DOCUMENT,
 		headTurnStrength = options.float("--head-strength", 1f),
 		bodyStrength = options.float("--body-strength", 1f),
 		meshOnly = options.flags.contains("--mesh-only"),

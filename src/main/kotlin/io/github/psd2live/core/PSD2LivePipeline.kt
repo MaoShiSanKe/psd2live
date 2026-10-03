@@ -213,6 +213,7 @@ class PSD2LivePipeline {
 			current.config.meshFillAlgorithm != config.meshFillAlgorithm ||
 			current.config.meshSuppressBoundaryDiagonals != config.meshSuppressBoundaryDiagonals ||
 			current.config.meshFillParameters != config.meshFillParameters ||
+			current.config.meshUnits != config.meshUnits ||
 			current.config.alphaThreshold != config.alphaThreshold ||
 			current.config.meshOnly != config.meshOnly ||
 			current.config.mouthOutlineEnabled != config.mouthOutlineEnabled ||

@@ -411,6 +411,8 @@ data class PSD2LiveState(
 	val meshSuppressBoundaryDiagonals: Boolean = false,
 	val meshFillParameters: io.github.psd2live.core.MeshFillParameters = io.github.psd2live.core.MeshFillParameters(),
 	val meshOverrides: Map<String, MeshSettings> = emptyMap(),
+	/** New projects measure mesh lengths at the reference document size; older ones keep source pixels. */
+	val meshUnits: io.github.psd2live.core.MeshUnits = io.github.psd2live.core.MeshUnits.DOCUMENT,
 	val texturePadding: Int = 2,
 	val alphaThreshold: Int = 8,
 	val headStrength: Float = 1.0f,
@@ -625,6 +627,7 @@ data class PSD2LiveState(
 			meshSuppressBoundaryDiagonals = meshSuppressBoundaryDiagonals,
 			meshFillParameters = meshFillParameters,
 			meshOverrides = meshOverrides,
+			meshUnits = meshUnits,
 			alphaThreshold = alphaThreshold,
 			headTurnStrength = headStrength,
 			bodyStrength = bodyStrength,

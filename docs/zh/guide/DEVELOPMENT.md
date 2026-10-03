@@ -29,6 +29,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 | `--lang <zh\|en\|ja>` | 系统语言 | 日志语言 |
 | `--atlas <size>` | 4096 | 纹理图集尺寸 |
 | `--mesh-spacing <px>` | 64 | 网格间距 |
+| `--mesh-pixels` | 关闭 | 按源像素而非长边缩放到 1024 px 的文档像素计算网格长度 |
 | `--head-strength <value>` | 1.0 | 头部形变幅度 |
 | `--body-strength <value>` | 1.0 | 身体形变幅度 |
 | `--mesh-only` | 关闭 | 仅生成网格 |

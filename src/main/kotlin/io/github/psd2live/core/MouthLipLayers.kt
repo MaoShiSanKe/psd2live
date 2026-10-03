@@ -35,6 +35,7 @@ internal object MouthLipLayers {
         val layout = input.calibration ?: input
         val faceRig = NinePoseFaceRig.from(layout)
         val headSpace = faceRig.coordinateSpace
+        val unitScale = MeshResolution.unitScale(config, input.source)
         val layers = originals.flatMap { owner ->
             if (owner.semantic.tag !in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN) || owner.opaquePixels == 0) listOf(owner)
             else {
@@ -53,6 +54,7 @@ internal object MouthLipLayers {
                     suppressBoundaryDiagonals = config.meshOverrides[owner.source.id.raw]?.suppressBoundaryDiagonals
                         ?: config.meshSuppressBoundaryDiagonals,
                     fillParameters = config.meshOverrides[owner.source.id.raw]?.fillParameters ?: config.meshFillParameters,
+                    unitScale = unitScale,
                 )
                 val lips = if (adaptive != null) {
                     val rigPositions = FloatArray(adaptive.positions.size)

@@ -92,7 +92,7 @@ private fun validateAgentProjectSettings(
         "exportGuideImageParts", "exportIncludePhysics", "exportIncludeUserData", "exportIncludeDisplayInfo",
     )
     require(changes.keys.all { it in ranges || it in booleans ||
-        it in setOf("textureUpscale", "mouthShape", "runtimeTarget", "meshEdgeMode", "meshFillParameters", "rigTuning") }) {
+        it in setOf("textureUpscale", "mouthShape", "runtimeTarget", "meshEdgeMode", "meshUnits", "meshFillParameters", "rigTuning") }) {
         "Unknown project setting"
     }
     changes.forEach { (key, value) ->
@@ -105,6 +105,7 @@ private fun validateAgentProjectSettings(
             key in booleans -> require(value.jsonPrimitive.booleanOrNull != null) { "$key must be boolean" }
             key == "mouthShape" -> require(value.jsonPrimitive.content in setOf("flat", "smile", "w", "custom")) { "Unknown mouth shape" }
             key == "meshEdgeMode" -> require(io.github.psd2live.core.MeshEdgeMode.entries.any { it.name == value.jsonPrimitive.content }) { "Unknown mesh edge mode" }
+            key == "meshUnits" -> require(io.github.psd2live.core.MeshUnits.entries.any { it.name == value.jsonPrimitive.content }) { "Unknown mesh units" }
             key == "runtimeTarget" -> require(org.umamo.runtime.model.RuntimeTarget.entries.any { it.name == value.jsonPrimitive.content }) { "Unknown runtime target" }
         }
     }

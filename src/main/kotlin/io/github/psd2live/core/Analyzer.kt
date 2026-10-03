@@ -24,7 +24,8 @@ object CharacterAnalyzer {
 		// reference generated :r/:l IDs, so retain those identities when they carry edits.
 		val layers = initiallyClassified.flatMap { original ->
 			if (!preserveLegacySplit(original.source.id.raw, config)) listOf(original)
-			else ComponentSplitter.split(original, config.meshSpacing.toFloat(), config.alphaThreshold).map { component ->
+			else ComponentSplitter.split(original, config.meshSpacing.toFloat(), config.alphaThreshold,
+				MeshResolution.unitScale(config, source)).map { component ->
 				val override = config.layerOverrides[component.source.id.raw]
 					?: config.layerOverrides[original.source.id.raw]
 				component.withOverride(override, preserveSide = component.source.id != original.source.id)
