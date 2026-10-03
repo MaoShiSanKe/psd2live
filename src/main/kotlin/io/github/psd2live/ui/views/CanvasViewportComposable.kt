@@ -1,11 +1,16 @@
 package io.github.psd2live.ui.views
 
 import io.github.psd2live.ui.PanShift
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
 import io.github.psd2live.render.ArtworkDrawList
 import io.github.psd2live.render.ArtworkOptions
 import io.github.psd2live.render.CanvasRenderService
 import io.github.psd2live.render.CanvasScene
 import io.github.psd2live.render.MeshWireframe
+import io.github.psd2live.render.OverlayItem
+import io.github.psd2live.render.OverlayScene
+import io.github.psd2live.render.RigGuides
 import io.github.psd2live.render.WireItem
 import io.github.psd2live.ui.state.AppSettings
 import androidx.compose.ui.graphics.asComposeImageBitmap
@@ -330,6 +335,8 @@ fun CanvasViewportComposable(
 	val gpuSubmission = remember(renderKey) { GpuSceneSubmission(renderKey) }
 	DisposableEffect(renderKey) { onDispose { CanvasRenderService.release(renderKey) } }
 	val drawnGeometry = remember { DrawnGeometryMemo() }
+	val guideLabelMeasurer = rememberTextMeasurer(cacheSize = 128)
+	val guideLabels = remember { GuideLabelMemo() }
 	val sdkFrame by frameFlow.collectAsState()
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
 	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
@@ -1101,6 +1108,60 @@ fun CanvasViewportComposable(
 				// see the same instance, or the passes keyed on it would draw again and again.
 				val geometry = drawnGeometry.geometry(model, editGeometry, informationPose, simulated)
 
+					val guideKey = listOf(
+						model, geometryPose, editGeometry, informationPose, viewport, w, h,
+						viewOptions, warpIds, rotationIds, warpPoints, targetVisibleLayerIds,
+						canvasState.selectedLayerId, canvasState.selectedDeformerId,
+						canvasState.hoveredLayerId, canvasState.hoveredDeformerId,
+						canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
+						editor.glueSwapped, editor.drawsTransformBox,
+					)
+					val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
+					val deformerBounds = RigCanvasSupport.boundsByDeformer(model, drawableBounds)
+					val deformEditTarget = selectedDeformerId?.takeIf {
+						mode == CanvasMode.EDIT && showRotation && (
+							editor.hierarchyMode == EditHierarchyMode.DEFORM ||
+								editor.hierarchyMode == EditHierarchyMode.EDIT
+							)
+					}
+					val globalRotationIds = when {
+						mode != CanvasMode.EDIT -> emptySet()
+						deformEditTarget != null -> rotationIds - deformEditTarget
+						else -> rotationIds
+					}
+					val transformBoxOwnsSelection = mode == CanvasMode.EDIT && editor.drawsTransformBox
+					// The rig guides the GPU draws itself; their names and indices are Compose text over its frame.
+					val gpuWarpGuides = gpuReady
+					val gpuRotationGuides = gpuReady
+					val gpuBoxGuides = gpuReady
+					fun gpuRigGuides(): List<OverlayItem> {
+						if (!gpuReady) return emptyList()
+						val guides = RigGuides(viewport)
+						val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
+						if (gpuRotationGuides && globalRotationIds.isNotEmpty()) {
+							guides.rotations(io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(model.rig.puppet, guidePose,
+								viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected))
+						}
+						if (gpuBoxGuides && showSelectionBounds && !transformBoxOwnsSelection) {
+							selectedLayerId?.let { layerId ->
+								val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
+								drawableId?.let(drawableBounds::get)?.let { guides.selectionBox(it, ComponentPalette.strong(layerId).brighter()) }
+							}
+							if (mode == CanvasMode.EDIT) selectedDeformerId?.let { defId ->
+								val def = model.rig.puppet.deformers.firstOrNull { it.id.raw == defId }
+								if (def !is org.umamo.runtime.model.Deformer.Warp) {
+									deformerBounds[defId]?.let { guides.selectionBox(it, ComponentPalette.strong(defId).brighter()) }
+								}
+							}
+						}
+						if (gpuWarpGuides && warpIds.isNotEmpty()) {
+							val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model.rig.puppet, warpPoints), viewport)
+							guides.warps(io.github.psd2live.ui.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints, warpIds,
+								selectedDeformerId, hoveredDeformerId, dimUnselected), corners)
+						}
+						return guides.items
+					}
+
 					// 3b's choice of meshes. The GPU draws them in its frame; the Java2D guide pass draws them in software.
 					// Outside SELECT mode, mesh wires are focus chrome for the active artmesh only - every other part
 					// stays texture-only so the canvas stays readable while editing. In SELECT (object) mode every mesh
@@ -1160,10 +1221,11 @@ fun CanvasViewportComposable(
 							tintColor = hoverTintColor,
 						)
 						val wireKey = wireItems.map { Triple(it.drawable.id, it.selected, it.dimmed) }
-						gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey)) {
+						gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey,
+							guideKey, gpuWarpGuides, gpuRotationGuides)) {
 							CanvasScene(w, h, viewport, model, geometry,
 								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
-								MeshWireframe.overlay(geometry, wireItems, showTexture))
+								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()))
 						}
 						val frame = gpuFrame
 						val image = gpuImage
@@ -1199,14 +1261,6 @@ fun CanvasViewportComposable(
 						}
 					}
 
-				val guideKey = listOf(
-					model, geometryPose, editGeometry, informationPose, viewport, w, h,
-					viewOptions, warpIds, rotationIds, warpPoints, targetVisibleLayerIds,
-					canvasState.selectedLayerId, canvasState.selectedDeformerId,
-					canvasState.hoveredLayerId, canvasState.hoveredDeformerId,
-					canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
-					editor.glueSwapped, editor.drawsTransformBox,
-				)
 				val guideImage = guideCache.imageFor(guideKey, w, h, panShift(guideKey)) { g ->
 					g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 					// Whether any section drew: an empty pass is neither converted nor composited.
@@ -1252,20 +1306,7 @@ fun CanvasViewportComposable(
 					// 3c. Rotation Channel (RigInformationOverlay). Same ownership as warps: the
 					// editor decides which rotations show via showRotation; the Compose overlay draws
 					// the interactive needle for the edit target when that toggle is on.
-					val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
-					val deformerBounds = RigCanvasSupport.boundsByDeformer(model, drawableBounds)
-					val deformEditTarget = selectedDeformerId?.takeIf {
-						mode == CanvasMode.EDIT && showRotation && (
-							editor.hierarchyMode == EditHierarchyMode.DEFORM ||
-								editor.hierarchyMode == EditHierarchyMode.EDIT
-							)
-					}
-					val globalRotationIds = when {
-						mode != CanvasMode.EDIT -> emptySet()
-						deformEditTarget != null -> rotationIds - deformEditTarget
-						else -> rotationIds
-					}
-					if (globalRotationIds.isNotEmpty()) {
+					if (!gpuRotationGuides && globalRotationIds.isNotEmpty()) {
 						painted = true
 						io.github.psd2live.ui.RigInformationOverlay.paintRotations(
 							g, model.rig.puppet,
@@ -1284,8 +1325,7 @@ fun CanvasViewportComposable(
 					// while this one frames a single layer — so letting both draw stacks two different
 					// rectangles over the same artwork. The transform box wins: it is the one that is
 					// dragged. Every other tool leaves this as the only selection feedback.
-					val transformBoxOwnsSelection = mode == CanvasMode.EDIT && editor.drawsTransformBox
-					if (showSelectionBounds && !transformBoxOwnsSelection) {
+					if (!gpuBoxGuides && showSelectionBounds && !transformBoxOwnsSelection) {
 						selectedLayerId?.let { layerId ->
 							val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
 							val bounds = drawableId?.let(drawableBounds::get)
@@ -1319,7 +1359,7 @@ fun CanvasViewportComposable(
 					// not this file's: the editor is what picks their corner marks, and were the two to
 					// work it out separately a mark could outlive the deformer it belongs to — which is
 					// exactly what it used to do.
-					if (warpIds.isNotEmpty()) {
+					if (!gpuWarpGuides && warpIds.isNotEmpty()) {
 						painted = true
 						io.github.psd2live.ui.RigInformationOverlay.paint(
 							g, model.rig.puppet,
@@ -1378,6 +1418,39 @@ fun CanvasViewportComposable(
 					painted
 				}
 				if (guideImage != null) drawImage(guideImage, topLeft = guideCache.offset)
+				if (gpuReady && (informationNames || informationIndices)) {
+					val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
+					val labels = guideLabels.labels(guideKey) {
+						buildList {
+							for (layer in io.github.psd2live.ui.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints,
+								warpIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
+								if (layer.isDimmed) continue
+								val p = layer.points
+								val w = layer.warp
+								if (informationIndices) for (i in 0 until minOf(p.size / 2, (w.rows + 1) * (w.columns + 1))) {
+									add(GuideLabel(i.toString(), viewport.x(p[i * 2]).toFloat() + 3f,
+										viewport.yFromWorld(p[i * 2 + 1]).toFloat() - 3f, layer.wireColor.rgb, plate = false))
+								}
+								if (informationNames && p.size >= 2) add(GuideLabel("${w.name} [${w.id.raw}] ${w.columns}×${w.rows}",
+									viewport.x(p[0]).toFloat().coerceAtLeast(0f) + 3f, viewport.yFromWorld(p[1]).toFloat().coerceAtLeast(16f),
+									layer.wireColor.rgb, plate = true))
+							}
+							if (informationNames) for (needle in io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(model.rig.puppet,
+									guidePose, viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
+								if (needle.dimmed) continue
+								add(GuideLabel("${needle.rotation.name} [${needle.rotation.id.raw}]", needle.pivot.x.coerceAtLeast(0f) + 3f,
+									(needle.pivot.y - 10f).coerceAtLeast(16f), needle.color.rgb, plate = true))
+							}
+						}
+					}
+					for (label in labels) {
+						val layout = guideLabelMeasurer.measure(label.text, GuideLabelStyle)
+						val top = label.baseline - layout.firstBaseline
+						if (label.plate) drawRect(Color(20, 20, 24, 220), Offset(label.x - 3f, label.baseline - 14f),
+							Size(layout.size.width + 6f, 17f))
+						drawText(layout, color = Color(label.argb), topLeft = Offset(label.x, top))
+					}
+				}
 				// Session tiles sit above the mesh overlays and never write into RigPreviewModel —
 				// Apply (commitPaintSession) is what publishes them to the shared preview.
 				if (showTexture && paintSession != null) {
@@ -1530,6 +1603,21 @@ fun CanvasViewportComposable(
 			)
 		}
 	}
+    }
+}
+
+/** One guide's name or point index, drawn as text over the GPU frame; [baseline] as Java2D's drawString takes it. */
+private class GuideLabel(val text: String, val x: Float, val baseline: Float, val argb: Int, val plate: Boolean)
+
+private val GuideLabelStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+
+/** The guide labels laid out for one set of guide inputs, kept across redraws that change nothing they show. */
+private class GuideLabelMemo {
+    private var key: List<Any?>? = null
+    private var labels: List<GuideLabel> = emptyList()
+    fun labels(key: List<Any?>, build: () -> List<GuideLabel>): List<GuideLabel> {
+        if (this.key != key) { labels = build(); this.key = key }
+        return labels
     }
 }
 

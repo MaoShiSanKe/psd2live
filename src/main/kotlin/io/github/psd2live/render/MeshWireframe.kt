@@ -34,8 +34,8 @@ internal object MeshWireframe {
 	 */
 	fun overlay(geometry: DeformedGeometry, items: List<WireItem>, showTexture: Boolean): OverlayScene {
 		if (items.isEmpty()) return OverlayScene.EMPTY
-		val lines = ArrayList<LineBatch>(items.size * 2)
-		val points = ArrayList<PointBatch>()
+		val lines = ArrayList<OverlayItem>(items.size * 2)
+		val points = ArrayList<OverlayItem>()
 		for (item in items) {
 			val mesh = item.drawable.mesh ?: continue
 			val world = geometry.worldPositions[item.drawable.id] ?: continue
@@ -57,7 +57,7 @@ internal object MeshWireframe {
 			lines += LineBatch(wireColor(item).rgb, width, drawn)
 			if (item.selected) points += PointBatch(POINT, POINT, 2.5f, 0f, world.copyOf(minOf(world.size, mesh.vertexCount * 2)))
 		}
-		return OverlayScene(lines, points)
+		return OverlayScene(lines + points)
 	}
 
 	fun uniqueEdges(indices: IntArray): IntArray = edgeCache.getOrPut(indices) {

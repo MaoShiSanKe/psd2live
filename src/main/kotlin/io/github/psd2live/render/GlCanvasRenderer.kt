@@ -64,6 +64,8 @@ internal class GlCanvasRenderer : AutoCloseable {
 	private val lineInstances: Int
 	private val pointVao: Int
 	private val pointInstances: Int
+	private val fillVao: Int = GL30.glGenVertexArrays()
+	private val fillVertices: Int = GL15.glGenBuffers()
 	private val worldUniform = FloatArray(4)
 
 	init {
@@ -85,6 +87,11 @@ internal class GlCanvasRenderer : AutoCloseable {
 		}
 		quad(floatArrayOf(0f, -1f, 1f, -1f, 0f, 1f, 1f, 1f), 4).let { (vao, buffer) -> lineVao = vao; lineInstances = buffer }
 		quad(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f), 2).let { (vao, buffer) -> pointVao = vao; pointInstances = buffer }
+		GL30.glBindVertexArray(fillVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, fillVertices)
+		GL20.glEnableVertexAttribArray(0)
+		GL20.glVertexAttribPointer(0, 2, GL11.GL_FLOAT, false, 0, 0L)
+		GL30.glBindVertexArray(0)
 	}
 
 	/**
@@ -154,8 +161,8 @@ internal class GlCanvasRenderer : AutoCloseable {
 		textures.values.forEach(GL11::glDeleteTextures)
 		textures.clear()
 		GL20.glDeleteProgram(artwork.id); GL20.glDeleteProgram(lines.id); GL20.glDeleteProgram(points.id)
-		GL30.glDeleteVertexArrays(lineVao); GL30.glDeleteVertexArrays(pointVao)
-		GL15.glDeleteBuffers(lineInstances); GL15.glDeleteBuffers(pointInstances)
+		GL30.glDeleteVertexArrays(lineVao); GL30.glDeleteVertexArrays(pointVao); GL30.glDeleteVertexArrays(fillVao)
+		GL15.glDeleteBuffers(lineInstances); GL15.glDeleteBuffers(pointInstances); GL15.glDeleteBuffers(fillVertices)
 	}
 
 	private fun worldTransform(viewport: CanvasViewport, width: Int, height: Int) {
@@ -236,37 +243,81 @@ internal class GlCanvasRenderer : AutoCloseable {
 	}
 
 	private fun drawOverlay(overlay: OverlayScene, width: Int, height: Int) {
-		if (overlay.lines.isNotEmpty()) {
-			GL20.glUseProgram(lines.id)
-			GL20.glUniform4fv(lines.uniform("u_world"), worldUniform)
-			GL20.glUniform2f(lines.uniform("u_viewport"), width.toFloat(), height.toFloat())
-			GL30.glBindVertexArray(lineVao)
-			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, lineInstances)
-			for (batch in overlay.lines) {
-				if (batch.segments.size < 4) continue
-				GL15.glBufferData(GL15.GL_ARRAY_BUFFER, batch.segments, GL15.GL_STREAM_DRAW)
-				GL20.glUniform1f(lines.uniform("u_width"), batch.width)
-				setColor(lines.uniform("u_color"), batch.argb)
-				GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, batch.segments.size / 4)
+		if (overlay.items.isEmpty()) return
+		// The artwork's masks leave their references behind; the fills count from a clean stencil.
+		GL11.glClear(GL11.GL_STENCIL_BUFFER_BIT)
+		for (item in overlay.items) when (item) {
+			is LineBatch -> {
+				if (item.segments.size < 4) continue
+				GL20.glUseProgram(lines.id)
+				GL20.glUniform4fv(lines.uniform("u_world"), worldUniform)
+				GL20.glUniform2f(lines.uniform("u_viewport"), width.toFloat(), height.toFloat())
+				GL30.glBindVertexArray(lineVao)
+				GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, lineInstances)
+				GL15.glBufferData(GL15.GL_ARRAY_BUFFER, item.segments, GL15.GL_STREAM_DRAW)
+				GL20.glUniform1f(lines.uniform("u_width"), item.width)
+				setColor(lines.uniform("u_color"), item.argb)
+				GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, item.segments.size / 4)
 			}
-		}
-		if (overlay.points.isNotEmpty()) {
-			GL20.glUseProgram(points.id)
-			GL20.glUniform4fv(points.uniform("u_world"), worldUniform)
-			GL20.glUniform2f(points.uniform("u_viewport"), width.toFloat(), height.toFloat())
-			GL30.glBindVertexArray(pointVao)
-			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, pointInstances)
-			for (batch in overlay.points) {
-				if (batch.centers.size < 2) continue
-				GL15.glBufferData(GL15.GL_ARRAY_BUFFER, batch.centers, GL15.GL_STREAM_DRAW)
-				GL20.glUniform1f(points.uniform("u_radius"), batch.radius)
-				GL20.glUniform1f(points.uniform("u_ring"), batch.ring)
-				setColor(points.uniform("u_fill"), batch.fillArgb)
-				setColor(points.uniform("u_stroke"), batch.strokeArgb)
-				GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, batch.centers.size / 2)
+			is PointBatch -> {
+				if (item.centers.size < 2) continue
+				GL20.glUseProgram(points.id)
+				GL20.glUniform4fv(points.uniform("u_world"), worldUniform)
+				GL20.glUniform2f(points.uniform("u_viewport"), width.toFloat(), height.toFloat())
+				GL30.glBindVertexArray(pointVao)
+				GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, pointInstances)
+				GL15.glBufferData(GL15.GL_ARRAY_BUFFER, item.centers, GL15.GL_STREAM_DRAW)
+				GL20.glUniform1f(points.uniform("u_radius"), item.radius)
+				GL20.glUniform1f(points.uniform("u_ring"), item.ring)
+				setColor(points.uniform("u_fill"), item.fillArgb)
+				setColor(points.uniform("u_stroke"), item.strokeArgb)
+				GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, item.centers.size / 2)
 			}
+			is FillBatch -> drawFill(item)
 		}
 		GL30.glBindVertexArray(0)
+	}
+
+	/**
+	 * Stencil, then cover: each outline's triangle fan inverts the stencil, which leaves exactly the even-odd
+	 * interior set, and one quad over the outlines' bounds paints it and clears the stencil behind itself.
+	 */
+	private fun drawFill(batch: FillBatch) {
+		val contours = batch.contours.filter { it.size >= 6 }
+		if (contours.isEmpty()) return
+		val total = contours.sumOf { it.size }
+		val vertices = FloatArray(total + 12)
+		var n = 0
+		var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+		for (contour in contours) {
+			contour.copyInto(vertices, n)
+			n += contour.size
+			for (i in contour.indices step 2) {
+				minX = minOf(minX, contour[i]); maxX = maxOf(maxX, contour[i])
+				minY = minOf(minY, contour[i + 1]); maxY = maxOf(maxY, contour[i + 1])
+			}
+		}
+		floatArrayOf(minX, minY, maxX, minY, minX, maxY, maxX, minY, maxX, maxY, minX, maxY).copyInto(vertices, n)
+		GL20.glUseProgram(artwork.id)
+		GL20.glUniform4fv(artwork.uniform("u_world"), worldUniform)
+		GL30.glBindVertexArray(fillVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, fillVertices)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, vertices, GL15.GL_STREAM_DRAW)
+		GL11.glEnable(GL11.GL_STENCIL_TEST)
+		GL11.glColorMask(false, false, false, false)
+		GL11.glStencilFunc(GL11.GL_ALWAYS, 0, 0xff)
+		GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_INVERT)
+		var first = 0
+		for (contour in contours) {
+			GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, first, contour.size / 2)
+			first += contour.size / 2
+		}
+		GL11.glColorMask(true, true, true, true)
+		GL11.glStencilFunc(GL11.GL_NOTEQUAL, 0, 0xff)
+		GL11.glStencilOp(GL11.GL_ZERO, GL11.GL_ZERO, GL11.GL_ZERO)
+		setColor(artwork.uniform("u_solid"), batch.argb)
+		GL11.glDrawArrays(GL11.GL_TRIANGLES, first, 6)
+		GL11.glDisable(GL11.GL_STENCIL_TEST)
 	}
 
 	/** Premultiplied from unpremultiplied ARGB. */

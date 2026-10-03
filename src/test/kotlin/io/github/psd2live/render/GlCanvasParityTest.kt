@@ -97,10 +97,14 @@ class GlCanvasParityTest {
 		val geometry = RigCanvasSupport.evaluate(model)
 		// World (0, 0) at screen (10, 50); world y runs up, so world y = -20 is screen row 70.
 		val viewport = CanvasViewport(1.0, 10.0, 50.0, 100f, 100f)
-		val overlay = OverlayScene(
-			listOf(LineBatch(0xFFFF0000.toInt(), 3f, floatArrayOf(0f, 0f, 100f, 0f))),
-			listOf(PointBatch(0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 6f, 2f, floatArrayOf(50f, -20f))),
-		)
+		// A concave L: a long arm across screen x 70..110, y 80..90 and a short one down x 70..90 to y 98, so the
+		// notch at x 90..110, y 90..98 must stay empty.
+		val ell = floatArrayOf(60f, -30f, 100f, -30f, 100f, -40f, 80f, -40f, 80f, -48f, 60f, -48f)
+		val overlay = OverlayScene(listOf(
+			LineBatch(0xFFFF0000.toInt(), 3f, floatArrayOf(0f, 0f, 100f, 0f)),
+			PointBatch(0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 6f, 2f, floatArrayOf(50f, -20f)),
+			FillBatch(0xFFFFFF00.toInt(), listOf(ell)),
+		))
 		val scene = CanvasScene(120, 100, viewport, model, geometry, emptyList(), overlay)
 		val pixels = requireNotNull(renderer!!.let { r -> host!!.submit { r.render("overlay", scene) }.get() }.readPixels())
 		fun rgba(x: Int, y: Int) = (0..3).map { pixels[(y * 120 + x) * 4 + it].toInt() and 0xff }
@@ -109,6 +113,49 @@ class GlCanvasParityTest {
 		assertTrue(rgba(60, 70) == listOf(0, 255, 0, 255), "point centre ${rgba(60, 70)}")
 		assertTrue(rgba(65, 70).let { it[2] > 200 && it[3] > 240 }, "point ring ${rgba(65, 70)}")
 		assertTrue(rgba(60, 78)[3] == 0, "nothing past the point's radius: ${rgba(60, 78)}")
+		assertTrue(rgba(75, 94) == listOf(255, 255, 0, 255), "inside the fill ${rgba(75, 94)}")
+		assertTrue(rgba(100, 94) == listOf(0, 0, 0, 0), "the concave notch stays empty: ${rgba(100, 94)}")
+		assertTrue(rgba(95, 82) == listOf(255, 255, 0, 255), "the long arm is filled: ${rgba(95, 82)}")
+	}
+
+	/** The GPU rig guides cover what the Java2D guides they replace paint, and nothing far from it. */
+	@Test fun rigGuidesCoverWhatJava2DPaints() {
+		val model = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val puppet = model.rig.puppet
+		val width = 960
+		val height = 720
+		val viewport = viewport(model, width, height, 1.0)
+		val warpIds = puppet.deformers.filterIsInstance<org.umamo.runtime.model.Deformer.Warp>().map { it.id.raw }.toSet()
+		val rotationIds = puppet.deformers.filterIsInstance<org.umamo.runtime.model.Deformer.Rotation>().map { it.id.raw }.toSet()
+		val selected = warpIds.first()
+		val points = io.github.psd2live.ui.RigInformationOverlay.warpPoints(puppet, emptyMap(), warpIds)
+		val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+		image.createGraphics().apply {
+			setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+			io.github.psd2live.ui.RigInformationOverlay.paintRotations(this, puppet, emptyMap(), viewport, rotationIds,
+				labels = false, selectedDeformerId = selected, dimUnselected = true)
+			io.github.psd2live.ui.RigInformationOverlay.paint(this, puppet, emptyMap(), viewport, warpIds, labels = false,
+				selectedDeformerId = selected, dimUnselected = true, pointsById = points)
+			dispose()
+		}
+		val guides = RigGuides(viewport)
+		guides.rotations(io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(puppet, emptyMap(), viewport, rotationIds, selected, null, true))
+		guides.warps(io.github.psd2live.ui.RigInformationOverlay.warpLayers(puppet, points, warpIds, selected, null, true),
+			io.github.psd2live.ui.RigCanvasSupport.deformerCorners(io.github.psd2live.ui.RigCanvasSupport.deformerOutlines(puppet, points), viewport))
+		val scene = CanvasScene(width, height, viewport, model, RigCanvasSupport.evaluate(model), emptyList(), OverlayScene(guides.items))
+		val gpu = requireNotNull(renderer!!.let { r -> host!!.submit { r.render("guides", scene) }.get() }.readPixels())
+		fun javaPainted(x: Int, y: Int) = x in 0 until width && y in 0 until height && (image.getRGB(x, y) ushr 24) > 40
+		fun gpuPainted(x: Int, y: Int) = x in 0 until width && y in 0 until height && (gpu[(y * width + x) * 4 + 3].toInt() and 0xff) > 40
+		fun near(x: Int, y: Int, painted: (Int, Int) -> Boolean) = (-1..1).any { dy -> (-1..1).any { dx -> painted(x + dx, y + dy) } }
+		var java = 0; var javaCovered = 0; var gpuCount = 0; var gpuCovered = 0
+		for (y in 0 until height) for (x in 0 until width) {
+			if (javaPainted(x, y)) { java++; if (near(x, y, ::gpuPainted)) javaCovered++ }
+			if (gpuPainted(x, y)) { gpuCount++; if (near(x, y, ::javaPainted)) gpuCovered++ }
+		}
+		println("GUIDES java2d $java px, ${javaCovered * 100 / maxOf(1, java)}% covered by GPU; gpu $gpuCount px, ${gpuCovered * 100 / maxOf(1, gpuCount)}% near Java2D")
+		assertTrue(java > 2000, "the Java2D guides drew something")
+		assertTrue(javaCovered >= java * 0.97, "GPU misses Java2D guide pixels: $javaCovered of $java")
+		assertTrue(gpuCovered >= gpuCount * 0.97, "GPU paints away from the Java2D guides: $gpuCovered of $gpuCount")
 	}
 
 	private fun viewport(model: RigPreviewModel, width: Int, height: Int, zoom: Double): CanvasViewport {

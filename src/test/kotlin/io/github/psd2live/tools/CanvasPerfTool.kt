@@ -68,9 +68,9 @@ class CanvasPerfTool {
 			SwingUtilities.invokeAndWait {
 				viewModel.dismissStartScreen()
 				viewModel.setCanvasMode(viewModel.state.value.activeCanvas.id, CanvasMode.EDIT)
-				// Every mesh's wireframe, faded in object mode: the heaviest guide the canvas draws.
+				// Every mesh wireframe (faded in object mode), every warp lattice and rotation: the heaviest guides the canvas draws.
 				val state = viewModel.state.value
-				viewModel.updateEditViewOptions(state.activeCanvas.id, state.activeWorkspace.id) { it.copy(showMesh = true) }
+				viewModel.updateEditViewOptions(state.activeCanvas.id, state.activeWorkspace.id) { it.copy(showMesh = true, showWarp = true, showRotation = true) }
 			}
 			CanvasRenderService.ensureStarted()
 			waitFor(30, "GPU renderer") { CanvasRenderService.status.value !is CanvasRenderService.Status.Starting }

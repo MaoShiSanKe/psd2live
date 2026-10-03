@@ -36,24 +36,16 @@ internal object RigInformationOverlay {
         return warps.zip(probes).mapNotNull { (warp,probe) -> geometry.worldPositions[probe.id]?.let { warp.id.raw to it } }.toMap()
     }
 
-    fun paint(
-        g: Graphics2D,
+    /** Each shown warp's lattice and the look it is drawn in; the Java2D and GPU guides both draw from this. */
+    fun warpLayers(
         model: PuppetModel,
-        parameters: Map<ParameterId, Float>,
-        viewport: CanvasViewport,
+        points: Map<String, FloatArray>,
         ids: Set<String>,
-        labels: Boolean = true,
-        pointIndices: Boolean = false,
-        selectedDeformerId: String? = null,
-        hoveredDeformerId: String? = null,
-        dimUnselected: Boolean = false,
-        pointsById: Map<String, FloatArray>? = null,
-    ) {
-        if (ids.isEmpty()) return
-        val points = pointsById ?: warpPoints(model, parameters, ids)
-        // Laid out once for the whole pass, because a mark's size depends on what else shares its corner.
-        val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model, points), viewport)
-        val layers = model.deformers.filterIsInstance<Deformer.Warp>().filter { it.id.raw in ids }.mapNotNull { w ->
+        selectedDeformerId: String?,
+        hoveredDeformerId: String?,
+        dimUnselected: Boolean,
+    ): List<WarpLayer> {
+        return model.deformers.filterIsInstance<Deformer.Warp>().filter { it.id.raw in ids }.mapNotNull { w ->
             val p = points[w.id.raw] ?: return@mapNotNull null
             val isSelected = selectedDeformerId != null && w.id.raw == selectedDeformerId
             val isHovered = hoveredDeformerId != null && w.id.raw == hoveredDeformerId && !isSelected
@@ -84,6 +76,26 @@ internal object RigInformationOverlay {
                 isDimmed = isDimmed,
             )
         }
+    }
+
+    fun paint(
+        g: Graphics2D,
+        model: PuppetModel,
+        parameters: Map<ParameterId, Float>,
+        viewport: CanvasViewport,
+        ids: Set<String>,
+        labels: Boolean = true,
+        pointIndices: Boolean = false,
+        selectedDeformerId: String? = null,
+        hoveredDeformerId: String? = null,
+        dimUnselected: Boolean = false,
+        pointsById: Map<String, FloatArray>? = null,
+    ) {
+        if (ids.isEmpty()) return
+        val points = pointsById ?: warpPoints(model, parameters, ids)
+        // Laid out once for the whole pass, because a mark's size depends on what else shares its corner.
+        val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model, points), viewport)
+        val layers = warpLayers(model, points, ids, selectedDeformerId, hoveredDeformerId, dimUnselected)
 
         // Pass 1: the rig itself - every lattice, every control point, every corner mark.
         for (layer in layers) {
@@ -148,7 +160,7 @@ internal object RigInformationOverlay {
      * a different dimming than the lattice it belongs to - the two would then be able to disagree about
      * which deformer is selected.
      */
-    private class WarpLayer(
+    class WarpLayer(
         val warp: Deformer.Warp,
         val points: FloatArray,
         val baseColor: Color,
@@ -179,12 +191,40 @@ internal object RigInformationOverlay {
         dimUnselected: Boolean = false,
     ) {
         if (ids.isEmpty()) return
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        for (needle in rotationNeedles(model, parameters, viewport, ids, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
+            paintRotationNeedle(g, needle.pivot.x, needle.pivot.y, needle.tip.x, needle.tip.y, needle.color, needle.dimmed)
+            if (labels && !needle.dimmed) {
+                val label = "${needle.rotation.name} [${needle.rotation.id.raw}]"
+                val left = needle.pivot.x.toInt().coerceAtLeast(0)
+                val baseline = (needle.pivot.y - 10f).toInt().coerceAtLeast(16)
+                g.color = Color(20, 20, 24, 220)
+                g.fillRect(left, baseline - 14, g.fontMetrics.stringWidth(label) + 6, 17)
+                g.color = needle.color
+                g.drawString(label, left + 3, baseline)
+            }
+        }
+    }
+
+    /** One rotation guide: its pivot and tip on screen and the colour it is drawn in. */
+    class RotationNeedle(val rotation: Deformer.Rotation, val pivot: Offset, val tip: Offset, val color: Color, val dimmed: Boolean)
+
+    /** The rotation needles [paintRotations] draws, for the GPU guides to draw alike. */
+    fun rotationNeedles(
+        model: PuppetModel,
+        parameters: Map<ParameterId, Float>,
+        viewport: CanvasViewport,
+        ids: Set<String>,
+        selectedDeformerId: String?,
+        hoveredDeformerId: String?,
+        dimUnselected: Boolean,
+    ): List<RotationNeedle> {
+        if (ids.isEmpty()) return emptyList()
         val pose = parameters.mapKeys { it.key.raw }
         val defaults = model.parameters.associate { it.id to it.default }
         val paramValue: (ParameterId) -> Float = { id -> parameters[id] ?: defaults[id] ?: 0f }
         val worlds = buildDeformerWorlds(model.deformers, paramValue, { defaults[it] ?: 0f })
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-
+        val out = ArrayList<RotationNeedle>()
         for (rotation in model.deformers.filterIsInstance<Deformer.Rotation>()) {
             if (rotation.id.raw !in ids) continue
             val geo = runCatching { RigGeometryTools.geometry(model, "rotation", rotation.id.raw, pose) }.getOrNull()
@@ -208,18 +248,9 @@ internal object RigInformationOverlay {
                 isDimmed -> Color(baseColor.red, baseColor.green, baseColor.blue, 90)
                 else -> baseColor
             }
-            paintRotationNeedle(g, pivot.x, pivot.y, tip.x, tip.y, color, isDimmed)
-
-            if (labels && !isDimmed) {
-                val label = "${rotation.name} [${rotation.id.raw}]"
-                val left = pivot.x.toInt().coerceAtLeast(0)
-                val baseline = (pivot.y - 10f).toInt().coerceAtLeast(16)
-                g.color = Color(20, 20, 24, 220)
-                g.fillRect(left, baseline - 14, g.fontMetrics.stringWidth(label) + 6, 17)
-                g.color = color
-                g.drawString(label, left + 3, baseline)
-            }
+            out += RotationNeedle(rotation, pivot, tip, color, isDimmed)
         }
+        return out
     }
 
     /** Compact Graphics2D stand-in for the Compose deform-mode needle. */
