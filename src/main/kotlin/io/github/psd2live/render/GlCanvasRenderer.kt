@@ -51,6 +51,8 @@ internal class GlCanvasRenderer : AutoCloseable {
 		var capacityHeight = 0
 		val meshes = HashMap<DrawableId, MeshBuffers>()
 		var readback: ByteBuffer? = null
+		/** Heap copy of the last readback, reused: the bitmap copies it into its own memory. */
+		var pixels = ByteArray(0)
 		/** Stencil reference of the last masked draw; cleared and restarted when it would overflow. */
 		var stencilRef = 0
 	}
@@ -127,7 +129,8 @@ internal class GlCanvasRenderer : AutoCloseable {
 		GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 4)
 		GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer)
 		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0)
-		val pixels = ByteArray(bytes)
+		if (view.pixels.size != bytes) view.pixels = ByteArray(bytes)
+		val pixels = view.pixels
 		buffer.get(pixels, 0, bytes)
 		return Bitmap().apply {
 			allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.PREMUL))

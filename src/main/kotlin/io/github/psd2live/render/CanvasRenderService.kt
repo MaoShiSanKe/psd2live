@@ -32,6 +32,13 @@ internal object CanvasRenderService {
 	private val pending = ConcurrentHashMap<String, CanvasScene>()
 	private val frameFlows = ConcurrentHashMap<String, MutableStateFlow<RenderedFrame?>>()
 	private val drainScheduled = AtomicBoolean(false)
+	/**
+	 * Each canvas's recent frame bitmaps, oldest first. A bitmap's pixels are native memory the garbage collector
+	 * does not see, so a drag would pile up hundreds of megabytes before it ran; each is closed once
+	 * [RETAINED_FRAMES] newer ones have replaced it, by which time no drawn frame can still read it.
+	 */
+	private val retained = ConcurrentHashMap<String, ArrayDeque<org.jetbrains.skia.Bitmap>>()
+	private const val RETAINED_FRAMES = 3
 
 	/** Starts the GL context once, off the calling thread. */
 	fun ensureStarted() {
@@ -67,6 +74,8 @@ internal object CanvasRenderService {
 	fun release(viewId: String) {
 		pending.remove(viewId)
 		frameFlows.remove(viewId)
+		// The last frames may still be on screen for a moment; the collector frees these few as it would anyway.
+		retained.remove(viewId)
 		val r = renderer ?: return
 		host?.execute { runCatching { r.release(viewId) } }
 	}
@@ -86,6 +95,11 @@ internal object CanvasRenderService {
 				val bitmap = r.render(viewId, scene)
 				frameFlows.getOrPut(viewId) { MutableStateFlow(null) }.value =
 					RenderedFrame(bitmap, scene.width, scene.height, scene.viewport, scene)
+				val recent = retained.getOrPut(viewId) { ArrayDeque() }
+				synchronized(recent) {
+					recent.addLast(bitmap)
+					while (recent.size > RETAINED_FRAMES) recent.removeFirst().close()
+				}
 			}
 		} catch (failure: Throwable) {
 			// A frame that cannot be drawn says nothing good about the next; the canvas goes back to software.
