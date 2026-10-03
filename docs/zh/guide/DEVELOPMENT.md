@@ -85,6 +85,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.cmo3` | `.cmo3` 的参数、变形器树（网格轴与范围）、图形网格、分段运动剖面、身体参数下各网格的位移，身体 X × 身体 Y 的剪影，以及物理组 | `model-profile/<名称>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
 | `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
+| `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
 
 | 环境变量 | 作用 |
 | --- | --- |
