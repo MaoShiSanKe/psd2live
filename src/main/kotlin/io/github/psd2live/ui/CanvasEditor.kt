@@ -3746,6 +3746,14 @@ internal class CanvasEditor(
     private var cachedGeometryPose = emptyMap<ParameterId, Float>()
     private var cachedGeometry: DeformedGeometry? = null
 
+    /** Bounds of [cachedGeometry]'s drawables; the hover asks for them on every pointer move. */
+    private var cachedBoundsGeometry: DeformedGeometry? = null
+    private var cachedBounds = emptyMap<String, Bounds>()
+
+    private var cachedCornersPoints: Map<String, FloatArray>? = null
+    private var cachedCornersViewport: CanvasViewport? = null
+    private var cachedCorners = emptyMap<String, java.awt.geom.Area>()
+
     private var warpOutlineSource: PuppetModel? = null
     private var warpOutlinePose = emptyMap<ParameterId, Float>()
     private var warpOutlineIds = emptySet<String>()
@@ -3776,9 +3784,13 @@ internal class CanvasEditor(
     private fun layerCandidates(pos: Offset, viewport: CanvasViewport): List<String> {
         val source = state.previewModel ?: return emptyList()
         val geometry = evaluatedGeometry() ?: return emptyList()
+        if (cachedBoundsGeometry !== geometry) {
+            cachedBounds = RigCanvasSupport.boundsByDrawable(geometry)
+            cachedBoundsGeometry = geometry
+        }
         return RigCanvasSupport.hitLayers(
             source,
-            RigCanvasSupport.boundsByDrawable(geometry),
+            cachedBounds,
             viewport.canvasX(pos.x.toInt()),
             viewport.canvasY(pos.y.toInt()),
             state.effectiveVisibleLayerIds,
@@ -3801,7 +3813,14 @@ internal class CanvasEditor(
         val source = drawnPreview?.rig?.puppet ?: return emptyMap()
         val ids = activeWarpIds()
         if (ids.isEmpty()) return emptyMap()
-        return RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(source, warpOutlinePoints(source, ids)), viewport)
+        // The marks are constructive Areas, rebuilt only when the lattices or the camera move, not per hover.
+        val points = warpOutlinePoints(source, ids)
+        if (cachedCornersPoints !== points || cachedCornersViewport != viewport) {
+            cachedCorners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(source, points), viewport)
+            cachedCornersPoints = points
+            cachedCornersViewport = viewport
+        }
+        return cachedCorners
     }
 
     /**

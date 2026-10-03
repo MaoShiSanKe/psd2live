@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.ui.PanShift
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -314,7 +316,7 @@ fun CanvasViewportComposable(
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
 	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
 	val simulated = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
-	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toComposeImageBitmap() }
+	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toImageBitmapFast() }
 	val background = canvasState.canvasBackground
 	val checkerLight = background.checkerLight?.let(::opaqueColor) ?: colors.checkerLight
 	val checkerDark = background.checkerDark?.let(::opaqueColor) ?: colors.checkerDark
@@ -963,6 +965,13 @@ fun CanvasViewportComposable(
 			}
 
 			val viewport = computeViewport(model, w, h)
+			// While the camera pans, cached passes are drawn shifted rather than drawn again every step;
+			// the pan's release draws them once more at the final camera.
+			val panning = isDragging
+			fun panShift(key: List<Any?>): PanShift = PanShift(
+				key.map { if (it === viewport) viewport.copy(offsetX = 0.0, offsetY = 0.0) else it },
+				viewport.offsetX, viewport.offsetY, panning,
+			)
 
 			// 2. Draw canvas boundary
 			drawRect(
@@ -1083,7 +1092,7 @@ fun CanvasViewportComposable(
 								effectiveVisible, canvasState.drawOrderOverrides, dimUnselected,
 								highlightedLayerIds, hoverTintLayerIds, hoverTintColor,
 							)
-							artworkCache.draw(target.skiaCanvas, key, w, h) { recording ->
+							artworkCache.draw(target.skiaCanvas, key, w, h, panShift(key)) { recording ->
 								editingPainter.paint(
 									recording, model, geometry, viewport, 1.0f,
 									visibleLayerIds = effectiveVisible,
@@ -1106,7 +1115,7 @@ fun CanvasViewportComposable(
 					canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
 					editor.glueSwapped, editor.drawsTransformBox,
 				)
-				val guideImage = guideCache.imageFor(guideKey, w, h) { g ->
+				val guideImage = guideCache.imageFor(guideKey, w, h, panShift(guideKey)) { g ->
 					g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
 					// 3b. Mesh Channel (Wireframe)
@@ -1328,7 +1337,7 @@ fun CanvasViewportComposable(
 						}
 					}
 				}
-				drawImage(guideImage)
+				drawImage(guideImage, topLeft = guideCache.offset)
 				// Session tiles sit above the mesh overlays and never write into RigPreviewModel —
 				// Apply (commitPaintSession) is what publishes them to the shared preview.
 				if (showTexture && paintSession != null) {
@@ -1488,21 +1497,37 @@ fun CanvasViewportComposable(
 private class CanvasGuideImageCache {
     private var key: List<Any?>? = null
     private var image: ImageBitmap? = null
+    /** Reused between rebuilds: a canvas-sized allocation per hover change or pan step adds up. */
+    private var buffer: BufferedImage? = null
+    private var shift: PanShift? = null
+    /** Where the last image goes this frame: shifted by the pan since it was drawn, or in place. */
+    var offset: Offset = Offset.Zero
+        private set
 
-    fun imageFor(key: List<Any?>, width: Int, height: Int, paint: (Graphics2D) -> Unit): ImageBitmap {
+    fun imageFor(key: List<Any?>, width: Int, height: Int, pan: PanShift? = null, paint: (Graphics2D) -> Unit): ImageBitmap {
+        val cached = shift
+        val current = image
+        if (pan != null && pan.panning && cached != null && current != null && cached.stableKey == pan.stableKey) {
+            offset = Offset((pan.offsetX - cached.offsetX).toFloat(), (pan.offsetY - cached.offsetY).toFloat())
+            return current
+        }
+        offset = Offset.Zero
         if (image == null || this.key != key) {
-            val buffer = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+            val buffer = buffer?.takeIf { it.width == width && it.height == height }
+                ?: BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE).also { buffer = it }
+            java.util.Arrays.fill((buffer.raster.dataBuffer as java.awt.image.DataBufferInt).data, 0)
             val graphics = buffer.createGraphics()
             try {
                 paint(graphics)
-                image = buffer.toComposeImageBitmap()
+                image = buffer.toImageBitmapFast()
                 this.key = key
+                shift = pan
             } catch (_: Exception) {
                 // A bad guide frame must not escape into composition and stop this canvas.
             } finally {
                 graphics.dispose()
             }
-            return image ?: buffer.toComposeImageBitmap()
+            return image ?: buffer.toImageBitmapFast()
         }
         return requireNotNull(image)
     }
@@ -1549,7 +1574,7 @@ private fun createCheckerboardBrush(light: Color, dark: Color, cellSize: Int = 1
 	} finally {
 		graphics.dispose()
 	}
-	return RepeatedImageBrush(tile.toComposeImageBitmap())
+	return RepeatedImageBrush(tile.toImageBitmapFast())
 }
 
 private class RepeatedImageBrush(private val image: ImageBitmap) : ShaderBrush() {

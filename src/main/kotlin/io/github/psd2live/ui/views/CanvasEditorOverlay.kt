@@ -24,6 +24,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
@@ -291,13 +292,22 @@ internal fun BoxScope.CanvasEditorOverlay(
                 val pts = screens.getValue(t.id)
                 val meshColor = meshColors[t.id] ?: colors.accent
                 val primary = t.id == primaryMesh?.id
-                MeshTopology.uniqueEdges(t.indices).forEach { edge ->
-                    val a = pts.getOrNull(edge.endpointLow) ?: return@forEach
-                    val b = pts.getOrNull(edge.endpointHigh) ?: return@forEach
-                    val selected = primary && editor.elementMode == 1 && edge in editor.selectedEdges
-                    drawLine(Color.Black.copy(alpha = 0.45f), a, b, 2.5f)
-                    drawLine(meshColor.copy(alpha = if (selected) 1f else 0.65f), a, b, if (selected) 3f else 1f)
+                // One draw per kind of stroke rather than two per edge: a dense mesh has thousands of edges,
+                // and this runs on every frame the overlay draws (each cursor move).
+                val edges = cachedUniqueEdges(t.indices)
+                val plain = ArrayList<Offset>(edges.size * 2)
+                val chosen = ArrayList<Offset>()
+                val selectedEdges = if (primary && editor.elementMode == 1) editor.selectedEdges else emptySet()
+                for (edge in edges) {
+                    val a = pts.getOrNull(edge.endpointLow) ?: continue
+                    val b = pts.getOrNull(edge.endpointHigh) ?: continue
+                    val into = if (selectedEdges.isNotEmpty() && edge in selectedEdges) chosen else plain
+                    into.add(a); into.add(b)
                 }
+                drawPoints(plain, PointMode.Lines, Color.Black.copy(alpha = 0.45f), 2.5f)
+                if (chosen.isNotEmpty()) drawPoints(chosen, PointMode.Lines, Color.Black.copy(alpha = 0.45f), 2.5f)
+                drawPoints(plain, PointMode.Lines, meshColor.copy(alpha = 0.65f), 1f)
+                if (chosen.isNotEmpty()) drawPoints(chosen, PointMode.Lines, meshColor, 3f)
             }
 
             // 1d. Vertices. A glued point is skipped here and drawn once in 1e.
@@ -3614,3 +3624,9 @@ private fun SkeletonPoseLayer(editor: CanvasEditor, viewport: CanvasViewport, pa
         }
     }
 }
+
+/** [MeshTopology.uniqueEdges] of each index array the overlay draws, kept while that array is alive. */
+private val uniqueEdgeCache = java.util.WeakHashMap<IntArray, List<org.umamo.edit.MeshElement.Edge>>()
+
+private fun cachedUniqueEdges(indices: IntArray): List<org.umamo.edit.MeshElement.Edge> =
+    uniqueEdgeCache.getOrPut(indices) { MeshTopology.uniqueEdges(indices) }

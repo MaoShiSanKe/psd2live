@@ -1,5 +1,6 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -207,7 +208,7 @@ class PaintSession(
             } finally {
                 g.dispose()
             }
-            published[key] = PreviewTile(x, y, width, height, tile.toComposeImageBitmap())
+            published[key] = PreviewTile(x, y, width, height, tile.toImageBitmapFast())
         }
         stale.clear()
         previewTiles = published.values.toList()
