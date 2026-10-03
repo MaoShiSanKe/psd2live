@@ -56,8 +56,11 @@ dependencies {
 	implementation(platform("org.lwjgl:lwjgl-bom:3.4.2"))
 	implementation("org.lwjgl:lwjgl")
 	implementation("org.lwjgl:lwjgl-opengl")
+	// The editing canvas renders on its own hidden-window GL context (io.github.psd2live.render).
+	implementation("org.lwjgl:lwjgl-glfw")
 	runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
 	runtimeOnly("org.lwjgl:lwjgl-opengl::$lwjglNatives")
+	runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
 	implementation("io.modelcontextprotocol:kotlin-sdk-server:0.15.0")
 	implementation("io.ktor:ktor-server-cio")
 	implementation("io.ktor:ktor-server-auth")

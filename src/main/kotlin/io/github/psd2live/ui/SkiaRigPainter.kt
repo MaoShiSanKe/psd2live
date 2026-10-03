@@ -5,7 +5,10 @@ import io.github.psd2live.core.PackedAtlas
 import io.github.psd2live.core.RigPreviewModel
 import org.jetbrains.skia.*
 import org.umamo.render.eval.DeformedGeometry
-import org.umamo.render.glsl.SELECTION_TINT_STRENGTH
+import io.github.psd2live.render.ArtworkDraw
+import io.github.psd2live.render.ArtworkDrawList
+import io.github.psd2live.render.ArtworkOptions
+import io.github.psd2live.render.HOVER_TINT_STRENGTH
 import org.umamo.runtime.model.DrawableId
 
 
@@ -31,27 +34,23 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
         dimmedAlphaMultiplier: Float = 0.22f,
         tintLayerIds: Set<String>? = null,
         tintColor: Int = 0,
-        /** Defaults to the GpuRenderer's own wash, so the two paths tint by the same amount. */
-        tintAlpha: Float = SELECTION_TINT_STRENGTH,
-    ) {
-        val drawables = model.rig.puppet.drawables.filter { it.mesh != null && it.id in geometry.worldPositions }
-            .sortedBy { RigCanvasSupport.displayOrder(model, it, geometry, drawOrderOverrides) }
+        tintAlpha: Float = HOVER_TINT_STRENGTH,
+    ) = paint(canvas, model, geometry, viewport, ArtworkDrawList.build(model, geometry, ArtworkOptions(
+        alpha, visibleLayerIds, drawOrderOverrides, dimUnselected, highlightedLayerIds, dimmedAlphaMultiplier,
+        tintLayerIds, tintColor, tintAlpha,
+    )))
+
+    /** Draws [draws], the list the GPU renderer draws too, so the two paths cannot disagree about what shows. */
+    fun paint(canvas: Canvas, model: RigPreviewModel, geometry: DeformedGeometry, viewport: CanvasViewport, draws: List<ArtworkDraw>) {
         val byId = model.rig.puppet.drawables.associateBy { it.id }
         val masks = mutableMapOf<List<DrawableId>, Path?>()
         Paint().use { paint ->
             try {
-                for (drawable in drawables) {
-                    val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-                    if (visibleLayerIds != null && layerId != null && layerId !in visibleLayerIds) continue
-                    if (visibleLayerIds != null && layerId == null && drawable.id.raw !in visibleLayerIds && !drawable.isVisible) continue
-                    val highlighted = highlightedLayerIds == null || (layerId != null && layerId in highlightedLayerIds) || drawable.id.raw in highlightedLayerIds
-                    val dim = if (dimUnselected && !highlighted) dimmedAlphaMultiplier else 1f
-                    val opacity = ((geometry.opacity[drawable.id] ?: drawable.opacity) * alpha * dim).coerceIn(0f, 1f)
-                    if (opacity <= 0.001f) continue
+                for (draw in draws) {
+                    val drawable = byId[draw.drawableId] ?: continue
                     val mesh = drawable.mesh ?: continue
                     val world = geometry.worldPositions[drawable.id] ?: continue
-                    val page = model.rig.pageByDrawableId[drawable.id.raw] ?: drawable.texturePage
-                    val image = images.getOrNull(page) ?: continue
+                    val image = images.getOrNull(draw.page) ?: continue
                     val positions = FloatArray(mesh.indices.size * 2)
                     val uvs = FloatArray(positions.size)
                     // Expanded vertices avoid the unsigned-short index limit for large authored meshes.
@@ -61,14 +60,12 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
                         uvs[index * 2] = mesh.uvs[vertex * 2] * image.width
                         uvs[index * 2 + 1] = mesh.uvs[vertex * 2 + 1] * image.height
                     }
-                    val mask = if (drawable.maskedBy.isNotEmpty() && !drawable.invertMask) {
-                        masks.getOrPut(drawable.maskedBy) {
+                    val mask = if (draw.maskIds.isNotEmpty()) {
+                        masks.getOrPut(draw.maskIds) {
                             PathBuilder().use { path ->
                                 var triangles = 0
-                                for (id in drawable.maskedBy) {
-                                    val source = byId[id] ?: continue
-                                    if (!source.isVisible) continue
-                                    val maskMesh = source.mesh ?: continue
+                                for (id in draw.maskIds) {
+                                    val maskMesh = byId[id]?.mesh ?: continue
                                     val points = geometry.worldPositions[id] ?: continue
                                     for (i in maskMesh.indices.indices step 3) {
                                         val a = maskMesh.indices[i] * 2
@@ -92,19 +89,17 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
                     val saved = canvas.save()
                     try {
                         mask?.let { canvas.clipPath(it, false) }
-                        paint.shader = shaders[page]
-                        paint.setAlphaf(opacity)
+                        paint.shader = shaders[draw.page]
+                        paint.setAlphaf(draw.opacity)
                         canvas.drawVertices(VertexMode.TRIANGLES, positions, null, uvs, null, BlendMode.MODULATE, paint)
                         // Hover annotation: wash the very triangles just drawn with the component colour
                         // instead of boxing them. Re-drawing the mesh keeps the tint on the artwork's own
                         // silhouette — a part lights up rather than growing a rectangle — and because it
                         // runs inside the same clip, a masked part is tinted only where it actually shows.
-                        if (tintColor != 0 && tintLayerIds != null &&
-                            ((layerId != null && layerId in tintLayerIds) || drawable.id.raw in tintLayerIds)
-                        ) {
+                        if (draw.tintColor != 0) {
                             paint.shader = null
-                            paint.color = tintColor
-                            paint.setAlphaf(tintAlpha)
+                            paint.color = draw.tintColor
+                            paint.setAlphaf(draw.tintAlpha)
                             canvas.drawVertices(VertexMode.TRIANGLES, positions, null, null, null, BlendMode.SRC_OVER, paint)
                         }
                     } finally { canvas.restoreToCount(saved) }
