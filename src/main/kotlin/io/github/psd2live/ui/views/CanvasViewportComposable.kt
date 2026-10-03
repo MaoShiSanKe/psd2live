@@ -1,6 +1,12 @@
 package io.github.psd2live.ui.views
 
 import io.github.psd2live.ui.PanShift
+import io.github.psd2live.render.ArtworkDrawList
+import io.github.psd2live.render.ArtworkOptions
+import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.CanvasScene
+import io.github.psd2live.ui.state.AppSettings
+import androidx.compose.ui.graphics.asComposeImageBitmap
 import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -312,6 +318,16 @@ fun CanvasViewportComposable(
 	val snapshotArtworkCache = remember { CachedSkiaPicture() }
 	DisposableEffect(snapshotArtworkCache) { onDispose { snapshotArtworkCache.close() } }
 	val guideCache = remember { CanvasGuideImageCache() }
+	// The GPU renderer draws this canvas's artwork when it can; the Skia painter above stays the fallback.
+	val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
+	LaunchedEffect(softwareCanvas) { if (!softwareCanvas) CanvasRenderService.ensureStarted() }
+	val gpuStatus by CanvasRenderService.status.collectAsState()
+	val gpuReady = !softwareCanvas && gpuStatus is CanvasRenderService.Status.Ready
+	val gpuFrame by remember(renderKey) { CanvasRenderService.frames(renderKey) }.collectAsState()
+	val gpuImage = remember(gpuFrame) { gpuFrame?.bitmap?.asComposeImageBitmap() }
+	val gpuSubmission = remember(renderKey) { GpuSceneSubmission(renderKey) }
+	DisposableEffect(renderKey) { onDispose { CanvasRenderService.release(renderKey) } }
+	val drawnGeometry = remember { DrawnGeometryMemo() }
 	val sdkFrame by frameFlow.collectAsState()
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
 	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
@@ -379,6 +395,14 @@ fun CanvasViewportComposable(
         viewModel.setCanvasView(zoom.toFloat(), panX.toFloat(), panY.toFloat(), canvasId, mode)
     }
 
+    // The document learns the camera once the wheel settles; a pan still hands it over on release.
+    LaunchedEffect(zoom, panX, panY, cameraDirty, isDragging) {
+        if (cameraDirty && !isDragging) {
+            delay(CAMERA_PERSIST_DELAY_MILLIS)
+            persistCamera()
+        }
+    }
+
     // A mode or workspace switch can remove this viewport before it receives Release.
     DisposableEffect(viewModel, canvasId, mode, canvasState.projectOpenGeneration, canvasState.activeWorkspace.id) {
         val projectGeneration = canvasState.projectOpenGeneration
@@ -430,8 +454,9 @@ fun CanvasViewportComposable(
 		val centered = computeViewport(model, viewSize.width, viewSize.height)
 		panX += mouseX - (centered.offsetX + canvasX * centered.scale)
 		panY += mouseY - (centered.offsetY + canvasY * centered.scale)
-        cameraDirty = false
-        viewModel.setCanvasView(zoom.toFloat(), panX.toFloat(), panY.toFloat(), canvasId, mode)
+		// Kept local while the wheel turns, as a pan is while it drags: writing the camera into the document on
+		// every notch recomposes every dock panel (the hierarchy tree most of all) once per notch.
+		cameraDirty = true
 	}
 
 	// Vsync-driven frame pump. Cubism conflates requests while busy, so the newest
@@ -1070,12 +1095,9 @@ fun CanvasViewportComposable(
 				// keeps showing the last committed atlas, never an in-progress stroke.
 				// Document-space paint tiles only line up with the mesh at rest; driving the other
 				// layers with the live pose would leave the stroke floating off the art.
-				val geometry = (editGeometry ?: RigCanvasSupport.evaluate(model, informationPose)).let { evaluated ->
-					if (simulated == null) evaluated else org.umamo.render.eval.DeformedGeometry(
-						evaluated.worldPositions + simulated.positions.filterKeys { it in evaluated.worldPositions },
-						evaluated.drawOrder, evaluated.opacity,
-					)
-				}
+				// One geometry per (model, pose, simulation frame): every redraw (a GPU frame arriving, a hover) must
+				// see the same instance, or the passes keyed on it would draw again and again.
+				val geometry = drawnGeometry.geometry(model, editGeometry, informationPose, simulated)
 
 					// 3a. Texture Channel. The artwork always renders opaque; legibility of the
 					// overlays comes from the focus/dim options instead of a global transparency.
@@ -1086,7 +1108,33 @@ fun CanvasViewportComposable(
 						} else {
 							targetVisibleLayerIds
 						}
-						if (editingPainter != null) drawIntoCanvas { target ->
+						if (gpuReady) {
+							val options = ArtworkOptions(
+								visibleLayerIds = effectiveVisible,
+								drawOrderOverrides = canvasState.drawOrderOverrides,
+								dimUnselected = dimUnselected,
+								highlightedLayerIds = highlightedLayerIds,
+								tintLayerIds = hoverTintLayerIds,
+								tintColor = hoverTintColor,
+							)
+							gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options)) {
+								CanvasScene(w, h, viewport, model, geometry, ArtworkDrawList.build(model, geometry, options))
+							}
+							val frame = gpuFrame
+							val image = gpuImage
+							if (frame != null && image != null) {
+								// The frame may be a step behind the camera: move it to where the camera is now, so a pan
+								// or zoom follows the pointer at once and the exact frame replaces it when it lands.
+								val k = (viewport.scale / frame.viewport.scale).toFloat()
+								val tx = (viewport.offsetX - frame.viewport.offsetX * k).toFloat()
+								val ty = (viewport.offsetY - frame.viewport.offsetY * k).toFloat()
+								if (k == 1f && tx == 0f && ty == 0f) drawImage(image)
+								else withTransform({
+									translate(tx, ty)
+									scale(k, k, pivot = Offset.Zero)
+								}) { drawImage(image) }
+							}
+						} else if (editingPainter != null) drawIntoCanvas { target ->
 							val key = listOf(
 								editingPainter, model.rig.puppet, geometry, viewport, w, h,
 								effectiveVisible, canvasState.drawOrderOverrides, dimUnselected,
@@ -1493,6 +1541,51 @@ fun CanvasViewportComposable(
     }
 }
 
+/** Hands the GPU renderer a new scene only when what it shows changed; redraws in between submit nothing. */
+private class GpuSceneSubmission(private val viewId: String) {
+    private var key: List<Any?>? = null
+
+    fun submit(key: List<Any?>, scene: () -> CanvasScene) {
+        if (this.key == key) return
+        this.key = key
+        CanvasRenderService.submit(viewId, scene())
+    }
+}
+
+/**
+ * The geometry the canvas draws, kept while its inputs stay the same: the edit tab's own, or the pose evaluated
+ * here, with a live simulation's vertices laid over it.
+ */
+private class DrawnGeometryMemo {
+    private var puppet: org.umamo.runtime.model.PuppetModel? = null
+    private var edit: org.umamo.render.eval.DeformedGeometry? = null
+    private var pose: Map<org.umamo.runtime.model.ParameterId, Float>? = null
+    private var simulation: Any? = null
+    private var geometry: org.umamo.render.eval.DeformedGeometry? = null
+
+    fun geometry(
+        model: RigPreviewModel,
+        editGeometry: org.umamo.render.eval.DeformedGeometry?,
+        pose: Map<org.umamo.runtime.model.ParameterId, Float>,
+        simulated: io.github.psd2live.core.sim.SimulatedFrame?,
+    ): org.umamo.render.eval.DeformedGeometry {
+        val cached = geometry
+        if (cached != null && puppet === model.rig.puppet && edit === editGeometry && simulation === simulated &&
+            (editGeometry != null || this.pose == pose)) return cached
+        val evaluated = editGeometry ?: RigCanvasSupport.evaluate(model, pose)
+        val next = if (simulated == null) evaluated else org.umamo.render.eval.DeformedGeometry(
+            evaluated.worldPositions + simulated.positions.filterKeys { it in evaluated.worldPositions },
+            evaluated.drawOrder, evaluated.opacity,
+        )
+        puppet = model.rig.puppet
+        edit = editGeometry
+        this.pose = pose
+        simulation = simulated
+        geometry = next
+        return next
+    }
+}
+
 /** The Java2D guide pass is rebuilt only when this canvas's visible inputs change. */
 private class CanvasGuideImageCache {
     private var key: List<Any?>? = null
@@ -1558,6 +1651,9 @@ private class ActualFpsCounter {
 }
 
 private val TransparentCanvasFill = Color(0f, 0f, 0f, 1f / 255f)
+
+/** How long the camera must rest before a wheel zoom is written into the document. */
+private const val CAMERA_PERSIST_DELAY_MILLIS = 250L
 
 private fun opaqueColor(rgb: Int): Color = Color(0xFF000000L or (rgb.toLong() and 0xFFFFFF))
 

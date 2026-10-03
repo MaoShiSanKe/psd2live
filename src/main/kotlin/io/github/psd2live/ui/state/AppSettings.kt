@@ -32,6 +32,20 @@ object AppSettings {
 			if (value.isFinite()) runCatching { preferences.putFloat("parameter_name_width", value.coerceIn(24f, 240f)) }
 		}
 
+	private val softwareCanvasState = kotlinx.coroutines.flow.MutableStateFlow(
+		runCatching { preferences.getBoolean("software_canvas", false) }.getOrDefault(false),
+	)
+
+	/** The editing canvas paints in software instead of on its GPU renderer; for troubleshooting a driver. */
+	val softwareCanvasFlow: kotlinx.coroutines.flow.StateFlow<Boolean> get() = softwareCanvasState
+
+	var softwareCanvas: Boolean
+		get() = softwareCanvasState.value
+		set(value) {
+			softwareCanvasState.value = value
+			runCatching { preferences.putBoolean("software_canvas", value) }
+		}
+
 	/** Whether edits in the simulation panel bake again as they commit; off by default, as a bake takes seconds. */
 	var simulationAutoBake: Boolean
 		get() = runCatching { preferences.getBoolean("simulation_auto_bake", false) }.getOrDefault(false)
