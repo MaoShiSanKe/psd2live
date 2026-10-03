@@ -29,7 +29,7 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 | `--lang <zh\|en\|ja>` | システム言語 | ログの言語 |
 | `--atlas <size>` | 4096 | テクスチャアトラスのサイズ |
 | `--mesh-spacing <px>` | 64 | メッシュ間隔 |
-| `--mesh-pixels` | オフ | メッシュの長さを、長辺 1024 px に縮めたドキュメントではなく元のピクセルで測る |
+| `--mesh-pixels` | オフ | メッシュの長さを、長辺 2048 px に縮めたドキュメントではなく元のピクセルで測る |
 | `--head-strength <value>` | 1.0 | 頭の変形の強さ |
 | `--body-strength <value>` | 1.0 | 体の変形の強さ |
 | `--mesh-only` | オフ | メッシュのみ生成 |

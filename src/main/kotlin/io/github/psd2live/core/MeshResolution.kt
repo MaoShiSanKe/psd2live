@@ -17,7 +17,7 @@ import kotlin.math.max
  */
 object MeshResolution {
 	/** The longer side, in pixels, of the document one mesh unit is a pixel of. */
-	const val REFERENCE_SIDE = 1024
+	const val REFERENCE_SIDE = 2048
 
 	/** Below this scale the reduction would save nothing and only blur the contour. */
 	private const val MIN_REDUCTION = 1.05f

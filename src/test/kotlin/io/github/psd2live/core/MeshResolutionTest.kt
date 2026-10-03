@@ -12,11 +12,11 @@ import kotlin.test.assertTrue
 class MeshResolutionTest {
 	@Test fun unitScaleFollowsTheDocumentOnlyInDocumentUnits() {
 		assertEquals(1f, MeshResolution.unitScale(MeshUnits.PIXELS, 8192, 8192))
-		assertEquals(1f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 800, 1024))
-		assertEquals(2f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 2048, 1024))
-		assertEquals(6f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 4000, 6144))
+		assertEquals(1f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 1280, 1280))
+		assertEquals(1f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 2048, 1024))
+		assertEquals(3f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 4000, 6144))
 		// A document barely past the reference is meshed as it is.
-		assertEquals(1f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 1040, 1040))
+		assertEquals(1f, MeshResolution.unitScale(MeshUnits.DOCUMENT, 2080, 2080))
 	}
 
 	@Test fun reductionKeepsEveryPaintedPixelCovered() {
