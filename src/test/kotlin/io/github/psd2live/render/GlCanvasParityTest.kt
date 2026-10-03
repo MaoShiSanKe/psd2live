@@ -92,6 +92,25 @@ class GlCanvasParityTest {
 		}
 	}
 
+	@Test fun overlayLinesAndPointsLandWhereTheCameraPutsThem() {
+		val model = PSD2LivePipeline().buildPreview(Path.of("examples/ds/psd-input/ds.psd"))
+		val geometry = RigCanvasSupport.evaluate(model)
+		// World (0, 0) at screen (10, 50); world y runs up, so world y = -20 is screen row 70.
+		val viewport = CanvasViewport(1.0, 10.0, 50.0, 100f, 100f)
+		val overlay = OverlayScene(
+			listOf(LineBatch(0xFFFF0000.toInt(), 3f, floatArrayOf(0f, 0f, 100f, 0f))),
+			listOf(PointBatch(0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 6f, 2f, floatArrayOf(50f, -20f))),
+		)
+		val scene = CanvasScene(120, 100, viewport, model, geometry, emptyList(), overlay)
+		val pixels = requireNotNull(renderer!!.let { r -> host!!.submit { r.render("overlay", scene) }.get() }.readPixels())
+		fun rgba(x: Int, y: Int) = (0..3).map { pixels[(y * 120 + x) * 4 + it].toInt() and 0xff }
+		assertTrue(rgba(60, 50) == listOf(255, 0, 0, 255), "line centre ${rgba(60, 50)}")
+		assertTrue(rgba(60, 53)[3] == 0, "a 3 px line stays within its width: ${rgba(60, 53)}")
+		assertTrue(rgba(60, 70) == listOf(0, 255, 0, 255), "point centre ${rgba(60, 70)}")
+		assertTrue(rgba(65, 70).let { it[2] > 200 && it[3] > 240 }, "point ring ${rgba(65, 70)}")
+		assertTrue(rgba(60, 78)[3] == 0, "nothing past the point's radius: ${rgba(60, 78)}")
+	}
+
 	private fun viewport(model: RigPreviewModel, width: Int, height: Int, zoom: Double): CanvasViewport {
 		val w = model.analysis.source.widthPx.toDouble()
 		val h = model.analysis.source.heightPx.toDouble()
