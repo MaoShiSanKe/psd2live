@@ -337,8 +337,12 @@ fun CanvasViewportComposable(
 	val ghostGeometry = remember(renderKey) { arrayOfNulls<org.umamo.render.eval.DeformedGeometry>(1) }
 	// The last regular frame and its image, shown while a ghost frame is the newest one.
 	val lastArtwork = remember(renderKey) { arrayOfNulls<Pair<io.github.psd2live.render.RenderedFrame, ImageBitmap>>(1) }
+	// The paint session this view's GPU texture holds in full; another session, or a new view, uploads all of it.
+	val paintUploaded = remember(renderKey) { arrayOfNulls<Any>(1) }
 	DisposableEffect(renderKey) { onDispose { CanvasRenderService.release(renderKey) } }
 	val drawnGeometry = remember { DrawnGeometryMemo() }
+	// A session shown by the GPU hands it changed areas instead of painting preview tiles.
+	LaunchedEffect(paintSession, gpuReady) { paintSession?.gpuPreview = gpuReady }
 	val guideLabelMeasurer = rememberTextMeasurer(cacheSize = 128)
 	val guideLabels = remember { GuideLabelMemo() }
 	val sdkFrame by frameFlow.collectAsState()
@@ -1248,11 +1252,19 @@ fun CanvasViewportComposable(
 							tintColor = hoverTintColor,
 						)
 						val wireKey = wireItems.map { Triple(it.drawable.id, it.selected, it.dimmed) }
+						val gpuPaint = paintSession?.takeIf { showTexture && it.gpuPreview }
 						gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey,
-							guideKey, pathIds, canvasState.pathShowWidth, canvasState.pathShowHardness)) {
+							guideKey, pathIds, canvasState.pathShowWidth, canvasState.pathShowHardness, gpuPaint, gpuPaint?.gpuVersion)) {
+							val paint = gpuPaint?.let { session ->
+								val full = paintUploaded[0] !== session
+								paintUploaded[0] = session
+								io.github.psd2live.render.PaintScene(session, session.docWidth, session.docHeight,
+									listOfNotNull(session.takeGpuUpload(full)))
+							}
 							CanvasScene(w, h, viewport, model, geometry,
 								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
-								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()))
+								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()),
+								paint)
 						}
 						val latest = gpuFrame
 						val latestImage = gpuImage
@@ -1476,7 +1488,7 @@ fun CanvasViewportComposable(
 				}
 				// Session tiles sit above the mesh overlays and never write into RigPreviewModel —
 				// Apply (commitPaintSession) is what publishes them to the shared preview.
-				if (showTexture && paintSession != null) {
+				if (showTexture && paintSession != null && !paintSession.gpuPreview) {
 					val scale = viewport.scale
 					for (tile in paintSession.previewTiles) {
 						val left = Math.round(viewport.offsetX + tile.x * scale)

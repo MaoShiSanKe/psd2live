@@ -58,6 +58,11 @@ internal class GlCanvasRenderer(
 		val meshes = HashMap<DrawableId, MeshBuffers>()
 		/** Stencil reference of the last masked draw; cleared and restarted when it would overflow. */
 		var stencilRef = 0
+		/** The paint session's raster on the GPU, and the session it holds. */
+		var paintTexture = 0
+		var paintSession: Any? = null
+		var paintWidth = 0
+		var paintHeight = 0
 	}
 
 	private val artwork = program(Shaders.ARTWORK_VERTEX, Shaders.ARTWORK_FRAGMENT)
@@ -71,6 +76,10 @@ internal class GlCanvasRenderer(
 	private val pointInstances: Int
 	private val fillVao: Int = GL30.glGenVertexArrays()
 	private val fillVertices: Int = GL15.glGenBuffers()
+	/** One textured quad: positions per draw, the texture's corners fixed. */
+	private val quadVao: Int = GL30.glGenVertexArrays()
+	private val quadPositions: Int = GL15.glGenBuffers()
+	private val quadUvs: Int = GL15.glGenBuffers()
 	private val worldUniform = FloatArray(4)
 
 	init {
@@ -96,6 +105,14 @@ internal class GlCanvasRenderer(
 		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, fillVertices)
 		GL20.glEnableVertexAttribArray(0)
 		GL20.glVertexAttribPointer(0, 2, GL11.GL_FLOAT, false, 0, 0L)
+		GL30.glBindVertexArray(quadVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, quadPositions)
+		GL20.glEnableVertexAttribArray(0)
+		GL20.glVertexAttribPointer(0, 2, GL11.GL_FLOAT, false, 0, 0L)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, quadUvs)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f), GL15.GL_STATIC_DRAW)
+		GL20.glEnableVertexAttribArray(1)
+		GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, 0, 0L)
 		GL30.glBindVertexArray(0)
 	}
 
@@ -124,6 +141,7 @@ internal class GlCanvasRenderer(
 
 		drawArtwork(view, scene)
 		drawOverlay(scene.overlay, width, height)
+		drawPaint(view, scene.paint)
 
 		// Straight into the bitmap's own memory: no direct buffer, no heap array, no second copy into Skia.
 		val bitmap = Bitmap()
@@ -150,6 +168,7 @@ internal class GlCanvasRenderer(
 		if (view.framebuffer != 0) GL30.glDeleteFramebuffers(view.framebuffer)
 		if (view.color != 0) GL30.glDeleteRenderbuffers(view.color)
 		if (view.depthStencil != 0) GL30.glDeleteRenderbuffers(view.depthStencil)
+		if (view.paintTexture != 0) GL11.glDeleteTextures(view.paintTexture)
 	}
 
 	/** Drops atlas pages no longer in [live]; called when a model's atlas is replaced. */
@@ -168,7 +187,9 @@ internal class GlCanvasRenderer(
 		textures.clear()
 		GL20.glDeleteProgram(artwork.id); GL20.glDeleteProgram(lines.id); GL20.glDeleteProgram(points.id)
 		GL30.glDeleteVertexArrays(lineVao); GL30.glDeleteVertexArrays(pointVao); GL30.glDeleteVertexArrays(fillVao)
+		GL30.glDeleteVertexArrays(quadVao)
 		GL15.glDeleteBuffers(lineInstances); GL15.glDeleteBuffers(pointInstances); GL15.glDeleteBuffers(fillVertices)
+		GL15.glDeleteBuffers(quadPositions); GL15.glDeleteBuffers(quadUvs)
 	}
 
 	private fun worldTransform(viewport: CanvasViewport, width: Int, height: Int) {
@@ -284,6 +305,60 @@ internal class GlCanvasRenderer(
 			}
 			is FillBatch -> drawFill(item)
 		}
+		GL30.glBindVertexArray(0)
+	}
+
+	/**
+	 * The paint session's raster: its changed areas written into the view's texture, then the texture drawn as
+	 * one quad over the document, where document pixel (x, y) is world (x, -y). Above the guides, as the
+	 * software canvas draws its tiles.
+	 */
+	private fun drawPaint(view: View, paint: PaintScene?) {
+		if (paint == null) {
+			if (view.paintTexture != 0) { GL11.glDeleteTextures(view.paintTexture); view.paintTexture = 0 }
+			view.paintSession = null
+			return
+		}
+		if (view.paintTexture == 0 || view.paintSession !== paint.session ||
+			view.paintWidth != paint.width || view.paintHeight != paint.height) {
+			if (view.paintTexture == 0) view.paintTexture = GL11.glGenTextures()
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, view.paintTexture)
+			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, paint.width, paint.height, 0, GL11.GL_RGBA,
+				GL11.GL_UNSIGNED_BYTE, null as java.nio.ByteBuffer?)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
+			view.paintSession = paint.session
+			view.paintWidth = paint.width
+			view.paintHeight = paint.height
+		}
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, view.paintTexture)
+		GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1)
+		for (upload in paint.uploads) {
+			if (upload.width <= 0 || upload.height <= 0 || upload.x < 0 || upload.y < 0 ||
+				upload.x + upload.width > paint.width || upload.y + upload.height > paint.height) continue
+			val pixels = MemoryUtil.memAlloc(upload.rgba.size)
+			try {
+				pixels.put(upload.rgba).flip()
+				GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, upload.x, upload.y, upload.width, upload.height,
+					GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels)
+			} finally {
+				MemoryUtil.memFree(pixels)
+			}
+		}
+		val w = paint.width.toFloat()
+		val h = paint.height.toFloat()
+		GL20.glUseProgram(artwork.id)
+		GL20.glUniform4fv(artwork.uniform("u_world"), worldUniform)
+		GL20.glUniform1i(artwork.uniform("u_texture"), 0)
+		GL20.glUniform1f(artwork.uniform("u_opacity"), 1f)
+		GL20.glUniform4f(artwork.uniform("u_solid"), 0f, 0f, 0f, -1f)
+		GL13.glActiveTexture(GL13.GL_TEXTURE0)
+		GL30.glBindVertexArray(quadVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, quadPositions)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(0f, 0f, w, 0f, 0f, -h, w, -h), GL15.GL_STREAM_DRAW)
+		GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4)
 		GL30.glBindVertexArray(0)
 	}
 

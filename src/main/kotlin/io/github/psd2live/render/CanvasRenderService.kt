@@ -66,7 +66,8 @@ internal object CanvasRenderService {
 	/** Queues [scene] for [viewId], replacing one not yet drawn. */
 	fun submit(viewId: String, scene: CanvasScene) {
 		if (status.value !is Status.Ready) return
-		pending[viewId] = scene
+		// A scene that replaces one the GL thread never drew must keep its paint uploads, or the texture would miss them.
+		pending.merge(viewId, scene) { earlier, next -> next.after(earlier) }
 		scheduleDrain()
 	}
 

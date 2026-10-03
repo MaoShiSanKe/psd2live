@@ -128,6 +128,15 @@ class CanvasPerfTool {
 				viewModel.saveParameterSnapshot("turned")
 				viewModel.setParameterValue(io.github.psd2live.core.StandardParameters.ANGLE_X, 0f)
 			}
+			/** A red brush stroke circling over the face, through the editor's own paint gesture. */
+			val paintStroke = Phase("paint-stroke", 4.0) { _, t, _, _, _ ->
+				SwingUtilities.invokeAndWait {
+					val viewport = editor.viewport ?: return@invokeAndWait
+					val origin = dragOrigin ?: return@invokeAndWait
+					val pos = origin + androidx.compose.ui.geometry.Offset((cos(t * 5) * 40).toFloat(), (sin(t * 5) * 40).toFloat())
+					if (t == 0.0) editor.press(pos, viewport, shift = false, alt = false) else editor.move(pos, viewport, shift = false)
+				}
+			}
 			for (software in listOf(false, true)) {
 				AppSettings.softwareCanvas = software
 				Thread.sleep(1500)
@@ -143,7 +152,29 @@ class CanvasPerfTool {
 					(ghost[0] as? io.github.psd2live.ui.state.ParameterSnapshotPreview)?.let(viewModel::clearParameterSnapshotPreview)
 				}
 				Thread.sleep(500)
-				for (phase in phases + deformDrag) {
+				for (phase in phases + deformDrag + paintStroke) {
+					if (phase === paintStroke) {
+						SwingUtilities.invokeAndWait {
+							viewModel.setCanvasView(1f, 0f, 0f, canvasId, CanvasMode.EDIT)
+							viewModel.selectLayer(face)
+						}
+						Thread.sleep(500)
+						SwingUtilities.invokeAndWait {
+							editor.setHierarchyMode(io.github.psd2live.ui.EditHierarchyMode.PAINT)
+							editor.tool = io.github.psd2live.ui.CanvasTool.PAINT_BRUSH
+							editor.paintColor = androidx.compose.ui.graphics.Color.Red
+							editor.paintBrushSize = 24f
+						}
+						Thread.sleep(800)
+						SwingUtilities.invokeAndWait {
+							val viewport = editor.viewport
+							val target = editor.target()
+							if (viewport != null && target != null) {
+								val points = editor.screen(target.geometry.points, target, viewport)
+								dragOrigin = androidx.compose.ui.geometry.Offset(points.map { it.x }.average().toFloat(), points.map { it.y }.average().toFloat())
+							}
+						}
+					}
 					if (phase === deformDrag) {
 						SwingUtilities.invokeAndWait {
 							viewModel.setCanvasView(1f, 0f, 0f, canvasId, CanvasMode.EDIT)
@@ -186,6 +217,15 @@ class CanvasPerfTool {
 					if (phase === deformDrag) {
 						ImageIO.write(robot.createScreenCapture(bounds), "png", File(out, "$mode-deform-mid.png"))
 						report.appendLine("deform drag: in gesture ${editor.inGesture}, previewing ${editor.preview != null}; $pressNote")
+					}
+					if (phase === paintStroke) {
+						ImageIO.write(robot.createScreenCapture(bounds), "png", File(out, "$mode-paint-mid.png"))
+						SwingUtilities.invokeAndWait {
+							report.appendLine("paint stroke: session ${editor.paintSession != null}, gpu preview ${editor.paintSession?.gpuPreview}")
+							editor.release()
+							editor.discardPaintSession()
+							editor.setHierarchyMode(io.github.psd2live.ui.EditHierarchyMode.SELECT)
+						}
 					}
 					if (phase === deformDrag) SwingUtilities.invokeAndWait {
 						editor.release()

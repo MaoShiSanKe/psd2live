@@ -170,6 +170,54 @@ class PaintSession(
     /** One published tile of the preview, at its place on the document. */
     class PreviewTile(val x: Int, val y: Int, val width: Int, val height: Int, val image: ImageBitmap)
 
+    /**
+     * The canvas shows this session through the GPU renderer, which keeps the raster as one texture and is
+     * handed only the rectangles that changed: no preview tiles are painted or converted then. Set by the canvas
+     * that draws the session; switching it off repaints every tile for the software canvas.
+     */
+    var gpuPreview: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) {
+                stale.addAll(tileKeys(0, 0, docWidth, docHeight))
+                refreshPreview()
+            }
+        }
+
+    /** Bumped whenever the raster changed while [gpuPreview] is on, so a draw scope reading it redraws. */
+    var gpuVersion by mutableStateOf(0)
+        private set
+
+    /** Changed areas the GPU texture has not been given yet. */
+    private val gpuDirty = ArrayList<Rectangle>()
+
+    /**
+     * The changes since the last call, as one rectangle of premultiplied RGBA pixels copied off the raster here
+     * on the UI thread that writes it, so the GL thread never reads a half-written stroke. [full] asks for the
+     * whole raster, for a texture that has just been made.
+     */
+    internal fun takeGpuUpload(full: Boolean): io.github.psd2live.render.PaintUpload? {
+        val area = if (full) Rectangle(0, 0, docWidth, docHeight) else {
+            if (gpuDirty.isEmpty()) return null
+            gpuDirty.reduce { a, b -> a.union(b) }.intersection(Rectangle(0, 0, docWidth, docHeight))
+        }
+        gpuDirty.clear()
+        if (area.isEmpty) return null
+        val argb = workingImage.getRGB(area.x, area.y, area.width, area.height, null, 0, area.width)
+        val bytes = ByteArray(argb.size * 4)
+        for (i in argb.indices) {
+            val c = argb[i]
+            val a = c ushr 24
+            if (a == 0) continue
+            bytes[i * 4] = (((c ushr 16 and 0xff) * a + 127) / 255).toByte()
+            bytes[i * 4 + 1] = (((c ushr 8 and 0xff) * a + 127) / 255).toByte()
+            bytes[i * 4 + 2] = (((c and 0xff) * a + 127) / 255).toByte()
+            bytes[i * 4 + 3] = a.toByte()
+        }
+        return io.github.psd2live.render.PaintUpload(area.x, area.y, area.width, area.height, bytes)
+    }
+
     /** The stroke being drawn right now, and the pixels it has taken over so far. */
     private var liveStroke: LayerPaintEngine.Stroke? = null
     private var pending = PixelPatch()
@@ -191,6 +239,12 @@ class PaintSession(
      * pointer move, which is what makes the mark itself the preview.
      */
     fun refreshPreview() {
+        if (gpuPreview) {
+            // The GPU canvas takes the changed areas themselves (see takeGpuUpload); the tiles wait until a
+            // software canvas asks for them.
+            if (gpuDirty.isNotEmpty()) gpuVersion++
+            return
+        }
         if (stale.isEmpty()) return
         for (key in stale) {
             val x = tileX(key) * PREVIEW_TILE
@@ -220,6 +274,8 @@ class PaintSession(
             ?: Rectangle(0, 0, docWidth, docHeight)
         if (area.isEmpty) return
         stale.addAll(tileKeys(area.x, area.y, area.width, area.height))
+        // A GPU canvas that starts later uploads the whole raster, so the software canvas keeps no list.
+        if (gpuPreview) gpuDirty += area
     }
 
     /** Marks everything [rects] reaches. Called with the areas an undo, a redo or a give-back moved. */
