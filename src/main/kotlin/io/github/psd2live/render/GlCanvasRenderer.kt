@@ -246,9 +246,11 @@ internal class GlCanvasRenderer : AutoCloseable {
 		// The artwork's masks leave their references behind; the fills count from a clean stencil.
 		GL11.glClear(GL11.GL_STENCIL_BUFFER_BIT)
 		for (item in overlay.items) when (item) {
+			is PolylineBatch -> drawPolyline(item, width, height)
 			is LineBatch -> {
 				if (item.segments.size < 4) continue
 				GL20.glUseProgram(lines.id)
+				GL20.glUniform1f(lines.uniform("u_once"), 0f)
 				GL20.glUniform4fv(lines.uniform("u_world"), worldUniform)
 				GL20.glUniform2f(lines.uniform("u_viewport"), width.toFloat(), height.toFloat())
 				GL30.glBindVertexArray(lineVao)
@@ -261,6 +263,7 @@ internal class GlCanvasRenderer : AutoCloseable {
 			is PointBatch -> {
 				if (item.centers.size < 2) continue
 				GL20.glUseProgram(points.id)
+				GL20.glUniform1f(points.uniform("u_once"), 0f)
 				GL20.glUniform4fv(points.uniform("u_world"), worldUniform)
 				GL20.glUniform2f(points.uniform("u_viewport"), width.toFloat(), height.toFloat())
 				GL30.glBindVertexArray(pointVao)
@@ -275,6 +278,49 @@ internal class GlCanvasRenderer : AutoCloseable {
 			is FillBatch -> drawFill(item)
 		}
 		GL30.glBindVertexArray(0)
+	}
+
+	/**
+	 * The segments, then a disc at every vertex for the round joins and caps, all under one stencil rule: a pixel
+	 * is painted by the first piece that covers it at least half and by none after.
+	 */
+	private fun drawPolyline(batch: PolylineBatch, width: Int, height: Int) {
+		val n = batch.points.size / 2
+		if (n < 2) return
+		val count = if (batch.closed) n else n - 1
+		val segments = FloatArray(count * 4)
+		for (i in 0 until count) {
+			val j = (i + 1) % n
+			segments[i * 4] = batch.points[i * 2]; segments[i * 4 + 1] = batch.points[i * 2 + 1]
+			segments[i * 4 + 2] = batch.points[j * 2]; segments[i * 4 + 3] = batch.points[j * 2 + 1]
+		}
+		GL11.glClear(GL11.GL_STENCIL_BUFFER_BIT)
+		GL11.glEnable(GL11.GL_STENCIL_TEST)
+		GL11.glStencilFunc(GL11.GL_EQUAL, 0, 0xff)
+		GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_INCR)
+		GL20.glUseProgram(lines.id)
+		GL20.glUniform1f(lines.uniform("u_once"), 1f)
+		GL20.glUniform4fv(lines.uniform("u_world"), worldUniform)
+		GL20.glUniform2f(lines.uniform("u_viewport"), width.toFloat(), height.toFloat())
+		GL20.glUniform1f(lines.uniform("u_width"), batch.width)
+		setColor(lines.uniform("u_color"), batch.argb)
+		GL30.glBindVertexArray(lineVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, lineInstances)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, segments, GL15.GL_STREAM_DRAW)
+		GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, count)
+		GL20.glUseProgram(points.id)
+		GL20.glUniform1f(points.uniform("u_once"), 1f)
+		GL20.glUniform4fv(points.uniform("u_world"), worldUniform)
+		GL20.glUniform2f(points.uniform("u_viewport"), width.toFloat(), height.toFloat())
+		GL20.glUniform1f(points.uniform("u_radius"), batch.width * 0.5f)
+		GL20.glUniform1f(points.uniform("u_ring"), 0f)
+		setColor(points.uniform("u_fill"), batch.argb)
+		setColor(points.uniform("u_stroke"), batch.argb)
+		GL30.glBindVertexArray(pointVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, pointInstances)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, batch.points, GL15.GL_STREAM_DRAW)
+		GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, n)
+		GL11.glDisable(GL11.GL_STENCIL_TEST)
 	}
 
 	/**

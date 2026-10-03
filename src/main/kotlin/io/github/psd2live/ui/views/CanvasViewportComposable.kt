@@ -1131,6 +1131,24 @@ fun CanvasViewportComposable(
 					}
 					val transformBoxOwnsSelection = mode == CanvasMode.EDIT && editor.drawsTransformBox
 					// The rig guides the GPU draws itself; their names and indices are Compose text over its frame.
+					// 3e's paths. A path belongs to the part it deforms, so it is drawn only while that part (or the part's
+					// deformer) is selected -- an edit-time guide, never part of the Preview tab's render. Hovering a
+					// part in the tree previews its path, the instant feedback the warp channel gives.
+					val pathsShown = mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()
+					val selectedPathIds: Set<String> = if (!pathsShown) emptySet() else {
+						val selectedLayerDescendants = if (selectedDeformerId != null) {
+							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+						} else emptySet()
+						model.rig.puppet.deformPaths.filter { path ->
+							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
+							(selectedLayerId != null && layerId == selectedLayerId) ||
+								(selectedDeformerId != null && layerId != null && layerId in selectedLayerDescendants)
+						}.mapTo(HashSet()) { it.id }
+					}
+					val hoveredPathIds: Set<String> = if (!pathsShown) emptySet() else model.rig.puppet.deformPaths.filter { path ->
+						hoveredLayerId != null && model.rig.layerIdByDrawableId[path.drawableId.raw] == hoveredLayerId
+					}.mapTo(HashSet()) { it.id }
+					val pathIds = selectedPathIds + hoveredPathIds
 					val gpuWarpGuides = gpuReady
 					val gpuRotationGuides = gpuReady
 					val gpuBoxGuides = gpuReady
@@ -1158,6 +1176,11 @@ fun CanvasViewportComposable(
 							val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model.rig.puppet, warpPoints), viewport)
 							guides.warps(io.github.psd2live.ui.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints, warpIds,
 								selectedDeformerId, hoveredDeformerId, dimUnselected), corners)
+						}
+						if (pathIds.isNotEmpty()) {
+							guides.paths(io.github.psd2live.ui.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
+								pathIds, showWidth = canvasState.pathShowWidth, showHardness = canvasState.pathShowHardness,
+								selectedPathIds = selectedPathIds, hoveredPathIds = hoveredPathIds))
 						}
 						return guides.items
 					}
@@ -1222,7 +1245,7 @@ fun CanvasViewportComposable(
 						)
 						val wireKey = wireItems.map { Triple(it.drawable.id, it.selected, it.dimmed) }
 						gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey,
-							guideKey, gpuWarpGuides, gpuRotationGuides)) {
+							guideKey, pathIds, canvasState.pathShowWidth, canvasState.pathShowHardness)) {
 							CanvasScene(w, h, viewport, model, geometry,
 								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
 								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()))
@@ -1261,7 +1284,8 @@ fun CanvasViewportComposable(
 						}
 					}
 
-				val guideImage = guideCache.imageFor(guideKey, w, h, panShift(guideKey)) { g ->
+				// The Java2D guide pass is the software path's: with the GPU every guide is in its frame.
+				val guideImage = if (gpuReady) null else guideCache.imageFor(guideKey, w, h, panShift(guideKey)) { g ->
 					g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 					// Whether any section drew: an empty pass is neither converted nor composited.
 					var painted = false
@@ -1377,50 +1401,29 @@ fun CanvasViewportComposable(
 					// 3e. Deform Paths (RigInformationOverlay). A path belongs to the part it
 					// deforms, so it is drawn only while that part (or the part's deformer) is
 					// selected -- an edit-time guide, never part of the Preview tab's render.
-					if (mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()) {
-						val selectedLayerDescendants = if (selectedDeformerId != null) {
-							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
-						} else {
-							emptySet()
-						}
-						val selectedPathIds = model.rig.puppet.deformPaths.filter { path ->
-							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
-							(selectedLayerId != null && layerId == selectedLayerId) ||
-								(selectedDeformerId != null && layerId != null && layerId in selectedLayerDescendants)
-						}.map { it.id }.toSet()
-
-						val hoveredPathIds = model.rig.puppet.deformPaths.filter { path ->
-							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
-							hoveredLayerId != null && layerId == hoveredLayerId
-						}.map { it.id }.toSet()
-
-						// Hovering a part in the tree previews its path -- same instant feedback the
-						// warp channel gives, without bringing back the always-on rig clutter.
-						val pathIds = selectedPathIds + hoveredPathIds
-
-						if (pathIds.isNotEmpty()) {
-							painted = true
-							io.github.psd2live.ui.RigInformationOverlay.paintDeformPaths(
-								g = g,
-								model = model.rig.puppet,
-								geometry = geometry,
-								viewport = viewport,
-								pathIds = pathIds,
-								labels = false,
-								pointIndices = informationIndices,
-								showWidth = canvasState.pathShowWidth,
-								showHardness = canvasState.pathShowHardness,
-								selectedPathIds = selectedPathIds,
-								hoveredPathIds = hoveredPathIds,
-							)
-						}
+					if (!gpuReady && pathIds.isNotEmpty()) {
+						painted = true
+						io.github.psd2live.ui.RigInformationOverlay.paintDeformPaths(
+							g = g,
+							model = model.rig.puppet,
+							geometry = geometry,
+							viewport = viewport,
+							pathIds = pathIds,
+							labels = false,
+							pointIndices = informationIndices,
+							showWidth = canvasState.pathShowWidth,
+							showHardness = canvasState.pathShowHardness,
+							selectedPathIds = selectedPathIds,
+							hoveredPathIds = hoveredPathIds,
+						)
 					}
 					painted
 				}
 				if (guideImage != null) drawImage(guideImage, topLeft = guideCache.offset)
 				if (gpuReady && (informationNames || informationIndices)) {
+					// guideKey misses the simulated geometry the paths follow, so the label key adds it.
 					val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
-					val labels = guideLabels.labels(guideKey) {
+					val labels = guideLabels.labels(guideKey + listOf(geometry, pathIds)) {
 						buildList {
 							for (layer in io.github.psd2live.ui.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints,
 								warpIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
@@ -1434,6 +1437,15 @@ fun CanvasViewportComposable(
 								if (informationNames && p.size >= 2) add(GuideLabel("${w.name} [${w.id.raw}] ${w.columns}×${w.rows}",
 									viewport.x(p[0]).toFloat().coerceAtLeast(0f) + 3f, viewport.yFromWorld(p[1]).toFloat().coerceAtLeast(16f),
 									layer.wireColor.rgb, plate = true))
+							}
+							if (informationIndices && pathIds.isNotEmpty()) {
+								for (look in io.github.psd2live.ui.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
+										pathIds, selectedPathIds = selectedPathIds, hoveredPathIds = hoveredPathIds)) {
+									if (look.isDimmed && !look.isSelected && !look.isHovered) continue
+									look.screenPoints.forEachIndexed { i, (x, y) ->
+										add(GuideLabel(i.toString(), x + 6f, y - 4f, -1, plate = true))
+									}
+								}
 							}
 							if (informationNames) for (needle in io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(model.rig.puppet,
 									guidePose, viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {

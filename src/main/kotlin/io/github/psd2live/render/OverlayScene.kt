@@ -40,3 +40,11 @@ class PointBatch(val fillArgb: Int, val strokeArgb: Int, val radius: Float, val 
  * @property contours x, y per vertex of each closed outline, world units.
  */
 class FillBatch(val argb: Int, val contours: List<FloatArray>) : OverlayItem
+
+/**
+ * A polyline stroked with round caps and joins, painting each pixel at most once, as a Java2D stroke does: its
+ * translucent halo does not darken where the pieces meet.
+ *
+ * @property points x, y per vertex, world units.
+ */
+class PolylineBatch(val argb: Int, val width: Float, val points: FloatArray, val closed: Boolean) : OverlayItem

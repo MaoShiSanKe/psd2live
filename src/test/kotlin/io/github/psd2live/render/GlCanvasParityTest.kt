@@ -158,6 +158,52 @@ class GlCanvasParityTest {
 		assertTrue(gpuCovered >= gpuCount * 0.97, "GPU paints away from the Java2D guides: $gpuCovered of $gpuCount")
 	}
 
+	/** Deform paths, curves with halos, points, corner diamonds and hardness rings, as the Java2D guide pass paints them. */
+	@Test fun deformPathGuidesCoverWhatJava2DPaints() {
+		val base = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val face = base.rig.puppet.drawables.first { it.name.equals("face", ignoreCase = true) }
+		val indices = requireNotNull(face.mesh).indices
+		val step = indices.size / 3 / 6
+		val third = 1f / 3f
+		val points = (0 until 5).map { k ->
+			val t = k * step * 3
+			org.umamo.runtime.model.DeformPathPoint(indices[t], indices[t + 1], indices[t + 2], third, third, 1f - 2 * third, corner = k == 2)
+		}
+		val path = org.umamo.runtime.model.DeformPath("p", face.id, points, width = 40f, hardness = 60f, closed = true)
+		val puppet = base.rig.puppet.copy(deformPaths = listOf(path))
+		val model = base.copy(rig = base.rig.copy(puppet = puppet))
+		val width = 960
+		val height = 720
+		val viewport = viewport(model, width, height, 3.0)
+		val geometry = RigCanvasSupport.evaluate(model)
+		val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+		image.createGraphics().apply {
+			io.github.psd2live.ui.RigInformationOverlay.paintDeformPaths(this, puppet, geometry, viewport, setOf("p"),
+				showHardness = true, selectedPathIds = setOf("p"))
+			dispose()
+		}
+		val guides = RigGuides(viewport)
+		guides.paths(io.github.psd2live.ui.RigInformationOverlay.deformPathLooks(puppet, geometry, viewport, setOf("p"),
+			showHardness = true, selectedPathIds = setOf("p")))
+		val scene = CanvasScene(width, height, viewport, model, geometry, emptyList(), OverlayScene(guides.items))
+		val gpu = requireNotNull(renderer!!.let { r -> host!!.submit { r.render("paths", scene) }.get() }.readPixels())
+		fun javaPainted(x: Int, y: Int) = x in 0 until width && y in 0 until height && (image.getRGB(x, y) ushr 24) > 40
+		fun gpuPainted(x: Int, y: Int) = x in 0 until width && y in 0 until height && (gpu[(y * width + x) * 4 + 3].toInt() and 0xff) > 40
+		fun near(x: Int, y: Int, painted: (Int, Int) -> Boolean) = (-1..1).any { dy -> (-1..1).any { dx -> painted(x + dx, y + dy) } }
+		var java = 0; var javaCovered = 0; var gpuCount = 0; var gpuCovered = 0
+		for (y in 0 until height) for (x in 0 until width) {
+			if (javaPainted(x, y)) { java++; if (near(x, y, ::gpuPainted)) javaCovered++ }
+			if (gpuPainted(x, y)) { gpuCount++; if (near(x, y, ::javaPainted)) gpuCovered++ }
+		}
+		println("PATHS java2d $java px, ${javaCovered * 100 / maxOf(1, java)}% covered by GPU; gpu $gpuCount px, ${gpuCovered * 100 / maxOf(1, gpuCount)}% near Java2D")
+		assertTrue(java > 500, "the Java2D path guide drew something")
+		assertTrue(javaCovered >= java * 0.97, "GPU misses Java2D path pixels: $javaCovered of $java")
+		assertTrue(gpuCovered >= gpuCount * 0.97, "GPU paints away from the Java2D path: $gpuCovered of $gpuCount")
+		// The halo is translucent: where curve pieces meet it must not darken, which the stencil-once stroke ensures.
+		val haloAlphas = (0 until width * height).map { gpu[it * 4 + 3].toInt() and 0xff }.filter { it in 1..254 }
+		println("PATHS translucent alphas: ${haloAlphas.groupingBy { it / 32 }.eachCount().toSortedMap()}")
+	}
+
 	private fun viewport(model: RigPreviewModel, width: Int, height: Int, zoom: Double): CanvasViewport {
 		val w = model.analysis.source.widthPx.toDouble()
 		val h = model.analysis.source.heightPx.toDouble()

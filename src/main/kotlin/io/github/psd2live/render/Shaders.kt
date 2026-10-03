@@ -61,13 +61,16 @@ void main() {
 }
 """
 
+	/** With u_once set, a pixel less than half covered is left to the next piece, so a stencil can paint each pixel once. */
 	const val LINE_FRAGMENT = """#version 330 core
 in float v_across;
 uniform float u_width;
 uniform vec4 u_color;
+uniform float u_once;
 out vec4 o_color;
 void main() {
     float coverage = clamp(u_width * 0.5 + 0.5 - abs(v_across), 0.0, 1.0);
+    if (coverage <= 0.0 || (u_once > 0.0 && coverage < 0.5)) discard;
     o_color = u_color * coverage;
 }
 """
@@ -95,13 +98,16 @@ uniform float u_radius;
 uniform float u_ring;
 uniform vec4 u_fill;
 uniform vec4 u_stroke;
+uniform float u_once;
 out vec4 o_color;
 void main() {
     float d = length(v_offset);
     float outside = clamp(d - u_radius + 0.5, 0.0, 1.0);
     float inside = u_ring > 0.0 ? clamp(d - (u_radius - u_ring) + 0.5, 0.0, 1.0) : 0.0;
     vec4 color = mix(u_fill, u_stroke, inside);
-    o_color = color * (1.0 - outside);
+    float coverage = 1.0 - outside;
+    if (coverage <= 0.0 || (u_once > 0.0 && coverage < 0.5)) discard;
+    o_color = color * coverage;
 }
 """
 }

@@ -114,6 +114,70 @@ internal class RigGuides(private val viewport: CanvasViewport) {
 		}
 	}
 
+	/**
+	 * [RigInformationOverlay.paintDeformPaths]'s guides: each curve with its halo, the width and hardness rings
+	 * round its points when asked for, then its points, corners as diamonds.
+	 */
+	fun paths(looks: List<RigInformationOverlay.DeformPathLook>) {
+		for (look in looks) {
+			val curve = look.curvePoints
+			if (curve.size >= 2) {
+				val world = FloatArray(curve.size * 2)
+				curve.forEachIndexed { i, (x, y) -> world[i * 2] = wx(x); world[i * 2 + 1] = wy(y) }
+				items += PolylineBatch(look.haloColor.rgb, look.strokeWidth + 2f, world, look.path.closed)
+				items += PolylineBatch(look.curveColor.rgb, look.strokeWidth, world, look.path.closed)
+			}
+			if (look.drawWidth || look.drawHardness) {
+				for ((x, y) in look.screenPoints) {
+					val inner = look.innerRadiusPx
+					if (look.drawHardness && inner > 1f) {
+						items += PointBatch(Color(33, 150, 243, 35).rgb, Color(33, 150, 243, 160).rgb, inner + 0.6f, 1.2f,
+							floatArrayOf(wx(x), wy(y)))
+					}
+					val outer = look.outerRadiusPx
+					if (look.drawWidth && outer > 1f) items += LineBatch(Color(244, 67, 54, 180).rgb, 1.4f, dashedCircle(x, y, outer))
+				}
+			}
+			val dimmed = look.isDimmed
+			val curveColor = look.curveColor
+			look.screenPoints.forEachIndexed { i, (x, y) ->
+				if (look.isCorner(i)) {
+					val d = look.diamondSize()
+					val diamond = floatArrayOf(wx(x), wy(y - d), wx(x + d), wy(y), wx(x), wy(y + d), wx(x - d), wy(y))
+					items += FillBatch((if (dimmed) Color(180, 150, 50, 60) else Color(255, 202, 40)).rgb, listOf(diamond))
+					items += LineBatch((if (dimmed) Color(20, 20, 24, 40) else Color(20, 20, 24, 220)).rgb, 1.2f, loop(diamond))
+				} else {
+					// Java2D's fillOval then a 1.2 px drawOval on the same circle: a disc with a ring over its edge.
+					val r = look.pointRadius().toFloat()
+					val fill = if (dimmed) Color(curveColor.red, curveColor.green, curveColor.blue, 50) else curveColor
+					val ring = if (dimmed) Color(20, 20, 24, 40) else Color.WHITE
+					items += PointBatch(fill.rgb, ring.rgb, r + 0.6f, 1.2f, floatArrayOf(wx(x), wy(y)))
+				}
+			}
+		}
+	}
+
+	/** A circle of [radius] screen pixels round ([cx], [cy]) as 4 px dashes with 4 px gaps, Java2D's dash pattern. */
+	private fun dashedCircle(cx: Float, cy: Float, radius: Float): FloatArray {
+		val circumference = 2.0 * Math.PI * radius
+		val dashes = (circumference / 8.0).toInt().coerceIn(1, 2048)
+		val step = 2.0 * Math.PI / (circumference / 8.0).coerceAtLeast(1.0)
+		val dash = step * 0.5
+		val out = ArrayList<Float>(dashes * 8)
+		for (k in 0 until dashes) {
+			// Each dash as a few short pieces, so a large circle's dashes stay on the circle.
+			val start = k * step
+			val pieces = 3
+			for (p in 0 until pieces) {
+				val a0 = start + dash * p / pieces
+				val a1 = start + dash * (p + 1) / pieces
+				out += wx((cx + cos(a0) * radius).toFloat()); out += wy((cy + sin(a0) * radius).toFloat())
+				out += wx((cx + cos(a1) * radius).toFloat()); out += wy((cy + sin(a1) * radius).toFloat())
+			}
+		}
+		return out.toFloatArray()
+	}
+
 	/** The closed outlines of [area], flattened, in world units. */
 	private fun contours(area: Area): List<FloatArray> {
 		val out = ArrayList<FloatArray>()
