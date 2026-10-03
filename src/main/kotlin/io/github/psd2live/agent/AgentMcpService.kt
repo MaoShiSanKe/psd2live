@@ -252,7 +252,7 @@ private suspend fun createTransport(
 
 internal fun createAgentMcpServer(workspace: AgentWorkspace, legacyTools: Boolean = false): Server {
 	val server = Server(
-		serverInfo = Implementation("psd2live", "2.0.2"),
+		serverInfo = Implementation("psd2live", "2.0.3"),
 		options = ServerOptions(
 			ServerCapabilities(
 				resources = ServerCapabilities.Resources(subscribe = false, listChanged = false),
