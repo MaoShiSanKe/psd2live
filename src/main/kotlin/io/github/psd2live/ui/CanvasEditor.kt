@@ -1084,6 +1084,45 @@ internal class CanvasEditor(
     var paintPencilSize by mutableStateOf(4f)
     var paintEraserSize by mutableStateOf(24f)
 
+    /** The open document's longest side in pixels; 0 with nothing open. */
+    val documentLongSide: Int
+        get() = state.let { it.analysis ?: it.previewModel?.analysis }?.source?.let { maxOf(it.widthPx, it.heightPx) } ?: 0
+
+    /**
+     * The largest size any brush takes: never below [MIN_BRUSH_SIZE_LIMIT], and otherwise the document's longest
+     * side, since a brush wider than the document has nothing more to cover.
+     */
+    val brushSizeLimit: Float
+        get() = maxOf(MIN_BRUSH_SIZE_LIMIT, documentLongSide.toFloat())
+
+    /**
+     * How much larger brushes start on this document: 1 up to [io.github.psd2live.core.MeshResolution.REFERENCE_SIDE],
+     * in proportion above it, so a default stroke covers the same share of a large document as of a small one.
+     */
+    val brushScale: Float
+        get() = (documentLongSide.toFloat() / io.github.psd2live.core.MeshResolution.REFERENCE_SIDE).coerceAtLeast(1f)
+
+    private var brushScaleApplied = 1f
+
+    /**
+     * Scales every brush size - paint, pencil, eraser, the deform and weight brushes - by the change in [brushScale]
+     * since the last call, so the defaults suit a newly opened document and sizes the user picked keep their share
+     * of it. Nothing happens with no document open.
+     */
+    fun fitBrushesToDocument() {
+        if (documentLongSide <= 0) return
+        val scale = brushScale
+        if (scale == brushScaleApplied) return
+        val k = scale / brushScaleApplied
+        val limit = brushSizeLimit
+        paintBrushSize = (paintBrushSize * k).coerceIn(1f, limit)
+        paintPencilSize = (paintPencilSize * k).coerceIn(1f, limit)
+        paintEraserSize = (paintEraserSize * k).coerceIn(1f, limit)
+        radius = (radius * k).coerceIn(1f, limit)
+        skeletonWeightRadius = (skeletonWeightRadius * k).coerceIn(1f, limit)
+        brushScaleApplied = scale
+    }
+
     /** Edge softness of the paint and erase tips: 1 is a pen, 0 fades the whole tip to nothing. */
     var paintHardness by mutableStateOf(0.85f)
 
@@ -6430,7 +6469,7 @@ internal class CanvasEditor(
         }
         if (paintBrushActive) {
             when (brushAxis) {
-                BrushAdjustAxis.RADIUS -> paintSize = (paintSizeAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(1f, 512f)
+                BrushAdjustAxis.RADIUS -> paintSize = (paintSizeAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(1f, brushSizeLimit)
                 BrushAdjustAxis.HARDNESS -> paintHardness = (paintHardnessAtStart + dy / BRUSH_HARDNESS_SPAN_PX).coerceIn(0f, 1f)
                 BrushAdjustAxis.OPACITY -> paintOpacity = (paintOpacityAtStart + dy / BRUSH_HARDNESS_SPAN_PX).coerceIn(0.01f, 1f)
                 BrushAdjustAxis.ANGLE, null -> Unit
@@ -6438,7 +6477,7 @@ internal class CanvasEditor(
             return
         }
         when (brushAxis) {
-            BrushAdjustAxis.RADIUS -> radius = (brushRadiusAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(4f, 500f)
+            BrushAdjustAxis.RADIUS -> radius = (brushRadiusAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(4f, brushSizeLimit)
             BrushAdjustAxis.HARDNESS -> hardness = (brushHardnessAtStart + dy / BRUSH_HARDNESS_SPAN_PX * 0.95f).coerceIn(0f, 0.95f)
             BrushAdjustAxis.ANGLE -> brushAngle = (brushAngleAtStart + dx * 0.75f).mod(360f)
             BrushAdjustAxis.OPACITY, null -> Unit
@@ -6512,6 +6551,9 @@ private const val INFLATE_GAIN = 0.5f
 
 /** Travel in raw px that equals one `]` press (one 1.2x step) in the Alt + right-drag radius gesture. */
 private const val BRUSH_RADIUS_STEP_PX = 12f
+
+/** The brush size limit on documents smaller than this. */
+private const val MIN_BRUSH_SIZE_LIMIT = 512f
 
 /** Vertical travel in raw px that spans the whole 0f..0.95f hardness range in the same gesture. */
 private const val BRUSH_HARDNESS_SPAN_PX = 200f

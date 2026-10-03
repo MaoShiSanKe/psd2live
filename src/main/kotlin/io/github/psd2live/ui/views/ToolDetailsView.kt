@@ -675,7 +675,7 @@ internal fun ToolDetailsView(
                                 onValueChange = { editor.radius = it.toFloat() },
                                 modifier = Modifier.weight(1f),
                                 min = 4.0,
-                                max = 500.0,
+                                max = editor.brushSizeLimit.toDouble(),
                                 unit = "px",
                                 height = 24.dp,
                             )
@@ -915,7 +915,7 @@ internal fun ToolDetailsView(
                         if (brush) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                                CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = 500.0, unit = "px", height = 24.dp)
+                                CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = editor.brushSizeLimit.toDouble(), unit = "px", height = 24.dp)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(tr("editor.hardness"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
@@ -937,7 +937,7 @@ internal fun ToolDetailsView(
                 }
                 CanvasTool.SUBDIVIDE -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = 500.0, unit = "px", height = 24.dp)
+                        CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = editor.brushSizeLimit.toDouble(), unit = "px", height = 24.dp)
                         Text(
                             text = tr("editor.subdivideHint"),
                             style = typography.caption.copy(fontSize = 10.5.sp),
@@ -1287,7 +1287,7 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
                     Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
                     CompactNumberSpinner(
                         value = editor.paintBrushSize.toDouble(),
-                        onValueChange = { editor.paintBrushSize = it.toFloat().coerceIn(1f, 256f) },
+                        onValueChange = { editor.paintBrushSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
                         modifier = Modifier.weight(1f),
                         min = 1.0, max = 256.0, step = 1.0, unit = "px", height = 24.dp
                     )
@@ -1308,7 +1308,7 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
                     Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
                     CompactNumberSpinner(
                         value = editor.paintPencilSize.toDouble(),
-                        onValueChange = { editor.paintPencilSize = it.toFloat().coerceIn(1f, 64f) },
+                        onValueChange = { editor.paintPencilSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
                         modifier = Modifier.weight(1f),
                         min = 1.0, max = 64.0, step = 1.0, unit = "px", height = 24.dp
                     )
@@ -1320,7 +1320,7 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
                     Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
                     CompactNumberSpinner(
                         value = editor.paintEraserSize.toDouble(),
-                        onValueChange = { editor.paintEraserSize = it.toFloat().coerceIn(1f, 256f) },
+                        onValueChange = { editor.paintEraserSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
                         modifier = Modifier.weight(1f),
                         min = 1.0, max = 256.0, step = 2.0, unit = "px", height = 24.dp
                     )
@@ -1367,7 +1367,7 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
                     Text(tr("editor.width"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
                     CompactNumberSpinner(
                         value = editor.paintBrushSize.toDouble(),
-                        onValueChange = { editor.paintBrushSize = it.toFloat().coerceIn(1f, 128f) },
+                        onValueChange = { editor.paintBrushSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
                         modifier = Modifier.weight(1f),
                         min = 1.0, max = 128.0, step = 1.0, unit = "px", height = 24.dp
                     )

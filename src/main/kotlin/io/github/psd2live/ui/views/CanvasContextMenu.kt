@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import kotlin.math.exp
+import kotlin.math.ln
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -270,7 +272,8 @@ private fun ColumnScope.SimulateModeContextMenu(
                 label = tr("editor.radius"),
                 value = editor.radius,
                 onValueChange = { editor.radius = it },
-                valueRange = 4f..500f,
+                valueRange = 4f..editor.brushSizeLimit,
+                    logarithmic = true,
                 display = "${editor.radius.toInt()}px",
             )
             ParamSliderRow(
@@ -328,7 +331,8 @@ private fun ColumnScope.DeformModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.radius,
                     onValueChange = { editor.radius = it },
-                    valueRange = 1f..500f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.radius.toInt()}px",
                 )
             }
@@ -369,7 +373,8 @@ private fun ColumnScope.EditModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.radius,
                     onValueChange = { editor.radius = it },
-                    valueRange = 1f..500f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.radius.toInt()}px",
                 )
             }
@@ -393,7 +398,8 @@ private fun ColumnScope.EditModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.radius,
                     onValueChange = { editor.radius = it },
-                    valueRange = 1f..500f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.radius.toInt()}px",
                 )
             }
@@ -479,7 +485,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.paintBrushSize,
                     onValueChange = { editor.paintBrushSize = it },
-                    valueRange = 1f..256f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintBrushSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -507,7 +514,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.paintPencilSize,
                     onValueChange = { editor.paintPencilSize = it },
-                    valueRange = 1f..64f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintPencilSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -527,7 +535,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.paintEraserSize,
                     onValueChange = { editor.paintEraserSize = it },
-                    valueRange = 1f..256f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintEraserSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -586,7 +595,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.width"),
                     value = editor.paintBrushSize,
                     onValueChange = { editor.paintBrushSize = it },
-                    valueRange = 1f..128f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintBrushSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -948,7 +958,8 @@ private fun ColumnScope.DeformBrushParamsSection(editor: CanvasEditor) {
             label = tr("editor.radius"),
             value = editor.radius,
             onValueChange = { editor.radius = it },
-            valueRange = 1f..500f,
+            valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
             display = "${editor.radius.toInt()}px",
         )
         ParamSliderRow(
@@ -1162,6 +1173,7 @@ private fun ParamSliderRow(
     onValueChange: (Float) -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
     display: String,
+    logarithmic: Boolean = false,
 ) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
@@ -1186,13 +1198,27 @@ private fun ParamSliderRow(
                 style = typography.monoSmall.copy(fontSize = 9.5.sp),
             )
         }
-        CompactSlider(
-            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            modifier = Modifier.fillMaxWidth(),
-            height = 12.dp,
-        )
+        // A size range can run to the document's long side; on a log scale the small sizes keep their room.
+        val clamped = value.coerceIn(valueRange.start, valueRange.endInclusive)
+        if (logarithmic && valueRange.start > 0f) {
+            val start = ln(valueRange.start)
+            val end = ln(valueRange.endInclusive)
+            CompactSlider(
+                value = ln(clamped),
+                onValueChange = { onValueChange(exp(it).coerceIn(valueRange.start, valueRange.endInclusive)) },
+                valueRange = start..end,
+                modifier = Modifier.fillMaxWidth(),
+                height = 12.dp,
+            )
+        } else {
+            CompactSlider(
+                value = clamped,
+                onValueChange = onValueChange,
+                valueRange = valueRange,
+                modifier = Modifier.fillMaxWidth(),
+                height = 12.dp,
+            )
+        }
     }
 }
 

@@ -343,6 +343,9 @@ fun CanvasViewportComposable(
 	val drawnGeometry = remember { DrawnGeometryMemo() }
 	// A session shown by the GPU hands it changed areas instead of painting preview tiles.
 	LaunchedEffect(paintSession, gpuReady) { paintSession?.gpuPreview = gpuReady }
+	// Brushes start at a size that suits the open document, and keep their share of it across documents.
+	val documentLongSide = editor.documentLongSide
+	LaunchedEffect(editor, documentLongSide) { editor.fitBrushesToDocument() }
 	val guideLabelMeasurer = rememberTextMeasurer(cacheSize = 128)
 	val guideLabels = remember { GuideLabelMemo() }
 	val sdkFrame by frameFlow.collectAsState()
@@ -769,8 +772,8 @@ fun CanvasViewportComposable(
 						true
 					}
 					ShortcutAction.BRUSH_RADIUS_UP -> {
-						if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(512f)
-						else editor.radius = (editor.radius * 1.2f).coerceAtMost(500f)
+						if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(editor.brushSizeLimit)
+						else editor.radius = (editor.radius * 1.2f).coerceAtMost(editor.brushSizeLimit)
 						true
 					}
 					// Never let the deform brush's hardness reach 1.0: brushWeight divides by (1 - hardness).
