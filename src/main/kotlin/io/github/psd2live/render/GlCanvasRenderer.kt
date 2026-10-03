@@ -17,7 +17,6 @@ import org.lwjgl.system.MemoryUtil
 import org.umamo.runtime.model.DrawableId
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
-import java.nio.ByteBuffer
 import java.util.IdentityHashMap
 
 /**
@@ -50,9 +49,6 @@ internal class GlCanvasRenderer : AutoCloseable {
 		var capacityWidth = 0
 		var capacityHeight = 0
 		val meshes = HashMap<DrawableId, MeshBuffers>()
-		var readback: ByteBuffer? = null
-		/** Heap copy of the last readback, reused: the bitmap copies it into its own memory. */
-		var pixels = ByteArray(0)
 		/** Stencil reference of the last masked draw; cleared and restarted when it would overflow. */
 		var stencilRef = 0
 	}
@@ -122,21 +118,22 @@ internal class GlCanvasRenderer : AutoCloseable {
 		drawArtwork(view, scene)
 		drawOverlay(scene.overlay, width, height)
 
-		val bytes = width * height * 4
-		val buffer = view.readback?.takeIf { it.capacity() >= bytes }
-			?: MemoryUtil.memAlloc(bytes).also { next -> view.readback?.let(MemoryUtil::memFree); view.readback = next }
-		buffer.clear()
-		GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 4)
-		GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer)
-		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0)
-		if (view.pixels.size != bytes) view.pixels = ByteArray(bytes)
-		val pixels = view.pixels
-		buffer.get(pixels, 0, bytes)
-		return Bitmap().apply {
-			allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.PREMUL))
-			installPixels(pixels)
-			setImmutable()
+		// Straight into the bitmap's own memory: no direct buffer, no heap array, no second copy into Skia.
+		val bitmap = Bitmap()
+		bitmap.allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.PREMUL))
+		val pixmap = checkNotNull(bitmap.peekPixels()) { "Frame bitmap has no pixels" }
+		try {
+			GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1)
+			GL11.glPixelStorei(GL12.GL_PACK_ROW_LENGTH, pixmap.rowBytes / 4)
+			GL11.nglReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixmap.addr)
+			GL11.glPixelStorei(GL12.GL_PACK_ROW_LENGTH, 0)
+		} finally {
+			pixmap.close()
 		}
+		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0)
+		bitmap.notifyPixelsChanged()
+		bitmap.setImmutable()
+		return bitmap
 	}
 
 	/** Frees what [viewId] holds on the GPU; the next render for it starts over. */
@@ -146,7 +143,6 @@ internal class GlCanvasRenderer : AutoCloseable {
 		if (view.framebuffer != 0) GL30.glDeleteFramebuffers(view.framebuffer)
 		if (view.color != 0) GL30.glDeleteRenderbuffers(view.color)
 		if (view.depthStencil != 0) GL30.glDeleteRenderbuffers(view.depthStencil)
-		view.readback?.let(MemoryUtil::memFree)
 	}
 
 	/** Drops atlas pages no longer in [live]; called when a model's atlas is replaced. */
