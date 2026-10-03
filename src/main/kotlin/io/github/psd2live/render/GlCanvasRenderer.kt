@@ -27,7 +27,14 @@ import java.util.IdentityHashMap
  * different array; the atlas pages as premultiplied textures; masks through the stencil buffer. The camera is a
  * uniform, so pan and zoom upload nothing.
  */
-internal class GlCanvasRenderer : AutoCloseable {
+internal class GlCanvasRenderer(
+	/**
+	 * Mipmapped atlas pages: a zoomed-out canvas samples a smaller level instead of skipping texels of the full
+	 * page, which keeps edges from shimmering and the GPU's texture cache from thrashing. Off only to compare
+	 * pixel for pixel with the Skia painter, which samples the full page.
+	 */
+	private val mipmaps: Boolean = true,
+) : AutoCloseable {
 	private class Program(val id: Int) {
 		private val locations = HashMap<String, Int>()
 		fun uniform(name: String): Int = locations.getOrPut(name) { GL20.glGetUniformLocation(id, name) }
@@ -447,7 +454,9 @@ internal class GlCanvasRenderer : AutoCloseable {
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture)
 			GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4)
 			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, width, height, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels)
-			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR)
+			if (mipmaps) GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER,
+				if (mipmaps) GL11.GL_LINEAR_MIPMAP_LINEAR else GL11.GL_LINEAR)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)

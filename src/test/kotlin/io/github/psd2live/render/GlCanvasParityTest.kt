@@ -36,7 +36,8 @@ class GlCanvasParityTest {
 	@BeforeTest fun start() {
 		host = GlHost.start()
 		assumeTrue(host != null, "No OpenGL 3.3 context: ${GlHost.failure}")
-		renderer = host!!.submit { GlCanvasRenderer() }.get()
+		// Skia samples the full page; mipmaps would differ from it exactly where they help.
+		renderer = host!!.submit { GlCanvasRenderer(mipmaps = false) }.get()
 	}
 
 	@AfterTest fun stop() {
@@ -116,6 +117,36 @@ class GlCanvasParityTest {
 		assertTrue(rgba(75, 94) == listOf(255, 255, 0, 255), "inside the fill ${rgba(75, 94)}")
 		assertTrue(rgba(100, 94) == listOf(0, 0, 0, 0), "the concave notch stays empty: ${rgba(100, 94)}")
 		assertTrue(rgba(95, 82) == listOf(255, 255, 0, 255), "the long arm is filled: ${rgba(95, 82)}")
+	}
+
+	/** Mipmapped sampling, as the app draws, changes how a zoomed-out page is filtered, never what is drawn where. */
+	@Test fun mipmappedArtworkKeepsTheSamePicture() {
+		val model = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val mipmapped = host!!.submit { GlCanvasRenderer(mipmaps = true) }.get()
+		try {
+			val geometry = RigCanvasSupport.evaluate(model)
+			val scene = CanvasScene(960, 720, viewport(model, 960, 720, 1.0), model, geometry,
+				ArtworkDrawList.build(model, geometry, ArtworkOptions()))
+			val plain = requireNotNull(host!!.submit { renderer!!.render("plain", scene) }.get().readPixels())
+			val smooth = requireNotNull(host!!.submit { mipmapped.render("mip", scene) }.get().readPixels())
+			var silhouette = 0
+			var painted = 0
+			var total = 0L
+			for (i in 0 until 960 * 720) {
+				val a = plain[i * 4 + 3].toInt() and 0xff
+				val b = smooth[i * 4 + 3].toInt() and 0xff
+				if (a > 0 || b > 0) painted++
+				// Coverage comes from the mesh, not the texture: only texture alpha at the art's own edges may move.
+				if ((a > 200) != (b > 200)) silhouette++
+				for (c in 0..3) total += kotlin.math.abs((plain[i * 4 + c].toInt() and 0xff) - (smooth[i * 4 + c].toInt() and 0xff))
+			}
+			val mean = total.toDouble() / (960 * 720 * 4)
+			println("MIPMAP painted $painted, silhouette changes $silhouette, mean difference ${"%.3f".format(mean)}")
+			assertTrue(silhouette < painted / 50, "mipmaps moved the silhouette on $silhouette pixels")
+			assertTrue(mean < 4.0, "mipmaps changed the picture by $mean on average")
+		} finally {
+			host!!.submit { mipmapped.close() }.get()
+		}
 	}
 
 	/** The GPU rig guides cover what the Java2D guides they replace paint, and nothing far from it. */
