@@ -333,6 +333,10 @@ fun CanvasViewportComposable(
 	val gpuFrame by remember(renderKey) { CanvasRenderService.frames(renderKey) }.collectAsState()
 	val gpuImage = remember(gpuFrame) { gpuFrame?.bitmap?.asComposeImageBitmap() }
 	val gpuSubmission = remember(renderKey) { GpuSceneSubmission(renderKey) }
+	// The last snapshot ghost's geometry: its frame must not show at full strength once the hover has moved on.
+	val ghostGeometry = remember(renderKey) { arrayOfNulls<org.umamo.render.eval.DeformedGeometry>(1) }
+	// The last regular frame and its image, shown while a ghost frame is the newest one.
+	val lastArtwork = remember(renderKey) { arrayOfNulls<Pair<io.github.psd2live.render.RenderedFrame, ImageBitmap>>(1) }
 	DisposableEffect(renderKey) { onDispose { CanvasRenderService.release(renderKey) } }
 	val drawnGeometry = remember { DrawnGeometryMemo() }
 	val guideLabelMeasurer = rememberTextMeasurer(cacheSize = 128)
@@ -1250,8 +1254,15 @@ fun CanvasViewportComposable(
 								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
 								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()))
 						}
-						val frame = gpuFrame
-						val image = gpuImage
+						val latest = gpuFrame
+						val latestImage = gpuImage
+						if (latest != null && latestImage != null && latest.scene.geometry !== ghostGeometry[0]) {
+							lastArtwork[0] = latest to latestImage
+						}
+						// A ghost frame still in flight: keep the last regular one, unless the service has released it.
+						val shown = lastArtwork[0]?.takeIf { !it.first.bitmap.isClosed }
+						val frame = shown?.first
+						val image = shown?.second
 						if (frame != null && image != null) {
 							// The frame may be a step behind the camera: move it to where the camera is now, so a pan
 							// or zoom follows the pointer at once and the exact frame replaces it when it lands.
@@ -1486,7 +1497,23 @@ fun CanvasViewportComposable(
 			}
 			// One faded layer for the whole saved pose, sharing the canvas camera and visibility.
 			// Composite after rendering its parts so overlapping meshes do not darken the ghost.
-			if (snapshotGeometry != null && editingPainter != null) drawIntoCanvas { target ->
+			if (snapshotGeometry != null && gpuReady) {
+				ghostGeometry[0] = snapshotGeometry
+				// The GPU frame is already one flattened layer, so fading the whole of it is the ghost.
+				val options = ArtworkOptions(visibleLayerIds = targetVisibleLayerIds, drawOrderOverrides = canvasState.drawOrderOverrides)
+				gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, snapshotGeometry, viewport, w, h, options, "snapshot")) {
+					CanvasScene(w, h, viewport, model, snapshotGeometry, ArtworkDrawList.build(model, snapshotGeometry, options))
+				}
+				val frame = gpuFrame
+				val image = gpuImage
+				if (frame != null && image != null && frame.scene.geometry === snapshotGeometry) {
+					val k = (viewport.scale / frame.viewport.scale).toFloat()
+					withTransform({
+						translate((viewport.offsetX - frame.viewport.offsetX * k).toFloat(), (viewport.offsetY - frame.viewport.offsetY * k).toFloat())
+						scale(k, k, pivot = Offset.Zero)
+					}) { drawImage(image, alpha = 0.6f) }
+				}
+			} else if (snapshotGeometry != null && editingPainter != null) drawIntoCanvas { target ->
 				val key = listOf(editingPainter, model, snapshotGeometry, viewport, w, h,
 					targetVisibleLayerIds, canvasState.drawOrderOverrides)
 				snapshotArtworkCache.draw(target.skiaCanvas, key, w, h) { recording ->

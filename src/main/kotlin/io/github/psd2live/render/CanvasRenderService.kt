@@ -98,7 +98,8 @@ internal object CanvasRenderService {
 				val recent = retained.getOrPut(viewId) { ArrayDeque() }
 				synchronized(recent) {
 					recent.addLast(bitmap)
-					while (recent.size > RETAINED_FRAMES) recent.removeFirst().close()
+					// Closed on the UI thread, which is the one drawing them: a close can never land mid-draw.
+					while (recent.size > RETAINED_FRAMES) recent.removeFirst().let { old -> javax.swing.SwingUtilities.invokeLater { old.close() } }
 				}
 			}
 		} catch (failure: Throwable) {

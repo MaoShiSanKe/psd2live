@@ -122,10 +122,27 @@ class CanvasPerfTool {
 					}
 				}
 			}
+			// A snapshot with the head turned, to look at its ghost over the rest pose in each mode.
+			SwingUtilities.invokeAndWait {
+				viewModel.setParameterValue(io.github.psd2live.core.StandardParameters.ANGLE_X, 30f)
+				viewModel.saveParameterSnapshot("turned")
+				viewModel.setParameterValue(io.github.psd2live.core.StandardParameters.ANGLE_X, 0f)
+			}
 			for (software in listOf(false, true)) {
 				AppSettings.softwareCanvas = software
 				Thread.sleep(1500)
 				val mode = if (software) "software" else "gpu"
+				val ghost = arrayOfNulls<Any>(1)
+				SwingUtilities.invokeAndWait {
+					viewModel.setCanvasView(1f, 0f, 0f, canvasId, CanvasMode.EDIT)
+					ghost[0] = viewModel.previewParameterSnapshot(viewModel.state.value.parameterSnapshots.last().id)
+				}
+				Thread.sleep(1500)
+				ImageIO.write(robot.createScreenCapture(bounds), "png", File(out, "$mode-snapshot-ghost.png"))
+				SwingUtilities.invokeAndWait {
+					(ghost[0] as? io.github.psd2live.ui.state.ParameterSnapshotPreview)?.let(viewModel::clearParameterSnapshotPreview)
+				}
+				Thread.sleep(500)
 				for (phase in phases + deformDrag) {
 					if (phase === deformDrag) {
 						SwingUtilities.invokeAndWait {
