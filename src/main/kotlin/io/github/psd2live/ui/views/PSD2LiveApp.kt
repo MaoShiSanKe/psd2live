@@ -57,6 +57,7 @@ import androidx.compose.ui.window.WindowState
 import io.github.psd2live.i18n.AppLanguage
 import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.state.LogLevel
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.CanvasStatusTone
 import io.github.psd2live.agent.AgentMcpConnectionInfo
@@ -179,6 +180,23 @@ fun FrameWindowScope.PSD2LiveApp(
 	val currentLanguage = state.currentLanguage
 
 	var isDraggingOver by remember { mutableStateOf(false) }
+
+	// Which renderers draw this window and the editing canvas: a window composited in software makes every
+	// panel and animation slow on its own, so the log says so instead of leaving it to be guessed.
+	LaunchedEffect(window) {
+		val api = window?.let { runCatching { it.renderApi.name }.getOrNull() } ?: return@LaunchedEffect
+		viewModel.addLog(tr("log.renderer.window", api), level = if (api == "SOFTWARE") LogLevel.WARNING else LogLevel.INFO, tag = "Render")
+	}
+	val canvasRenderer by io.github.psd2live.render.CanvasRenderService.status.collectAsState()
+	LaunchedEffect(canvasRenderer) {
+		when (val status = canvasRenderer) {
+			is io.github.psd2live.render.CanvasRenderService.Status.Ready ->
+				viewModel.addLog(tr("log.renderer.canvasGpu", status.description), tag = "Render")
+			is io.github.psd2live.render.CanvasRenderService.Status.Unavailable ->
+				viewModel.addLog(tr("log.renderer.canvasSoftware", status.reason), level = LogLevel.WARNING, tag = "Render")
+			io.github.psd2live.render.CanvasRenderService.Status.Starting -> Unit
+		}
+	}
 
 	// Window Drop Target for PSD Drag & Drop and Project Files
 	LaunchedEffect(window) {

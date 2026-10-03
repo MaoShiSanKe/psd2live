@@ -34,12 +34,17 @@ import kotlin.test.Test
 class CanvasPerfTool {
 	private class Phase(val name: String, val seconds: Double, val input: (Robot, Double, Double, Double, Double) -> Unit)
 
+	private var dragOrigin: androidx.compose.ui.geometry.Offset? = null
+	private var pressNote = ""
+
 	@Test fun profile() {
 		requireTools()
 		val sample = Sample.fromEnvironment()
 		val out = output("canvas-perf")
 		val savedSoftware = AppSettings.softwareCanvas
 		val viewModel = PSD2LiveViewModel()
+		// As the app starts it: the history workspace is what makes the canvas editable.
+		viewModel.attachAgentWorkspace(io.github.psd2live.agent.ViewModelAgentWorkspace(viewModel))
 		val frames = ConcurrentLinkedQueue<Long>()
 		val window = AtomicReference<java.awt.Window?>()
 		Thread {
@@ -91,11 +96,49 @@ class CanvasPerfTool {
 					circle(r, t, x, y)
 				},
 			)
+			val canvasId = viewModel.state.value.activeCanvas.id
+			val editor = viewModel.canvasEditorFor(canvasId)
+			val rig = viewModel.state.value.previewModel!!.rig
+			val face = rig.puppet.drawables.first { it.name.equals("face", ignoreCase = true) }.let { rig.layerIdByDrawableId.getValue(it.id.raw) }
+			/** Drags every point of the face mesh in Deform mode in a circle, through the editor's own gesture. */
+			val deformDrag = Phase("deform-drag", 4.0) { _, t, _, _, _ ->
+				SwingUtilities.invokeAndWait {
+					val viewport = editor.viewport ?: return@invokeAndWait
+					val target = editor.target() ?: return@invokeAndWait
+					val points = editor.screen(target.geometry.points, target, viewport)
+					val cx = points.map { it.x }.average().toFloat()
+					val cy = points.map { it.y }.average().toFloat()
+					if (t == 0.0 || !editor.inGesture) {
+						// A Deform press may first snap the pose to a key and press again itself; retry until it holds.
+						val origin = dragOrigin.takeIf { t > 0.0 } ?: androidx.compose.ui.geometry.Offset(cx, cy)
+						val handled = editor.press(origin, viewport, shift = false, alt = false)
+						if (t == 0.0) pressNote = "press at $origin handled $handled, tool ${editor.tool}, editable ${editor.editable}, busy ${editor.busy}, " +
+							"in gesture ${editor.inGesture}, snapping ${viewModel.isSnappingParameters}, error ${editor.error}, " +
+							viewModel.state.value.let { "history ${it.historySnapshot != null}, canvasEditBusy ${it.canvasEditBusy}, generating ${it.isGenerating}, analyzing ${it.isAnalyzing}" }
+						dragOrigin = origin
+					} else {
+						val origin = dragOrigin ?: return@invokeAndWait
+						editor.move(origin + androidx.compose.ui.geometry.Offset((cos(t * 4) * 30).toFloat() - 30f, (sin(t * 4) * 30).toFloat()), viewport, shift = false)
+					}
+				}
+			}
 			for (software in listOf(false, true)) {
 				AppSettings.softwareCanvas = software
 				Thread.sleep(1500)
 				val mode = if (software) "software" else "gpu"
-				for (phase in phases) {
+				for (phase in phases + deformDrag) {
+					if (phase === deformDrag) {
+						SwingUtilities.invokeAndWait {
+							viewModel.setCanvasView(1f, 0f, 0f, canvasId, CanvasMode.EDIT)
+							viewModel.selectLayer(face)
+						}
+						Thread.sleep(500)
+						SwingUtilities.invokeAndWait { editor.setHierarchyMode(io.github.psd2live.ui.EditHierarchyMode.DEFORM) }
+						Thread.sleep(500)
+						SwingUtilities.invokeAndWait { editor.selectAll() }
+						Thread.sleep(500)
+						report.appendLine("deform drag: mode ${editor.hierarchyMode}, ${editor.vertices.size} points selected on ${editor.target()?.id}")
+					}
 					val pings = mutableListOf<Long>()
 					val recording = jdk.jfr.Recording(jdk.jfr.Configuration.getConfiguration("profile")).apply {
 						enable("jdk.ExecutionSample").withPeriod(java.time.Duration.ofMillis(2)); start()
@@ -104,8 +147,11 @@ class CanvasPerfTool {
 					val start = System.nanoTime()
 					var previous = 0.0
 					var pingAt = start
+					var first = true
 					while (true) {
-						val t = (System.nanoTime() - start) / 1e9
+						// The first step is exactly 0, which is where phases press their buttons.
+						val t = if (first) 0.0 else (System.nanoTime() - start) / 1e9
+						first = false
 						if (t > phase.seconds) break
 						phase.input(robot, t, t - previous, cx, cy)
 						previous = t
@@ -120,6 +166,15 @@ class CanvasPerfTool {
 					val jfr = File(out, "$mode-${phase.name}.jfr")
 					recording.dump(jfr.toPath()); recording.close()
 					if (phase.name == "pan") robot.mouseRelease(InputEvent.BUTTON2_DOWN_MASK)
+					if (phase === deformDrag) {
+						ImageIO.write(robot.createScreenCapture(bounds), "png", File(out, "$mode-deform-mid.png"))
+						report.appendLine("deform drag: in gesture ${editor.inGesture}, previewing ${editor.preview != null}; $pressNote")
+					}
+					if (phase === deformDrag) SwingUtilities.invokeAndWait {
+						editor.release()
+						editor.cancel()
+						editor.setHierarchyMode(io.github.psd2live.ui.EditHierarchyMode.SELECT)
+					}
 					Thread.sleep(300)
 					ImageIO.write(robot.createScreenCapture(bounds), "png", File(out, "$mode-${phase.name}.png"))
 					val stamps = frames.toList().sorted()
