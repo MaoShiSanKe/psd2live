@@ -90,3 +90,21 @@ internal object WorkspaceAuxiliaryResultSchemas {
         }
     }
 }
+
+internal object WorkspaceCanvasVisibilityResultSchemas {
+    private val flags = WorkspaceResultSchema.dictionary(WorkspaceResultSchema.boolean())
+    val canvas = WorkspaceResultSchema.obj(linkedMapOf("workspace_id" to WorkspaceResultSchema.handle(),
+        "canvas_id" to WorkspaceResultSchema.handle(), "mode" to WorkspaceResultSchema.choices("edit", "preview"),
+        "layers" to flags, "deformers" to flags,
+        "isolated_layer_id" to WorkspaceResultSchema.nullable(WorkspaceResultSchema.handle()),
+        "isolation_snapshot" to WorkspaceResultSchema.nullable(flags),
+        "hidden_layer_ids" to WorkspaceResultSchema.array(WorkspaceResultSchema.handle())))
+
+    fun forOperation(id: String): JsonObject = when (id) {
+        "canvas_visibility" -> WorkspaceResultSchema.obj(WorkspaceResultSchema.identity +
+            mapOf("applied" to WorkspaceResultSchema.boolean(), "canvas" to canvas))
+        "canvas_visibility_get" -> WorkspaceResultSchema.obj(WorkspaceResultSchema.identity +
+            mapOf("items" to WorkspaceResultSchema.array(canvas)))
+        else -> error("Canvas visibility operation has no result schema: $id")
+    }
+}

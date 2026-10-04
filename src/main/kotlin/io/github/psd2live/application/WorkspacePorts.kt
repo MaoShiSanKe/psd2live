@@ -173,6 +173,12 @@ interface WorkspacePreviewPort {
     fun commitAuthoredPoses(state: String, poses: Map<String, WorkspacePose>)
 }
 
+/** Per-canvas visibility and solo; the host supplies its live canvases and projects each committed record. */
+interface WorkspaceCanvasVisibilityPort {
+    fun canvasVisibility(): WorkspaceCanvasVisibilitySnapshot
+    fun editCanvasVisibility(state: String, address: CanvasAddress, intent: CanvasVisibilityIntent): WorkspaceCanvasVisibilitySnapshot
+}
+
 interface WorkspacePhysicsPort {
     /** Panel intents resolve IDs, presets and observed response against the same isolated candidate. */
     suspend fun editPhysics(intent: WorkspacePhysicsIntent, expectedState: String): Pair<WorkspaceMutationResult, JsonObject>
@@ -338,4 +344,5 @@ interface WorkspaceBackend :
     WorkspaceTaskRecordPort,
     WorkspaceProjectLifecycle,
     WorkspaceDocumentPort,
-    WorkspaceAuxiliaryPort
+    WorkspaceAuxiliaryPort,
+    WorkspaceCanvasVisibilityPort

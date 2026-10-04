@@ -26,6 +26,7 @@ internal class WorkspaceOperations(private val workspace: WorkspaceBackend,
         registerPhysicsAuditionOperations(registry, workspace)
         registerDocumentBatch(registry, workspace, workspace, jobs)
         registerAuxiliaryOperations(registry, workspace, workspace)
+        registerCanvasVisibilityOperations(registry, workspace)
         registerPhysicsPresetLibraryOperations(registry, presetLibrary)
         for ((id, commandId) in mapOf("project_import_psd" to "asset_import_psd", "project_create_artwork" to "asset_create_artwork")) {
             val command = commands.get(commandId)
