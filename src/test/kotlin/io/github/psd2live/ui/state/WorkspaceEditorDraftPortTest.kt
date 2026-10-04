@@ -28,7 +28,7 @@ class WorkspaceEditorDraftPortTest {
         var paintContext: WorkspaceExecution? = null
         override fun snapshot() = WorkspaceProjectSnapshot("project", WorkspaceRevisions.of(original), "head", true,
             "Artwork", 16, 16, false, "Ready", null, emptyList(), emptyList(), state = token)
-        override fun submitEditorDraft(projectId: String, state: String, document: WorkspaceDocument,
+        override fun submitEditorDraft(projectId: String, state: String, document: WorkspaceDocument, settingsIntents: List<JsonObject>,
                                        summary: String, author: MutationAuthor): Deferred<WorkspaceMutationResult> {
             assertEquals("project", projectId)
             submitted = Triple(state, document, author)

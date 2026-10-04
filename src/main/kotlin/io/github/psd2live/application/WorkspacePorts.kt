@@ -17,7 +17,11 @@ interface WorkspaceStatePort {
 }
 
 interface WorkspaceEditorDraftPort {
-    fun submitEditorDraft(projectId: String, state: String, document: WorkspaceDocument,
+    /**
+     * [settingsIntents] are the settings switches made during the field session, in order. They replay through the
+     * same intent as settings_update, so their links and authored-pose releases land with the draft in one commit.
+     */
+    fun submitEditorDraft(projectId: String, state: String, document: WorkspaceDocument, settingsIntents: List<JsonObject>,
                           summary: String, author: MutationAuthor): Deferred<WorkspaceMutationResult>
     suspend fun awaitEditorDrafts()
     /** Advance an action only through this editor queue's own successful commits. */

@@ -626,6 +626,7 @@ class DesktopWorkspace(
 
     /** Completed GUI drafts use the same candidate/rebuild/CAS boundary as application commands. */
     override fun submitEditorDraft(projectId: String, state: String, document: WorkspaceDocument,
+                                   settingsIntents: List<kotlinx.serialization.json.JsonObject>,
                                    summary: String, author: MutationAuthor): kotlinx.coroutines.Deferred<WorkspaceMutationResult> {
         val expectedUi = viewModel.state.value
         val submitted = draftQueue.submit(projectId, state, document, summary, author,
@@ -649,7 +650,11 @@ class DesktopWorkspace(
                         viewModel.refreshWorkspaceRenderer(result.capture.model)
                     }
                 }
-            }, prepare = generationCommands::prepareDraft)
+            }, prepare = { before, model, draft -> generationCommands.prepareEditorDraft(before, model, draft, settingsIntents) },
+            auxiliary = { captured, next, model ->
+                WorkspaceDocumentCommands.changedPoses(captured, next, model).takeIf { it.isNotEmpty() }
+                    ?.let { viewModel.projectWorkspacePoses(expectedUi, it) }
+            })
         return draftScope.async {
             val result = submitted.await()
             WorkspaceMutationResult(result.capture.historyHead, result.capture.revision, emptyList(), summary,

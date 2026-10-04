@@ -1970,9 +1970,14 @@ class PSD2LiveViewModel : AutoCloseable {
     private val editorSessions = EditorFieldSessions { commitEditorChange() }
     private var editorDraftExpected: io.github.psd2live.project.WorkspaceProjectSnapshot? = null
     private var editorDraftCount = 0
+    /** Settings switches made while a field session is open; the draft replays them through the settings intent. */
+    private val editorSettingsIntents = mutableListOf<kotlinx.serialization.json.JsonObject>()
 
     private fun beginEditorSession(token: String) {
-        if (!editorSessions.anyOpen) editorDraftExpected = workspaceBackend?.snapshot()
+        if (!editorSessions.anyOpen) {
+            editorDraftExpected = workspaceBackend?.snapshot()
+            synchronized(stateLock) { editorSettingsIntents.clear() }
+        }
         editorSessions.begin(token)
     }
 
@@ -2091,13 +2096,16 @@ class PSD2LiveViewModel : AutoCloseable {
     private fun commitEditorChange(summary: String? = null): kotlinx.coroutines.Deferred<WorkspaceMutationResult>? {
         val expected = editorDraftExpected ?: workspaceBackend?.snapshot()
         editorDraftExpected = null
+        val intents = synchronized(stateLock) { editorSettingsIntents.toList().also { editorSettingsIntents.clear() } }
         val workspace: io.github.psd2live.application.WorkspaceEditorDraftPort = workspaceBackend ?: return null
         if (expected?.loaded != true || expected.projectId == null) return null
         val (current, document) = synchronized(stateLock) {
             val captured = _state.value
             if (captured.analysis == null) return null
             val draft = WorkspaceStateCodec.document(captured)
-            if (!captured.editorDraftBusy && io.github.psd2live.project.WorkspaceRevisions.of(draft) == expected.revisionId) return null
+            // A switch turned off and back on leaves the document as it was but still released poses.
+            if (intents.isEmpty() && !captured.editorDraftBusy &&
+                io.github.psd2live.project.WorkspaceRevisions.of(draft) == expected.revisionId) return null
             // The draft's commit checks the state still holds this document and installs its own model. A local
             // preview rebuild in flight would write rigEdits/atlasSize in between, so it is superseded here.
             previewRebuildToken++
@@ -2105,7 +2113,7 @@ class PSD2LiveViewModel : AutoCloseable {
             captured to draft
         }
         markWorkspaceChanged()
-        val result = workspace.submitEditorDraft(expected.projectId, expected.state, document,
+        val result = workspace.submitEditorDraft(expected.projectId, expected.state, document, intents,
             summary ?: "Workspace changed in the editor", MutationAuthor.USER)
         synchronized(stateLock) {
             editorDraftCount++
@@ -2716,10 +2724,15 @@ class PSD2LiveViewModel : AutoCloseable {
 	/**
 	 * Settings switches that link other settings or release authored poses go through the application's settings
 	 * intent, so the settings, the released poses of every workspace and the rebuilt model publish in one commit.
-	 * An open field session keeps the local draft; its settings are recorded when the session closes.
+	 * An open field session keeps the local draft for display and records the switch, which the draft replays
+	 * through the same intent when the session closes.
 	 */
 	private fun submitSettingsIntent(changes: kotlinx.serialization.json.JsonObject, after: suspend () -> Unit = {}): Boolean {
-		val workspace = workspaceBackend?.takeUnless { editorSessions.anyOpen } ?: return false
+		if (workspaceBackend != null && editorSessions.anyOpen) {
+			synchronized(stateLock) { editorSettingsIntents.add(changes) }
+			return false
+		}
+		val workspace = workspaceBackend ?: return false
 		val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
 		runWorkspaceCommand(after) { state -> port.updateProjectSettings(state, changes) }
 		return true
@@ -4673,7 +4686,8 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     private fun runWorkspaceCommand(after: suspend () -> Unit = {}, action: suspend (String) -> WorkspaceMutationResult) {
-        if (_state.value.canvasEditBusy) return
+        // The command would act on a state the running edit is about to replace; say so rather than drop it.
+        if (_state.value.canvasEditBusy) { setErrorMessage(tr("error.workspaceCommandBusy")); return }
         flushEditorFields()
         val workspace = requireNotNull(workspaceBackend)
         val expected = workspace.snapshot()
