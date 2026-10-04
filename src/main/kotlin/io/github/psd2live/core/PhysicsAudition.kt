@@ -47,6 +47,13 @@ internal class PhysicsAudition {
 
     @Synchronized fun resetPeaks() { engine?.strands?.forEach { it.resetPeaks() } }
 
+    /** Forget the group, for a panel whose group can no longer be auditioned. */
+    @Synchronized fun clear() {
+        engine = null; drag = PhysicsDrag(); ranges = emptyMap(); outputs = emptyMap(); serial = 0L; elapsed = 0.0
+    }
+
+    @Synchronized fun frameOrNull(): PhysicsAuditionFrame? = if (engine?.strands?.singleOrNull() == null) null else frame()
+
     @Synchronized fun frame(): PhysicsAuditionFrame {
         val strand = requireNotNull(engine?.strands?.singleOrNull()) { "Configure an audition first" }
         return PhysicsAuditionFrame(strand.setting, strand.x.toList(), strand.y.toList(), outputs.toMap(),

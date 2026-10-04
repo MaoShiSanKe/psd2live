@@ -41,7 +41,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.PhysicsEngine
-import io.github.psd2live.core.PhysicsDrag
+import io.github.psd2live.core.PhysicsAudition
+import io.github.psd2live.core.PhysicsAuditionFrame
 import io.github.psd2live.core.PhysicsSourceType
 import io.github.psd2live.core.RigPhysicsEdit
 import io.github.psd2live.i18n.tr
@@ -73,8 +74,8 @@ internal sealed interface PendulumHandle {
 
 /** What the pendulum canvas keeps between frames. */
 internal class PendulumRuntime {
-	var engine: PhysicsEngine? = null
-	val drag = PhysicsDrag()
+	/** The same selected-group audition the physics_audition tools run, so both swing and fit alike. */
+	val audition = PhysicsAudition()
 	var outputs: Map<String, Float> = emptyMap()
 	/** Where each handle was last drawn, for hit testing, in drawing order (last on top). */
 	var handles: List<Pair<PendulumHandle, Offset>> = emptyList()
@@ -97,22 +98,18 @@ internal class PendulumRuntime {
 	private var peaksAt = 0L
 
 	fun resetPeaks() {
-		engine?.strands?.forEach { it.resetPeaks() }
+		audition.resetPeaks()
 		peaks = emptyMap()
 	}
 
-	/** Reads the strand's peaks into [peaks], at most every 100 ms. */
-	fun publishPeaks(now: Long, ranges: Map<String, PhysicsEngine.Range>) {
+	/** Reads the audition's peaks into [peaks], at most every 100 ms. */
+	fun publishPeaks(now: Long, frame: PhysicsAuditionFrame) {
 		if (now - peaksAt < 100_000_000L) return
 		peaksAt = now
-		val strand = engine?.strands?.firstOrNull() ?: return
-		val next = strand.setting.outputs.indices.mapNotNull { k ->
-			ranges[strand.setting.outputs[k].parameter]?.let { k to strand.peakFraction(k, it) }
-		}.toMap()
-		if (next != peaks) peaks = next
+		if (frame.peaks != peaks) peaks = frame.peaks
 	}
 
-	val setting: RigPhysicsEdit? get() = engine?.strands?.firstOrNull()?.setting
+	val setting: RigPhysicsEdit? get() = audition.frameOrNull()?.setting
 }
 
 /** Where the pendulum hangs in a canvas of [width] x [height]: pixels per unit and the plumb line. */
@@ -162,21 +159,21 @@ internal fun PendulumEditor(
 	val typography = LocalToolTypography.current
 	val measurer = rememberTextMeasurer(cacheSize = 32)
 	val fps = state.rigEdits.physicsFps
-	// A retuned pendulum keeps swinging from where it is.
+	// A retuned pendulum keeps swinging from where it is; a group the audition cannot run shows nothing.
 	remember(setting, ranges, fps) {
-		PhysicsEngine(listOf(setting), ranges, fps.toFloat()).also { it.carryOver(runtime.engine); runtime.engine = it }
+		runCatching { runtime.audition.configure(setting, ranges, fps) }.onFailure { runtime.audition.clear() }
 	}
 	// The inputs are the pose the preview shows, frame for frame; the edit pose while it holds still.
 	val previewState = state.previewPanelState()
 	val staticValues = previewState.parameterValues
 	val inputs by rememberUpdatedState {
 		val live = if (previewState.activeWorkspace.pose?.authoringPose == true) emptyMap() else viewModel.livePose.value
-		val base = (staticValues + live).mapKeys { it.key.raw }
-		val s = runtime.setting
-		if (s == null) base else runtime.drag.apply(base, s.inputs.map { it.parameter }, ranges)
+		// The audition applies the drag itself and takes only values within a known parameter's range.
+		(staticValues + live).mapKeys { it.key.raw }.mapNotNull { (id, value) ->
+			ranges[id]?.takeIf { value.isFinite() }?.let { id to value.coerceIn(minOf(it.min, it.max), maxOf(it.min, it.max)) }
+		}.toMap()
 	}
 	val editBy by rememberUpdatedState(edit)
-	val rangesNow by rememberUpdatedState(ranges)
 	val selectSegment by rememberUpdatedState(onSelectSegment)
 	val selectOutput by rememberUpdatedState(onSelectOutput)
 	val segmentSelected by rememberUpdatedState(selectedSegment)
@@ -190,10 +187,10 @@ internal fun PendulumEditor(
 			if (!pacer.due(now)) return@withFrameNanos
 			val dt = if (last == 0L) 0f else ((now - last) / 1e9f).coerceAtMost(0.1f)
 			last = now
-			if (dt > 0f) {
-				runtime.drag.update(dt)
-				runtime.engine?.let { runtime.outputs = it.step(inputs(), dt) }
-				runtime.publishPeaks(now, rangesNow)
+			if (dt > 0f && runtime.audition.frameOrNull() != null) {
+				val frame = runtime.audition.step(inputs(), dt)
+				runtime.outputs = frame.outputs
+				runtime.publishPeaks(now, frame)
 			}
 			tick = now
 		}
@@ -241,7 +238,7 @@ internal fun PendulumEditor(
 								}
 								if (moved) when (handle) {
 									// Only sideways: the pull turns the head and body, as a horizontal drag in Cubism's viewer.
-									null -> runtime.drag.target((p.x - down.position.x) / (w * 0.35f), 0f)
+									null -> runtime.audition.target(((p.x - down.position.x) / (w * 0.35f)).coerceIn(-1f, 1f), 0f)
 									is PendulumHandle.Length -> {
 										val above = runtime.rest.getOrNull(handle.segment) ?: break
 										val length = ((p.y - above.y) / runtime.frozenScale).coerceIn(0.2f, 200f)
@@ -277,7 +274,7 @@ internal fun PendulumEditor(
 							if (moved && handle != null) viewModel.endEditorGesture()
 							runtime.active = null
 							runtime.dropVertex = null
-							runtime.drag.release()
+							runtime.audition.release()
 						}
 					}
 				}
@@ -293,8 +290,7 @@ internal fun PendulumEditor(
 				},
 		) {
 			if (tick < 0L) return@Canvas // Reading the frame tick redraws only the canvas.
-			val engine = runtime.engine ?: return@Canvas
-			val strand = engine.strands.firstOrNull() ?: return@Canvas
+			val strand = runtime.audition.frameOrNull() ?: return@Canvas
 			val s = strand.setting
 			val k = if (runtime.active != null && runtime.frozenScale > 0f) runtime.frozenScale else pendulumScale(s, size.width, size.height)
 			val cx = size.width * PENDULUM_AREA / 2f
@@ -404,7 +400,7 @@ internal fun PendulumEditor(
 			modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 6.dp, vertical = 4.dp),
 		)
 		CompactIconButton(
-			onClick = { runtime.engine?.reset(); runtime.drag.reset() }, size = 18.dp, tooltip = tr("physics.resetSimulation"),
+			onClick = { runtime.audition.reset() }, size = 18.dp, tooltip = tr("physics.resetSimulation"),
 			modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
 		) { IconReset(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
 	}

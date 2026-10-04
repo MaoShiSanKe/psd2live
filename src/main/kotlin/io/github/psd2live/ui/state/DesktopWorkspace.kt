@@ -431,6 +431,7 @@ class DesktopWorkspace(
     private val playbackSessions = WorkspacePlaybackSessions(runtime)
     private val swingSessions = WorkspaceSwingSessions(runtime)
     private val simulationPreviewSessions = WorkspaceSimulationPreviewSessions(runtime)
+    private val physicsAuditionSessions = io.github.psd2live.application.WorkspacePhysicsAuditionSessions(runtime)
     private val projectController = ProjectController(viewModel)
     private val draftScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val draftQueue = WorkspaceDraftQueue(runtime, draftScope)
@@ -1248,6 +1249,21 @@ class DesktopWorkspace(
         viewModel.applySimulationPreview(result)
         return result
     }
+
+    override fun controlPhysicsAudition(arguments: JsonObject): JsonObject {
+        val (capture, workspace) = synchronized(historyLock) { runtime.capture() to viewModel.state.value.activeWorkspace.id }
+        requireExpected(arguments.getValue("state").jsonPrimitive.content, capture)
+        return physicsAuditionSessions.control(capture.projectId, capture.state, workspace, arguments)
+    }
+
+    override fun stepPhysicsAudition(arguments: JsonObject): JsonObject {
+        val (capture, workspace) = synchronized(historyLock) { runtime.capture() to viewModel.state.value.activeWorkspace.id }
+        requireExpected(arguments.getValue("state").jsonPrimitive.content, capture)
+        return physicsAuditionSessions.step(capture.projectId, capture.state, workspace, arguments)
+    }
+
+    override fun physicsAudition(sessionId: String): JsonObject = physicsAuditionSessions.get(
+        runtime.capture().projectId, viewModel.state.value.activeWorkspace.id, sessionId)
 
     override fun simulationPreviewFrame(sessionId: String): WorkspaceSimulationPreview = simulationPreviewSessions.get(
         runtime.capture().projectId, viewModel.state.value.activeWorkspace.id, sessionId)

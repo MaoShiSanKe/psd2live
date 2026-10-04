@@ -209,6 +209,13 @@ interface WorkspaceSimulationPort {
     suspend fun putSimulationBakes(bakes: Map<String, SimBakeResult?>, expectedState: String): WorkspaceMutationResult
 }
 
+/** The physics panel's selected-group pendulum as a process session; frames never reach the document. */
+interface WorkspacePhysicsAuditionPort {
+    fun controlPhysicsAudition(arguments: JsonObject): JsonObject
+    fun stepPhysicsAudition(arguments: JsonObject): JsonObject
+    fun physicsAudition(sessionId: String): JsonObject
+}
+
 interface WorkspaceSimulationPreviewPort {
     suspend fun controlSimulationPreview(arguments: JsonObject): WorkspaceSimulationPreview
     suspend fun stepSimulationPreview(arguments: JsonObject): WorkspaceSimulationPreview
@@ -307,6 +314,7 @@ interface WorkspaceBackend :
     WorkspacePhysicsPort,
     WorkspaceSimulationPort,
     WorkspaceSimulationPreviewPort,
+    WorkspacePhysicsAuditionPort,
     WorkspaceSwingPort,
     WorkspaceRenderPort,
     WorkspaceAssetPort,
