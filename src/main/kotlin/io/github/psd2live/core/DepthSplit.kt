@@ -1,11 +1,12 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.i18n.tr
 import kotlinx.serialization.json.*
 import org.umamo.format.art.LayerId
 import org.umamo.format.art.LayerRaster
+import org.umamo.format.art.SourceArt
 import org.umamo.runtime.model.*
 import java.util.UUID
 
@@ -14,6 +15,11 @@ internal object DepthSplit {
     const val OP = "canvas_depth_split"
 
     data class Result(val preview: RigPreviewModel, val frontLayerId: String)
+    data class Preparation(val source: SourceArt, val config: PipelineConfig, val frontLayerId: String)
+
+    fun frontLayerIds(config: PipelineConfig): Set<String> = config.rigEdits.authoringJournal
+        .filter { it["op"]?.jsonPrimitive?.contentOrNull == OP }
+        .mapNotNull { it["layer_id"]?.jsonPrimitive?.contentOrNull }.toSet()
 
     fun isFrontLayer(preview: RigPreviewModel?, layerId: String?): Boolean =
         layerId != null && preview?.config?.rigEdits?.authoringJournal?.any {
@@ -27,24 +33,47 @@ internal object DepthSplit {
 
     fun build(pipeline: PSD2LivePipeline, current: RigPreviewModel, config: PipelineConfig,
               sourceId: String, middleIds: List<String>): Result {
+        val prepared = prepare(current, config, sourceId, middleIds,
+            names = listOf(tr("editor.depthSplit.backName", current.rig.puppet.drawables.single { it.id.raw == sourceId }.name),
+                tr("editor.depthSplit.frontName", current.rig.puppet.drawables.single { it.id.raw == sourceId }.name)))
+        return Result(pipeline.buildPreviewAfterLayerSplit(current, prepared.source, prepared.config), prepared.frontLayerId)
+    }
+
+    /** Pure preparation; production commands rebuild and commit the returned durable candidate. */
+    fun prepare(current: RigPreviewModel, config: PipelineConfig, sourceId: String, middleIds: List<String>,
+                frontId: String = "depth:${UUID.randomUUID()}", frontDrawableId: String = "ArtMeshDepth_${UUID.randomUUID()}",
+                glueId: String = "GlueDepth_${UUID.randomUUID()}", names: List<String>? = null,
+                checkpoint: () -> Unit = {}): Preparation {
+        checkpoint()
         require(middleIds.isNotEmpty() && sourceId !in middleIds)
-        require(config.rigEdits.importedCmo3 == null) { tr("editor.depthSplit.imported") }
-        val source = current.rig.puppet.drawables.single { it.id.raw == sourceId }
-        require(source.mesh != null)
+        require(middleIds.distinct().size == middleIds.size) { "Middle mesh IDs must be unique" }
+        val source = requireNotNull(current.rig.puppet.drawables.firstOrNull { it.id.raw == sourceId }) { "Source mesh not found: $sourceId" }
+        require(source.mesh != null) { "Depth source must be a mesh" }
         val middles = middleIds.distinct().map { id ->
-            current.rig.puppet.drawables.single { it.id.raw == id }.also { require(it.mesh != null) }
+            requireNotNull(current.rig.puppet.drawables.firstOrNull { it.id.raw == id }) { "Middle mesh not found: $id" }
+                .also { require(it.mesh != null) { "Middle objects must be meshes" } }
         }
-        val layerId = current.rig.layerIdByDrawableId.getValue(sourceId)
-        val layer = current.analysis.layers.single { it.source.id.raw == layerId }
-        val frontId = "depth:${UUID.randomUUID()}"
-        val frontDrawableId = "ArtMeshDepth_${UUID.randomUUID()}"
-        val backName = tr("editor.depthSplit.backName", source.name)
-        val frontName = tr("editor.depthSplit.frontName", source.name)
+        val layerId = requireNotNull(current.rig.layerIdByDrawableId[sourceId]) { "Source mesh has no source layer" }
+        val layer = requireNotNull(current.analysis.layers.firstOrNull { it.source.id.raw == layerId }) { "Source layer not found: $layerId" }
+        require(frontId.isNotBlank() && current.analysis.source.layers.none { it.id.raw == frontId } &&
+            current.analysis.layers.none { it.source.id.raw == frontId } && frontId !in config.rigEdits.splitDrawableIds) { "Front layer ID already exists or is empty" }
+        require(frontDrawableId.isNotBlank() && current.rig.puppet.drawables.none { it.id.raw == frontDrawableId } &&
+            current.rig.puppet.deformers.none { it.id.raw == frontDrawableId } && frontDrawableId !in config.rigEdits.splitDrawableIds.values) { "Front mesh ID already exists or is empty" }
+        require(glueId.isNotBlank() && current.rig.puppet.glues.none { it.id == glueId } &&
+            config.rigEdits.authoringJournal.none { it["glue_id"]?.jsonPrimitive?.contentOrNull == glueId }) { "Glue ID already exists or is empty" }
+        val pieceNames = names?.map(String::trim) ?: listOf("${source.name} (back)", "${source.name} (front)")
+        require(pieceNames.size == 2 && pieceNames.all { it.isNotBlank() } && pieceNames.distinct().size == 2) { "Name the back and front slices once" }
+        val (backName, frontName) = pieceNames
         val original = WorkspaceSourceLayer.copyOf(layer.source, layer.source.order) as WorkspaceSourceLayer
+        val pixels = ByteArray(original.raster.rgba.size)
+        for (offset in pixels.indices step 4096) {
+            checkpoint()
+            original.raster.rgba.copyInto(pixels, offset, offset, minOf(offset + 4096, pixels.size))
+        }
         val front = original.copy(id = LayerId(frontId), name = frontName,
             order = (current.analysis.source.layers.maxOfOrNull { it.order } ?: 0) + 1,
-            raster = LayerRaster(original.raster.width, original.raster.height, original.raster.rgba.copyOf()),
-            clipped = false, derived = true)
+            raster = LayerRaster(original.raster.width, original.raster.height, pixels),
+            clipped = false, derived = true, sourceAssetId = null, sourceSpatialReferenceId = null)
         val art = WorkspaceSourceArt(current.analysis.source.widthPx, current.analysis.source.heightPx,
             current.analysis.source.layers + front, current.analysis.source.groups)
         val middleOrders = middles.associate { drawable ->
@@ -68,7 +97,8 @@ internal object DepthSplit {
             put("op", OP); put("id", frontDrawableId); put("source", sourceId)
             put("layer_id", frontId); put("back_name", backName); put("front_name", frontName)
             put("back_order", backOrder); put("front_order", frontOrder)
-            put("glue_id", "GlueDepth_${UUID.randomUUID()}")
+            put("glue_id", glueId)
+            if (config.rigEdits.importedCmo3 != null) put("texture_source_id", Cmo3ModelImport.PAINT_SOURCE_ID)
         }
         val inherited = config.layerOverrides[layerId] ?: layer.semantic.let {
             LayerClassificationOverride(it.type, it.tag, it.side, it.parameter, it.switchId)
@@ -82,18 +112,27 @@ internal object DepthSplit {
             } + mapOf(layerId to backOrder, frontId to frontOrder)
         val updated = config.copy(
             layerOverrides = config.layerOverrides + (frontId to inherited),
-            parentOverrides = config.parentOverrides + (frontId to source.parentDeformerId?.raw),
+            // Journal-created parents do not exist during base generation. Replay clones the
+            // source's actual parent; the placeholder needs its original generation frame.
+            parentOverrides = config.parentOverrides + (frontId to current.baseRig.puppet.drawables
+                .firstOrNull { it.id == source.id }?.parentDeformerId?.raw),
             layerVisibility = config.layerVisibility + (frontId to source.isVisible),
+            meshOverrides = config.meshOverrides + listOfNotNull(config.meshOverrides[layerId]?.let { frontId to it }).toMap(),
             drawOrderOverrides = orders,
             rigEdits = config.rigEdits.copy(
                 splitBaselineLayerIds = config.rigEdits.splitBaselineLayerIds.ifEmpty {
-                    current.analysis.source.layers.mapTo(LinkedHashSet()) { it.id.raw }
+                    current.analysis.source.layers.filterNot {
+                        !RigLayerDeletion.deferred(config) && it.id.raw in config.deletedLayerIds
+                    }.mapTo(LinkedHashSet()) { it.id.raw }
                 },
                 splitDrawableIds = config.rigEdits.splitDrawableIds + ids,
+                importedLayerIds = if (config.rigEdits.importedCmo3 == null) config.rigEdits.importedLayerIds else
+                    config.rigEdits.importedLayerIds + (frontDrawableId to frontId),
                 authoringJournal = config.rigEdits.authoringJournal + command,
             ),
         )
-        return Result(pipeline.buildPreviewAfterLayerSplit(current, art, updated), frontId)
+        checkpoint()
+        return Preparation(art, updated, frontId)
     }
 
     /** Replays at the exact point the copy was made, after earlier mesh edits, before later ones. */
@@ -102,26 +141,17 @@ internal object DepthSplit {
             ?: return model // The rear layer may have been deleted subsequently.
         val mesh = source.mesh ?: return model
         val id = DrawableId(command.getValue("id").jsonPrimitive.content)
-        val tileId = PuppetSourceAtlas.tileIdFor(command.getValue("layer_id").jsonPrimitive.content)
+        val tileId = PuppetSourceAtlas.tileIdFor(command.getValue("layer_id").jsonPrimitive.content,
+            command["texture_source_id"]?.jsonPrimitive?.content ?: PuppetSourceAtlas.SOURCE_ID_RAW)
         val fromTile = model.atlas.tiles.firstOrNull { it.id == source.atlasTileId } ?: return model
         val toTile = model.atlas.tiles.firstOrNull { it.id == tileId } ?: return model
         val from = fromTile.placement ?: return model
         val to = toTile.placement ?: return model
-        fun sourceLayer(tile: AtlasTile): ArtSourceLayer {
-            val ref = requireNotNull(tile.source)
-            return model.sources.single { it.id == ref.sourceId }.layers.single { it.key == ref.layerKey }
-        }
-        val fromLayer = sourceLayer(fromTile)
-        val toLayer = sourceLayer(toTile)
-        val fromPage = model.atlas.pages[from.pageIndex]
-        val toPage = model.atlas.pages[to.pageIndex]
-        val uvs = FloatArray(mesh.uvs.size)
-        for (i in uvs.indices step 2) {
-            val pixel = requireNotNull(layerPixelOf(from, mesh.uvs[i] * fromPage.width, mesh.uvs[i + 1] * fromPage.height))
-            val packed = atlasPixelOf(to, pixel[0] + fromLayer.left - toLayer.left, pixel[1] + fromLayer.top - toLayer.top)
-            uvs[i] = packed[0] / toPage.width
-            uvs[i + 1] = packed[1] / toPage.height
-        }
+        val clone = source.copy(atlasTileId = tileId, texturePage = to.pageIndex)
+        val sourceTexture = RasterMeshJournal.TextureCoordinates(model, source)
+        val canvas = if (command["texture_source_id"] != null && sourceTexture.sourceId.raw != Cmo3ModelImport.PAINT_SOURCE_ID)
+            mesh.positions.copyOf() else sourceTexture.toCanvas(mesh.uvs)
+        val uvs = RasterMeshJournal.TextureCoordinates(model, clone).toUvs(canvas)
         fun atOrder(drawable: Drawable, order: Float): Drawable = drawable.copy(drawOrder = order,
             channelGrids = ChannelGrids(drawable.channelGrids.gridsByChannel - FormChannel.DRAW_ORDER),
             blendShapes = drawable.blendShapes.map { binding -> binding.copy(forms = binding.forms.map { form ->

@@ -138,3 +138,24 @@ private fun writeGlueVertex(
 	attributes.glueIndex[vertexIndex] = glueIndex
 	attributes.weldWeight[vertexIndex] = weight
 }
+/** The compact GPU weld has one partner per vertex and a fixed intensity array.
+ * Detect when that representation would change the CPU/exporter's ordered semantics. */
+internal fun requiresSequentialGlue(model: PuppetModel): Boolean {
+    if (model.glues.size > MAX_GLUES) return true
+    val vertices = HashSet<Pair<DrawableId, Int>>()
+    for (glue in model.glues) for (pair in glue.pairs) {
+        if (!vertices.add(glue.meshA to pair.indexA) || !vertices.add(glue.meshB to pair.indexB)) return true
+    }
+    return false
+}
+
+/** Dynamic journal edits can change the weld attributes already resident on the device. */
+internal fun sameGpuGlueLayout(before: PuppetModel, after: PuppetModel): Boolean {
+    if (before.glues.size != after.glues.size) return false
+    if (before.drawables.map { it.id to it.mesh?.vertexCount } != after.drawables.map { it.id to it.mesh?.vertexCount }) return false
+    return before.glues.zip(after.glues).all { (a, b) ->
+        a.meshA == b.meshA && a.meshB == b.meshB && a.pairs.size == b.pairs.size && a.pairs.zip(b.pairs).all { (x, y) ->
+            x.indexA == y.indexA && x.indexB == y.indexB && x.weightA == y.weightA && x.weightB == y.weightB
+        }
+    }
+}

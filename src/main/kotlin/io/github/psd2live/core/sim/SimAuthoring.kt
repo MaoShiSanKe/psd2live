@@ -134,20 +134,30 @@ object SimAuthoring {
      * holds it at its maximum for [hold] seconds and releases it, and finally applies [wind] (px/s², world)
      * if given. Read-only; nothing is baked.
      */
-    fun report(model: PuppetModel, edit: RigSimEdit, hold: Float = 0.5f, release: Float = 1.5f, wind: Pair<Float, Float>? = null): JsonObject {
+    fun report(model: PuppetModel, edit: RigSimEdit, hold: Float = 0.5f, release: Float = 1.5f, wind: Pair<Float, Float>? = null,
+               progress: (Float) -> Unit = {}, cancelled: () -> Boolean = { false }): JsonObject {
+        require(hold.isFinite() && hold in 0f..20f && release.isFinite() && release in 0f..20f) { "Hold and release must be within 0..20 seconds" }
+        fun check() { if (cancelled()) throw java.util.concurrent.CancellationException("Simulation sampling cancelled") }
+        check(); progress(0f)
         val scene = SimScene.build(model, edit)
         val fps = 60
         val dt = 1f / fps
-        val residual = scene.calibrate(model)
+        val residual = scene.calibrate(model, progress = { progress(0.2f * it) }, cancelled = cancelled)
+        val phaseFrames = (hold * fps).toInt().coerceAtLeast(1) + (release * fps).toInt().coerceAtLeast(1)
+        val total = ((edit.inputs.size + if (wind == null) 0 else 1) * phaseFrames + fps).coerceAtLeast(1)
+        var completed = 0
+        fun frame() { check(); progress(0.2f + 0.8f * ++completed / total) }
         val rest = scene.state.positions()
         var worstStretch = 0f
         fun runPhase(pose: Map<ParameterId, Float>, seconds: Float): Pair<Float, Float> {
             var peak = 0f
             repeat((seconds * fps).toInt().coerceAtLeast(1)) {
+                check()
                 scene.drive(model, pose, dt)
                 worstStretch = max(worstStretch, scene.solver.maxStretch())
                 // Motion relative to the rig: the goal is where the rig alone would put each vertex.
                 for (i in 0 until scene.state.count) peak = max(peak, hypot(scene.state.x[i] - scene.state.goalX[i], scene.state.y[i] - scene.state.goalY[i]))
+                frame()
             }
             var last = 0f
             for (i in 0 until scene.state.count) last = max(last, hypot(scene.state.x[i] - scene.state.goalX[i], scene.state.y[i] - scene.state.goalY[i]))
@@ -176,7 +186,8 @@ object SimAuthoring {
         }
         var restDrift = 0f
         scene.reset(model, emptyMap())
-        repeat(fps) { scene.drive(model, emptyMap(), dt) }
+        repeat(fps) { check(); scene.drive(model, emptyMap(), dt); frame() }
+        check()
         val settled = scene.state.positions()
         for (i in 0 until scene.state.count) restDrift = max(restDrift, hypot(settled[i * 2] - rest[i * 2], settled[i * 2 + 1] - rest[i * 2 + 1]))
         return buildJsonObject {
@@ -242,7 +253,10 @@ object SimAuthoring {
     /** [overlay] with [bake] as simulation [id]'s bake, the panel's overrides of its pendulums carried over; null clears it, and them. */
     fun withBake(overlay: RigEditOverlay, id: String, bake: SimBakeResult?): RigEditOverlay {
         require(overlay.simEdits.any { it.id == id }) { "Simulation not found: $id" }
-        return rebased(overlay, overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = bake) else it }))
+        // Replay must use the same six-significant-digit offsets as the v1 archive. Keeping the solver's
+        // extra precision only in memory changes keyforms (and rendered edge pixels) after reopening.
+        val persisted = bake?.let { SimBakeResult.fromJson(it.toJson()) }
+        return rebased(overlay, overlay.copy(simEdits = overlay.simEdits.map { if (it.id == id) it.copy(bake = persisted) else it }))
     }
 
     /** The simulated vertices of every target of [scene], world space, keyed by mesh. */

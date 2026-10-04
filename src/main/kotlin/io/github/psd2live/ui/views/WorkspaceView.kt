@@ -84,7 +84,7 @@ import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CreatePlacementKind
 import io.github.psd2live.ui.CreateRelation
-import io.github.psd2live.ui.ComponentPalette
+import io.github.psd2live.core.ComponentPalette
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuHeader
 import io.github.psd2live.ui.components.CompactMenuItem

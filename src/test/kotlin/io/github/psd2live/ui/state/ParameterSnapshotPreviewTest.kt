@@ -1,10 +1,12 @@
 package io.github.psd2live.ui.state
 
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.ParameterSnapshot
+
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PipelineConfig
-import io.github.psd2live.project.WorkspaceStateCodec
+import io.github.psd2live.ui.state.WorkspaceStateCodec
 import org.umamo.format.art.*
 import org.umamo.runtime.model.Parameter
 import org.umamo.runtime.model.ParameterId

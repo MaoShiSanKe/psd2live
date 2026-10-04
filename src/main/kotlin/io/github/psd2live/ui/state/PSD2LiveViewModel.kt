@@ -1,5 +1,15 @@
 package io.github.psd2live.ui.state
 
+import io.github.psd2live.project.HistoryAnnotation
+
+import io.github.psd2live.project.ParameterSnapshot
+
+import io.github.psd2live.project.MutationAuthor
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceMutationResult
+import io.github.psd2live.project.WorkspaceProjectSnapshot
+
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -36,7 +46,6 @@ import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.core.RigPhysicsEdit
 import io.github.psd2live.core.PhysicsAuthoring
 import io.github.psd2live.core.PhysicsCatalog
-import io.github.psd2live.core.PhysicsEngine
 import io.github.psd2live.core.PhysicsGenerator
 import io.github.psd2live.core.PhysicsGroup
 import io.github.psd2live.core.RigAuthoringJournal
@@ -51,8 +60,10 @@ import org.umamo.runtime.model.Deformer
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.Side
 import io.github.psd2live.core.StandardParameters
-import io.github.psd2live.agent.AgentWorkspace
-import io.github.psd2live.agent.AgentHistorySnapshot
+import io.github.psd2live.application.WorkspaceBackend
+import io.github.psd2live.application.WorkspaceSwingPort
+import io.github.psd2live.application.WorkspaceSimulationPort
+import io.github.psd2live.project.WorkspaceHistorySnapshot
 import io.github.psd2live.i18n.AppLanguage
 import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
@@ -63,6 +74,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -77,6 +89,14 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.float
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.putJsonArray
 import kotlin.math.abs
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
@@ -106,6 +126,7 @@ class PSD2LiveViewModel : AutoCloseable {
         val layerName: String,
         val plan: MeshComponentSplit.Plan,
         val preview: RigPreviewModel,
+        val expected: io.github.psd2live.project.WorkspaceProjectSnapshot? = null,
     )
 
     internal data class LayerSplitDecision(
@@ -136,7 +157,8 @@ class PSD2LiveViewModel : AutoCloseable {
      * commit wraps them); [gizmo] is the handle geometry on the live preview, where those meshes are wrapped.
      * [motion] is the direction the handles edit.
      */
-    internal class SwingSession(val existingId: String?, draft: RigSwingEdit) {
+    internal class SwingSession(val existingId: String?, draft: RigSwingEdit,
+                                internal val expectation: io.github.psd2live.project.WorkspaceProjectSnapshot?, internal val sessionId: String) {
         var draft by mutableStateOf(draft)
         var gizmo by mutableStateOf<io.github.psd2live.core.SwingGizmo?>(null)
         var motion by mutableStateOf(0)
@@ -149,11 +171,10 @@ class PSD2LiveViewModel : AutoCloseable {
 
     internal var swingSession by mutableStateOf<SwingSession?>(null)
         private set
-    /** The preview before the session's live forms were patched in, and whether it was already stale. */
-    private var swingPreviewBase: Pair<RigPreviewModel, Boolean>? = null
-    /** The preview this session last installed; anything else means a rebuild replaced it underneath. */
-    private var swingPatched: RigPreviewModel? = null
     private var swingPlayer: Job? = null
+    private var swingDraftJob: Job? = null
+    internal var swingPreviewValues by mutableStateOf(emptyMap<ParameterId, Float>())
+        private set
 
     /**
      * Starts a swing session on Warps or meshes; a target already swung (or wrapped for a swing) edits that
@@ -161,23 +182,31 @@ class PSD2LiveViewModel : AutoCloseable {
      */
     internal fun beginSwing(targets: List<String>) {
         val state = _state.value
-        val puppet = state.previewModel?.rig?.puppet ?: return
+        if (state.previewModel == null) return
         if (targets.isEmpty() || state.canvasEditBusy) return
         endSwing()
-        val parents = targets.mapNotNull { id -> puppet.drawables.firstOrNull { it.id.raw == id }?.parentDeformerId?.raw }
-        val existing = state.rigEdits.swingEdits.firstOrNull { swing -> swing.targets.any { it in targets || it in parents } }
-        val draft = existing ?: swingDefaults(targets, SwingPreset.HAIR) ?: return
         setCanvasMode(state.activeCanvas.id, CanvasMode.EDIT)
         // One canvas session at a time: a pending placement would fight over the corner and the pointer.
         if (canvasEditor.placement != null) canvasEditor.cancelPlacement()
-        swingSession = SwingSession(existing?.id, draft)
-        updateSwing(draft)
+        runSwingControl("begin", kotlinx.serialization.json.buildJsonObject {
+            put("targets", kotlinx.serialization.json.JsonArray(targets.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            put("preset", SwingPreset.HAIR.name)
+        })
     }
 
     /** Leaves the session without recording anything. */
     internal fun endSwing() {
-        playSwing(false)
-        previewSwing(null)
+        val session = swingSession
+        swingDraftJob?.cancel(); swingPlayer?.cancel(); swingPlayer = null
+        if (session != null) {
+            scope.launch {
+                val state = currentWorkspaceState() ?: return@launch
+                runCatching { workspaceBackend?.controlSwingPreview(kotlinx.serialization.json.buildJsonObject {
+                    put("state", state); put("mode", "cancel"); put("session_id", session.sessionId)
+                }, MutationAuthor.USER) }
+            }
+            clearSwingProjection(session)
+        }
         swingSession = null
     }
 
@@ -187,17 +216,14 @@ class PSD2LiveViewModel : AutoCloseable {
         session.draft = draft
         session.error = null
         session.motion = session.motion.coerceIn(0, draft.motions.size - 1)
-        val result = previewSwing(draft)
-        if (result == null) { session.error = session.error ?: tr("swing.failed"); return }
-        session.preview = result
-        refreshSwingGizmo()
+        runSwingControl("update", kotlinx.serialization.json.buildJsonObject { put("draft", draft.toJson()) })
     }
 
     /** Rebuilds the handles for the pose on screen, so they stay on the art when other parameters move. */
     internal fun refreshSwingGizmo() {
         val session = swingSession ?: return
         val (puppet, prepared) = session.preview ?: return
-        session.gizmo = io.github.psd2live.core.SwingGizmo.of(puppet, prepared, values = _state.value.parameterValues, motion = session.motion)
+        session.gizmo = io.github.psd2live.core.SwingGizmo.of(puppet, prepared, values = canvasPose(_state.value), motion = session.motion)
     }
 
     /** Takes the settings a handle produced; the handles work on the wrap, the draft keeps the picked targets. */
@@ -206,175 +232,152 @@ class PSD2LiveViewModel : AutoCloseable {
         updateSwing(settings.copy(id = draft.id, name = draft.name, targets = draft.targets))
     }
 
-    /** The draft reshaped by [change] against the rig without the session's preview; null when that fails. */
-    private fun swingStructure(change: (PuppetModel, io.github.psd2live.core.RigEditOverlay) -> RigSwingEdit): RigSwingEdit? {
-        val state = _state.value
-        val puppet = (swingPreviewBase?.first ?: state.previewModel)?.rig?.puppet ?: return null
-        return runCatching { change(puppet, state.rigEdits) }.onFailure { swingSession?.error = it.message }.getOrNull()
-    }
-
     /** Sets which directions the draft moves in. */
     internal fun setSwingKinds(kinds: List<SwingKind>) {
-        val draft = swingSession?.draft ?: return
+        if (swingSession == null) return
         if (kinds.isEmpty()) return
-        swingStructure { puppet, overlay -> SwingAuthoring.withKinds(puppet, overlay, draft, kinds) }?.let(::updateSwing)
+        runSwingControl("kinds", kotlinx.serialization.json.buildJsonObject { put("kinds", kotlinx.serialization.json.JsonArray(kinds.map { kotlinx.serialization.json.JsonPrimitive(it.name) })) })
     }
 
     /** Sets the number of segment parameters in [motion]. */
     internal fun setSwingSegments(motion: Int, segments: Int) {
-        val draft = swingSession?.draft ?: return
-        swingStructure { puppet, overlay -> SwingAuthoring.withSegments(puppet, overlay, draft, motion, segments) }?.let(::updateSwing)
+        if (swingSession == null) return
+        runSwingControl("segments", kotlinx.serialization.json.buildJsonObject { put("motion", motion); put("segments", segments) })
     }
 
     /** Selects the direction the canvas handles edit. */
     internal fun selectSwingMotion(motion: Int) {
-        val session = swingSession ?: return
-        session.motion = motion.coerceIn(0, session.draft.motions.size - 1)
-        refreshSwingGizmo()
+        if (swingSession == null) return
+        runSwingControl("select", kotlinx.serialization.json.buildJsonObject { put("motion", motion) })
     }
 
     /** Starts every direction of the draft from [preset]'s shape, with its pendulums sized again. */
     internal fun setSwingPreset(preset: SwingPreset) {
-        val draft = swingSession?.draft ?: return
-        val next = draft.copy(preset = preset, motions = draft.motions.map { m ->
-            m.copy(shape = SwingPresets.shape(preset, m.kind).copy(flip = m.shape.flip))
-        })
-        swingStructure { puppet, _ -> SwingAuthoring.resized(puppet, next) }?.let(::updateSwing)
+        if (swingSession == null) return
+        runSwingControl("preset", kotlinx.serialization.json.buildJsonObject { put("preset", preset.name) })
     }
 
     /** Gives every direction a pendulum sized from the target, or takes them all away. */
     internal fun setSwingPhysicsEnabled(enabled: Boolean) {
-        val draft = swingSession?.draft ?: return
-        val next = draft.withPhysics { _, _ -> if (enabled) io.github.psd2live.core.SwingPhysics() else null }
-        if (!enabled) updateSwing(next) else swingStructure { puppet, _ -> SwingAuthoring.resized(puppet, next) }?.let(::updateSwing)
+        if (swingSession == null) return
+        runSwingControl("physics", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled) })
     }
 
-    /** A new left/right swing on [targets] with fresh IDs, preset values and a pendulum sized from the first target. */
-    internal fun swingDefaults(targets: List<String>, preset: SwingPreset): RigSwingEdit? {
-        val state = _state.value
-        val puppet = (swingPreviewBase?.first ?: state.previewModel)?.rig?.puppet ?: return null
-        val first = targets.firstOrNull() ?: return null
-        val name = puppet.deformers.firstOrNull { it.id.raw == first }?.name
-            ?: puppet.drawables.firstOrNull { it.id.raw == first }?.name ?: first
-        val (id, parameters) = SwingAuthoring.freshIds(puppet, state.rigEdits, first, 1)
-        return RigSwingEdit.single(id, tr("swing.defaultName", name), SwingKind.LATERAL, targets, parameters,
-            shape = SwingPresets.shape(preset, SwingKind.LATERAL), preset = preset,
-            physics = SwingPresets.physics(preset, SwingKind.LATERAL, swingLength(puppet, first)))
-    }
-
-    /** The pinned-edge-to-tip length of a Warp, or the long side of a mesh, in canvas pixels. */
-    private fun swingLength(puppet: PuppetModel, target: String): Float? {
-        SwingGenerator.measure(puppet, target)?.let { return it.second }
-        val drawable = puppet.drawables.firstOrNull { it.id.raw == target } ?: return null
-        val bounds = RigGeometryTools.bounds(drawable.mesh?.positions ?: return null)
-        // Under a Warp the mesh is in its 0..1 space; scale by that Warp's own length.
-        val scale = (puppet.deformers.firstOrNull { it.id == drawable.parentDeformerId } as? Deformer.Warp)
-            ?.let { SwingGenerator.measure(puppet, it.id.raw)?.second } ?: 1f
-        return maxOf(bounds[2], bounds[3]) * scale
-    }
-
-    /**
-     * Shows [edit]'s forms on the canvas without recording anything; null restores the committed preview.
-     * Returns the patched rig and the edit as replayed there, with mesh targets turned into their wraps.
-     */
-    private fun previewSwing(edit: RigSwingEdit?): Pair<PuppetModel, RigSwingEdit>? {
-        val current = _state.value
-        // A rebuild (undo, another edit) replaced the patched preview: that is the new base.
-        if (swingPreviewBase != null && current.previewModel !== swingPatched) swingPreviewBase = null
-        val base = swingPreviewBase
-        if (edit == null) {
-            if (base != null) {
-                swingPreviewBase = null
-                updateState { it.copy(previewModel = base.first, previewModelDirty = base.second) }
-            }
-            swingPatched = null
-            return null
-        }
-        val (preview, _) = base ?: ((current.previewModel ?: return null) to current.previewModelDirty).also { swingPreviewBase = it }
-        val result = runCatching {
-            // The committed version of this swing may drive other parameters: take its forms out first.
-            val puppet = current.rigEdits.swingEdits.firstOrNull { it.id == edit.id }
-                ?.let { SwingGenerator.strip(preview.rig.puppet, it) } ?: preview.rig.puppet
-            val overlay = SwingAuthoring.put(current.rigEdits, puppet, edit)
-            val prepared = overlay.swingEdits.single { it.id == edit.id }
-            val wrapped = overlay.authoringJournal.drop(current.rigEdits.authoringJournal.size).fold(puppet, RigAuthoringJournal::apply)
-            SwingGenerator.apply(wrapped, listOf(prepared)) to prepared
-        }.onFailure { swingSession?.error = it.message }.getOrNull() ?: return null
-        val patched = preview.copy(rig = preview.rig.copy(puppet = result.first))
-        swingPatched = patched
-        updateState { it.copy(previewModel = patched, previewModelDirty = true) }
-        return result
-    }
-
-    /** Sways the session's parameters between -1 and 1, each lower segment trailing and up/down out of step, until stopped. */
-    internal fun playSwing(play: Boolean) {
+    private fun runSwingControl(mode: String, fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())) {
+        val port = workspaceBackend as? WorkspaceSwingPort ?: return
         val session = swingSession
-        swingPlayer?.cancel()
-        swingPlayer = null
-        if (session == null) return
-        session.playing = play
-        if (!play) {
-            val ids = session.draft.parameterIds.map(::ParameterId)
-            updateState { it.copy(parameterValues = it.parameterValues + ids.associateWith { 0f }) }
+        val expected = if (mode == "begin") workspaceBackend?.snapshot() else session?.expectation
+        if (expected == null) return
+        swingDraftJob?.cancel()
+        val committing = mode == "commit"
+        if (committing) { session?.busy = true; updateState { it.copy(canvasEditBusy = true) } }
+        swingDraftJob = scope.launch {
+            try {
+                withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(expected.projectId, expected.state, MutationAuthor.USER)) {
+                    if (committing && session != null) port.controlSwingPreview(kotlinx.serialization.json.buildJsonObject {
+                        put("state", expected.state); put("mode", "update"); put("session_id", session.sessionId); put("draft", session.draft.toJson())
+                    }, MutationAuthor.USER)
+                    port.controlSwingPreview(kotlinx.serialization.json.JsonObject(fields + kotlinx.serialization.json.buildJsonObject {
+                        put("state", expected.state); put("mode", mode); session?.let { put("session_id", it.sessionId) }
+                    }), MutationAuthor.USER)
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                swingSession?.error = failure.message ?: tr("swing.failed")
+                if (swingSession == null) updateState { it.copy(statusText = failure.message ?: tr("swing.failed")) }
+            } finally {
+                if (committing) { session?.busy = false; updateState { it.copy(canvasEditBusy = false) } }
+            }
+        }
+    }
+
+    private fun clearSwingProjection(session: SwingSession) {
+        if (canvasEditor.preview === session.preview?.first) canvasEditor.preview = null
+        swingPreviewValues = emptyMap()
+    }
+
+    internal fun canvasPose(current: PSD2LiveState): Map<ParameterId, Float> =
+        parameterScrubPose(current, if (processPlaybackActive) processFrameValues else current.parameterValues) + swingPreviewValues
+
+    internal fun applySwingPreview(preview: io.github.psd2live.application.WorkspaceSwingPreview) {
+        val current = _state.value
+        if (preview.report.getValue("workspace_id").jsonPrimitive.content != current.activeWorkspace.id) return
+        val id = preview.report.getValue("session_id").jsonPrimitive.content
+        if (preview.report.getValue("status").jsonPrimitive.content != "active" || preview.report.getValue("stale").jsonPrimitive.boolean) {
+            val session = swingSession?.takeIf { it.sessionId == id } ?: return
+            clearSwingProjection(session); swingSession = null
+            swingPlayer?.cancel(); swingPlayer = null
             return
         }
-        swingPlayer = scope.launch {
-            val start = System.nanoTime()
-            while (isActive) {
-                val t = (System.nanoTime() - start) / 1e9f
-                val values = session.draft.motions.withIndex().flatMap { (m, motion) ->
-                    motion.parameterIds.withIndex().map { (k, id) ->
-                        ParameterId(id) to sin(2f * PI.toFloat() * t / (if (m == 0) 1.6f else 1.3f) - k * 0.7f - m * 1.3f)
-                    }
-                }.toMap()
-                updateState { it.copy(parameterValues = it.parameterValues + values) }
+        val session = swingSession?.takeIf { it.sessionId == id }
+            ?: SwingSession(preview.existingId, preview.draft, workspaceBackend?.snapshot(), id).also { swingSession = it }
+        session.draft = preview.draft; session.motion = preview.motion; session.playing = preview.playing
+        session.error = null; session.preview = preview.model.rig.puppet to preview.prepared
+        canvasEditor.preview = preview.model.rig.puppet; swingPreviewValues = preview.values
+        refreshSwingGizmo()
+        if (preview.playing && swingPlayer?.isActive != true) swingPlayer = scope.launch {
+            while (isActive && swingSession?.sessionId == id) {
                 delay(16)
+                val frame = workspaceBackend?.swingPreviewFrame(id) ?: break
+                applySwingPreview(frame)
             }
         }
+        else if (!preview.playing) { swingPlayer?.cancel(); swingPlayer = null }
+    }
+
+    /** The application session supplies playback frames on its own clock. */
+    internal fun playSwing(play: Boolean) {
+        if (swingSession == null) return
+        runSwingControl("play", kotlinx.serialization.json.buildJsonObject { put("enabled", play) })
     }
 
     /** Records the session's swing as one history node and ends the session. */
     internal fun commitSwing() {
-        val session = swingSession ?: return
-        val draft = session.draft
-        runSwingMutation(session) { workspace, head -> workspace.putSwing(draft, false, head, null, io.github.psd2live.agent.MutationAuthor.USER) }
+        if (swingSession == null) return
+        runSwingControl("commit")
     }
 
     /** Deletes the edited swing; [bake] first keeps its current forms as ordinary keys. */
     internal fun deleteSwing(bake: Boolean) {
         val session = swingSession ?: return
         val id = session.existingId ?: return
-        runSwingMutation(session) { workspace, head -> workspace.deleteSwing(id, bake, head, io.github.psd2live.agent.MutationAuthor.USER) }
+        runSwingMutation(session) { workspace, state -> workspace.deleteSwing(id, bake, state, io.github.psd2live.project.MutationAuthor.USER) }
     }
 
     private fun runSwingMutation(
         session: SwingSession,
-        mutation: suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult,
+        mutation: suspend (WorkspaceSwingPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
     ) {
         if (_state.value.canvasEditBusy || session.busy) return
-        playSwing(false)
-        previewSwing(null)
+        swingDraftJob?.cancel(); swingPlayer?.cancel(); swingPlayer = null
+        clearSwingProjection(session)
         session.busy = true
         updateState { it.copy(canvasEditBusy = true) }
         scope.launch {
             try {
-                val workspace = requireNotNull(agentWorkspace) { "Project workspace unavailable" }
-                val head = requireNotNull(workspace.snapshot().historyHeadNodeId) { "Project history unavailable" }
-                withContext(Dispatchers.Default) { mutation(workspace, head) }
+                val workspace = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+                val expected = requireNotNull(session.expectation) { "Project workspace unavailable" }
+                withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                    expected.projectId, expected.state, io.github.psd2live.project.MutationAuthor.USER)) {
+                    mutation(workspace, expected.state)
+                }
                 if (swingSession === session) swingSession = null
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
+                if (swingSession === session) workspaceBackend?.swingPreviewFrame(session.sessionId)?.let(::applySwingPreview)
                 session.error = failure.message ?: tr("swing.failed")
-                if (swingSession === session) updateSwing(session.draft)
             } finally {
                 session.busy = false
                 updateState { it.copy(canvasEditBusy = false) }
             }
         }
     }
-    // Simulation: the panel's edits commit through the workspace like swings; the live preview runs here.
-
-    private val simPreview = io.github.psd2live.core.sim.SimPreview()
+    // The application owns live scenes; these fields project only the current workspace's returned frames.
+    @Volatile internal var simulationSessionId: String? = null
+        private set
+    private var simStepping: kotlinx.coroutines.Job? = null
+    @Volatile private var simulationEpoch = 0L
+    private var pendingSimulationDelta = 0f
     private val _simulationFrames = MutableStateFlow<io.github.psd2live.core.sim.SimulatedFrame?>(null)
     /** The live simulation's latest frame, for the canvas; null while none runs or it is still preparing. */
     val simulationFrames: StateFlow<io.github.psd2live.core.sim.SimulatedFrame?> = _simulationFrames.asStateFlow()
@@ -415,6 +418,7 @@ class PSD2LiveViewModel : AutoCloseable {
         val current = _state.value
         val model = current.previewModel ?: return
         if (simBaking?.isActive == true || current.rigEdits.simEdits.none { it.id == id }) return
+        val expected = workspaceBackend?.snapshot()
         _simulationBaking.value = SimulationBaking(id, 0f)
         simBaking = scope.launch {
             try {
@@ -425,7 +429,11 @@ class PSD2LiveViewModel : AutoCloseable {
                         cancelled = { job?.isCancelled == true },
                     )
                 }
-                runSimulationMutation("Baked simulation $id") { workspace, head -> workspace.putSimulationBake(id, bake, head) }
+                check(!_state.value.canvasEditBusy) { "Workspace has another edit in progress" }
+                updateState { it.copy(canvasEditBusy = true) }
+                performSimulationMutation("Baked simulation $id", { workspace, state ->
+                    workspace.putSimulationBake(id, bake, state)
+                }, expected)
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
                 _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
@@ -452,6 +460,7 @@ class PSD2LiveViewModel : AutoCloseable {
         val model = current.previewModel ?: return
         val ids = simulationsToBake(current)
         if (simBaking?.isActive == true || ids.isEmpty()) return
+        val expected = workspaceBackend?.snapshot()
         _simulationBaking.value = SimulationBaking(ids.first(), 0f, 0, ids.size)
         simBaking = scope.launch {
             try {
@@ -475,8 +484,12 @@ class PSD2LiveViewModel : AutoCloseable {
                     }
                     bakes to failures
                 }
-                if (bakes.isNotEmpty()) runSimulationMutation("Baked simulations ${bakes.keys.joinToString()}") { workspace, head ->
-                    workspace.putSimulationBakes(bakes, head)
+                if (bakes.isNotEmpty()) {
+                    check(!_state.value.canvasEditBusy) { "Workspace has another edit in progress" }
+                    updateState { it.copy(canvasEditBusy = true) }
+                    performSimulationMutation("Baked simulations ${bakes.keys.joinToString()}", { workspace, state ->
+                        workspace.putSimulationBakes(bakes, state)
+                    }, expected)
                 }
                 if (failures.isNotEmpty()) _simulationStatus.value = SimulationStatus.Failed(failures.joinToString("\n"))
             } catch (failure: Exception) {
@@ -492,7 +505,7 @@ class PSD2LiveViewModel : AutoCloseable {
     internal fun clearAllSimulationBakes() {
         val ids = _state.value.rigEdits.simEdits.filter { it.bake != null }.map { it.id }
         if (ids.isEmpty()) return
-        runSimulationMutation("Cleared simulation bakes") { workspace, head -> workspace.putSimulationBakes(ids.associateWith { null }, head) }
+        runSimulationMutation("Cleared simulation bakes") { workspace, state -> workspace.putSimulationBakes(ids.associateWith { null }, state) }
     }
 
     internal fun cancelSimulationBake() {
@@ -520,22 +533,84 @@ class PSD2LiveViewModel : AutoCloseable {
 
     /** Removes simulation [id]'s bake: its parameters, keys and pendulums go with it. */
     internal fun clearSimulationBake(id: String) =
-        runSimulationMutation("Cleared simulation bake $id") { workspace, head -> workspace.putSimulationBake(id, null, head) }
+        runSimulationMutation("Cleared simulation bake $id") { workspace, state -> workspace.putSimulationBake(id, null, state) }
 
     /** Runs simulation [id] live in the preview, or stops it with null. */
     internal fun setSimulationPreview(id: String?) {
         if (_state.value.simulationPreviewId == id) return
         simPreparing?.cancel()
-        simPreview.clear()
+        simStepping?.cancel(); simStepping = null
+        val previous = simulationSessionId
+        simulationSessionId = null; simulationEpoch++; pendingSimulationDelta = 0f
         _simulationFrames.value = null
         _simulationStatus.value = SimulationStatus.Idle
         updateState { it.copy(simulationPreviewId = id) }
+        if (previous != null) scope.launch(Dispatchers.Default) {
+            val state = currentWorkspaceState() ?: return@launch
+            try { workspaceBackend?.controlSimulationPreview(kotlinx.serialization.json.buildJsonObject {
+                put("state", state); put("mode", "stop"); put("session_id", previous)
+            }) } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { /* A switched project/workspace owns its own preview. */ }
+        }
+        if (id != null) startSimulationPreview(id)
     }
 
     /** Puts the live simulation back at rest. */
     internal fun restartSimulationPreview() {
-        val model = _state.value.previewModel ?: return
-        simPreview.restart(model.rig.puppet, simulationPose(_state.value, model))
+        val id = simulationSessionId ?: run {
+            _state.value.simulationPreviewId?.let(::startSimulationPreview)
+            return
+        }
+        val current = _state.value; val model = current.previewModel ?: return
+        val state = currentWorkspaceState() ?: return
+        simStepping?.cancel(); pendingSimulationDelta = 0f
+        simPreparing?.cancel()
+        val epoch = simulationEpoch
+        simPreparing = scope.launch(Dispatchers.Default, start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try { workspaceBackend?.controlSimulationPreview(kotlinx.serialization.json.buildJsonObject {
+                put("state", state); put("mode", "restart"); put("session_id", id)
+                putJsonObject("values") { simulationPose(current, model).forEach { (parameter, value) -> put(parameter.raw, value) } }
+            }) } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { if (simulationEpoch == epoch) _simulationStatus.value = SimulationStatus.Failed(failure.message ?: "Could not restart simulation") }
+        }.also { it.start() }
+    }
+
+    private fun startSimulationPreview(id: String) {
+        if (simPreparing?.isActive == true) return
+        val current = _state.value; val model = current.previewModel ?: return
+        val state = currentWorkspaceState() ?: return
+        val epoch = simulationEpoch
+        _simulationStatus.value = SimulationStatus.Preparing
+        simPreparing = scope.launch(Dispatchers.Default, start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                workspaceBackend?.controlSimulationPreview(kotlinx.serialization.json.buildJsonObject {
+                    put("state", state); put("mode", "start"); put("simulation_id", id)
+                    putJsonObject("values") { simulationPose(current, model).forEach { (parameter, value) -> put(parameter.raw, value) } }
+                })
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                if (simulationEpoch == epoch) _simulationStatus.value = SimulationStatus.Failed(failure.message ?: "Could not prepare simulation")
+            }
+        }.also { it.start() }
+    }
+
+    internal fun applySimulationPreview(preview: io.github.psd2live.application.WorkspaceSimulationPreview) {
+        val current = _state.value
+        if (preview.report.getValue("project_id").jsonPrimitive.content != current.projectId ||
+            preview.report.getValue("workspace_id").jsonPrimitive.content != current.activeWorkspace.id ||
+            preview.model.rig.puppet !== current.previewModel?.rig?.puppet ||
+            preview.report.getValue("state").jsonPrimitive.content != currentWorkspaceState()) return
+        val id = preview.report.getValue("session_id").jsonPrimitive.content
+        if (preview.report.getValue("stale").jsonPrimitive.boolean || preview.report.getValue("status").jsonPrimitive.content == "stopped") {
+            if (simulationSessionId != id) return
+            simulationSessionId = null; _simulationFrames.value = null; _simulationStatus.value = SimulationStatus.Idle
+            updateState { it.copy(simulationPreviewId = null) }
+            return
+        }
+        simulationSessionId = id
+        _simulationFrames.value = preview.frame
+        _simulationStatus.value = SimulationStatus.Running(preview.notes)
+        if (current.simulationPreviewId != preview.frame.simulationId) updateState { it.copy(simulationPreviewId = preview.frame.simulationId) }
     }
 
     private val _simulationAutoBake = MutableStateFlow(AppSettings.simulationAutoBake)
@@ -549,8 +624,8 @@ class PSD2LiveViewModel : AutoCloseable {
 
     /** Creates or replaces [edit] as one history node, baked again in it when [simulationAutoBake] is on. */
     internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) =
-        runSimulationMutation("Set simulation ${edit.id}") { workspace, head ->
-            val (result, report) = workspace.putSimulation(edit.toJson(), head, null, _simulationAutoBake.value)
+        runSimulationMutation("Set simulation ${edit.id}") { workspace, state ->
+            val (result, report) = workspace.putSimulation(edit.toJson(), state, null, _simulationAutoBake.value)
             report["bake_error"]?.jsonPrimitive?.contentOrNull?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
             result
         }
@@ -578,7 +653,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     internal fun deleteSimulation(id: String) {
         if (_state.value.simulationPreviewId == id) setSimulationPreview(null)
-        runSimulationMutation("Deleted simulation $id") { workspace, head -> workspace.deleteSimulation(id, head) }
+        runSimulationMutation("Deleted simulation $id") { workspace, state -> workspace.deleteSimulation(id, state) }
     }
 
     private val _modelPresetReport = MutableStateFlow<kotlinx.serialization.json.JsonObject?>(null)
@@ -591,15 +666,15 @@ class PSD2LiveViewModel : AutoCloseable {
         val layers = if (selectedOnly) current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) } else emptySet()
         if (selectedOnly && layers.isEmpty()) return
         _simulationStatus.value = SimulationStatus.Idle
-        runSimulationMutation("Applied model preset ${preset.jsonName}", modelPresetMutation(preset, layers))
+        runSimulationMutation("Applied model preset ${preset.jsonName}", mutation = modelPresetMutation(preset, layers))
     }
 
     /** Applies [preset] to [layers] (empty: every recognized part), keeping its report and any bake failure. */
     private fun modelPresetMutation(
         preset: io.github.psd2live.core.sim.ModelPresets.Preset,
         layers: Set<String>,
-    ): suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult = { workspace, head ->
-        val (result, report) = workspace.applyModelPreset(preset, layers, head, io.github.psd2live.agent.MutationAuthor.USER)
+    ): suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult = { workspace, state ->
+        val (result, report) = workspace.applyModelPreset(preset, layers, state, io.github.psd2live.project.MutationAuthor.USER)
         _modelPresetReport.value = report
         (report["bakes"] as? kotlinx.serialization.json.JsonObject)?.values?.firstNotNullOfOrNull { bake ->
             ((bake as? kotlinx.serialization.json.JsonObject)?.get("error") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
@@ -610,8 +685,8 @@ class PSD2LiveViewModel : AutoCloseable {
     /** Drops the [front] or back hair simulation preset and brings back the legacy sway, running when [sway]. */
     internal fun restoreClassicHair(front: Boolean, sway: Boolean = true) {
         if (_state.value.simulationPreviewId in io.github.psd2live.core.sim.ModelPresets.PRESET_SIMS) setSimulationPreview(null)
-        runSimulationMutation("Restored classic hair sway") { workspace, head ->
-            workspace.restoreClassicHair(front, head, io.github.psd2live.agent.MutationAuthor.USER, sway)
+        runSimulationMutation("Restored classic hair sway") { workspace, state ->
+            workspace.restoreClassicHair(front, state, io.github.psd2live.project.MutationAuthor.USER, sway)
         }
     }
 
@@ -620,8 +695,8 @@ class PSD2LiveViewModel : AutoCloseable {
         if (_state.value.simulationPreviewId in io.github.psd2live.core.sim.ModelPresets.CLOTHING_SIMS.values) setSimulationPreview(null)
         _simulationStatus.value = SimulationStatus.Idle
         _modelPresetReport.value = null
-        runSimulationMutation("Removed clothing simulation presets") { workspace, head ->
-            workspace.removeClothingPresets(head, io.github.psd2live.agent.MutationAuthor.USER)
+        runSimulationMutation("Removed clothing simulation presets") { workspace, state ->
+            workspace.removeClothingPresets(state, io.github.psd2live.project.MutationAuthor.USER)
         }
     }
 
@@ -653,22 +728,27 @@ class PSD2LiveViewModel : AutoCloseable {
 
     private fun runSimulationMutation(
         summary: String,
-        mutation: suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult,
+        expected: io.github.psd2live.project.WorkspaceProjectSnapshot? = workspaceBackend?.snapshot(),
+        mutation: suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
     ) {
         if (_state.value.canvasEditBusy) return
         updateState { it.copy(canvasEditBusy = true) }
-        scope.launch { performSimulationMutation(summary, mutation) }
+        scope.launch { performSimulationMutation(summary, mutation, expected) }
     }
 
     /** Runs [mutation] on the project workspace; the caller has set canvasEditBusy, which this clears. */
     private suspend fun performSimulationMutation(
         summary: String,
-        mutation: suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult,
+        mutation: suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
+        expected: io.github.psd2live.project.WorkspaceProjectSnapshot? = workspaceBackend?.snapshot(),
     ) {
         try {
-            val workspace = requireNotNull(agentWorkspace) { "Project workspace unavailable" }
-            val head = requireNotNull(workspace.snapshot().historyHeadNodeId) { "Project history unavailable" }
-            withContext(Dispatchers.Default) { mutation(workspace, head) }
+            val workspace = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+            val captured = requireNotNull(expected) { "Project workspace unavailable" }
+            withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                captured.projectId, captured.state, io.github.psd2live.project.MutationAuthor.USER)) {
+                mutation(workspace, captured.state)
+            }
         } catch (failure: Exception) {
             if (failure is kotlinx.coroutines.CancellationException) throw failure
             _simulationStatus.value = SimulationStatus.Failed(failure.message ?: summary)
@@ -683,34 +763,39 @@ class PSD2LiveViewModel : AutoCloseable {
         else parameterScrubPose(current, current.previewPanelState().parameterValues) + pausedPhysics
 
     private fun stepSimulationPreview(current: PSD2LiveState, model: RigPreviewModel?, dt: Float) {
+        if (_simulationStatus.value is SimulationStatus.Failed) return
         val id = current.simulationPreviewId ?: return
-        val edit = current.rigEdits.simEdits.firstOrNull { it.id == id }
-        if (model == null || edit == null) {
+        if (model == null || current.rigEdits.simEdits.none { it.id == id }) {
             _simulationFrames.value = null
             return
         }
-        val puppet = model.rig.puppet
-        // The live body replaces what its own bake would add, so the baked modes stay at rest under it.
-        val pose = io.github.psd2live.core.sim.SimGenerator.withoutModes(simulationPose(current, model), edit)
-        if (simPreview.needs(puppet, edit)) {
-            simPreparing?.cancel()
-            simPreview.begin(puppet, edit)
-            _simulationStatus.value = SimulationStatus.Preparing
-            simPreparing = scope.launch {
-                _simulationStatus.value = try {
-                    SimulationStatus.Running(withContext(Dispatchers.Default) { simPreview.prepare(puppet, edit, pose) })
-                } catch (failure: Exception) {
-                    if (failure is kotlinx.coroutines.CancellationException) throw failure
-                    SimulationStatus.Failed(failure.message ?: failure.toString())
-                }
-            }
+        val session = simulationSessionId
+        if (session == null) {
+            if (_simulationStatus.value !is SimulationStatus.Failed) startSimulationPreview(id)
             return
         }
-        simPreview.step(puppet, edit, pose, dt)?.let { _simulationFrames.value = it }
+        pendingSimulationDelta = (pendingSimulationDelta + dt).coerceAtMost(0.2f)
+        if (simStepping?.isActive == true || simPreparing?.isActive == true) return
+        val state = currentWorkspaceState() ?: return
+        val elapsed = pendingSimulationDelta; pendingSimulationDelta = 0f
+        val steps = kotlin.math.ceil(elapsed / 0.05f).toInt().coerceAtLeast(1)
+        simStepping = scope.launch(Dispatchers.Default, start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try { workspaceBackend?.stepSimulationPreview(kotlinx.serialization.json.buildJsonObject {
+                put("state", state); put("session_id", session); put("dt", elapsed / steps); put("steps", steps)
+                putJsonObject("values") { simulationPose(current, model).forEach { (parameter, value) -> put(parameter.raw, value) } }
+            }) } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (conflict: io.github.psd2live.application.WorkspaceConflict) {
+                if (simulationSessionId == session) {
+                    simulationSessionId = null; _simulationFrames.value = null; _simulationStatus.value = SimulationStatus.Idle
+                }
+            } catch (failure: Exception) {
+                if (simulationSessionId == session) _simulationStatus.value = SimulationStatus.Failed(failure.message ?: "Could not step simulation")
+            }
+        }.also { it.start() }
     }
 
     /** False while a live simulation needs frames, so the paused preview keeps pumping. */
-    val previewSettled: Boolean get() = pausedPhysicsSettled && _state.value.simulationPreviewId == null
+    val previewSettled: Boolean get() = pausedPhysicsSettled && (_state.value.simulationPreviewId == null || _simulationStatus.value is SimulationStatus.Failed)
 
     private val meshSplitQueue = ArrayDeque<String>()
     private val manualMeshSplitRequests = mutableSetOf<String>()
@@ -736,6 +821,8 @@ class PSD2LiveViewModel : AutoCloseable {
                     meshSplitQueue.clear()
                     manualMeshSplitRequests.clear()
                 }
+                if (next.activeWorkspace.id != current.activeWorkspace.id || next.projectOpenGeneration != current.projectOpenGeneration)
+                    next = next.copy(simulationPreviewId = null)
                 // Pruning walks the entire rig and every canvas session. Pointer hover, camera
                 // and dock updates must never pay that cost; only a new model can invalidate ids.
                 if (next.previewModel !== current.previewModel ||
@@ -746,24 +833,27 @@ class PSD2LiveViewModel : AutoCloseable {
             pruneParameterSnapshotPreview(after)
             if (before.activeWorkspace.id != after.activeWorkspace.id ||
                 before.projectOpenGeneration != after.projectOpenGeneration) {
+                simulationEpoch++; simPreparing?.cancel(); simStepping?.cancel()
+                simulationSessionId = null; pendingSimulationDelta = 0f
+                _simulationFrames.value = null; _simulationStatus.value = SimulationStatus.Idle
                 motionEditor.playing = false
-                motionPlayer.stop()
+                stopProcessMotion()
                 latestLiveParameters = emptyMap()
                 pausedPhysics = emptyMap()
                 setLivePose(emptyMap())
-                physicsClock = PhysicsClock.NONE
+                resetPreviewPhysics()
                 pointerActive = false
-                followX = 0f
-                bodyFollowX = 0f
-                followY = 0f
-                bodyFollowY = 0f
-                elapsed = 0.0
             } else if (before.previewModel !== after.previewModel ||
                 (after.activeWorkspace.pose?.authoringPose == true &&
                     (before.parameterValues != after.parameterValues || before.activeWorkspace.pose?.authoringPose != true))) {
                 setLivePose(emptyMap())
                 pausedPhysics = emptyMap()
                 latestLiveParameters = emptyMap()
+                if (before.previewModel !== after.previewModel) {
+                    simulationEpoch++; simPreparing?.cancel(); simStepping?.cancel()
+                    simulationSessionId = null; pendingSimulationDelta = 0f
+                    _simulationFrames.value = null; _simulationStatus.value = SimulationStatus.Idle
+                }
             }
             _uiState.value = _state.value
         }
@@ -772,6 +862,9 @@ class PSD2LiveViewModel : AutoCloseable {
     private fun replaceState(next: PSD2LiveState) {
         synchronized(stateLock) {
             if (next.projectOpenGeneration != _state.value.projectOpenGeneration) {
+                simulationEpoch++; simPreparing?.cancel(); simStepping?.cancel()
+                simulationSessionId = null; pendingSimulationDelta = 0f
+                _simulationFrames.value = null; _simulationStatus.value = SimulationStatus.Idle
                 pendingMeshSplit = null
                 pendingStartScreen = null
                 meshSplitQueue.clear()
@@ -814,6 +907,7 @@ class PSD2LiveViewModel : AutoCloseable {
     internal fun canvasEditorFor(canvasId: String): CanvasEditor {
         val current = uiState.value
         if (editorGeneration != current.projectOpenGeneration) {
+            dismissImagePlacements()
             canvasEditors.clear()
             editorGeneration = current.projectOpenGeneration
         }
@@ -844,7 +938,7 @@ class PSD2LiveViewModel : AutoCloseable {
         editorChanged()
     }
 
-    fun applyCommittedPaint(updatedPreview: RigPreviewModel, summary: String) {
+    suspend fun applyCommittedPaint(updatedPreview: RigPreviewModel, summary: String) {
         updateState {
             it.copy(
                 previewModel = updatedPreview,
@@ -856,7 +950,65 @@ class PSD2LiveViewModel : AutoCloseable {
         }
         refreshSdkSession(updatedPreview)
         markWorkspaceChanged()
-        commitEditorChange(summary)
+        commitEditorChange(summary)?.await()
+    }
+
+    /** Paint tools resume from the authoritative model only after their queued commit has completed. */
+    internal fun capturePaintExpectation(): io.github.psd2live.project.WorkspaceProjectSnapshot? =
+        workspaceBackend?.snapshot()?.takeIf { it.loaded }
+
+    internal fun beginPaintSession(layerId: String): io.github.psd2live.application.WorkspacePaintSession? {
+        val backend = workspaceBackend ?: return null
+        val expected = backend.snapshot().takeIf { it.loaded } ?: return null
+        return try { backend.beginPaintSession(expected.state, layerId) }
+        catch (failure: Exception) { setErrorMessage(failure.message ?: "Could not begin paint session"); null }
+    }
+
+    internal fun savePaintSession(session: io.github.psd2live.application.WorkspacePaintSession,
+        rebuildMesh: Boolean, preserveSourceRaster: Boolean, summary: String, onCommitted: () -> Unit) {
+        if (_state.value.canvasEditBusy || _state.value.editorDraftBusy) {
+            setErrorMessage("An editor operation is still being applied"); return
+        }
+        val backend = workspaceBackend ?: run { setErrorMessage("Project workspace unavailable"); return }
+        val sessionState = session.sessionState
+        updateState { it.copy(canvasEditBusy = true) }
+        scope.launch {
+            try {
+                withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                    session.projectId, session.workspaceState, MutationAuthor.USER)) {
+                    backend.commitPaintSession(session.workspaceState, session.id, sessionState, rebuildMesh, preserveSourceRaster, MutationAuthor.USER)
+                }
+                updateState { it.withLog(tr("editor.paint.applied", summary), level = LogLevel.INFO, tag = "Paint") }
+                onCommitted()
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                setErrorMessage(failure.message ?: "Could not save paint changes")
+            } finally { updateState { it.copy(canvasEditBusy = false) } }
+        }
+    }
+
+    internal fun savePaintRaster(request: io.github.psd2live.application.WorkspacePaintRaster,
+                                 expected: io.github.psd2live.project.WorkspaceProjectSnapshot?,
+                                 summary: String, onCommitted: () -> Unit) {
+        if (_state.value.canvasEditBusy || _state.value.editorDraftBusy) {
+            setErrorMessage("An editor operation is still being applied"); return
+        }
+        val workspace = workspaceBackend ?: run { setErrorMessage("Project workspace unavailable"); return }
+        val captured = expected ?: run { setErrorMessage("Paint session has no captured workspace state"); return }
+        updateState { it.copy(canvasEditBusy = true) }
+        scope.launch {
+            try {
+                withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                    captured.projectId, captured.state, MutationAuthor.USER)) {
+                    workspace.commitPaintRaster(captured.state, request)
+                }
+                updateState { it.withLog(tr("editor.paint.applied", summary), level = LogLevel.INFO, tag = "Paint") }
+                onCommitted()
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                setErrorMessage(failure.message ?: "Could not save paint changes")
+            } finally { updateState { it.copy(canvasEditBusy = false) } }
+        }
     }
 
     /** Offer one source split at a time after the new mesh is actually in the preview. */
@@ -922,27 +1074,18 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     /** The source layers among [layerIds] whose mesh falls apart into several pieces and can still be split. */
-    private suspend fun detectMeshSplits(preview: RigPreviewModel, layerIds: List<String>): List<MeshSplitOffer> =
-        withContext(Dispatchers.Default) {
+    private suspend fun detectMeshSplits(preview: RigPreviewModel, layerIds: List<String>): List<MeshSplitOffer> {
+        val expected = workspaceBackend?.snapshot()
+        return withContext(Dispatchers.Default) {
             layerIds.mapNotNull { id ->
-                if (meshSplitWouldDiscardEdits(preview, id)) return@mapNotNull null
-                val source = preview.analysis.source.layers.firstOrNull { it.id.raw == id }
-                    ?: preview.analysis.layers.firstOrNull { it.source.id.raw == id }?.source
+                val plan = io.github.psd2live.application.WorkspacePartitionEdits.componentPlan(preview, id)
                     ?: return@mapNotNull null
-                if (source.clipped || source.blend != org.umamo.format.art.LayerBlend.Normal ||
-                    source.channelMask != org.umamo.format.art.ChannelMask.ALL) return@mapNotNull null
-                val drawable = preview.rig.puppet.drawables.firstOrNull {
-                    it.id.raw == id || preview.rig.layerIdByDrawableId[it.id.raw] == id
-                } ?: return@mapNotNull null
-                val placement = preview.atlas.placementByLayerId[id] ?: return@mapNotNull null
-                val page = preview.atlas.pages.getOrNull(placement.page)?.image ?: return@mapNotNull null
-                val plan = drawable.mesh?.let {
-                    MeshComponentSplit.detect(it, source, placement, page.width, page.height)
-                } ?: return@mapNotNull null
-                if (plan.components.size <= 1) return@mapNotNull null
-                MeshSplitOffer(id, source.name, plan, preview)
+                val source = preview.analysis.source.layers.firstOrNull { it.id.raw == id }
+                    ?: preview.analysis.layers.first { it.source.id.raw == id }.source
+                MeshSplitOffer(id, source.name, plan, preview, expected)
             }
         }
+    }
 
     /**
      * Answers the start screen: splits the [decisions] first, since a preset simulation holds on to the meshes
@@ -1001,12 +1144,21 @@ class PSD2LiveViewModel : AutoCloseable {
         try {
             if (choices.motionBasic != current.motionBasic) setMotionBasic(choices.motionBasic)
             if (choices.motionSkeleton != current.motionSkeleton) setMotionSkeleton(choices.motionSkeleton)
-            if (choices.eyeJelly != current.physicsEyeJelly) setPhysicsEyeJelly(choices.eyeJelly)
+            if (choices.eyeJelly != current.physicsEyeJelly) {
+                if (parts.eyeJelly) setPhysicsEyeJelly(choices.eyeJelly)
+                else updateState { it.copy(physicsEyeJelly = choices.eyeJelly) }
+            }
             // A simulated hair turned back to sway or still goes through its own step below.
             if (!current.hairSimulationFront && choices.frontHair != HairMode.SIMULATION &&
-                (choices.frontHair == HairMode.CLASSIC) != current.physicsFrontHair) setPhysicsFrontHair(choices.frontHair == HairMode.CLASSIC)
+                (choices.frontHair == HairMode.CLASSIC) != current.physicsFrontHair) {
+                if (parts.frontHair) setPhysicsFrontHair(choices.frontHair == HairMode.CLASSIC)
+                else updateState { it.copy(physicsFrontHair = choices.frontHair == HairMode.CLASSIC) }
+            }
             if (!current.hairSimulationBack && choices.backHair != HairMode.SIMULATION &&
-                (choices.backHair == HairMode.CLASSIC) != current.physicsBackHair) setPhysicsBackHair(choices.backHair == HairMode.CLASSIC)
+                (choices.backHair == HairMode.CLASSIC) != current.physicsBackHair) {
+                if (parts.backHair) setPhysicsBackHair(choices.backHair == HairMode.CLASSIC)
+                else updateState { it.copy(physicsBackHair = choices.backHair == HairMode.CLASSIC) }
+            }
             val rigChanged = choices.headStrength != current.headStrength || choices.bodyStrength != current.bodyStrength ||
                 choices.featureDisplacement != current.featureDisplacementEnabled || choices.mouthOutline != current.mouthOutlineEnabled
             if (rigChanged) updateState {
@@ -1027,7 +1179,7 @@ class PSD2LiveViewModel : AutoCloseable {
         }
 
         val clothingNow = current.rigEdits.simEdits.any { it.id in io.github.psd2live.core.sim.ModelPresets.CLOTHING_SIMS.values }
-        val steps = ArrayList<Pair<String, suspend (AgentWorkspace, String) -> io.github.psd2live.agent.AgentWorkspaceMutationResult>>()
+        val steps = ArrayList<Pair<String, suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult>>()
         for (front in listOf(true, false)) {
             val exists = if (front) parts.frontHair else parts.backHair
             val simulated = if (front) current.hairSimulationFront else current.hairSimulationBack
@@ -1035,7 +1187,7 @@ class PSD2LiveViewModel : AutoCloseable {
             val preset = if (front) io.github.psd2live.core.sim.ModelPresets.Preset.FRONT_HAIR else io.github.psd2live.core.sim.ModelPresets.Preset.BACK_HAIR
             if (exists && wanted == HairMode.SIMULATION && !simulated) steps += "Applied model preset ${preset.jsonName}" to modelPresetMutation(preset, emptySet())
             if (simulated && wanted != HairMode.SIMULATION) steps += "Restored classic hair sway" to { workspace, head ->
-                workspace.restoreClassicHair(front, head, io.github.psd2live.agent.MutationAuthor.USER, wanted == HairMode.CLASSIC)
+                workspace.restoreClassicHair(front, head, io.github.psd2live.project.MutationAuthor.USER, wanted == HairMode.CLASSIC)
             }
         }
         if (parts.clothing && choices.clothing && !clothingNow) {
@@ -1044,9 +1196,10 @@ class PSD2LiveViewModel : AutoCloseable {
         }
         if (clothingNow && !choices.clothing) steps += "Removed clothing simulation presets" to { workspace, head ->
             _modelPresetReport.value = null
-            workspace.removeClothingPresets(head, io.github.psd2live.agent.MutationAuthor.USER)
+            workspace.removeClothingPresets(head, io.github.psd2live.project.MutationAuthor.USER)
         }
         if (steps.isEmpty()) return
+        workspaceBackend?.awaitEditorDrafts()
         awaitPreviewRebuild()
         _simulationStatus.value = SimulationStatus.Idle
         for ((summary, mutation) in steps) {
@@ -1077,6 +1230,7 @@ class PSD2LiveViewModel : AutoCloseable {
         val workspaceId: String,
         val canvasId: String,
         val initialMiddleId: String?,
+        val expected: io.github.psd2live.project.WorkspaceProjectSnapshot,
     )
 
     internal var pendingDepthSplit by mutableStateOf<DepthSplitOffer?>(null)
@@ -1105,11 +1259,12 @@ class PSD2LiveViewModel : AutoCloseable {
         if (canvasEditor.paintSession?.isDirty == true) {
             setErrorMessage(tr("editor.depthSplit.pendingPaint")); return
         }
+        val expected = workspaceBackend?.snapshot() ?: return
         val middleIds = depthSplitMiddleIds(drawableId)
         if (middleIds.isNotEmpty()) {
             pendingDepthSplit = null
             createDepthSplit(DepthSplitOffer(preview, drawableId, current.activeWorkspace.id,
-                current.activeCanvas.id, middleIds.first()), middleIds)
+                current.activeCanvas.id, middleIds.first(), expected), middleIds)
             return
         }
         val others = preview.rig.puppet.drawables.filter { it.id.raw != drawableId && it.mesh != null }
@@ -1119,7 +1274,7 @@ class PSD2LiveViewModel : AutoCloseable {
             it.source.id.raw == preview.rig.layerIdByDrawableId[d.id.raw] && it.semantic.tag == SemanticTag.NECK
         } }
         pendingDepthSplit = DepthSplitOffer(preview, drawableId, current.activeWorkspace.id,
-            current.activeCanvas.id, selected?.id?.raw ?: neck?.id?.raw)
+            current.activeCanvas.id, selected?.id?.raw ?: neck?.id?.raw, expected)
     }
 
     internal fun dismissDepthSplit() { pendingDepthSplit = null }
@@ -1135,30 +1290,31 @@ class PSD2LiveViewModel : AutoCloseable {
         if (_state.value.previewModel !== offer.preview) {
             setErrorMessage(tr("editor.depthSplit.changed")); return
         }
-        val config = _state.value.buildConfig()
+        val port: io.github.psd2live.application.WorkspaceSourcePort = workspaceBackend ?: return
+        val request = kotlinx.serialization.json.buildJsonObject {
+            put("source_id", offer.sourceId)
+            put("middle_ids", kotlinx.serialization.json.JsonArray(middleIds.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            val name = offer.preview.rig.puppet.drawables.single { it.id.raw == offer.sourceId }.name
+            put("names", kotlinx.serialization.json.JsonArray(listOf(tr("editor.depthSplit.backName", name),
+                tr("editor.depthSplit.frontName", name)).map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        }
         updateState { it.copy(canvasEditBusy = true, statusText = tr("editor.depthSplit.working")) }
         scope.launch {
             try {
-                val result = withContext(Dispatchers.Default) {
-                    io.github.psd2live.core.DepthSplit.build(pipeline, offer.preview, config, offer.sourceId, middleIds)
+                val result = withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                    offer.expected.projectId, offer.expected.state, MutationAuthor.USER)) {
+                    port.splitDepth(requireNotNull(offer.expected.state), request)
                 }
-                if (_state.value.previewModel !== offer.preview) {
-                    setErrorMessage(tr("editor.depthSplit.changed")); return@launch
-                }
-                val built = result.preview
-                updateState { it.copy(parentOverrides = built.config.parentOverrides,
-                    layerOverrides = built.config.layerOverrides, drawOrderOverrides = built.config.drawOrderOverrides) }
+                val frontLayerId = result.affectedLayerIds.single()
                 updateCanvasPresentation(offer.workspaceId, offer.canvasId, CanvasMode.EDIT) {
-                    it.copy(selectedLayerId = result.frontLayerId, selectedLayerIds = setOf(result.frontLayerId),
-                        selectedDeformerId = null, layerVisibility = it.layerVisibility + (result.frontLayerId to true))
+                    it.copy(selectedLayerId = frontLayerId, selectedLayerIds = setOf(frontLayerId),
+                        selectedDeformerId = null, layerVisibility = it.layerVisibility + (frontLayerId to true))
                 }
-                applyCommittedPaint(built, tr("editor.depthSplit.done"))
-                yield() // History cleanup finishes before arming the new paint session.
                 if (_state.value.activeWorkspace.id == offer.workspaceId && _state.value.activeCanvas.id == offer.canvasId) {
                     setCanvasMode(offer.canvasId, CanvasMode.EDIT)
                     val editor = canvasEditorFor(offer.canvasId)
                     editor.activateTool(io.github.psd2live.ui.CanvasTool.PAINT_ERASER)
-                    editor.startPaintSession(result.frontLayerId, forceReload = true)
+                    editor.startPaintSession(frontLayerId, forceReload = true)
                     requestCanvasFocus(offer.canvasId)
                 }
             } catch (failure: Exception) {
@@ -1186,7 +1342,7 @@ class PSD2LiveViewModel : AutoCloseable {
         if (meshSplitChecking || meshSplitApplying || pendingMeshSplit != null || pendingStartScreen != null || meshSplitQueue.isEmpty()) return
         val id = meshSplitQueue.removeFirst()
         val preview = _state.value.previewModel ?: return
-        if (meshSplitWouldDiscardEdits(preview, id)) {
+        if (preview.config.rigEdits.importedCmo3 != null) {
             if (id in manualMeshSplitRequests) setErrorMessage(tr("editor.meshSplit.authored"))
             manualMeshSplitRequests -= id
             checkNextMeshSplit()
@@ -1195,22 +1351,7 @@ class PSD2LiveViewModel : AutoCloseable {
         meshSplitChecking = true
         scope.launch {
             try {
-                val offer = withContext(Dispatchers.Default) {
-                    val source = preview.analysis.source.layers.firstOrNull { it.id.raw == id }
-                        ?: preview.analysis.layers.firstOrNull { it.source.id.raw == id }?.source
-                        ?: return@withContext null
-                    if (source.clipped || source.blend != org.umamo.format.art.LayerBlend.Normal ||
-                        source.channelMask != org.umamo.format.art.ChannelMask.ALL) return@withContext null
-                    val drawable = preview.rig.puppet.drawables.firstOrNull {
-                        it.id.raw == id || preview.rig.layerIdByDrawableId[it.id.raw] == id
-                    } ?: return@withContext null
-                    val placement = preview.atlas.placementByLayerId[id] ?: return@withContext null
-                    val page = preview.atlas.pages.getOrNull(placement.page)?.image ?: return@withContext null
-                    val plan = drawable.mesh?.let {
-                        MeshComponentSplit.detect(it, source, placement, page.width, page.height)
-                    } ?: return@withContext null
-                    MeshSplitOffer(id, source.name, plan, preview)
-                }
+                val offer = detectMeshSplits(preview, listOf(id)).singleOrNull()
                 if (_state.value.previewModel === preview && offer != null) pendingMeshSplit = offer
                 else if (id in manualMeshSplitRequests && _state.value.previewModel === preview)
                     setErrorMessage(tr("editor.meshSplit.none"))
@@ -1223,20 +1364,6 @@ class PSD2LiveViewModel : AutoCloseable {
                 if (pendingMeshSplit == null && pendingStartScreen == null) checkNextMeshSplit()
             }
         }
-    }
-
-    private fun meshSplitWouldDiscardEdits(preview: RigPreviewModel, layerId: String): Boolean {
-        val ids = preview.rig.layerIdByDrawableId.filterValues { it == layerId }.keys + layerId
-        val edits = preview.config.rigEdits
-        fun referencesId(json: kotlinx.serialization.json.JsonObject): Boolean =
-            ids.any { id -> json.toString().contains("\"$id\"") }
-        return edits.keyformSetEdits.any { it.target.id in ids } ||
-            edits.keyformDeleteEdits.any { it.target.id in ids } ||
-            edits.keyformCopyEdits.any { it.sourceTarget.id in ids || it.destinationTarget.id in ids } ||
-            edits.warpEdits.any { warp -> warp.meshIds.any { it in ids } } ||
-            edits.authoringJournal.any(::referencesId) ||
-            edits.structureEdits.any(::referencesId) ||
-            preview.rig.puppet.glues.any { it.meshA.raw in ids || it.meshB.raw in ids }
     }
 
     internal fun confirmMeshSplit(names: List<String>, sides: List<Side>) {
@@ -1268,139 +1395,19 @@ class PSD2LiveViewModel : AutoCloseable {
 
     /** Splits each decided layer of [basePreview] into its pieces as one history step; nothing if the model moved on. */
     private suspend fun applyMeshSplits(basePreview: RigPreviewModel, validDecisions: List<LayerSplitDecision>) {
-        val current = _state.value
-        if (current.previewModel !== basePreview) return
-
-        val generatedPiecesByLayer = withContext(Dispatchers.Default) {
-            validDecisions.associate { d ->
-                d.offer.layerId to d.offer.plan.pieces(d.names)
-            }
-        }
-
-        val allNewPieces = generatedPiecesByLayer.values.flatten()
-        val allNewIds = allNewPieces.map { it.id.raw }
-        val splitLayerIds = validDecisions.map { it.offer.layerId }.toSet()
-
-        var updatedOverrides = current.layerOverrides
-        var updatedVisibility = current.layerVisibility
-        var updatedParents = current.parentOverrides
-        var updatedMeshOverrides = current.meshOverrides
-        var updatedDrawOrders = current.drawOrderOverrides
-
-        for (decision in validDecisions) {
-            val offer = decision.offer
-            val pieces = generatedPiecesByLayer[offer.layerId] ?: continue
-            val ids = pieces.map { it.id.raw }
-            val original = basePreview.analysis.source.layers.firstOrNull { it.id.raw == offer.layerId }
-                ?: basePreview.analysis.layers.first { it.source.id.raw == offer.layerId }.source
-
-            val classified = basePreview.analysis.layers.firstOrNull { it.source.id.raw == offer.layerId }
-            val inherited = current.layerOverrides[offer.layerId] ?: classified?.semantic?.let {
-                LayerClassificationOverride(it.type, it.tag, it.side, it.parameter, it.switchId)
-            } ?: LayerClassificationOverride()
-
-            updatedOverrides = updatedOverrides + ids.mapIndexed { index, id ->
-                val side = decision.sides[index]
-                id to inherited.copy(side = if (side == Side.NONE) inherited.side else side)
-            }
-
-            updatedVisibility = updatedVisibility + ids.associateWith {
-                current.layerVisibility[offer.layerId] ?: original.visible
-            }
-
-            val oldDrawable = basePreview.rig.puppet.drawables.firstOrNull {
-                it.id.raw == offer.layerId || basePreview.rig.layerIdByDrawableId[it.id.raw] == offer.layerId
-            }
-            val oldParentId = if (offer.layerId in current.parentOverrides) current.parentOverrides[offer.layerId]
-                else oldDrawable?.parentDeformerId?.raw
-            updatedParents = updatedParents + ids.associateWith { oldParentId }
-
-            current.meshOverrides[offer.layerId]?.let { meshOv ->
-                updatedMeshOverrides = updatedMeshOverrides + ids.associateWith { meshOv }
-            }
-            current.drawOrderOverrides[offer.layerId]?.let { drawOv ->
-                updatedDrawOrders = updatedDrawOrders + ids.associateWith { drawOv }
-            }
-        }
-
-        val deleted = current.deletedLayerIds + splitLayerIds
-
-        val virtualOwnerMap = splitLayerIds.associateWith { splitId ->
-            val originalIsInSource = basePreview.analysis.source.layers.any { it.id.raw == splitId }
-            if (originalIsInSource) null else basePreview.analysis.source.layers
-                .map { it.id.raw }.filter { splitId.startsWith("$it:") }.maxByOrNull(String::length)
-        }
-
-        val injectedLayerIds = mutableSetOf<String>()
-        val expandedLayers = basePreview.analysis.source.layers.flatMap { layer ->
-            val matchingSplits = splitLayerIds.filter { splitId ->
-                layer.id.raw == splitId || layer.id.raw == virtualOwnerMap[splitId]
-            }
-            if (matchingSplits.isNotEmpty()) {
-                val piecesToInject = matchingSplits.flatMap { splitId ->
-                    if (injectedLayerIds.add(splitId)) {
-                        generatedPiecesByLayer[splitId].orEmpty()
-                    } else emptyList()
-                }
-                listOf(layer) + piecesToInject
-            } else {
-                listOf(layer)
-            }
-        }
-
-        val remainingPieces = splitLayerIds.filter { it !in injectedLayerIds }.flatMap {
-            generatedPiecesByLayer[it].orEmpty()
-        }
-        val allCombinedLayers = expandedLayers + remainingPieces
-
-        val reorderedLayers = allCombinedLayers.mapIndexed { index, layer ->
-            io.github.psd2live.agent.WorkspaceSourceLayer.copyOf(
-                layer,
-                allCombinedLayers.size - index
-            )
-        }
-
-        val newSource = io.github.psd2live.agent.WorkspaceSourceArt(
-            basePreview.analysis.source.widthPx,
-            basePreview.analysis.source.heightPx,
-            reorderedLayers,
-            basePreview.analysis.source.groups
-        )
-
-        val baselineIds = current.rigEdits.splitBaselineLayerIds.ifEmpty {
-            (basePreview.analysis.source.layers.map { it.id.raw }
-                .filterNot { it in current.deletedLayerIds } +
-                basePreview.analysis.layers.map { it.source.id.raw }).toSet()
-        }
-
-        val config = current.buildConfig().copy(
-            deletedLayerIds = deleted,
-            layerOverrides = updatedOverrides,
-            layerVisibility = updatedVisibility,
-            parentOverrides = updatedParents,
-            meshOverrides = updatedMeshOverrides,
-            drawOrderOverrides = updatedDrawOrders,
-            rigEdits = current.rigEdits.copy(splitBaselineLayerIds = baselineIds),
-        )
-
-        val built = withContext(Dispatchers.Default) {
-            pipeline.buildPreviewAfterLayerSplit(basePreview, newSource, config)
-        }
         if (_state.value.previewModel !== basePreview) return
-
-        updateState { it.copy(
-            deletedLayerIds = deleted,
-            layerOverrides = updatedOverrides,
-            layerVisibility = updatedVisibility,
-            parentOverrides = updatedParents,
-            meshOverrides = updatedMeshOverrides,
-            drawOrderOverrides = updatedDrawOrders,
-            selectedLayerId = it.selectedLayerId?.takeUnless { id -> id in splitLayerIds },
-        ) }
-
-        val summary = if (validDecisions.size == 1) tr("canvas.hierarchy.meshSplitDone", allNewIds.size)
-            else tr("editor.meshSplit.batchDone", validDecisions.size, allNewIds.size)
-        applyCommittedPaint(built, summary)
+        val workspace = requireNotNull(workspaceBackend) { "Workspace is not ready" }
+        val expected = requireNotNull(validDecisions.first().offer.expected) { "Partition offer has no captured workspace state" }
+        require(validDecisions.all { it.offer.expected?.state == expected.state }) { "Partition offers belong to different states" }
+        val port: io.github.psd2live.application.WorkspaceSourcePort = workspace
+        val requests = validDecisions.map { decision -> kotlinx.serialization.json.buildJsonObject {
+            put("layer_id", decision.offer.layerId)
+            put("names", kotlinx.serialization.json.JsonArray(decision.names.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            put("sides", kotlinx.serialization.json.JsonArray(decision.sides.map { kotlinx.serialization.json.JsonPrimitive(it.name.lowercase()) }))
+        } }
+        withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(expected.projectId, expected.state, MutationAuthor.USER)) {
+            port.splitMeshComponents(requireNotNull(expected.state), requests)
+        }
     }
 
     fun requestCanvasPathTool() {
@@ -1430,19 +1437,72 @@ class PSD2LiveViewModel : AutoCloseable {
         }
         return canvasEditorFor(canvas.id)
     }
-    fun saveAuthoringEdits(expectedState: String, edits: kotlinx.serialization.json.JsonArray, onComplete: (String?) -> Unit) {
-        if (_state.value.canvasEditBusy) { onComplete("An editor operation is still being applied"); return }
+    /** Opaque document generation/version, captured when a gesture or dialog begins. */
+    internal fun currentWorkspaceState(): String? = workspaceBackend?.snapshot()?.takeIf { it.loaded }?.state
+
+    /** A completed authored gesture hands over frozen poses through the neutral preview port. */
+    private fun persistAuthoredPose() {
+        val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+        val state = currentWorkspaceState() ?: return
+        val current = _state.value
+        val poses = mapOf(current.activeWorkspace.id to io.github.psd2live.application.WorkspacePose(
+            current.parameterValues.toMap(), current.lockedParameters.toSet()))
+        port.commitAuthoredPoses(state, poses)
+    }
+
+    fun saveAuthoringEdits(expectedState: String, edits: kotlinx.serialization.json.JsonArray, onComplete: (String?) -> Unit) =
+        saveWorkspaceEdit(onComplete) {
+            val workspace: io.github.psd2live.application.WorkspaceRigPort = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+            workspace.authorRig(expectedState, edits, io.github.psd2live.project.MutationAuthor.USER)
+        }
+
+    internal fun saveDocumentEdits(expectedState: String, summary: String,
+                                  edits: List<io.github.psd2live.application.WorkspaceDocumentOperation>, onComplete: (String?) -> Unit) =
+        saveWorkspaceEdit(onComplete) {
+            val workspace: io.github.psd2live.application.WorkspaceDocumentPort = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+            workspace.applyDocumentEdits(expectedState, summary, edits, io.github.psd2live.project.MutationAuthor.USER)
+        }
+
+    private val warpControlFields = mutableMapOf<String, WarpControlField>()
+
+    internal fun applyWarpControlField(token: String, operation: String, request: kotlinx.serialization.json.JsonObject) {
+        val current = _state.value
+        if (current.canvasEditBusy || current.editorDraftBusy) return
+        val source = current.previewModel ?: return
+        val expected = currentWorkspaceState() ?: return
+        val edit = io.github.psd2live.application.WorkspaceDocumentOperation(operation, request)
+        val field = warpControlFields.getOrPut(token) { WarpControlField(expected, current, WorkspaceStateCodec.document(current), source, edit) }
+        try {
+            val document = io.github.psd2live.application.WorkspaceWarpControlEdits.apply(edit, field.document, field.model)
+            val records = document.rigEdits.authoringJournal.drop(field.document.rigEdits.authoringJournal.size)
+            val puppet = records.fold(field.model.rig.puppet) { model, record -> io.github.psd2live.core.RigAuthoringJournal.apply(model, record) }
+            val preview = field.model.copy(rig = field.model.rig.copy(puppet = puppet), config = field.model.config.copy(rigEdits = document.rigEdits))
+            field.operation = edit; field.preview = preview
+            updateState { it.copy(previewModel = preview, previewModelDirty = true, projectDirty = true) }
+        } catch (failure: Exception) { updateState { it.copy(errorMessage = failure.message) } }
+    }
+
+    internal fun endWarpControlField(token: String) {
+        val field = warpControlFields.remove(token) ?: return
+        saveDocumentEdits(field.expectedState, "Edit Warp controls", listOf(field.operation)) { failure ->
+            if (failure != null || currentWorkspaceState() == field.expectedState) updateState { state ->
+                if (state.previewModel === field.preview) state.copy(previewModel = field.state.previewModel,
+                    previewModelDirty = field.state.previewModelDirty, projectDirty = field.state.projectDirty,
+                    errorMessage = failure) else state.copy(errorMessage = failure)
+            }
+        }
+    }
+
+    private fun saveWorkspaceEdit(onComplete: (String?) -> Unit, mutation: suspend () -> Unit) {
+        if (_state.value.canvasEditBusy || _state.value.editorDraftBusy) { onComplete("An editor operation is still being applied"); return }
         updateState { it.copy(canvasEditBusy = true) }
         scope.launch {
             try {
-                val workspace = requireNotNull(agentWorkspace) { "Project workspace unavailable" }
-                // Canvas authoring uses the same journal the MCP tools write, so the author has to
-                // be stated here: these edits came from the person at the editor.
-                withContext(Dispatchers.Default) { workspace.authorRig(expectedState, edits, io.github.psd2live.agent.MutationAuthor.USER) }
+                withContext(Dispatchers.Default) { mutation() }
                 onComplete(null)
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
-                onComplete(failure.message ?: "Could not save deform paths")
+                onComplete(failure.message ?: "Could not save editor changes")
             } finally {
                 updateState { it.copy(canvasEditBusy = false) }
                 queuedCanvasSave?.let { saveAs -> queuedCanvasSave=null; requestProjectSave(saveAs) }
@@ -1474,7 +1534,7 @@ class PSD2LiveViewModel : AutoCloseable {
         vararg fields: Pair<String, kotlinx.serialization.json.JsonElement>,
     ) {
         val edit = structureEdit("static", kind, id, kotlinx.serialization.json.JsonObject(linkedMapOf(*fields)))
-        editorSessions.begin(token)
+        beginEditorSession(token)
         pendingRigEdits[token] = edit
         patchPreview(edit)
     }
@@ -1495,7 +1555,7 @@ class PSD2LiveViewModel : AutoCloseable {
      */
     fun applyRigStructureLive(token: String, action: String, kind: String, id: String, fields: kotlinx.serialization.json.JsonObject) {
         val edit = structureEdit(action, kind, id, fields)
-        editorSessions.begin(token)
+        beginEditorSession(token)
         pendingRigEdits[token] = edit
         patchPreview(edit)
     }
@@ -1567,7 +1627,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 selectedDeformerId = if (current.selectedDeformerId in removed) null else current.selectedDeformerId,
             )
         }
-        val expected = _state.value.historySnapshot?.headNodeId ?: return
+        val expected = currentWorkspaceState() ?: return
         val command = kotlinx.serialization.json.JsonObject(
             linkedMapOf(
                 "op" to kotlinx.serialization.json.JsonPrimitive("structure"),
@@ -1578,7 +1638,7 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     private fun recordStructure(edit: kotlinx.serialization.json.JsonObject) {
-        val expected = _state.value.historySnapshot?.headNodeId ?: return
+        val expected = currentWorkspaceState() ?: return
         val command = kotlinx.serialization.json.JsonObject(
             linkedMapOf(
                 "op" to kotlinx.serialization.json.JsonPrimitive("structure"),
@@ -1602,27 +1662,29 @@ class PSD2LiveViewModel : AutoCloseable {
 		onComplete: (String?) -> Unit,
 	) {
         flushEditorFields()
-        val expected = expectedState ?: _state.value.historySnapshot?.headNodeId
+        val expected = expectedState ?: currentWorkspaceState()
         if (expected == null) { onComplete("Project workspace unavailable"); return }
-        val fields = kotlinx.serialization.json.buildJsonObject {
-            if (action == "create") {
-				put("parameter_kind", kotlinx.serialization.json.JsonPrimitive(parameterKind.name))
-				if (parentGroupId != null) {
-					put("parent_id", kotlinx.serialization.json.JsonPrimitive(parentGroupId))
-				}
-			}
-            if (action != "delete") {
-                put("name", kotlinx.serialization.json.JsonPrimitive(name))
-                put("min", kotlinx.serialization.json.JsonPrimitive(min))
-                put("default", kotlinx.serialization.json.JsonPrimitive(default))
-                put("max", kotlinx.serialization.json.JsonPrimitive(max))
-            }
+        require(action in setOf("create", "update", "delete")) { "Unknown parameter action: $action" }
+        val definition = io.github.psd2live.application.WorkspaceDocumentOperation("parameter_$action",
+            kotlinx.serialization.json.buildJsonObject {
+                put("parameter_id", id)
+                if (action != "delete") {
+                    put("name", name); put("min", min); put("default", default); put("max", max)
+                    put("kind", parameterKind.name)
+                }
+            })
+        val trailing = if (action == "delete") emptyList() else buildList {
+            if (action == "create" && parentGroupId != null) add(kotlinx.serialization.json.buildJsonObject {
+                put("op", "structure")
+                put("edits", kotlinx.serialization.json.JsonArray(listOf(structureEdit("move", "parameter", id,
+                    kotlinx.serialization.json.buildJsonObject { put("parent_id", parentGroupId) }))))
+            })
+            addAll(keyEdits)
         }
-        val command = kotlinx.serialization.json.buildJsonObject {
-            put("op", kotlinx.serialization.json.JsonPrimitive("structure"))
-            put("edits", kotlinx.serialization.json.JsonArray(listOf(structureEdit(action, "parameter", id, fields))))
-        }
-        saveAuthoringEdits(expected, kotlinx.serialization.json.JsonArray(listOf(command) + if (action == "delete") emptyList() else keyEdits), onComplete)
+        val edits = listOf(definition) + if (trailing.isEmpty()) emptyList() else listOf(
+            io.github.psd2live.application.WorkspaceDocumentOperation("keyform_apply",
+                kotlinx.serialization.json.buildJsonObject { put("changes", kotlinx.serialization.json.JsonArray(trailing)) }))
+        saveDocumentEdits(expected, "${action.replaceFirstChar(Char::uppercase)} parameter $id", edits, onComplete)
     }
 
     /** Creates a parameter-panel folder (CMO3 CParameterGroup) at the panel root or under [parentGroupId]. */
@@ -1715,8 +1777,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 	internal val pipeline = PSD2LivePipeline()
 	private val preferences by lazy { Preferences.userNodeForPackage(PSD2LiveViewModel::class.java) }
-	private var agentWorkspace: AgentWorkspace? = null
-    private val projectSession = io.github.psd2live.project.ProjectSession(this)
+	private var workspaceBackend: WorkspaceBackend? = null
     private var pendingDestructiveAction: (() -> Unit)? = null
     var confirmUnsavedChanges: (() -> Int)? = null
     private var queuedCanvasSave: Boolean? = null
@@ -1755,40 +1816,141 @@ class PSD2LiveViewModel : AutoCloseable {
             } catch (_: Exception) { pendingDestructiveAction = null }
         }
     }
-    internal suspend fun saveProjectNow(path: Path? = null, actor: String = "user"): String {
-        val target = path ?: _state.value.projectFile?.let(Path::of) ?: error("Choose a project save location in the application first")
-        val workspace = agentWorkspace as? io.github.psd2live.agent.ViewModelAgentWorkspace ?: error("Project workspace unavailable")
-        return projectSession.save(workspace, target, actor)
+    internal suspend fun saveProjectNow(path: Path? = null): String =
+        executeUserProject({ it.saveProjectAt(path?.toAbsolutePath()?.normalize()) }).historyNodeId
+
+    private suspend fun executeUserProject(
+        action: suspend (io.github.psd2live.application.WorkspaceProjectLifecycle) -> WorkspaceMutationResult,
+        discardRejectedDraft: Boolean = false,
+    ): WorkspaceMutationResult {
+        val workspace = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+        try { workspace.awaitEditorDrafts() }
+        catch (failure: Exception) {
+            if (failure is kotlinx.coroutines.CancellationException || !discardRejectedDraft) throw failure
+        }
+        val expected = workspace.snapshot()
+        return withContext(io.github.psd2live.application.WorkspaceExecution(
+            expected.projectId, expected.state, MutationAuthor.USER)) { action(workspace) }
     }
+    internal suspend fun openProjectNow(path: Path, discardUnsaved: Boolean = false) =
+        executeUserProject({ it.openProjectAt(path.toAbsolutePath().normalize(), discardUnsaved) },
+            discardRejectedDraft = discardUnsaved)
+
     fun openProject(path: Path) = withSavedChanges {
         scope.launch {
             try {
-                val workspace = agentWorkspace as? io.github.psd2live.agent.ViewModelAgentWorkspace ?: error("Project workspace unavailable")
-                projectSession.open(workspace, path)
+                openProjectNow(path, discardUnsaved = true)
             } catch (failure: Exception) { updateState { it.copy(errorMessage = failure.message) } }
         }
     }
-    internal fun installProjectState(state: PSD2LiveState) {
+    internal fun installProjectState(state: PSD2LiveState, expected: PSD2LiveState? = null, dirty: Boolean = false,
+                                     cancelActiveWork: Boolean = true) = synchronized(stateLock) {
+        expected?.let { prior ->
+            val current = _state.value
+            require(current.projectId == prior.projectId && current.projectOpenGeneration == prior.projectOpenGeneration &&
+                current.projectEditVersion == prior.projectEditVersion) { "Workspace changed while loading project" }
+        }
         previewRebuildJob?.cancel()
-        activeWorkJob?.cancel()
+        if (cancelActiveWork) activeWorkJob?.cancel()
         resetCanvasPaintSessions()
         state.projectFile?.let(AppSettings::rememberRecentFile)
         replaceState(state.copy(
-            projectDirty = false,
+            projectDirty = dirty,
             projectOpenGeneration = _state.value.projectOpenGeneration + 1,
             recentFiles = AppSettings.recentFiles(),
         ))
     }
+    internal fun applySourceImport(expected: PSD2LiveState, document: io.github.psd2live.project.WorkspaceDocument,
+                                   preview: RigPreviewModel, path: Path?, projectId: String) {
+        val recognized = preview.analysis.layers.count { it.semantic.tag != SemanticTag.UNKNOWN }
+        val status = tr("status.analysisSummary", preview.analysis.source.widthPx, preview.analysis.source.heightPx,
+            preview.analysis.layers.size, recognized)
+        applyImportedSource(expected, document, preview, path, path?.fileName?.toString() ?: "Generated artwork", projectId, false, status)
+        if (path != null) updateState { it.withLogs(listOf(tr("log.analysis", preview.analysis.layers.size,
+            preview.analysis.anchors.character.width.toInt(), preview.analysis.anchors.character.height.toInt())) +
+            preview.analysis.warnings.map { warning -> tr("log.warning", warning) }, level = LogLevel.INFO, tag = "Analysis") }
+    }
+
+    internal fun applyCmo3Import(expected: PSD2LiveState, document: io.github.psd2live.project.WorkspaceDocument,
+                               preview: RigPreviewModel, path: Path, projectId: String, replacing: Boolean) =
+        applyImportedSource(expected, document, preview, path, path.fileName.toString(), projectId, replacing,
+            tr("cmo3.imported", path.fileName.toString()))
+
+    /** Domain reading, generation and history belong to the application; the GUI only projects a prepared import. */
+    private fun applyImportedSource(expected: PSD2LiveState, document: io.github.psd2live.project.WorkspaceDocument,
+                                    preview: RigPreviewModel, path: Path?, sourceName: String, projectId: String,
+                                    replacing: Boolean, status: String) = synchronized(stateLock) {
+        val current = _state.value
+        check(current.projectId == expected.projectId && current.projectOpenGeneration == expected.projectOpenGeneration &&
+            current.projectEditVersion == expected.projectEditVersion) { "Workspace changed while importing model" }
+        val defaults = preview.rig.puppet.parameters.associate { it.id to it.default }
+        val workspaces = current.workspaces.map { workspace ->
+            val pose = WorkspacePose(parameterValues = defaults,
+                authoringPose = replacing && workspace.pose?.authoringPose == true,
+                mouseTrackingEnabled = if (replacing) workspace.pose?.mouseTrackingEnabled ?: current.mouseTrackingEnabled else true)
+            val canvases = workspace.canvases.map { canvas ->
+                fun reset(session: CanvasModeSession) = session.copy(
+                    camera = if (replacing) session.camera else TabCamera(),
+                    presentation = if (replacing) session.presentation.copy(selectedLayerId = null, selectedLayerIds = emptySet(),
+                        selectedDeformerId = null, hoveredLayerId = null, hoveredDeformerId = null,
+                        isolatedLayerId = null, isolationSnapshot = null) else CanvasPresentation())
+                canvas.copy(editSession = reset(canvas.editSession), previewSession = reset(canvas.previewSession))
+            }
+            workspace.copy(canvases = canvases).withPose(pose)
+        }
+        val next = WorkspaceStateCodec.decode(document.settings, current).copy(
+            workspaces = workspaces, mouseTrackingEnabled = if (replacing) current.mouseTrackingEnabled else true,
+            projectId = projectId, projectSourceName = if (replacing) current.projectSourceName else sourceName,
+            projectFile = if (replacing) current.projectFile else null,
+            inputPath = if (replacing) current.inputPath else path?.toString().orEmpty(),
+            loadedInputPath = if (replacing) current.loadedInputPath else path?.toString(),
+            loadedInputFileSignature = if (replacing) current.loadedInputFileSignature else null,
+            analysis = preview.analysis, previewModel = preview, previewModelDirty = false,
+            rigEdits = document.rigEdits, generationSource = document.generationSource,
+            meshSource = document.meshSource,
+            placementSource = document.placementSource,
+            layerOverrides = document.layerOverrides, layerVisibility = document.layerVisibility,
+            deletedLayerIds = document.deletedLayerIds, parentOverrides = document.parentOverrides, meshOverrides = document.meshOverrides,
+            deformerVisibility = if (replacing) current.deformerVisibility else emptyMap(),
+            selectedLayerId = null, selectedLayerIds = emptySet(), selectedDeformerId = null,
+            hoveredLayerId = null, hoveredDeformerId = null, isolatedLayerId = null, isolationSnapshot = null, clipMaskPickSourceId = null,
+            parameterValues = preview.rig.puppet.parameters.associate { it.id to it.default },
+            previewParameterValues = emptyMap(), lockedParameters = emptySet(),
+            parameterSnapshots = if (replacing) current.parameterSnapshots else emptyList(),
+            animationEnabled = false, simulationPreviewId = null,
+            historySnapshot = if (replacing) current.historySnapshot else null,
+            historyAnnotations = if (replacing) current.historyAnnotations else emptyMap(),
+            projectDirty = true, projectEditVersion = current.projectEditVersion + 1,
+            showProjectLocationDialog = false, statusText = status, errorMessage = null,
+        )
+        if (replacing) {
+            previewRebuildJob?.cancel()
+            resetCanvasPaintSessions()
+            replaceState(next)
+        } else installProjectState(next, current, dirty = true, cancelActiveWork = false)
+    }
     private val pendingProjectSaves = java.util.concurrent.atomic.AtomicInteger()
     internal fun projectSaveStarted() { pendingProjectSaves.incrementAndGet(); updateState { it.copy(projectSaving = true, projectSaveError = null) } }
-    internal fun projectSaveFailed(failure: Exception) { val saving = pendingProjectSaves.decrementAndGet() > 0; updateState { it.copy(projectSaving = saving, projectDirty = true, projectSaveError = failure.message ?: "Save failed") } }
+    internal fun projectSaveFailed(failure: Exception, captured: PSD2LiveState) {
+        val saving = pendingProjectSaves.decrementAndGet() > 0
+        updateState { current ->
+            if (current.projectId != captured.projectId || current.projectOpenGeneration != captured.projectOpenGeneration) {
+                current.copy(projectSaving = saving)
+            } else current.copy(projectSaving = saving, projectDirty = true, projectSaveError = failure.message ?: "Save failed")
+        }
+    }
     internal fun projectSaveFinished(path: Path, headId: String, captured: PSD2LiveState) {
         val saving = pendingProjectSaves.decrementAndGet() > 0
         val saved = path.toAbsolutePath().normalize().toString()
         AppSettings.rememberRecentFile(saved)
-        updateState { current -> current.copy(projectFile = saved, projectSaving = saving,
-            projectDirty = current.historySnapshot?.headNodeId != headId || current.projectAuxiliaryVersion != captured.projectAuxiliaryVersion || io.github.psd2live.project.WorkspaceStateCodec.editableIdentity(current) != io.github.psd2live.project.WorkspaceStateCodec.editableIdentity(captured),
-            projectSaveError = null, recentFiles = AppSettings.recentFiles()) }
+        updateState { current ->
+            if (current.projectId != captured.projectId || current.projectOpenGeneration != captured.projectOpenGeneration) {
+                return@updateState current.copy(projectSaving = saving, recentFiles = AppSettings.recentFiles())
+            }
+            current.copy(projectFile = saved, projectSaving = saving,
+            projectDirty = current.historySnapshot?.headNodeId != headId || current.projectAuxiliaryVersion != captured.projectAuxiliaryVersion || io.github.psd2live.ui.state.WorkspaceStateCodec.editableIdentity(current) != io.github.psd2live.ui.state.WorkspaceStateCodec.editableIdentity(captured),
+            projectSaveError = null, recentFiles = AppSettings.recentFiles())
+        }
     }
     internal fun markProjectAuxiliaryChanged() { updateState { it.copy(projectDirty = true, projectEditVersion = it.projectEditVersion + 1, projectAuxiliaryVersion = it.projectAuxiliaryVersion + 1) } }
     private fun markWorkspaceChanged() { updateState { if (it.analysis == null) it else it.copy(projectDirty = true, projectEditVersion = it.projectEditVersion + 1) } }
@@ -1797,15 +1959,25 @@ class PSD2LiveViewModel : AutoCloseable {
      * per keystroke. See [EditorFieldSessions].
      */
     private val editorSessions = EditorFieldSessions { commitEditorChange() }
+    private var editorDraftExpected: io.github.psd2live.project.WorkspaceProjectSnapshot? = null
+    private var editorDraftCount = 0
 
-    fun beginEditorGesture() = editorSessions.begin(SLIDER_SESSION)
+    private fun beginEditorSession(token: String) {
+        if (!editorSessions.anyOpen) editorDraftExpected = workspaceBackend?.snapshot()
+        editorSessions.begin(token)
+    }
+
+    fun beginEditorGesture() = beginEditorSession(SLIDER_SESSION)
     fun endEditorGesture() = editorSessions.end(SLIDER_SESSION)
 
 	/** Preview scrubs carry only changed values until release, like pointer tracking. */
 	private data class ParameterScrub(
 		val generation: Long,
 		val workspaceId: String,
+		val expectedState: String,
 		val overrides: Map<ParameterId, Float> = emptyMap(),
+		val autoKey: kotlinx.serialization.json.JsonObject? = null,
+		val poseTarget: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
 	)
 
 	@Volatile private var parameterScrub: ParameterScrub? = null
@@ -1816,12 +1988,16 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun parameterScrubValueOf(id: ParameterId): Float? = parameterScrubValues[id]
 
 	fun beginParameterScrub() {
-		editorSessions.begin(SLIDER_SESSION)
+		beginEditorSession(SLIDER_SESSION)
 		val current = _state.value
-		if (!current.previewLive || current.previewModel == null || current.sdkStatus != "ready") return
+		if (current.previewModel == null) return
 		if (parameterScrub != null) return
 		motionEditor.playing = false
-		motionPlayer.stop()
+		if (processActiveMotion != null) {
+			processActiveMotion = null
+			configurePlayback("stop_motion")
+		}
+		configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", false) })
 		// One state change pauses motion. Slider samples after this never rebuild the edit canvas.
 		val suppressPreviewEffects = current.activeCanvas.mode == CanvasMode.EDIT
 		if (current.animationEnabled || current.previewParameterValues.isNotEmpty() ||
@@ -1830,7 +2006,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				.authoringPose(suppressPreviewEffects) }
 		}
 		val started = _state.value
-		parameterScrub = ParameterScrub(started.projectOpenGeneration, started.activeWorkspace.id)
+		parameterScrub = ParameterScrub(started.projectOpenGeneration, started.activeWorkspace.id, currentWorkspaceState() ?: return, autoKey = currentAutoKey())
 		parameterScrubActive = true
 	}
 
@@ -1839,19 +2015,46 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorSessions.end(SLIDER_SESSION)
 	}
 
-	private fun commitParameterScrub() {
+	fun endIkTargetScrub(id: String, target: io.github.psd2live.core.SkeletonIkTarget?) {
+		commitParameterScrub(kotlinx.serialization.json.buildJsonObject { put("ik_target", ikTargetRequest(id, target)) })
+		editorSessions.end(SLIDER_SESSION)
+	}
+	fun cancelParameterScrub() {
+		parameterScrub = null; parameterScrubValues.clear(); parameterScrubActive = false
+		editorSessions.end(SLIDER_SESSION)
+	}
+	private fun ikTargetRequest(id: String, target: io.github.psd2live.core.SkeletonIkTarget?) = kotlinx.serialization.json.buildJsonObject {
+		put("bone_id", id)
+		put("point", target?.let { kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(it.x), kotlinx.serialization.json.JsonPrimitive(it.y))) } ?: kotlinx.serialization.json.JsonNull)
+		target?.let { put("enabled", it.enabled) }
+	}
+	internal fun editIkTarget(id: String, target: io.github.psd2live.core.SkeletonIkTarget?) {
+		submitParameterValues(emptyMap(), currentWorkspaceState() ?: return,
+			kotlinx.serialization.json.buildJsonObject { put("ik_target", ikTargetRequest(id, target)) })
+	}
+	internal fun editBoneIk(id: String, settings: io.github.psd2live.core.SkeletonIkSettings) {
+		submitParameterValues(emptyMap(), currentWorkspaceState() ?: return,
+			kotlinx.serialization.json.buildJsonObject { putJsonObject("bone_ik") { put("bone_id", id); put("settings", settings.toJson()) } })
+	}
+	internal fun poseGestureTarget(id: String, x: Float, y: Float, ik: Boolean) {
+		parameterScrub = parameterScrub?.copy(poseTarget = kotlinx.serialization.json.buildJsonObject {
+			put("bone_id", id); put("target", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(x), kotlinx.serialization.json.JsonPrimitive(y)))); put("ik", ik)
+		})
+	}
+
+	private fun commitParameterScrub(extras: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())) {
 		val scrub = parameterScrub ?: return
 		parameterScrub = null
 		val current = _state.value
-		if (current.projectOpenGeneration == scrub.generation && current.activeWorkspace.id == scrub.workspaceId && scrub.overrides.isNotEmpty()) {
-			setParameterValues(scrub.overrides)
+		if (current.projectOpenGeneration == scrub.generation && current.activeWorkspace.id == scrub.workspaceId && (scrub.overrides.isNotEmpty() || scrub.poseTarget.isNotEmpty() || extras.isNotEmpty())) {
+			submitParameterValues(scrub.overrides, scrub.expectedState, kotlinx.serialization.json.JsonObject(scrub.poseTarget + extras), scrub.autoKey)
 		}
 		parameterScrubValues.clear()
 		parameterScrubActive = false
 	}
 
     /** Brackets one text/number field's editing session; [token] has to match the paired `end`. */
-    fun beginEditorField(token: String) = editorSessions.begin(token)
+    fun beginEditorField(token: String) = beginEditorSession(token)
 
     /**
      * Ends a field session and records whatever it was holding.
@@ -1866,6 +2069,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     /** Closes every open field session so a save or a window close sees the value just typed. */
     fun flushEditorFields() {
+		warpControlFields.keys.toList().forEach(::endWarpControlField)
 		commitParameterScrub()
 		editorSessions.flush()
 	}
@@ -1875,13 +2079,68 @@ class PSD2LiveViewModel : AutoCloseable {
         commitEditorChange(summary)
     }
 
-    private fun commitEditorChange(summary: String? = null) {
-        if (_state.value.analysis == null) return
-        (agentWorkspace as? io.github.psd2live.agent.ViewModelAgentWorkspace)?.editorChanged(summary)
+    private fun commitEditorChange(summary: String? = null): kotlinx.coroutines.Deferred<WorkspaceMutationResult>? {
+        val expected = editorDraftExpected ?: workspaceBackend?.snapshot()
+        editorDraftExpected = null
+        val workspace: io.github.psd2live.application.WorkspaceEditorDraftPort = workspaceBackend ?: return null
+        val current = _state.value
+        if (current.analysis == null || expected?.loaded != true || expected.projectId == null) return null
+        val document = WorkspaceStateCodec.document(current)
+        if (!current.editorDraftBusy && io.github.psd2live.project.WorkspaceRevisions.of(document) == expected.revisionId) return null
+        markWorkspaceChanged()
+        val result = workspace.submitEditorDraft(expected.projectId, expected.state, document,
+            summary ?: "Workspace changed in the editor", MutationAuthor.USER)
+        synchronized(stateLock) {
+            editorDraftCount++
+            updateState { it.copy(editorDraftBusy = true) }
+        }
+        scope.launch {
+            try { result.await() }
+            catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                updateState { state ->
+                    if (state.projectId != current.projectId || state.projectOpenGeneration != current.projectOpenGeneration) state
+                    else state.copy(errorMessage = failure.message ?: "Could not save editor changes")
+                }
+            } finally {
+                synchronized(stateLock) {
+                    editorDraftCount--
+                    updateState { it.copy(editorDraftBusy = editorDraftCount > 0) }
+                }
+            }
+        }
+        return result
     }
+    internal fun installSavedProjectData(expected: PSD2LiveState, before: io.github.psd2live.project.WorkspaceAuxiliaryData,
+                                          next: io.github.psd2live.project.WorkspaceAuxiliaryData) = synchronized(stateLock) {
+        val current = _state.value
+        check(current.projectId == expected.projectId && current.projectOpenGeneration == expected.projectOpenGeneration &&
+            current.parameterSnapshots == before.parameterSnapshots && current.historyAnnotations == before.historyAnnotations) {
+            "Saved project data changed while the operation was being prepared"
+        }
+        updateState { it.copy(parameterSnapshots = next.parameterSnapshots, historyAnnotations = next.historyAnnotations,
+            projectDirty = it.projectDirty || it.analysis != null, projectEditVersion = it.projectEditVersion + 1,
+            projectAuxiliaryVersion = it.projectAuxiliaryVersion + 1) }
+    }
+
+    private fun editSavedProjectData(edit: io.github.psd2live.application.WorkspaceAuxiliaryEdit) {
+        val workspace = workspaceBackend as? io.github.psd2live.application.WorkspaceAuxiliaryPort
+        if (workspace != null) {
+            workspace.editSavedProjectData(workspace.savedProjectData().state, edit)
+            return
+        }
+        updateState { current ->
+            val before = io.github.psd2live.project.WorkspaceAuxiliaryData(current.parameterSnapshots, current.historyAnnotations)
+            val next = io.github.psd2live.application.WorkspaceAuxiliaryEdits.apply(before, edit,
+                current.previewModel?.rig?.puppet?.parameters.orEmpty(), current.historySnapshot?.nodes.orEmpty().mapTo(HashSet()) { it.id })
+            if (next == before) current else current.copy(parameterSnapshots = next.parameterSnapshots,
+                historyAnnotations = next.historyAnnotations, projectDirty = current.projectDirty || current.analysis != null,
+                projectEditVersion = current.projectEditVersion + 1, projectAuxiliaryVersion = current.projectAuxiliaryVersion + 1)
+        }
+    }
+
     fun editHistoryAnnotation(id: String, title: String, note: String, hidden: Boolean) {
-        require(_state.value.historySnapshot?.nodes?.any { it.id == id } == true)
-        updateState { it.copy(historyAnnotations = it.historyAnnotations + (id to HistoryAnnotation(title.trim(), note, hidden)), projectDirty = true, projectEditVersion = it.projectEditVersion + 1) }
+        editSavedProjectData(io.github.psd2live.application.WorkspaceAuxiliaryEdit.PutAnnotation(id, HistoryAnnotation(title, note, hidden)))
     }
     fun undoHistory() {
         if (_state.value.canvasEditBusy) return
@@ -1972,8 +2231,9 @@ class PSD2LiveViewModel : AutoCloseable {
         }
     }
 
-	fun attachAgentWorkspace(workspace: AgentWorkspace) {
-		agentWorkspace = workspace
+	fun attachWorkspace(workspace: WorkspaceBackend) {
+		workspaceBackend = workspace
+        (workspace as? DesktopWorkspace)?.attachCurrentWorkspace()
 		runCatching {
 			val snapshot = workspace.history()
 			updateState { it.copy(historySnapshot = snapshot, projectDirty = it.projectDirty || (it.historySnapshot != null && it.historySnapshot.headNodeId != snapshot.headNodeId), projectEditVersion = it.projectEditVersion + if (it.historySnapshot?.headNodeId != snapshot.headNodeId) 1 else 0) }
@@ -2026,7 +2286,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	private val previewMeshSettingsOverrides = mutableMapOf<String, MeshSettings>()
 	private var previewMeshSettingsBaseline: RigPreviewModel? = null
 	private var motionJob: Job? = null
-	private val motionPlayer = PreviewMotionPlayer()
+	private var processActiveMotion: String? by mutableStateOf(null)
+	private var processFrameValues: Map<ParameterId, Float> = emptyMap()
+	private var processPlaybackActive = false
 	/** Shared by the animation panel and the animation editor. Initialized before [startMotionLoop]. */
 	internal val motionEditor = MotionEditorState()
 	private var activeWorkJob: Job? = null
@@ -2036,14 +2298,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	private var pointerActive = false
 	private var pointerX = 0f
 	private var pointerY = 0f
-	private var followX = 0f
-	private var followY = 0f
-	/** Where the body is turned toward: the head's target reached more slowly, so the head leads and the body follows. */
-	private var bodyFollowX = 0f
-	private var bodyFollowY = 0f
-	/** The exported physics, run on the software preview so it moves as Cubism would before the SDK is up. */
-	private val softwarePhysics = SoftwarePhysics()
-	private var elapsed = 0.0
 	private var lastTick = System.nanoTime()
 	private var lastSdkParameterPublishNanos = 0L
 	private var lastSdkParameterCanvasId: String? = null
@@ -2225,6 +2479,17 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** Applies the global mesh defaults in one rebuild (panel “no selection” mode). */
 	fun setGlobalMeshSettings(settings: MeshSettings) {
+        workspaceBackend?.takeUnless { editorSessions.anyOpen }?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+            runWorkspaceCommand { state -> port.updateProjectSettings(state, kotlinx.serialization.json.buildJsonObject {
+                put("meshOuterMargin", settings.outerMargin.coerceIn(0f, 32f)); put("meshEdgeMode", settings.edgeMode.name)
+                put("meshEdgeWidth", settings.edgeWidth.coerceIn(0.5f, 32f)); put("meshMaxEdgeDistance", settings.maxEdgeDistance.coerceIn(6f, 128f))
+                put("meshSpacing", settings.maxEdgeDistance.toInt().coerceIn(16, 128)); put("meshInteriorDensity", settings.interiorDensity.coerceIn(6f, 128f))
+                put("meshFillAlgorithm", settings.fillAlgorithm.name); put("meshSuppressBoundaryDiagonals", settings.suppressBoundaryDiagonals)
+                put("meshFillParameters", io.github.psd2live.project.WorkspaceSettingsCodec.encodeFillParameters(settings.fillParameters))
+            }) }
+            return
+        }
 		updateState {
 			it.copy(
 				meshOuterMargin = settings.outerMargin.coerceIn(0f, 32f),
@@ -2244,6 +2509,11 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun setPartMeshSettings(layerId: String, settings: MeshSettings) {
 		clearMeshSettingsPreviewState(layerId)
+        workspaceBackend?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+            runWorkspaceCommand { state -> port.setLayerMeshSettings(state, layerId, meshSettingFields(settings), false) }
+            return
+        }
 		updateState { it.copy(meshOverrides = it.meshOverrides + (layerId to settings)) }
 		schedulePreviewRebuild()
 	    editorChanged()
@@ -2251,6 +2521,11 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun resetPartMeshSettings(layerId: String) {
 		clearMeshSettingsPreviewState(layerId)
+        workspaceBackend?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+            runWorkspaceCommand(after = { offerMeshSplit(listOf(layerId)) }) { state -> port.setLayerMeshSettings(state, layerId, null, true) }
+            return
+        }
 		updateState { it.copy(meshOverrides = it.meshOverrides - layerId) }
 		schedulePreviewRebuild()
 	    editorChanged()
@@ -2297,6 +2572,14 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun confirmPartMeshSettingsPreview(layerId: String, settings: MeshSettings) {
+        workspaceBackend?.let { workspace ->
+            cancelPartMeshSettingsPreview(layerId)
+            val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+            runWorkspaceCommand(after = { offerMeshSplit(listOf(layerId)) }) { state ->
+                port.setLayerMeshSettings(state, layerId, meshSettingFields(settings), false)
+            }
+            return
+        }
 		val currentPreview = _state.value.previewModel
 		val previewIsReady = synchronized(stateLock) {
 			val ready = previewMeshSettingsOverrides[layerId] == settings &&
@@ -2402,12 +2685,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			} else updated
 		}
 		if (enabled) {
-			softwarePhysics.reset()
-			followX = 0f
-			bodyFollowX = 0f
-			followY = 0f
-			bodyFollowY = 0f
-			motionPlayer.stop()
+			resetPreviewPhysics()
+			stopProcessMotion()
 		}
 		schedulePreviewRebuild()
 	    editorChanged()
@@ -2442,10 +2721,6 @@ class PSD2LiveViewModel : AutoCloseable {
 			current.copy(motionBasic = false, parameterValues = current.parameterValues + rest)
 		}
 		if (!enabled) {
-			followX = 0f
-			bodyFollowX = 0f
-			followY = 0f
-			bodyFollowY = 0f
 			closePresetGroupMotion(skeleton = false)
 		}
 		scheduleRuntimeBundleUpdate()
@@ -2456,7 +2731,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	private fun closePresetGroupMotion(skeleton: Boolean) {
 		val names = MotionClips.BUILTIN_NAMES.filter { MotionClips.isSkeletonPreset(it) == skeleton }
 		if (names.any { motionEditor.clipId == MotionEditorState.presetClipId(it) }) closeMotionEditorClip()
-		if (names.any { it.equals(motionPlayer.activeName, ignoreCase = true) }) motionPlayer.stop()
+		if (names.any { it.equals(processActiveMotion, ignoreCase = true) }) stopProcessMotion()
 	}
 
 	fun setMotionIdle(enabled: Boolean) {
@@ -2479,10 +2754,6 @@ class PSD2LiveViewModel : AutoCloseable {
 			} else updated
 		}
 		if (!enabled) {
-			followX = 0f
-			bodyFollowX = 0f
-			followY = 0f
-			bodyFollowY = 0f
 		}
 		scheduleRuntimeBundleUpdate()
 	    editorChanged()
@@ -2508,7 +2779,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { current ->
 			val next = current.copy(motionNod = enabled)
 			val updated = next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
-			if (!enabled && motionPlayer.activeName == "nod") {
+			if (!enabled && processActiveMotion == "nod") {
 				val nodReset = mapOf(
 					StandardParameters.ANGLE_Y to 0f,
 					StandardParameters.BODY_Y to 0f,
@@ -2516,7 +2787,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				updated.copy(parameterValues = updated.parameterValues + nodReset)
 			} else updated
 		}
-		if (!enabled) motionPlayer.stop("nod")
+		if (!enabled) stopProcessMotion("nod")
 		scheduleRuntimeBundleUpdate()
 		if (enabled) triggerMotion("Nod")
 	    editorChanged()
@@ -2526,7 +2797,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { current ->
 			val next = current.copy(motionShake = enabled)
 			val updated = next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
-			if (!enabled && motionPlayer.activeName == "shake") {
+			if (!enabled && processActiveMotion == "shake") {
 				val shakeReset = mapOf(
 					StandardParameters.ANGLE_X to 0f,
 					StandardParameters.BODY_X to 0f,
@@ -2535,7 +2806,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				updated.copy(parameterValues = updated.parameterValues + shakeReset)
 			} else updated
 		}
-		if (!enabled) motionPlayer.stop("shake")
+		if (!enabled) stopProcessMotion("shake")
 		scheduleRuntimeBundleUpdate()
 		if (enabled) triggerMotion("Shake")
 	    editorChanged()
@@ -2556,7 +2827,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			val updated = current.copy(generatePhysics = enabled)
 			if (!enabled) updated.copy(parameterValues = updated.parameterValues + physicsRestValues(current, current.rigEdits)) else updated
 		}
-		if (!enabled) softwarePhysics.reset()
+		if (!enabled) resetPreviewPhysics()
 		scheduleRuntimeBundleUpdate()
 	    editorChanged()
 	}
@@ -2566,16 +2837,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun setPhysicsEyeJelly(enabled: Boolean) = setPresetPhysics(PhysicsGenerator.EYE_JELLY_ID, enabled)
 
 	private fun setPresetPhysics(id: String, enabled: Boolean) {
-		updateState { current ->
-			val next = when (id) {
-				PhysicsGenerator.FRONT_HAIR_ID -> current.copy(physicsFrontHair = enabled)
-				PhysicsGenerator.BACK_HAIR_ID -> current.copy(physicsBackHair = enabled)
-				else -> current.copy(physicsEyeJelly = enabled)
-			}
-			if (enabled) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
-		}
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Enabled(id, enabled))
 	}
 
 	// region Physics groups
@@ -2599,99 +2861,85 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** Makes [edit] the version of its group; a slider drag inside a gesture commits once. */
 	fun putPhysicsGroup(edit: RigPhysicsEdit) {
-		val generated = physicsGroups().firstOrNull { it.id == edit.id }?.generated
-		val overlay = runCatching { PhysicsAuthoring.put(_state.value.rigEdits, edit, generated) }
-			.getOrElse { failure -> addLog(failure.message ?: "Physics edit failed", level = LogLevel.WARNING, tag = "Physics"); return }
-		updateState { it.copy(rigEdits = overlay) }
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Put(edit))
 	}
 
 	fun setPhysicsGroupEnabled(id: String, enabled: Boolean) {
-		if (physicsGroups().firstOrNull { it.id == id }?.origin == io.github.psd2live.core.PhysicsOrigin.PRESET) return setPresetPhysics(id, enabled)
-		updateState { current ->
-			val next = current.copy(rigEdits = PhysicsAuthoring.setEnabled(current.rigEdits, id, enabled))
-			if (enabled) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
-		}
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Enabled(id, enabled))
 	}
 
 	/** Deletes a user group, or returns a replaced generated one to its generated values. */
 	fun removePhysicsGroup(id: String) {
-		val group = physicsGroups().firstOrNull { it.id == id } ?: return
 		if (_state.value.rigEdits.physicsEdits.none { it.id == id }) return
-		updateState { current ->
-			val next = current.copy(rigEdits = PhysicsAuthoring.remove(current.rigEdits, id, group.generated != null))
-			if (group.generated != null) next else next.copy(parameterValues = next.parameterValues + physicsRestValues(current, current.rigEdits, setOf(id)))
-		}
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Delete(id))
 	}
 
 	/** Adds a new pendulum, a copy of [from] without its outputs when given, and returns its ID. */
-	fun createPhysicsGroup(from: RigPhysicsEdit? = null): String? {
-		val state = _state.value
-		val puppet = state.previewModel?.rig?.puppet ?: return null
-		val groups = physicsGroups(state)
-		val id = PhysicsAuthoring.freshId(groups, state.rigEdits)
-		val names = groups.mapTo(HashSet()) { it.setting.name }
-		fun unique(base: String) = generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base $it" }.first { it !in names }
-		val edit = from?.copy(id = id, name = unique(tr("physics.copyName", from.name)), outputs = emptyList())
-			?: PhysicsAuthoring.template(id, unique(tr("physics.newName")), puppet.parameters.mapTo(HashSet()) { it.id.raw })
-		updateState { it.copy(rigEdits = it.rigEdits.copy(physicsEdits = it.rigEdits.physicsEdits + edit)) }
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
-		return id
+	fun createPhysicsGroup(from: RigPhysicsEdit? = null, onCreated: (String) -> Unit = {}) {
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Create(
+			from?.let { tr("physics.copyName", it.name) } ?: tr("physics.newName"), from?.id), onCreated)
 	}
 
 	/** Moves [id] [by] places in the evaluation order. */
-	fun movePhysicsGroup(id: String, by: Int) = changePhysicsOverlay { PhysicsAuthoring.move(it, physicsGroups(), id, by) }
+	fun movePhysicsGroup(id: String, by: Int) = submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Move(id, by))
 
 	/** The project's one frame rate, [RigEditOverlay.UNLIMITED_FPS] for the display's: preview, parameters and physics. */
-	fun setProjectFps(fps: Int) = changePhysicsOverlay { PhysicsAuthoring.setFps(it, fps) }
+	fun setProjectFps(fps: Int) = submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Fps(fps))
 
 	/** Sets each output's scale so the swing measured in [peaks] just reaches its parameter's end. */
 	fun fitPhysicsScales(id: String, peaks: Map<Int, Float>) {
-		val setting = physicsGroups().firstOrNull { it.id == id }?.setting ?: return
-		putPhysicsGroup(PhysicsAuthoring.fitScales(setting, peaks))
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.FitObserved(id, peaks.toMap()))
 	}
 
 	fun applyPhysicsPreset(id: String, preset: io.github.psd2live.core.PhysicsPresets.Preset) {
-		val state = _state.value
-		val setting = physicsGroups(state).firstOrNull { it.id == id }?.setting ?: return
-		val available = state.previewModel?.rig?.puppet?.parameters?.mapTo(HashSet()) { it.id.raw } ?: return
-		putPhysicsGroup(io.github.psd2live.core.PhysicsPresets.apply(preset, setting, available))
+		submitPhysicsIntent(io.github.psd2live.application.WorkspacePhysicsIntent.Preset(id, preset))
 	}
 
 	/** Imports a physics3.json's groups as user groups and returns the first one's ID. */
-	fun importPhysics(path: String): String? {
-		val state = _state.value
-		val available = state.previewModel?.rig?.puppet?.parameters?.mapTo(HashSet()) { it.id.raw } ?: return null
-		val imported = runCatching {
-			PhysicsAuthoring.import(state.rigEdits, physicsGroups(state), java.io.File(path).readText(), available)
-		}.getOrElse { failure ->
-			addLog(tr("physics.import.failed", failure.message ?: failure.javaClass.simpleName), level = LogLevel.ERROR, tag = "Physics")
-			return null
+	fun importPhysics(path: String, onCreated: (String) -> Unit = {}) {
+		val port: io.github.psd2live.application.WorkspacePhysicsPort = workspaceBackend ?: return
+		var report: kotlinx.serialization.json.JsonObject? = null
+		runWorkspaceCommand(after = {
+			val imported = report?.get("imported")?.jsonArray.orEmpty().map { it.jsonPrimitive.content }
+			addLog(tr("physics.import.done", imported.size, java.nio.file.Path.of(path).fileName), tag = "Physics")
+			report?.get("disabled")?.jsonArray?.takeIf { it.isNotEmpty() }?.let { disabled ->
+				addLog(tr("physics.import.disabled", disabled.joinToString { it.jsonPrimitive.content }), level = LogLevel.WARNING, tag = "Physics")
+			}
+			report?.get("missing_parameters")?.jsonObject?.forEach { (group, missing) ->
+				addLog(tr("physics.import.missing", group, missing.jsonArray.joinToString { it.jsonPrimitive.content }), level = LogLevel.WARNING, tag = "Physics")
+			}
+			imported.firstOrNull()?.let(onCreated)
+		}) { state ->
+			val result = port.importPhysics(path, state); report = result.second; result.first
 		}
-		updateState { it.copy(rigEdits = imported.overlay, generatePhysics = true) }
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
-		addLog(tr("physics.import.done", imported.ids.size, java.io.File(path).name), tag = "Physics")
-		if (imported.disabled.isNotEmpty()) addLog(tr("physics.import.disabled", imported.disabled.joinToString()), level = LogLevel.WARNING, tag = "Physics")
-		for ((group, missing) in imported.missing) {
-			addLog(tr("physics.import.missing", group, missing.joinToString()), level = LogLevel.WARNING, tag = "Physics")
-		}
-		return imported.ids.firstOrNull()
 	}
 
-	private fun changePhysicsOverlay(change: (RigEditOverlay) -> RigEditOverlay) {
-		val next = runCatching { change(_state.value.rigEdits) }
-			.getOrElse { failure -> addLog(failure.message ?: "Physics edit failed", level = LogLevel.WARNING, tag = "Physics"); return }
-		if (next == _state.value.rigEdits) return
-		updateState { it.copy(rigEdits = next) }
-		scheduleRuntimeBundleUpdate()
-		editorChanged()
+	private fun submitPhysicsIntent(intent: io.github.psd2live.application.WorkspacePhysicsIntent, onCreated: (String) -> Unit = {}) {
+		val workspace = workspaceBackend ?: return
+		if (editorSessions.anyOpen && intent !is io.github.psd2live.application.WorkspacePhysicsIntent.Create) {
+			val current = _state.value
+			val model = current.previewModel ?: return
+			val prepared = runCatching {
+				val document = WorkspaceStateCodec.document(current)
+				val operation = io.github.psd2live.application.WorkspacePhysicsIntents.operation(document, model, intent)
+				io.github.psd2live.application.WorkspacePhysicsEdits.apply(operation, document, model)
+			}.getOrElse { failure -> setErrorMessage(failure.message); return }
+			updateState { it.copy(rigEdits = prepared.rigEdits,
+				generatePhysics = prepared.settings["generatePhysics"]?.jsonPrimitive?.boolean ?: it.generatePhysics,
+				physicsFrontHair = prepared.settings["physicsFrontHair"]?.jsonPrimitive?.boolean ?: it.physicsFrontHair,
+				physicsBackHair = prepared.settings["physicsBackHair"]?.jsonPrimitive?.boolean ?: it.physicsBackHair,
+				physicsEyeJelly = prepared.settings["physicsEyeJelly"]?.jsonPrimitive?.boolean ?: it.physicsEyeJelly) }
+			scheduleRuntimeBundleUpdate()
+			editorChanged()
+			return
+		}
+		val port: io.github.psd2live.application.WorkspacePhysicsPort = workspace
+		var created: String? = null
+		runWorkspaceCommand(after = { created?.let(onCreated) }) { state ->
+			val result = port.editPhysics(intent, state)
+			created = result.second["created"]?.jsonPrimitive?.content
+			result.first
+		}
 	}
 
 	/** Rest values for the outputs of [ids] (every group when null) so a switched-off group lets go. */
@@ -2700,33 +2948,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		return physicsGroups(state.copy(rigEdits = overlay)).filter { ids == null || it.id in ids }
 			.flatMap { it.setting.outputParameters }.mapNotNull { parameters[it] }
 			.filter { it.id !in state.lockedParameters }.associate { it.id to it.default }
-	}
-
-	/** The software preview's physics: rebuilt when the exported groups change, reset when motion stops. */
-	private inner class SoftwarePhysics {
-		private var key: List<Any?>? = null
-		private var engine: PhysicsEngine? = null
-		private var released: Map<String, Float> = emptyMap()
-
-		fun reset() { engine?.reset() }
-
-		fun step(state: PSD2LiveState, model: RigPreviewModel, inputs: Map<ParameterId, Float>, dt: Float): Map<ParameterId, Float> {
-			val groups = if (!state.generatePhysics || state.meshOnly) emptyList() else physicsGroups(state).filter { it.active }.map { it.setting }
-			val parameters = model.rig.puppet.parameters
-			val fps = state.rigEdits.physicsFps
-			val nextKey = listOf(groups, parameters, fps)
-			if (nextKey != key) {
-				val before = engine?.strands.orEmpty().flatMap { it.setting.outputParameters }.toSet()
-				key = nextKey
-				engine = PhysicsEngine(groups, PhysicsEngine.ranges(parameters), fps.toFloat()).also { it.carryOver(engine) }
-				val now = groups.flatMap { it.outputParameters }.toSet()
-				released = parameters.filter { it.id.raw in before - now }.associate { it.id.raw to it.default }
-			}
-			val values = inputs.mapKeys { it.key.raw }
-			val out = released + engine!!.step(values, dt)
-			released = emptyMap()
-			return out.mapKeys { ParameterId(it.key) }
-		}
 	}
 
 	// endregion
@@ -2763,61 +2984,32 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun motionPresetSettings(name: String): MotionPresetSettings = _state.value.rigEdits.motionPresets[name] ?: MotionPresetSettings()
 
-	/** One change to the generated motions' settings, and to their overrides, as one history step. */
-	private fun updateMotionPresets(
-		summary: String? = null,
-		clips: (List<MotionClip>) -> List<MotionClip> = { it },
-		transform: (Map<String, MotionPresetSettings>) -> Map<String, MotionPresetSettings>,
-	) {
-		updateState { current ->
-			val presets = transform(current.rigEdits.motionPresets).filterValues { !it.isDefault }
-			val nextClips = clips(current.rigEdits.motionClips)
-			if (presets == current.rigEdits.motionPresets && nextClips == current.rigEdits.motionClips) current
-			else current.copy(rigEdits = current.rigEdits.copy(motionPresets = presets, motionClips = nextClips))
+	private fun editMotionPreset(name: String, action: String, values: Map<String, Float> = emptyMap(), disabled: Boolean? = null) {
+		val state = currentWorkspaceState() ?: return
+		val request = kotlinx.serialization.json.buildJsonObject {
+			put("builtin", name); put("action", action)
+			if (values.isNotEmpty()) putJsonObject("values") { values.forEach { (id, value) -> put(id, value) } }
+			disabled?.let { put("disabled", it) }
 		}
-		scheduleRuntimeBundleUpdate()
-		editorChanged(summary)
+		saveDocumentEdits(state, "Edit generated motion", listOf(io.github.psd2live.application.WorkspaceDocumentOperation("motion_preset", request))) {
+			failure -> if (failure != null) updateState { it.copy(statusText = failure) }
+		}
 	}
 
-	/** Sets one knob of a generated motion (see [MotionPresets.knobs]). */
 	fun setMotionPresetValue(name: String, knobId: String, value: Float) {
 		val knob = MotionPresets.knobs(name).firstOrNull { it.id == knobId } ?: return
-		if (!value.isFinite()) return
-		val clamped = value.coerceIn(knob.min, knob.max)
-		updateMotionPresets { presets ->
-			val settings = presets[name] ?: MotionPresetSettings()
-			val values = if (clamped == knob.default) settings.values - knobId else settings.values + (knobId to clamped)
-			presets + (name to settings.copy(values = values))
-		}
+		if (value.isFinite()) editMotionPreset(name, "update", mapOf(knobId to value.coerceIn(knob.min, knob.max)))
 	}
-
-	/** Puts a generated motion back as generated: default settings and no hand edits. */
-	fun resetMotionPreset(name: String) {
-		updateMotionPresets(clips = { clips -> clips.filterNot { it.builtin.equals(name, ignoreCase = true) } }) { presets ->
-			val settings = presets[name] ?: return@updateMotionPresets presets
-			presets + (name to settings.copy(values = emptyMap()))
-		}
-	}
-
-	/** Removes a generated motion from the model; it stays restorable from the new-motion menu. */
+	fun resetMotionPreset(name: String) = editMotionPreset(name, "reset")
 	fun deleteMotionPreset(name: String) {
 		if (motionEditor.clipId == MotionEditorState.presetClipId(name)) closeMotionEditorClip()
-		motionPlayer.stop(name)
-		updateMotionPresets(clips = { clips -> clips.filterNot { it.builtin.equals(name, ignoreCase = true) } }) { presets ->
-			presets + (name to MotionPresetSettings(deleted = true))
-		}
+		stopProcessMotion(name)
+		editMotionPreset(name, "delete")
 	}
-
-	fun restoreMotionPreset(name: String) {
-		updateMotionPresets { presets -> presets - name }
-	}
-
-	/** Switches one skeleton preset on or off; the basic motions have their own switches ([setMotionIdle] and on). */
+	fun restoreMotionPreset(name: String) = editMotionPreset(name, "restore")
 	fun setMotionPresetEnabled(name: String, enabled: Boolean) {
-		if (!enabled) motionPlayer.stop(name)
-		updateMotionPresets { presets ->
-			presets + (name to (presets[name] ?: MotionPresetSettings()).copy(disabled = !enabled))
-		}
+		if (!enabled) stopProcessMotion(name)
+		editMotionPreset(name, "update", disabled = !enabled)
 	}
 
 	/**
@@ -2836,20 +3028,13 @@ class PSD2LiveViewModel : AutoCloseable {
 	internal fun motionParameterRanges(): Map<String, ClosedFloatingPointRange<Float>> =
 		_state.value.previewModel?.rig?.puppet?.parameters?.associate { it.id.raw to it.min..it.max }.orEmpty()
 
-	/**
-	 * One change to the authored motions. [commit] records a history node and refreshes the runtime bundle;
-	 * a drag passes false for its samples and commits once on release.
-	 */
-	private fun updateMotionClips(commit: Boolean = true, summary: String? = null, transform: (List<MotionClip>) -> List<MotionClip>) {
-		updateState { current ->
-			val next = transform(current.rigEdits.motionClips)
-			if (next == current.rigEdits.motionClips) current
-			else current.copy(rigEdits = current.rigEdits.copy(motionClips = next))
-		}
-		if (commit) {
-			scheduleRuntimeBundleUpdate()
-			editorChanged(summary)
-		} else markWorkspaceChanged()
+	/** A transient drag projection; completed edits use the application timeline commands. */
+	private fun previewMotionClips(transform: (List<MotionClip>) -> List<MotionClip>) {
+		val current = _state.value
+		val before = current.rigEdits.motionClips
+		val next = transform(before)
+		if (next == before) return
+		updateState { it.copy(rigEdits = it.rigEdits.copy(motionClips = next)) }
 	}
 
 	/**
@@ -2857,16 +3042,16 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * same step. The clip keeps its id and what it overrides whatever [transform] returns: a drag transforms
 	 * the clip it started from, which may be the generated one.
 	 */
-	private fun updateMotionClip(id: String, commit: Boolean = true, summary: String? = null, transform: (MotionClip) -> MotionClip) {
+	private fun previewMotionClip(id: String, transform: (MotionClip) -> MotionClip) {
 		val preset = MotionEditorState.presetOf(id)
 		if (preset == null) {
-			updateMotionClips(commit, summary) { clips ->
+			previewMotionClips { clips ->
 				clips.map { if (it.id == id) transform(it).copy(id = it.id, builtin = it.builtin) else it }
 			}
 			return
 		}
 		val generated = presetMotionClip(_state.value, preset) ?: return
-		updateMotionClips(commit, summary) { clips ->
+		previewMotionClips { clips ->
 			val existing = MotionClips.overrideOf(clips, preset)
 			if (existing != null) clips.map { if (it.id == existing.id) transform(it).copy(id = it.id, builtin = it.builtin) else it }
 			else {
@@ -2878,24 +3063,17 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** A new clip, blank or a copy of a generated motion as it plays now, opened in the editor. */
 	fun createMotionClip(fromBuiltin: String? = null): String {
-		val clips = motionClips
-		val id = MotionClips.newId(clips)
-		val clip = if (fromBuiltin != null) {
-			val source = MotionClips.overrideOf(clips, fromBuiltin)
-				?: MotionPresets.clip(id, fromBuiltin, _state.value.rigEdits.skeleton, motionPresetSettings(fromBuiltin).copy(deleted = false))
-			source.copy(id = id, name = MotionClips.uniqueName(clips, fromBuiltin), builtin = null, enabled = true)
-		} else MotionClip(id = id, name = MotionClips.uniqueName(clips, tr("animation.newMotionName")))
-		updateMotionClips { it + clip }
-		openMotionInEditor(id)
+		val id = MotionClips.newId(motionClips)
+		saveMotionOperation("create", kotlinx.serialization.json.buildJsonObject {
+			put("id", id); put("name", fromBuiltin ?: tr("animation.newMotionName")); fromBuiltin?.let { put("from_builtin", it) }
+		}) { openMotionInEditor(id) }
 		return id
 	}
 
 	fun duplicateMotionClip(id: String) {
-		val clips = motionClips
-		val source = clips.firstOrNull { it.id == id } ?: return
-		val copy = source.copy(id = MotionClips.newId(clips), name = MotionClips.uniqueName(clips, source.name), builtin = null)
-		updateMotionClips { it + copy }
-		openMotionInEditor(copy.id)
+		if (motionClips.none { it.id == id }) return
+		val nextId = MotionClips.newId(motionClips)
+		saveMotionOperation("duplicate", kotlinx.serialization.json.buildJsonObject { put("id", id); put("new_id", nextId) }) { openMotionInEditor(nextId) }
 	}
 
 	fun renameMotionClip(id: String, name: String) {
@@ -2903,23 +3081,32 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (trimmed.isEmpty() || trimmed.any(Char::isISOControl)) return
 		val clip = motionClips.firstOrNull { it.id == id } ?: return
 		if (clip.builtin != null || clip.name == trimmed) return
-		val others = motionClips.filter { it.id != id }
-		updateMotionClip(id) { it.copy(name = MotionClips.uniqueName(others, trimmed)) }
+		saveMotionOperation("rename", kotlinx.serialization.json.buildJsonObject { put("id", id); put("name", trimmed) })
 	}
 
 	fun deleteMotionClip(id: String) {
 		if (motionClips.none { it.id == id }) return
-		motionPlayer.stop()
-		updateMotionClips { clips -> clips.filterNot { it.id == id } }
+		stopProcessMotion()
+		saveMotionOperation("delete", kotlinx.serialization.json.buildJsonObject { put("id", id) })
 		if (motionEditor.clipId == id) closeMotionEditorClip()
 	}
 
 	/** Loop, duration, FPS, fades or the export switch; a shorter duration drops the keys past it. */
-	fun updateMotionClipProperties(id: String, transform: (MotionClip) -> MotionClip) =
-		updateMotionClip(id) { clip ->
-			val next = transform(clip)
-			if (next.duration != clip.duration) next.copy(curves = MotionKeyEdits.withDuration(clip, next.duration).curves) else next
+	fun updateMotionClipProperties(id: String, transform: (MotionClip) -> MotionClip) {
+		val clip = motionClips.firstOrNull { it.id == id } ?: editingMotionClip()?.takeIf { it.id == id } ?: return
+		val next = transform(clip)
+		editTimeline("properties", kotlinx.serialization.json.buildJsonObject {
+			put("loop", next.loop); put("duration", next.duration); put("fps", next.fps)
+			put("fade_in", next.fadeIn); put("fade_out", next.fadeOut); put("enabled", next.enabled)
+		}, clip)
+	}
+
+	private fun saveMotionOperation(mode: String, fields: kotlinx.serialization.json.JsonObject, completed: () -> Unit = {}) {
+		val state = currentWorkspaceState() ?: return
+		saveDocumentEdits(state, "Edit motion", listOf(io.github.psd2live.application.WorkspaceDocumentOperation("motion_$mode", fields))) { failure ->
+			if (failure == null) completed() else updateState { it.copy(statusText = failure) }
 		}
+	}
 
 	/** Opens a generated motion in the editor; it becomes an override only once a key changes. */
 	fun editBuiltinMotion(name: String) = openMotionInEditor(MotionEditorState.presetClipId(name))
@@ -2956,9 +3143,25 @@ class PSD2LiveViewModel : AutoCloseable {
 		motionEditor.focusedCurve = null
 	}
 
-	private fun updateEditingClip(commit: Boolean = true, summary: String? = null, transform: (MotionClip) -> MotionClip) {
-		val id = editingMotionClip()?.id ?: return
-		updateMotionClip(id, commit, summary, transform)
+	private fun motionKeyJson(key: MotionKey) = kotlinx.serialization.json.buildJsonObject {
+		put("time", key.time); put("value", key.value); put("interpolation", key.interpolation.name)
+		put("out", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(key.outHandle.x), kotlinx.serialization.json.JsonPrimitive(key.outHandle.y))))
+		put("in", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(key.inHandle.x), kotlinx.serialization.json.JsonPrimitive(key.inHandle.y))))
+	}
+	private fun motionSelectionJson(selection: Set<MotionKeyRef>) = kotlinx.serialization.json.buildJsonArray {
+		selection.forEach { ref -> add(kotlinx.serialization.json.buildJsonObject { put("parameter", ref.parameterId); put("time", ref.time) }) }
+	}
+	private fun editTimeline(mode: String, fields: kotlinx.serialization.json.JsonObject, source: MotionClip? = editingMotionClip(), expectedState: String? = currentWorkspaceState()) {
+		val clip = source ?: return
+		val state = expectedState ?: return
+		val untouched = clip.id.startsWith("preset:")
+		val materialized = if (untouched) clip.copy(id = MotionClips.newId(motionClips)) else clip
+		val edits = buildList {
+			if (untouched) add(io.github.psd2live.application.WorkspaceDocumentOperation("motion_put", kotlinx.serialization.json.buildJsonObject { put("clip", MotionClips.toJson(materialized)) }))
+			add(io.github.psd2live.application.WorkspaceDocumentOperation("motion_" + mode,
+				kotlinx.serialization.json.JsonObject(fields + ("id" to kotlinx.serialization.json.JsonPrimitive(materialized.id)))))
+		}
+		saveDocumentEdits(state, "Edit timeline", edits) { failure -> if (failure != null) updateState { it.copy(statusText = failure) } }
 	}
 
 	fun toggleMotionAutoKey() {
@@ -2969,20 +3172,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		motionEditor.autoKey = enabled && editingMotionClip() != null
 	}
 
-	internal fun recordAutoKey(
-		changes: Map<String, Float>,
-		initialValues: Map<String, Float>,
-	) {
-		val clip = editingMotionClip() ?: return
-		val playhead = motionEditor.playhead.coerceIn(0f, clip.duration)
-		val keyTime = if (motionEditor.snapToFrames) MotionKeyEdits.snap(playhead, clip.fps).coerceIn(0f, clip.duration) else playhead
-		val (nextClip, keyRefs) = MotionKeyEdits.autoKeyMultiple(clip, changes, initialValues, keyTime)
-		if (nextClip != clip) {
-			updateEditingClip(summary = tr("history.motion.autoKey")) { nextClip }
-			motionEditor.selection = keyRefs
-			changes.keys.lastOrNull()?.let { motionEditor.focusedCurve = it }
-		}
-	}
 
 	/** A curve for [parameterId], keyed at the playhead with the pose the preview shows. */
 	fun addMotionCurve(parameterId: String) {
@@ -2990,12 +3179,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		motionEditor.focusedCurve = parameterId
 		if (clip.curve(parameterId) != null) return
 		val time = motionEditor.playhead.coerceIn(0f, clip.duration)
-		updateEditingClip { MotionKeyEdits.setKey(it, parameterId, MotionKey(time, currentMotionParameterValue(parameterId))) }
+		editTimeline("set_key", kotlinx.serialization.json.buildJsonObject { put("parameter", parameterId); put("key", motionKeyJson(MotionKey(time, currentMotionParameterValue(parameterId)))) })
 		motionEditor.selection = setOf(MotionKeyRef(parameterId, time))
 	}
 
 	fun removeMotionCurve(parameterId: String) {
-		updateEditingClip { clip -> clip.copy(curves = clip.curves.filterNot { it.parameterId == parameterId }) }
+		editTimeline("remove_curve", kotlinx.serialization.json.buildJsonObject { put("parameter", parameterId) })
 		motionEditor.selection = motionEditor.selection.filterTo(HashSet()) { it.parameterId != parameterId }
 		if (motionEditor.focusedCurve == parameterId) motionEditor.focusedCurve = null
 	}
@@ -3016,7 +3205,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val curve = clip.curve(parameterId)
 		val existing = curve?.keys?.firstOrNull(ref::matches)
 		val v = value ?: curve?.let { MotionClips.sample(it, at) } ?: currentMotionParameterValue(parameterId)
-		updateEditingClip { MotionKeyEdits.setKey(it, parameterId, existing?.copy(value = v) ?: MotionKey(at, v)) }
+		editTimeline("set_key", kotlinx.serialization.json.buildJsonObject { put("parameter", parameterId); put("key", motionKeyJson(existing?.copy(value = v) ?: MotionKey(at, v))) })
 		motionEditor.selection = setOf(ref)
 	}
 
@@ -3024,13 +3213,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun keyCurrentPose() {
 		val clip = editingMotionClip() ?: return
 		val time = motionEditor.playhead.coerceIn(0f, clip.duration)
-		updateEditingClip { current ->
-			current.curves.fold(current) { next, curve ->
-				val existing = curve.keys.firstOrNull(MotionKeyRef(curve.parameterId, time)::matches)
-				val value = currentMotionParameterValue(curve.parameterId)
-				MotionKeyEdits.setKey(next, curve.parameterId, existing?.copy(value = value) ?: MotionKey(time, value))
-			}
-		}
+		editTimeline("pose", kotlinx.serialization.json.buildJsonObject {
+			put("time", time); putJsonObject("values") { clip.curves.forEach { curve -> put(curve.parameterId, currentMotionParameterValue(curve.parameterId)) } }
+		})
 		motionEditor.selection = clip.curves.mapTo(HashSet()) { MotionKeyRef(it.parameterId, time) }
 	}
 
@@ -3041,13 +3226,13 @@ class PSD2LiveViewModel : AutoCloseable {
 		val parameters = current.previewModel?.rig?.puppet?.parameters.orEmpty().associateBy { it.id.raw }
 		val values = saved.mapNotNull { (id, value) -> parameters[id]?.let { id to value.coerceIn(it.min, it.max) } }.toMap()
 		val time = motionEditor.playhead.coerceIn(0f, clip.duration)
-		updateEditingClip { MotionKeyEdits.pose(it, values, time) }
+		editTimeline("pose", kotlinx.serialization.json.buildJsonObject { put("time", time); putJsonObject("values") { values.forEach { (id, value) -> put(id, value) } } })
 		motionEditor.selection = values.keys.mapTo(linkedSetOf()) { MotionKeyRef(it, time) }
 	}
 
 	fun deleteSelectedMotionKeys() {
 		val selection = motionEditor.selection.takeIf { it.isNotEmpty() } ?: return
-		updateEditingClip { MotionKeyEdits.delete(it, selection) }
+		editTimeline("delete_keys", kotlinx.serialization.json.buildJsonObject { put("selection", motionSelectionJson(selection)) })
 		motionEditor.selection = emptySet()
 	}
 
@@ -3057,15 +3242,19 @@ class PSD2LiveViewModel : AutoCloseable {
 		val selection = motionEditor.selection.takeIf { it.isNotEmpty() } ?: return
 		val ranges = motionParameterRanges()
 		val moved = mutableSetOf<MotionKeyRef>()
-		val next = MotionKeyEdits.mapKeys(clip, selection) { id, key ->
+		val replacements = mutableListOf<kotlinx.serialization.json.JsonObject>()
+		MotionKeyEdits.mapKeys(clip, selection) { id, key ->
 			val edited = transform(id, key)
 			val range = ranges[id]
 			edited.copy(
 				time = edited.time.coerceIn(0f, clip.duration),
 				value = if (range != null) edited.value.coerceIn(range) else edited.value,
-			).also { moved += MotionKeyRef(id, it.time) }
+			).also { next ->
+				moved += MotionKeyRef(id, next.time)
+				replacements += kotlinx.serialization.json.buildJsonObject { put("parameter", id); put("from_time", key.time); put("key", motionKeyJson(next)) }
+			}
 		}
-		updateEditingClip { next }
+		editTimeline("replace_keys", kotlinx.serialization.json.buildJsonObject { put("keys", kotlinx.serialization.json.JsonArray(replacements)) })
 		motionEditor.selection = moved
 	}
 
@@ -3078,7 +3267,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		val keys = motionEditor.clipboard.takeIf { it.isNotEmpty() } ?: return
 		val clip = editingMotionClip() ?: return
 		val (next, pasted) = MotionKeyEdits.paste(clip, keys, motionEditor.playhead)
-		updateEditingClip { next }
+		editTimeline("paste_keys", kotlinx.serialization.json.buildJsonObject {
+			put("time", motionEditor.playhead); putJsonArray("keys") { keys.forEach { (id, key) -> add(kotlinx.serialization.json.buildJsonObject { put("parameter", id); put("key", motionKeyJson(key)) }) } }
+		})
 		motionEditor.selection = pasted
 	}
 
@@ -3086,13 +3277,17 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun beginMotionKeyDrag() {
 		motionEditor.dragOrigin = editingMotionClip() ?: return
 		motionEditor.dragSelection = motionEditor.selection
-		beginEditorField(MOTION_DRAG_SESSION)
+		motionEditor.dragState = currentWorkspaceState()
+		motionEditor.dragClips = _state.value.rigEdits.motionClips
+		motionEditor.dragRequest = null
 	}
 
 	fun dragMotionKeys(dt: Float, dv: Float = 0f, normalized: Boolean = false) {
 		val origin = motionEditor.dragOrigin ?: return
 		val (next, moved) = MotionKeyEdits.move(origin, motionEditor.dragSelection, dt, dv, motionParameterRanges(), normalized)
-		updateMotionClip(origin.id, commit = false) { next }
+		previewMotionClip(origin.id) { next }
+		motionEditor.dragMode = "move_keys"
+		motionEditor.dragRequest = kotlinx.serialization.json.buildJsonObject { put("selection", motionSelectionJson(motionEditor.dragSelection)); put("dt", dt); put("dv", dv); put("normalized", normalized) }
 		motionEditor.selection = moved
 	}
 
@@ -3102,15 +3297,25 @@ class PSD2LiveViewModel : AutoCloseable {
 		val next = MotionKeyEdits.mapKeys(origin, setOf(ref)) { _, key ->
 			if (outgoing) key.copy(outHandle = handle.clamped()) else key.copy(inHandle = handle.clamped())
 		}
-		updateMotionClip(origin.id, commit = false) { next }
+		previewMotionClip(origin.id) { next }
+		val key = next.curve(ref.parameterId)?.keys?.firstOrNull(ref::matches) ?: return
+		motionEditor.dragMode = "replace_keys"
+		motionEditor.dragRequest = kotlinx.serialization.json.buildJsonObject { putJsonArray("keys") { add(kotlinx.serialization.json.buildJsonObject { put("parameter", ref.parameterId); put("from_time", ref.time); put("key", motionKeyJson(key)) }) } }
 	}
 
 	fun endMotionKeyDrag() {
-		if (motionEditor.dragOrigin == null) return
+		val origin = motionEditor.dragOrigin ?: return
+		val request = motionEditor.dragRequest
+		val mode = motionEditor.dragMode
+		val next = _state.value.rigEdits.motionClips
+		val before = motionEditor.dragClips
+		val expected = motionEditor.dragState
 		motionEditor.dragOrigin = null
 		motionEditor.dragSelection = emptySet()
-		scheduleRuntimeBundleUpdate()
-		endEditorField(MOTION_DRAG_SESSION)
+		motionEditor.dragState = null
+		motionEditor.dragClips = emptyList()
+		if (expected == currentWorkspaceState()) updateState { it.copy(rigEdits = it.rigEdits.copy(motionClips = before)) }
+		if (expected != null && request != null && next != before) editTimeline(mode, request, origin, expected)
 	}
 
 	/** Moves the playhead and poses the preview there; the preview pauses so the editor owns the pose. */
@@ -3118,79 +3323,53 @@ class PSD2LiveViewModel : AutoCloseable {
 		val clip = editingMotionClip()
 		val t = if (clip != null) time.coerceIn(0f, clip.duration) else time.coerceAtLeast(0f)
 		motionEditor.playhead = t
-		if (clip != null) poseMotionPreview(clip, t)
+		if (clip != null) configurePlayback("seek", kotlinx.serialization.json.buildJsonObject { put("clip_id", clip.id); put("time", t) })
 	}
 
-	/** Samples the clip into the shared authoring pose without changing canvas layout. */
-	private fun poseMotionPreview(clip: MotionClip, time: Float) {
-		if (clip.curves.isEmpty()) return
+	private fun configurePlayback(mode: String, fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())) {
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+		val state = currentWorkspaceState() ?: return
+		try { port.controlPlayback(kotlinx.serialization.json.JsonObject(fields + mapOf("state" to kotlinx.serialization.json.JsonPrimitive(state), "mode" to kotlinx.serialization.json.JsonPrimitive(mode)))) }
+		catch (failure: Exception) { updateState { it.copy(statusText = failure.message ?: "Could not change playback") } }
+	}
+
+	internal fun applyPlaybackFrame(frame: kotlinx.serialization.json.JsonObject) {
 		val current = _state.value
-		val parameters = current.previewModel?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
-		val values = MotionClips.sampleAll(clip, time.toDouble(), loop = false)
-			.filterKeys { it in parameters }
-			.mapValues { (id, value) -> parameters.getValue(id).let { value.coerceIn(it.min, it.max) } }
-		motionPlayer.stop()
+		if (frame.getValue("workspace_id").jsonPrimitive.content != current.activeWorkspace.id) return
+		frame["clip_id"]?.jsonPrimitive?.content?.let {
+			motionEditor.clipId = it
+			motionEditor.playhead = frame.getValue("time").jsonPrimitive.float
+		}
+		motionEditor.playing = frame.getValue("playing").jsonPrimitive.boolean
+		processActiveMotion = frame["active_motion"]?.jsonPrimitive?.content
+		processPlaybackActive = frame.getValue("animation").jsonPrimitive.boolean || frame.getValue("playing").jsonPrimitive.boolean ||
+			frame.getValue("tracking").jsonPrimitive.boolean || frame["clip_id"] != null
+		val values = frame.getValue("values").jsonObject.map { (id, value) -> ParameterId(id) to value.jsonPrimitive.float }.toMap()
+		processFrameValues = values
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
-			it.copy(
-				animationEnabled = false,
-				parameterValues = it.parameterValues + values,
-			).authoringPose()
+			it.copy(animationEnabled = frame.getValue("animation").jsonPrimitive.boolean, previewParameterValues = values, mouseTrackingEnabled = frame.getValue("tracking").jsonPrimitive.boolean)
 		}
 	}
 
 	fun setMotionEditorPlaying(playing: Boolean) {
 		val clip = editingMotionClip()
 		if (playing && clip == null) return
-		if (playing && clip != null && motionEditor.playhead >= clip.duration - 1e-4f) motionEditor.playhead = 0f
-		motionEditor.playing = playing
-		if (playing && clip != null) poseMotionPreview(clip, motionEditor.playhead)
+		if (playing && clip != null) {
+			val time = motionEditor.playhead.takeIf { it < clip.duration - 1e-4f } ?: 0f
+			configurePlayback("start", kotlinx.serialization.json.buildJsonObject { put("clip_id", clip.id); put("time", time) })
+		} else configurePlayback("pause")
 	}
-
-	fun stopMotionEditorPlayback() {
-		motionEditor.playing = false
-		setMotionPlayhead(0f)
-	}
-
-	/** One tick of the editor's own playback; a loop wraps and a one-shot stops at its end. */
-	private fun advanceMotionEditor(dt: Float) {
-		if (!motionEditor.playing) return
-		val clip = editingMotionClip()
-		if (clip == null) {
-			motionEditor.playing = false
-			return
-		}
-		var t = motionEditor.playhead + dt
-		if (t >= clip.duration) {
-			if (clip.loop) t %= clip.duration
-			else {
-				t = clip.duration
-				motionEditor.playing = false
-			}
-		}
-		motionEditor.playhead = t
-		poseMotionPreview(clip, t)
-	}
-
+	fun stopMotionEditorPlayback() = configurePlayback("stop")
 	// endregion
 
 	/** Commit an edited armature as one undoable project change and rebuild its derived rig. */
 	fun setSkeleton(spec: io.github.psd2live.core.SkeletonSpec) {
-		updateState { current -> current.copy(rigEdits = current.rigEdits.copy(skeleton = spec)) }
-		schedulePreviewRebuild()
-		editorChanged()
+		val state = currentWorkspaceState() ?: return
+		saveDocumentEdits(state, "Edit skeleton", listOf(io.github.psd2live.application.WorkspaceDocumentOperation("skeleton_put",
+			kotlinx.serialization.json.buildJsonObject { put("spec", spec.toJson()) }))) { failure -> if (failure != null) updateState { it.copy(statusText = failure) } }
 	}
 
-	/** Pose metadata changes neither baked geometry nor runtime assets. Keep preview config synchronized. */
-	fun setSkeletonPoseMetadata(spec: io.github.psd2live.core.SkeletonSpec) {
-		val preview = _state.value.previewModel
-		val previous = preview?.config?.rigEdits?.skeleton
-		fun geometry(s: io.github.psd2live.core.SkeletonSpec) = s.copy(savedPoses = emptyMap(), ikTargets = emptyMap(),
-			bones = s.bones.map { it.copy(ik = io.github.psd2live.core.SkeletonIkSettings()) })
-		if (previous == null || geometry(previous) != geometry(spec)) { setSkeleton(spec); return }
-		updateState { current -> current.copy(rigEdits = current.rigEdits.copy(skeleton = spec),
-			previewModel = current.previewModel?.let { it.copy(config = it.config.copy(rigEdits = it.config.rigEdits.copy(skeleton = spec))) }) }
-		editorChanged()
-	}
+	fun setSkeletonPoseMetadata(spec: io.github.psd2live.core.SkeletonSpec) = setSkeleton(spec)
 
 	fun setExportCmo3(enabled: Boolean) {
 		updateState { it.copy(exportCmo3 = enabled) }
@@ -3569,7 +3748,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				changed = true
 				if (target.canvases.none { it.mode == CanvasMode.PREVIEW && it.id !in target.hiddenModules }) {
 					pointerActive = false
-					motionPlayer.stop()
+					stopProcessMotion()
 				}
 				current.copy(activeWorkspaceId = id)
 			}
@@ -3608,6 +3787,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		)
 		updateState { it.copy(workspaces = it.workspaces + workspace, activeWorkspaceId = workspace.id) }
 		markWorkspaceChanged()
+        persistAuthoredPose()
 		return workspace.id
 	}
 
@@ -3659,7 +3839,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (_state.value.previewLive) ensureSdkSessionLoaded()
 		else {
 			pointerActive = false
-			motionPlayer.stop()
+			stopProcessMotion()
 		}
 	}
 
@@ -3740,7 +3920,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (mode == CanvasMode.PREVIEW) ensureSdkSessionLoaded()
 		if (!_state.value.previewLive) {
 			pointerActive = false
-			motionPlayer.stop()
+			stopProcessMotion()
 		}
 	}
 
@@ -3784,7 +3964,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		markWorkspaceChanged()
 		if (!_state.value.previewLive) {
 			pointerActive = false
-			motionPlayer.stop()
+			stopProcessMotion()
 		}
 	}
 
@@ -3803,7 +3983,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		markWorkspaceChanged()
 		if (isCanvasModule(module) && !_state.value.previewLive) {
 			pointerActive = false
-			motionPlayer.stop()
+			stopProcessMotion()
 		}
 	}
 
@@ -4063,7 +4243,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(lightboxImage = null, lightboxTitle = null) }
 	}
 
-	fun updateHistorySnapshot(snapshot: AgentHistorySnapshot) {
+	fun updateHistorySnapshot(snapshot: WorkspaceHistorySnapshot) {
 		updateState { it.copy(historySnapshot = snapshot, projectDirty = it.projectDirty || (it.historySnapshot != null && it.historySnapshot.headNodeId != snapshot.headNodeId), projectEditVersion = it.projectEditVersion + if (it.historySnapshot?.headNodeId != snapshot.headNodeId) 1 else 0) }
 	}
 
@@ -4075,9 +4255,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun checkoutHistoryNode(nodeId: String) {
 		scope.launch {
 			try {
-				val ws = agentWorkspace ?: throw IllegalStateException("Agent workspace is not attached")
+				val ws = workspaceBackend ?: throw IllegalStateException("Agent workspace is not attached")
 				val result = withContext(Dispatchers.Default) {
-					ws.checkoutHistory(nodeId, io.github.psd2live.agent.MutationAuthor.USER)
+					ws.checkoutHistory(nodeId, io.github.psd2live.project.MutationAuthor.USER)
 				}
 				// The workspace already logged the checkout; this only reflects it in the status bar.
 				updateState { current ->
@@ -4101,6 +4281,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setAnimationEnabled(enabled: Boolean) {
+		configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled) })
 		if (enabled) {
 			// The editor's playback poses a paused preview; the running animation takes over.
 			motionEditor.playing = false
@@ -4335,6 +4516,11 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun deleteLayer(layerId: String) {
+		if (workspaceBackend != null) {
+            val port: io.github.psd2live.application.WorkspaceSourcePort = requireNotNull(workspaceBackend)
+            runWorkspaceCommand { state -> port.softDeleteLayer(layerId, state) }
+            return
+        }
 		val analysis = _state.value.analysis
 		val layerName = analysis?.layers?.firstOrNull { it.source.id.raw == layerId }?.source?.name ?: layerId
 		updateState { current ->
@@ -4349,6 +4535,11 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun restoreAllDeletedLayers() {
+		if (workspaceBackend != null) {
+            val port: io.github.psd2live.application.WorkspaceSourcePort = requireNotNull(workspaceBackend)
+            runWorkspaceCommand { state -> port.restoreDeletedLayers(null, state) }
+            return
+        }
 		updateState { current ->
 			current.copy(
 				deletedLayerIds = emptySet(),
@@ -4359,6 +4550,32 @@ class PSD2LiveViewModel : AutoCloseable {
 	    editorChanged()
 	}
 
+    private fun meshSettingFields(settings: MeshSettings) = kotlinx.serialization.json.buildJsonObject {
+        put("outerMargin", settings.outerMargin); put("edgeMode", settings.edgeMode.name); put("edgeWidth", settings.edgeWidth)
+        put("maxEdgeDistance", settings.maxEdgeDistance); put("interiorDensity", settings.interiorDensity)
+        put("fillAlgorithm", settings.fillAlgorithm.name); put("suppressBoundaryDiagonals", settings.suppressBoundaryDiagonals)
+        put("fillParameters", io.github.psd2live.project.WorkspaceSettingsCodec.encodeFillParameters(settings.fillParameters))
+    }
+
+    private fun runWorkspaceCommand(after: suspend () -> Unit = {}, action: suspend (String) -> WorkspaceMutationResult) {
+        if (_state.value.canvasEditBusy) return
+        flushEditorFields()
+        val workspace = requireNotNull(workspaceBackend)
+        val expected = workspace.snapshot()
+        updateState { it.copy(canvasEditBusy = true, errorMessage = null) }
+        scope.launch {
+            try {
+                val settled = workspace.settleEditorDrafts(requireNotNull(expected.projectId), expected.state)
+                withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(expected.projectId, settled, MutationAuthor.USER)) {
+                    action(settled)
+                }
+                after()
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                updateState { it.copy(errorMessage = failure.message) }
+            } finally { updateState { it.copy(canvasEditBusy = false) } }
+        }
+    }
 	fun reparentItem(childId: String, newParentId: String?) {
 		val model = _state.value.previewModel
 		val isDeformer = model?.rig?.puppet?.deformers?.any { it.id.raw == childId } ?: false
@@ -4397,281 +4614,143 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * Imports transparent rasters as layers under [parentDeformerId] (null = root), then opens the
 	 * canvas placement panel for the last imported layer so the artist can fine-tune position.
 	 */
-	fun importLayersFromFiles(files: List<java.io.File>, parentDeformerId: String?, anchorLabel: String) {
-		val rasters = LayerImport.transparentRasterFiles(files)
-		if (rasters.isEmpty()) return
-		if (_state.value.previewModel == null || _state.value.isBusy) {
-			setErrorMessage(tr("error.importLayerBusy"))
-			return
-		}
-		val workspaceId = _state.value.activeWorkspace.id
-		val canvasId = _state.value.activeCanvas.id
-		scope.launch {
-			try {
-				updateState { it.copy(statusText = tr("status.importingLayers", rasters.size)) }
-				val result = withContext(Dispatchers.Default) {
-					buildImportedLayersPreview(rasters, parentDeformerId)
-				}
-				updateState {
-					it.copy(
-						parentOverrides = result.parentOverrides,
-						layerOverrides = result.layerOverrides,
-					)
-				}
-				updateCanvasPresentation(workspaceId, canvasId, CanvasMode.EDIT) {
-					it.copy(layerVisibility = it.layerVisibility + result.layerIds.associateWith { true })
-				}
-				applyCommittedPaint(result.preview, tr("editor.importLayer.summary", result.layerIds.size))
-				val placeId = result.layerIds.lastOrNull() ?: return@launch
-				val placeName = result.preview.analysis.layers
-					.firstOrNull { it.source.id.raw == placeId }?.source?.name
-					?: placeId
-				val bounds = result.preview.analysis.source.layers
-					.firstOrNull { it.id.raw == placeId }?.bounds
-					?: return@launch
-				updateCanvasPresentation(workspaceId, canvasId, CanvasMode.EDIT) {
-					it.copy(selectedLayerId = placeId, selectedDeformerId = null)
-				}
-				// Let history-driven gesture cleanup run before arming the placement panel,
-				// so a cancel() from head-node churn cannot race the new LAYER session.
-				yield()
-				if (_state.value.activeCanvas.id == canvasId && _state.value.activeCanvas.mode != CanvasMode.EDIT) {
-					setCanvasMode(canvasId, CanvasMode.EDIT)
-				}
-				canvasEditorFor(canvasId).beginLayerPlacement(
-					layerId = placeId,
-					layerName = placeName,
-					anchorLabel = anchorLabel,
-					parentDeformerId = parentDeformerId,
-					canvasLeft = bounds.left.toFloat(),
-					canvasTop = bounds.top.toFloat(),
-					canvasWidth = bounds.width.toFloat(),
-					canvasHeight = bounds.height.toFloat(),
-					cancelLayerIds = result.layerIds,
-				)
-			} catch (failure: Exception) {
-				if (failure is kotlinx.coroutines.CancellationException) throw failure
-				setErrorMessage(failure.message ?: tr("error.importLayerFailed"))
-			}
-		}
-	}
+    internal suspend fun importImagesNow(files: List<java.io.File>, parentDeformerId: String?,
+                                         expected: WorkspaceProjectSnapshot): WorkspaceMutationResult {
+        val workspace = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+        val port: io.github.psd2live.application.WorkspaceSourcePort = workspace
+        return withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+            expected.projectId, expected.state, MutationAuthor.USER)) {
+            port.importImages(requireNotNull(expected.state), files.map { it.toPath().toAbsolutePath().normalize() }, parentDeformerId)
+        }
+    }
 
-	private fun buildImportedLayersPreview(
-		files: List<java.io.File>,
-		parentDeformerId: String?,
-	): ImportedLayersResult {
-		val current = _state.value
-		val preview = current.previewModel ?: error("No preview model")
-		val analysis = preview.analysis
-		val canvasW = analysis.source.widthPx
-		val canvasH = analysis.source.heightPx
-		val existing = analysis.source.layers.toMutableList()
-		val addedIds = mutableListOf<String>()
-		val overrides = current.parentOverrides.toMutableMap()
-		val visibility = current.layerVisibility.toMutableMap()
-		val classifications = current.layerOverrides.toMutableMap()
-		var nextOrder = (existing.maxOfOrNull { it.order } ?: 0) + 1
-		for (file in files) {
-			val image = LayerImport.decodeRasterFile(file)
-			val name = LayerImport.displayNameOf(file)
-			val layer = LayerImport.placedLayer(
-				image = image,
-				canvasWidth = canvasW,
-				canvasHeight = canvasH,
-				name = name,
-				order = nextOrder++,
-			)
-			existing += layer
-			addedIds += layer.id.raw
-			overrides[layer.id.raw] = parentDeformerId
-			visibility[layer.id.raw] = true
-			classifications[layer.id.raw] = LayerClassificationOverride(
-				type = LayerType.PRESET,
-				tag = SemanticTag.UNKNOWN,
-				side = Side.NONE,
-			)
-		}
-		val newSource = io.github.psd2live.agent.WorkspaceSourceArt(
-			widthPx = canvasW,
-			heightPx = canvasH,
-			layers = existing.mapIndexed { index, layer ->
-				val order = existing.size - index
-				if (layer is io.github.psd2live.agent.WorkspaceSourceLayer) layer.copy(order = order)
-				else io.github.psd2live.agent.WorkspaceSourceLayer.copyOf(layer, order)
-			},
-			groups = analysis.source.groups,
-		)
-		val config = current.buildConfig().copy(
-			parentOverrides = overrides,
-			layerVisibility = visibility,
-			layerOverrides = classifications,
-		)
-		val built = pipeline.buildPreview(newSource, config)
-		return ImportedLayersResult(built, addedIds, overrides, visibility, classifications)
-	}
+    fun importLayersFromFiles(files: List<java.io.File>, parentDeformerId: String?, anchorLabel: String) {
+        if (files.isEmpty()) return
+        val current = _state.value
+        val expected = workspaceBackend?.snapshot()
+        if (current.previewModel == null || current.isBusy || expected?.loaded != true) {
+            setErrorMessage(tr("error.importLayerBusy"))
+            return
+        }
+        val workspaceId = current.activeWorkspace.id
+        val canvasId = current.activeCanvas.id
+        scope.launch {
+            try {
+                updateState { it.copy(statusText = tr("status.importingLayers", files.size)) }
+                val result = importImagesNow(files, parentDeformerId, expected)
+                // Opening or another command after this commit cannot arm an old placement panel.
+                if (workspaceBackend?.snapshot()?.state != result.state || _state.value.activeWorkspace.id != workspaceId) return@launch
+                val preview = _state.value.previewModel ?: return@launch
+                val ids = result.affectedLayerIds
+                val placeId = ids.lastOrNull() ?: return@launch
+                val source = preview.analysis.source.layers.singleOrNull { it.id.raw == placeId } ?: return@launch
+                updateCanvasPresentation(workspaceId, canvasId, CanvasMode.EDIT) {
+                    it.copy(layerVisibility = it.layerVisibility + ids.associateWith { true },
+                        selectedLayerId = placeId, selectedDeformerId = null)
+                }
+                yield()
+                if (workspaceBackend?.snapshot()?.state != result.state || _state.value.activeWorkspace.id != workspaceId) return@launch
+                if (_state.value.activeCanvas.id == canvasId && _state.value.activeCanvas.mode != CanvasMode.EDIT) {
+                    setCanvasMode(canvasId, CanvasMode.EDIT)
+                }
+                val bounds = source.bounds
+                canvasEditorFor(canvasId).beginLayerPlacement(placeId, source.name, anchorLabel, parentDeformerId,
+                    bounds.left.toFloat(), bounds.top.toFloat(), bounds.width.toFloat(), bounds.height.toFloat(), ids,
+                    requireNotNull(workspaceBackend).beginImagePlacement(requireNotNull(result.state), ids))
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                setErrorMessage(failure.message ?: tr("error.importLayerFailed"))
+            }
+        }
+    }
 
-	private data class ImportedLayersResult(
-		val preview: RigPreviewModel,
-		val layerIds: List<String>,
-		val parentOverrides: Map<String, String?>,
-		val layerVisibility: Map<String, Boolean>,
-		val layerOverrides: Map<String, LayerClassificationOverride>,
-	)
+    /** Only the display model changes; the document projection remains the committed baseline. */
+    internal fun projectImagePlacementPreview(preview: RigPreviewModel) {
+        updateState { it.copy(previewModel = preview) }
+        refreshSdkSession(preview)
+    }
 
-	/**
-	 * Moves/resizes an imported layer's canvas bounds and rebuilds its mesh.
-	 * [commitHistory] false is for live field scrubbing; true records an undoable step.
-	 */
-	fun relocateImportedLayer(
-		layerId: String,
-		name: String,
-		left: Float,
-		top: Float,
-		width: Float,
-		height: Float,
-		commitHistory: Boolean = true,
-		splitCandidates: List<String> = emptyList(),
-	) {
-		val current = _state.value
-		val preview = current.previewModel ?: return
-		val workspaceId = current.activeWorkspace.id
-		val canvasId = current.activeCanvas.id
-		val canvasMode = current.activeCanvas.mode
-		val analysis = preview.analysis
-		val w = width.roundToInt().coerceAtLeast(1)
-		val h = height.roundToInt().coerceAtLeast(1)
-		val newBounds = org.umamo.format.art.LayerBounds(
-			left.roundToInt(),
-			top.roundToInt(),
-			w,
-			h,
-		)
-		val existing = analysis.source.layers.firstOrNull { it.id.raw == layerId } ?: return
-		if (existing.bounds == newBounds && (name.isBlank() || name == existing.name)) {
-			if (commitHistory) offerMeshSplit(splitCandidates)
-			return
-		}
-		val updatedLayers = analysis.source.layers.map { layer ->
-			if (layer.id.raw != layerId) layer
-			else {
-				val base = if (layer is io.github.psd2live.agent.WorkspaceSourceLayer) layer
-				else io.github.psd2live.agent.WorkspaceSourceLayer.copyOf(layer, layer.order) as io.github.psd2live.agent.WorkspaceSourceLayer
-				base.copy(name = name.ifBlank { base.name }, bounds = newBounds)
-			}
-		}
-		val newSource = io.github.psd2live.agent.WorkspaceSourceArt(
-			widthPx = analysis.source.widthPx,
-			heightPx = analysis.source.heightPx,
-			layers = updatedLayers,
-			groups = analysis.source.groups,
-		)
-		scope.launch {
-			try {
-				val built = withContext(Dispatchers.Default) {
-					pipeline.buildPreview(newSource, current.buildConfig())
-				}
-				if (commitHistory) {
-					applyCommittedPaint(built, tr("editor.importLayer.placed", name.ifBlank { layerId }))
-					offerMeshSplit(splitCandidates)
-				} else {
-					applyPreviewWithoutHistory(built)
-				}
-				selectOnCanvas(workspaceId, canvasId, canvasMode, layerId)
-				// Keep paint session on the relocated layer if the artist was painting it.
-				val editor = canvasEditorFor(canvasId)
-				if (editor.hierarchyMode == EditHierarchyMode.PAINT) {
-					editor.startPaintSession(layerId, forceReload = true)
-				}
-			} catch (failure: Exception) {
-				if (failure is kotlinx.coroutines.CancellationException) throw failure
-				setErrorMessage(failure.message ?: tr("error.importLayerFailed"))
-			}
-		}
-	}
+    internal fun dismissImagePlacements() {
+        canvasEditors.values.toList().forEach { it.dismissImagePlacement() }
+    }
 
-	/** Publish a rebuilt preview without opening a history node (live placement scrub). */
-	private fun applyPreviewWithoutHistory(updatedPreview: RigPreviewModel) {
-		updateState {
-			it.copy(
-				previewModel = updatedPreview,
-				analysis = updatedPreview.analysis,
-				rigEdits = updatedPreview.config.rigEdits,
-				previewModelDirty = true,
-				projectDirty = true,
-			)
-		}
-		refreshSdkSession(updatedPreview)
-		markWorkspaceChanged()
-	}
+    fun relocateImportedLayer(
+        placement: io.github.psd2live.application.WorkspaceImagePlacement,
+        layerId: String, name: String, left: Float, top: Float, width: Float, height: Float,
+        commitHistory: Boolean = true, splitCandidates: List<String> = emptyList(), onCommitted: () -> Unit = {},
+    ) {
+        val ui = _state.value
+        val workspaceId = ui.activeWorkspace.id; val canvasId = ui.activeCanvas.id; val mode = ui.activeCanvas.mode
+        val request = io.github.psd2live.project.WorkspaceImageBounds(layerId, left, top, width, height, name.takeUnless { it.isBlank() })
+        val pending = try {
+            if (commitHistory) placement.commit(request, tr("editor.importLayer.placed", name.ifBlank { layerId })) else placement.preview(request)
+        } catch (failure: Exception) { setErrorMessage(failure.message ?: tr("error.importLayerFailed")); return }
+        scope.launch {
+            try {
+                val result = pending.await()
+                if (commitHistory) {
+                    onCommitted()
+                    if (result is WorkspaceMutationResult && workspaceBackend?.snapshot()?.state == result.state && _state.value.activeWorkspace.id == workspaceId) {
+                        selectOnCanvas(workspaceId, canvasId, mode, layerId)
+                        offerMeshSplit(splitCandidates)
+                        val editor = canvasEditorFor(canvasId)
+                        if (editor.hierarchyMode == EditHierarchyMode.PAINT) editor.startPaintSession(layerId, forceReload = true)
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) return@launch
+                setErrorMessage(failure.message ?: tr("error.importLayerFailed"))
+            }
+        }
+    }
 
-	/** Removes layers created by a cancelled import placement session. */
-	fun cancelImportedLayerPlacement(layerIds: List<String>) {
-		if (layerIds.isEmpty()) return
-		val current = _state.value
-		val preview = current.previewModel ?: return
-		val analysis = preview.analysis
-		val remaining = analysis.source.layers.filterNot { it.id.raw in layerIds }
-		if (remaining.size == analysis.source.layers.size) {
-			layerIds.forEach { deleteLayer(it) }
-			return
-		}
-		if (remaining.none { it.raster.width > 0 && it.raster.height > 0 }) {
-			layerIds.forEach { deleteLayer(it) }
-			return
-		}
-		val newSource = io.github.psd2live.agent.WorkspaceSourceArt(
-			widthPx = analysis.source.widthPx,
-			heightPx = analysis.source.heightPx,
-			layers = remaining.mapIndexed { index, layer ->
-				val order = remaining.size - index
-				if (layer is io.github.psd2live.agent.WorkspaceSourceLayer) layer.copy(order = order)
-				else io.github.psd2live.agent.WorkspaceSourceLayer.copyOf(layer, order)
-			},
-			groups = analysis.source.groups,
-		)
-		scope.launch {
-			try {
-				updateState {
-					it.copy(
-						parentOverrides = it.parentOverrides - layerIds.toSet(),
-						layerVisibility = it.layerVisibility - layerIds.toSet(),
-						layerOverrides = it.layerOverrides - layerIds.toSet(),
-						deletedLayerIds = it.deletedLayerIds - layerIds.toSet(),
-						selectedLayerId = it.selectedLayerId?.takeUnless { id -> id in layerIds },
-					)
-				}
-				val built = withContext(Dispatchers.Default) {
-					pipeline.buildPreview(newSource, _state.value.buildConfig())
-				}
-				applyCommittedPaint(built, tr("editor.importLayer.cancelled"))
-			} catch (failure: Exception) {
-				if (failure is kotlinx.coroutines.CancellationException) throw failure
-				layerIds.forEach { deleteLayer(it) }
-			}
-		}
-	}
+    fun cancelImportedLayerPlacement(placement: io.github.psd2live.application.WorkspaceImagePlacement, onCancelled: () -> Unit) {
+        val pending = try { placement.cancel(tr("editor.importLayer.cancelled")) }
+            catch (failure: Exception) { setErrorMessage(failure.message ?: tr("error.importLayerFailed")); return }
+        scope.launch {
+            try { pending.await(); onCancelled() }
+            catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) return@launch
+                setErrorMessage(failure.message ?: tr("error.importLayerFailed"))
+            }
+        }
+    }
 
 	fun setLayerDrawOrder(targetId: String, order: Float) {
-		val clamped = order.coerceIn(0f, 1000f)
-		val model = _state.value.previewModel
-		val layerId = model?.rig?.layerIdByDrawableId?.get(targetId) ?: targetId
-		updateState { current ->
-			val updated = current.drawOrderOverrides + (layerId to clamped)
-			current.copy(drawOrderOverrides = updated)
-		}
-		editorChanged()
+		changeLayerDrawOrder(targetId, order)
 	}
 
 	fun resetLayerDrawOrder(targetId: String) {
-		val model = _state.value.previewModel
-		val layerId = model?.rig?.layerIdByDrawableId?.get(targetId) ?: targetId
-		updateState { current ->
-			current.copy(drawOrderOverrides = current.drawOrderOverrides - layerId - targetId)
-		}
-		editorChanged()
+		changeLayerDrawOrder(targetId, null)
 	}
 
+    private fun changeLayerDrawOrder(targetId: String, order: Float?) {
+        val request = io.github.psd2live.application.WorkspaceDrawOrderEdits.request(targetId, order)
+        workspaceBackend?.takeUnless { editorSessions.anyOpen }?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceDocumentPort = workspace
+            runWorkspaceCommand { state -> port.applyDocumentEdits(state, "Updated drawing order", listOf(
+                io.github.psd2live.application.WorkspaceDocumentOperation(io.github.psd2live.application.WorkspaceDrawOrderEdits.OP, request)), MutationAuthor.USER) }
+            return
+        }
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val candidate = try { io.github.psd2live.application.WorkspaceDrawOrderEdits.apply(WorkspaceStateCodec.document(current), model, request) }
+            catch (failure: Exception) { setErrorMessage(failure.message ?: "Invalid drawing order"); return }
+        val orders = candidate.settings.getValue("drawOrderOverrides").jsonObject.mapValues { it.value.jsonPrimitive.float }
+        if (orders == current.drawOrderOverrides) return
+        updateState { it.copy(drawOrderOverrides = orders, projectDirty = true) }
+        editorChanged("Updated drawing order")
+    }
+
 	fun setLayerClassification(layerId: String, override: LayerClassificationOverride) {
+        workspaceBackend?.takeUnless { editorSessions.anyOpen }?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceSourcePort = workspace
+            runWorkspaceCommand { state -> port.classifyLayer(layerId, kotlinx.serialization.json.buildJsonObject {
+                put("type", override.type.name); put("role", override.tag.name); put("side", override.side.name)
+                put("parameter", override.parameter); put("switch_id", override.switchId)
+            }, state) }
+            return
+        }
 		updateState {
 			it.copy(
 				layerOverrides = it.layerOverrides + (layerId to override),
@@ -4683,93 +4762,51 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun toggleParameterLock(id: ParameterId, currentValue: Float? = null) {
-		updateState { current ->
-			val wasLocked = id in current.lockedParameters
-			if (wasLocked) {
-				current.copy(
-					lockedParameters = current.lockedParameters - id,
-				)
-			} else {
-				val model = current.previewModel
-				val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
-				val defaultVal = param?.default ?: 0f
-				val valueToLock = (currentValue ?: current.parameterValues[id] ?: defaultVal).let { v ->
-					if (param != null) v.coerceIn(param.min, param.max) else v
-				}
-				current.copy(
-					lockedParameters = current.lockedParameters + id,
-					parameterValues = current.parameterValues + (id to valueToLock),
-				)
-			}
+		val current = _state.value
+		val parameter = current.previewModel?.rig?.puppet?.parameters?.firstOrNull { it.id == id } ?: return
+		val locked = id !in current.lockedParameters
+		editPreviewSession(kotlinx.serialization.json.buildJsonObject {
+			put("mode", "set"); putJsonObject("locks") { put(id.raw, locked) }
+			if (locked) putJsonObject("values") { put(id.raw, (currentValue ?: current.parameterValues[id] ?: parameter.default).coerceIn(parameter.min, parameter.max)) }
+		})
+	}
+	private fun editPreviewSession(request: kotlinx.serialization.json.JsonObject) {
+		val state = currentWorkspaceState() ?: return
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+		saveWorkspaceEdit({ failure -> if (failure != null) updateState { it.copy(statusText = failure) } }) {
+			port.setPreviewSession(kotlinx.serialization.json.JsonObject(request + ("state" to kotlinx.serialization.json.JsonPrimitive(state))))
 		}
-	    markWorkspaceChanged()
 	}
 
-	fun setParameterValue(id: ParameterId, value: Float) {
-		if (_state.value.previewModel?.config?.rigEdits?.skeleton?.ikTargets?.any { it.value.enabled } == true) {
-			setParameterValues(mapOf(id to value)); return
-		}
-		val model = _state.value.previewModel
-		val param = model?.rig?.puppet?.parameters?.firstOrNull { it.id == id }
-		val clamped = if (param != null) value.coerceIn(param.min, param.max) else value
-		if (updateParameterScrub(mapOf(id to clamped))) return
-		motionEditor.playing = false
-		motionPlayer.stop()
-		val previous = _state.value.parameterValues[id] ?: param?.default ?: 0f
-		val changed = abs(previous - clamped) >= 1e-5f
+	fun setParameterValue(id: ParameterId, value: Float) = setParameterValues(mapOf(id to value))
 
-		updateState { current ->
-			current.copy(
-				animationEnabled = false,
-				parameterValues = current.parameterValues + (id to clamped),
-				projectDirty = current.projectDirty || current.analysis != null,
-				projectEditVersion = current.projectEditVersion + if (current.analysis != null) 1 else 0,
-			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
-		}
-
-		if (changed && motionEditor.autoKey && editingMotionClip() != null) {
-			recordAutoKey(mapOf(id.raw to clamped), mapOf(id.raw to (param?.default ?: 0f)))
-		}
-
-	}
-
-	/** Several parameters in one state update, so a gesture that moves a chain redraws once, not per joint. */
+	/** Samples remain transient; the captured gesture state owns the completed command. */
 	fun setParameterValues(values: Map<ParameterId, Float>) {
 		if (values.isEmpty()) return
-		val model = _state.value.previewModel
-		val parameters = model?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
-		val requested = values.mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
-		val constrained = model?.let { io.github.psd2live.core.SkeletonPoseSolver.solveTargets(it.rig.puppet,
-			it.config.rigEdits.skeleton, _state.value.parameterValues + requested) }.orEmpty()
-		val clampedMap = requested + constrained
-		if (updateParameterScrub(clampedMap)) return
-		motionEditor.playing = false
-		motionPlayer.stop()
+		val parameters = _state.value.previewModel?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
+		val clamped = values.filterValues(Float::isFinite).mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
+		if (clamped.isEmpty() || updateParameterScrub(clamped)) return
+		submitParameterValues(clamped, currentWorkspaceState() ?: return)
+	}
 
-		val changed = mutableMapOf<String, Float>()
-		val initial = mutableMapOf<String, Float>()
-		for ((id, clamped) in clampedMap) {
-			val param = parameters[id]
-			val previous = _state.value.parameterValues[id] ?: param?.default ?: 0f
-			if (abs(previous - clamped) >= 1e-5f) {
-				changed[id.raw] = clamped
-				initial[id.raw] = param?.default ?: 0f
+	private fun currentAutoKey(): kotlinx.serialization.json.JsonObject? = editingMotionClip().takeIf { motionEditor.autoKey }?.let { clip ->
+		kotlinx.serialization.json.buildJsonObject { put("clip_id", clip.id); put("time", motionEditor.playhead.coerceIn(0f, clip.duration)); put("snap", motionEditor.snapToFrames) }
+	}
+	private fun submitParameterValues(values: Map<ParameterId, Float>, expectedState: String,
+		extras: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()), autoKey: kotlinx.serialization.json.JsonObject? = currentAutoKey()) {
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+		val request = kotlinx.serialization.json.buildJsonObject {
+			extras.forEach { (key, value) -> put(key, value) }
+			put("state", expectedState)
+			putJsonObject("values") { values.forEach { (id, value) -> put(id.raw, value) } }
+			autoKey?.let { put("auto_key", it) }
+		}
+		saveWorkspaceEdit({ failure -> if (failure != null) updateState { it.copy(statusText = failure) } }) {
+			val result = port.authorPose(request, io.github.psd2live.project.MutationAuthor.USER)
+			motionEditor.selection = result.getValue("keyed").jsonArray.mapTo(linkedSetOf()) { item ->
+				val key = item.jsonObject; MotionKeyRef(key.getValue("parameter").jsonPrimitive.content, key.getValue("time").jsonPrimitive.float)
 			}
 		}
-
-		updateState { current ->
-			current.copy(
-				animationEnabled = false,
-				parameterValues = current.parameterValues + clampedMap,
-				projectDirty = current.projectDirty || current.analysis != null,
-				projectEditVersion = current.projectEditVersion + if (current.analysis != null) 1 else 0,
-			).authoringPose(current.activeCanvas.mode == CanvasMode.EDIT)
-		}
-
-		if (changed.isNotEmpty() && motionEditor.autoKey && editingMotionClip() != null) {
-			recordAutoKey(changed, initial)
-		}
-
 	}
 
 	private fun updateParameterScrub(values: Map<ParameterId, Float>): Boolean {
@@ -4823,43 +4860,41 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (axes.isEmpty()) return false
 		val pose = _state.value.parameterValues
 		val defaults = puppet.parameters.associate { it.id to it.default }
-		val targets = io.github.psd2live.ui.nearestKeyPose(axes, pose, defaults)
+		val targets = io.github.psd2live.core.nearestKeyPose(axes, pose, defaults)
 		if (targets.isEmpty()) return false
+		val expectedState = currentWorkspaceState() ?: return false
 		parameterSnapJob?.cancel()
 		parameterSnapJob = scope.launch {
 			try {
-				animateParameterValues(targets, durationMs = 220L)
-			} finally {
+				animateParameterValues(targets, durationMs = 220L, expectedState)
 				onReady()
+			} catch (failure: Exception) {
+				if (failure is kotlinx.coroutines.CancellationException) throw failure
+				updateState { it.copy(statusText = failure.message ?: "Could not snap pose") }
 			}
 		}
 		return true
 	}
 
-	private suspend fun animateParameterValues(targets: Map<ParameterId, Float>, durationMs: Long) {
-		val startValues = _state.value.parameterValues.toMap()
-		val from = targets.mapValues { (id, _) -> startValues[id] ?: targets.getValue(id) }
+	private suspend fun animateParameterValues(targets: Map<ParameterId, Float>, durationMs: Long, state: String) {
+		val initial = _state.value
+		val from = targets.mapValues { (id, _) -> initial.parameterValues[id] ?: targets.getValue(id) }
 		val startedAt = System.nanoTime()
-		while (true) {
-			val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
-			val t = (elapsedMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-			// Smoothstep ease-in-out.
-			val eased = t * t * (3f - 2f * t)
-			updateState { current ->
-				val next = current.parameterValues.toMutableMap()
-				for ((id, to) in targets) {
-					val a = from[id] ?: to
-					next[id] = a + (to - a) * eased
-				}
-				current.copy(parameterValues = next).authoringPose()
+		try {
+			while (true) {
+				val t = ((System.nanoTime() - startedAt) / 1_000_000.0 / durationMs).toFloat().coerceIn(0f, 1f)
+				val eased = t * t * (3f - 2f * t)
+				if (currentWorkspaceState() != state) throw io.github.psd2live.application.WorkspaceConflict(state, currentWorkspaceState() ?: "unloaded")
+				val values = initial.parameterValues + targets.mapValues { (id, to) -> from.getValue(id) + (to - from.getValue(id)) * eased }
+				updateState { it.copy(previewParameterValues = values) }
+				if (t >= 1f) break
+				delay(16L)
 			}
-			if (t >= 1f) break
-			delay(16L)
+			val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+			port.authorPose(kotlinx.serialization.json.buildJsonObject { put("state", state); putJsonObject("values") { targets.forEach { (id, value) -> put(id.raw, value) } } }, io.github.psd2live.project.MutationAuthor.USER)
+		} finally {
+			if (_state.value.projectOpenGeneration == initial.projectOpenGeneration) updateState { it.copy(previewParameterValues = emptyMap()) }
 		}
-		updateState { current ->
-			current.copy(parameterValues = current.parameterValues + targets)
-		}
-		markWorkspaceChanged()
 	}
 
 	fun resetParameter(id: ParameterId) {
@@ -4868,13 +4903,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		val defaultVal = param?.default ?: 0f
 		setParameterValue(id, defaultVal)
 		if (id == StandardParameters.ANGLE_X || id == StandardParameters.EYE_BALL_X || id == StandardParameters.BODY_X) {
-			followX = 0f
-			bodyFollowX = 0f
 			pointerX = 0f
 		}
 		if (id == StandardParameters.ANGLE_Y || id == StandardParameters.EYE_BALL_Y || id == StandardParameters.BODY_Y) {
-			followY = 0f
-			bodyFollowY = 0f
 			pointerY = 0f
 		}
 	}
@@ -4883,41 +4914,50 @@ class PSD2LiveViewModel : AutoCloseable {
 		pointerActive = false
 		pointerX = 0f
 		pointerY = 0f
-		followX = 0f
-		bodyFollowX = 0f
-		followY = 0f
-		bodyFollowY = 0f
-		softwarePhysics.reset()
-		elapsed = 0.0
-		motionPlayer.stop()
+		resetPreviewPhysics()
+		stopProcessMotion()
 		lastTick = System.nanoTime()
 	}
 
-	fun resetAllParameters() {
-		resetMotionDynamics()
+    /** Both projections validate before publishing any authored pose or document candidate. */
+    internal fun projectAuthoredPose(expected: PSD2LiveState, pose: io.github.psd2live.application.WorkspacePose,
+                                    changed: Boolean, documentProjection: () -> Unit) = synchronized(stateLock) {
+        val current = _state.value
+        check(current.projectId == expected.projectId && current.activeWorkspace.id == expected.activeWorkspace.id &&
+            current.projectOpenGeneration == expected.projectOpenGeneration && current.previewModel === expected.previewModel &&
+            current.parameterValues == expected.parameterValues && current.lockedParameters == expected.lockedParameters) {
+            "Preview session changed while the operation was being prepared"
+        }
+        documentProjection()
+        applyPreviewSession(_state.value, pose, changed)
+    }
 
-		updateState { current ->
-			val model = current.previewModel
-			val defaults = model?.rig?.puppet?.parameters?.associate { it.id to it.default } ?: emptyMap()
-			current.copy(
-				animationEnabled = false,
-				lockedParameters = emptySet(),
-				parameterValues = defaults,
-				previewParameterValues = defaults,
-			)
-		}
-	    markWorkspaceChanged()
+    /** Explicit session application: unlike a slider gesture, this cannot invoke automatic keying. */
+    internal fun applyPreviewSession(expected: PSD2LiveState, pose: io.github.psd2live.application.WorkspacePose,
+                                     persistedChange: Boolean) = synchronized(stateLock) {
+        val current = _state.value
+        check(current.projectId == expected.projectId && current.activeWorkspace.id == expected.activeWorkspace.id &&
+            current.projectOpenGeneration == expected.projectOpenGeneration && current.previewModel === expected.previewModel &&
+            current.parameterValues == expected.parameterValues && current.lockedParameters == expected.lockedParameters) {
+            "Preview session changed while the operation was being prepared"
+        }
+        if (current.parameterValues == pose.values && current.lockedParameters == pose.locked &&
+            !current.animationEnabled && !motionEditor.playing && !persistedChange) return@synchronized
+        resetMotionDynamics()
+        motionEditor.playing = false
+        updateState {
+            it.copy(animationEnabled = false, parameterValues = pose.values, previewParameterValues = pose.values,
+                lockedParameters = pose.locked, projectDirty = it.projectDirty || (persistedChange && it.analysis != null),
+                projectEditVersion = it.projectEditVersion + if (persistedChange && it.analysis != null) 1 else 0)
+                .authoringPose(it.activeCanvas.mode == CanvasMode.EDIT)
+        }
+    }
+	fun resetAllParameters() {
+		editPreviewSession(kotlinx.serialization.json.buildJsonObject { put("mode", "reset") })
 	}
 
 	fun resetPreviewParameters() {
-		resetMotionDynamics()
-		val current = _state.value
-		val defaults = current.previewModel?.rig?.puppet?.parameters?.associate { it.id to it.default } ?: emptyMap()
-		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
-			it.copy(animationEnabled = false, lockedParameters = emptySet(), parameterValues = defaults,
-				previewParameterValues = defaults)
-		}
-		markWorkspaceChanged()
+		resetAllParameters()
 	}
 
 	private fun pruneParameterSnapshotPreview(current: PSD2LiveState) {
@@ -4948,44 +4988,38 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** Saves every parameter as the parameters panel shows it, the live pose included while previewing. */
 	fun saveParameterSnapshot(name: String = "") {
-		val values = shownParameterValues() ?: return
-		updateState { current ->
-			val number = (current.parameterSnapshots.maxOfOrNull { it.number } ?: 0) + 1
-			current.copy(parameterSnapshots = current.parameterSnapshots +
-				ParameterSnapshot(java.util.UUID.randomUUID().toString(), number, name, values))
-		}
-		markWorkspaceChanged()
-	}
+        val values = shownParameterValues() ?: return
+        editSavedProjectData(io.github.psd2live.application.WorkspaceAuxiliaryEdit.CreateSnapshot(java.util.UUID.randomUUID().toString(), name, values))
+    }
 
-	fun overwriteParameterSnapshot(id: String) {
-		val values = shownParameterValues() ?: return
-		updateState { current ->
-			current.copy(parameterSnapshots = current.parameterSnapshots.map { if (it.id == id) it.copy(values = values) else it })
-		}
-		markWorkspaceChanged()
-	}
+    fun overwriteParameterSnapshot(id: String) {
+        val values = shownParameterValues() ?: return
+        editSavedProjectData(io.github.psd2live.application.WorkspaceAuxiliaryEdit.UpdateSnapshot(id, values = values))
+    }
 
 	/** Loads a saved pose onto the parameters it still names; locked parameters keep their value. */
 	fun applyParameterSnapshot(id: String) {
 		val current = _state.value
 		val snapshot = current.parameterSnapshots.firstOrNull { it.id == id } ?: return
-		val known = current.previewModel?.rig?.puppet?.parameters?.mapTo(HashSet()) { it.id } ?: return
-		setParameterValues(snapshot.values.filterKeys { it in known && it !in current.lockedParameters })
+        val workspace = workspaceBackend as? io.github.psd2live.application.WorkspaceAuxiliaryPort
+        if (workspace != null) {
+            workspace.applySavedSnapshotPose(workspace.savedProjectData().state, id)
+            return
+        }
+        val parameters = current.previewModel?.rig?.puppet?.parameters ?: return
+        val values = parameters.mapNotNull { parameter -> snapshot.values[parameter.id]
+            ?.takeIf { parameter.id !in current.lockedParameters }?.let { parameter.id to it.coerceIn(parameter.min, parameter.max) } }.toMap()
+        val pose = io.github.psd2live.application.WorkspacePose(current.parameterValues + values, current.lockedParameters)
+        applyPreviewSession(current, pose, pose.values != current.parameterValues)
 	}
 
 	fun renameParameterSnapshot(id: String, name: String) {
-		// Blank goes back to showing the snapshot's number.
-		val trimmed = name.trim()
-		updateState { current ->
-			current.copy(parameterSnapshots = current.parameterSnapshots.map { if (it.id == id) it.copy(name = trimmed) else it })
-		}
-		markWorkspaceChanged()
-	}
+        editSavedProjectData(io.github.psd2live.application.WorkspaceAuxiliaryEdit.UpdateSnapshot(id, name = name))
+    }
 
-	fun deleteParameterSnapshot(id: String) {
-		updateState { current -> current.copy(parameterSnapshots = current.parameterSnapshots.filterNot { it.id == id }) }
-		markWorkspaceChanged()
-	}
+    fun deleteParameterSnapshot(id: String) {
+        editSavedProjectData(io.github.psd2live.application.WorkspaceAuxiliaryEdit.DeleteSnapshot(id))
+    }
 
 	private fun shownParameterValues(): Map<ParameterId, Float>? {
 		val current = _state.value
@@ -4997,15 +5031,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun unlockAllParameters() {
-		updateState { current ->
-			current.copy(
-				lockedParameters = emptySet(),
-			)
-		}
-	    markWorkspaceChanged()
+		val locked = _state.value.lockedParameters
+		if (locked.isNotEmpty()) editPreviewSession(kotlinx.serialization.json.buildJsonObject { put("mode", "set"); putJsonObject("locks") { locked.forEach { put(it.raw, false) } } })
 	}
 
 	fun setMouseTrackingEnabled(enabled: Boolean) {
+		configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled) })
 		val current = _state.value
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
 			it.copy(mouseTrackingEnabled = enabled)
@@ -5024,6 +5055,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		pointerActive = true
 		pointerX = screenNormX.coerceIn(-1f, 1f)
 		pointerY = screenNormY.coerceIn(-1f, 1f)
+		if (_state.value.mouseTrackingEnabled) configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", true); put("pointer", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(pointerX), kotlinx.serialization.json.JsonPrimitive(-pointerY)))) })
 	}
 
 	fun clearPointer(owner: String? = null) {
@@ -5031,6 +5063,7 @@ class PSD2LiveViewModel : AutoCloseable {
         if (owner != null && pointerOwner != owner) return
         pointerOwner = null
 		pointerActive = false
+		if (_state.value.mouseTrackingEnabled) configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", true) })
 	}
 
 	fun clearErrorMessage() {
@@ -5049,286 +5082,90 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(successExportMessage = null) }
 	}
 
-	fun analyze() {
-		val rawInput = _state.value.inputPath.trim()
-		if (rawInput.isEmpty()) {
-			updateState { it.copy(errorMessage = tr("dialog.inputRequired")) }
-			return
-		}
-		val input = Path.of(rawInput)
-		if (!Files.isRegularFile(input) || !input.fileName.toString().endsWith(".psd", true)) {
-			updateState { it.copy(errorMessage = tr("dialog.inputInvalid", input)) }
-			return
-		}
+    fun analyze(discardUnsaved: Boolean = false) {
+        if (_state.value.isBusy || _state.value.projectSaving) return
+        val rawInput = _state.value.inputPath.trim()
+        if (rawInput.isEmpty()) { updateState { it.copy(errorMessage = tr("dialog.inputRequired")) }; return }
+        val input = Path.of(rawInput)
+        if (!Files.isRegularFile(input) || !input.fileName.toString().endsWith(".psd", true)) {
+            updateState { it.copy(errorMessage = tr("dialog.inputInvalid", input)) }; return
+        }
+        startWorkspaceImport(discardUnsaved, tr("status.analyzing"), afterImport = {
+            if (AppSettings.autoDetectMeshSplitsOnImport) requestStartScreen(fresh = true)
+            else applyStartScreenDefaults()
+        }) { it.importPsd(input.toAbsolutePath().normalize().toString(), discardUnsaved) }
+    }
 
-		activeWorkJob?.cancel()
-		activeWorkJob = scope.launch {
-			updateState {
-				it.copy(
-					isAnalyzing = true,
-					isIndeterminateProgress = true,
-					progress = 0f,
-					statusText = tr("status.analyzing"),
-					errorMessage = null,
-				)
-			}
-			try {
-				val config = _state.value.copy(layerVisibility = emptyMap(), layerOverrides = emptyMap(), deletedLayerIds = emptySet(), parentOverrides = emptyMap(), rigEdits = RigEditOverlay.Empty).buildConfig()
-				val preview = runInterruptible(Dispatchers.Default) {
-					pipeline.buildPreview(input, config)
-				}
-				val inputSignature = runCatching {
-					"${Files.size(input)}:${Files.getLastModifiedTime(input).toMillis()}"
-				}.getOrNull()
-				updateState { current ->
-					val recognized = preview.analysis.layers.count { it.semantic.tag != SemanticTag.UNKNOWN }
-					val summary = tr(
-						"status.analysisSummary",
-						preview.analysis.source.widthPx,
-						preview.analysis.source.heightPx,
-						preview.analysis.layers.size,
-						recognized,
-					)
-					val logLinesList = listOf(
-						tr(
-							"log.analysis",
-							preview.analysis.layers.size,
-							preview.analysis.anchors.character.width.toInt(),
-							preview.analysis.anchors.character.height.toInt(),
-						),
-					) + preview.analysis.warnings.map { tr("log.warning", it) }
-					current.withLogs(logLinesList, level = LogLevel.INFO, tag = "Analysis").copy(
-						isIndeterminateProgress = false,
-						projectId = java.util.UUID.randomUUID().toString(),
-                        projectSourceName = input.fileName.toString(),
-                        projectFile = null, projectDirty = true, showProjectLocationDialog = false, isAnalyzing = true,
-                        layerVisibility = emptyMap(), deformerVisibility = emptyMap(), layerOverrides = emptyMap(),
-                        deletedLayerIds = emptySet(), parentOverrides = emptyMap(), rigEdits = preview.config.rigEdits,
-                        selectedLayerId = null, selectedDeformerId = null, hoveredLayerId = null, hoveredDeformerId = null,
-                        isolatedLayerId = null, isolationSnapshot = null, animationEnabled = false,
-                        mouseTrackingEnabled = true, previewParameterValues = emptyMap(),
-                        workspaces = current.workspaces.map { workspace ->
-                            workspace.copy(canvases = workspace.canvases.map { canvas ->
-                                canvas.updateSession(CanvasMode.EDIT) {
-                                    it.copy(camera = TabCamera(), presentation = CanvasPresentation())
-                                }.updateSession(CanvasMode.PREVIEW) {
-                                    it.copy(camera = TabCamera(), presentation = CanvasPresentation())
-                                }
-                            })
-                        },
-                        historySnapshot = null, historyAnnotations = emptyMap(),
-                        projectOpenGeneration = current.projectOpenGeneration + 1,
-                        analysis = preview.analysis,
-						loadedInputPath = input.toAbsolutePath().normalize().toString(),
-						loadedInputFileSignature = inputSignature,
-						previewModel = preview,
-						statusText = summary,
-						lockedParameters = emptySet(),
-						parameterValues = preview.rig.puppet.parameters.associate { it.id to it.default },
-						parameterSnapshots = emptyList(),
-					)
-				}
-				refreshSdkSession(preview)
-                resetCanvasPaintSessions()
-                (agentWorkspace as? io.github.psd2live.agent.ViewModelAgentWorkspace)?.importedPsd()
-                updateState { it.copy(isAnalyzing = false) }
-				// The start screen, or with it turned off the default presets straight away.
-				if (AppSettings.autoDetectMeshSplitsOnImport) requestStartScreen(fresh = true)
-				else applyStartScreenDefaults()
-			} catch (failure: Throwable) {
-                if (failure is kotlinx.coroutines.CancellationException) throw failure
-				val detail = failure.message ?: failure.javaClass.simpleName
-				updateState {
-					it.withLog(tr("log.failed", detail), level = LogLevel.ERROR, tag = "Analysis").copy(
-						isAnalyzing = false,
-						isIndeterminateProgress = false,
-						statusText = tr("status.failed", detail),
-						errorMessage = detail,
-					)
-				}
-			}
-		}
-	}
-
-    /** Import an authored model without running PSD rig, skeleton, motion or physics presets. */
+    /** Both adapters invoke the same application source capability; only this entry owns GUI confirmation. */
     fun importCmo3(path: Path, mode: io.github.psd2live.core.Cmo3ImportMode) {
         if (_state.value.isBusy || _state.value.projectSaving) return
+        if (mode == io.github.psd2live.core.Cmo3ImportMode.NEW && _state.value.analysis != null) {
+            withSavedChanges { startCmo3Import(path, mode, discardUnsaved = true) }
+        } else startCmo3Import(path, mode, discardUnsaved = false)
+    }
+
+    private fun startCmo3Import(path: Path, mode: io.github.psd2live.core.Cmo3ImportMode, discardUnsaved: Boolean) =
+        startWorkspaceImport(discardUnsaved, tr("cmo3.importing")) {
+            it.importCmo3(path.toAbsolutePath().normalize(), mode, discardUnsaved)
+        }
+
+    private fun startWorkspaceImport(discardUnsaved: Boolean, status: String, afterImport: () -> Unit = {},
+                                     action: suspend (io.github.psd2live.application.WorkspaceSourcePort) -> Unit) {
         flushEditorFields()
         endSwing()
-        val before = _state.value
-        val replace = mode == io.github.psd2live.core.Cmo3ImportMode.REPLACE && before.previewModel != null
         previewRebuildJob?.cancel()
         activeWorkJob = scope.launch {
-            updateState { it.copy(isAnalyzing = true, isIndeterminateProgress = true, errorMessage = null,
-                statusText = tr("cmo3.importing")) }
             try {
-                val preview = runInterruptible(Dispatchers.Default) {
-                    require(Files.isRegularFile(path)) { "CMO3 file does not exist: $path" }
-                    val (source, config) = io.github.psd2live.core.Cmo3ModelImport.prepare(
-                        Files.readAllBytes(path), mode, before.previewModel, before.buildConfig())
-                    pipeline.buildPreview(source, config)
+                val workspace = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+                try { workspace.awaitEditorDrafts() }
+                catch (failure: Exception) {
+                    if (failure is kotlinx.coroutines.CancellationException || !discardUnsaved) throw failure
                 }
-                val config = preview.config
-                val summary = tr("cmo3.imported", path.fileName.toString())
-                resetCanvasPaintSessions()
-                updateState { current -> current.copy(
-                    projectId = if (replace) before.projectId else java.util.UUID.randomUUID().toString(),
-                    projectSourceName = if (replace) before.projectSourceName else path.fileName.toString(),
-                    projectFile = if (replace) before.projectFile else null,
-                    inputPath = if (replace) before.inputPath else path.toAbsolutePath().normalize().toString(),
-                    loadedInputPath = if (replace) before.loadedInputPath else path.toAbsolutePath().normalize().toString(),
-                    loadedInputFileSignature = if (replace) before.loadedInputFileSignature else "${Files.size(path)}:${Files.getLastModifiedTime(path).toMillis()}",
-                    analysis = preview.analysis, previewModel = preview, previewModelDirty = false,
-                    rigEdits = config.rigEdits, runtimeTarget = config.runtimeTarget,
-                    meshOnly = config.meshOnly, generateDeformers = config.generateDeformers,
-                    mouthOutlineEnabled = config.mouthOutlineEnabled, generatePhysics = config.generatePhysics,
-                    physicsFrontHair = false, physicsBackHair = false, physicsEyeJelly = false,
-                    motionBasic = config.motionBasic, motionIdle = config.motionIdle, motionBlink = config.motionBlink, motionNod = config.motionNod,
-                    motionShake = config.motionShake, motionSkeleton = config.motionSkeleton,
-                    hairSimulationFront = if (replace) before.hairSimulationFront else false,
-                    hairSimulationBack = if (replace) before.hairSimulationBack else false,
-                    layerOverrides = config.layerOverrides, layerVisibility = config.layerVisibility,
-                    deletedLayerIds = config.deletedLayerIds, meshOverrides = config.meshOverrides,
-                    parentOverrides = config.parentOverrides, drawOrderOverrides = config.drawOrderOverrides,
-                    deformerVisibility = if (replace) before.deformerVisibility else emptyMap(),
-                    selectedLayerId = null, selectedLayerIds = emptySet(), selectedDeformerId = null,
-                    hoveredLayerId = null, hoveredDeformerId = null, isolatedLayerId = null, isolationSnapshot = null,
-                    clipMaskPickSourceId = null,
-                    parameterValues = preview.rig.puppet.parameters.associate { it.id to it.default },
-                    previewParameterValues = emptyMap(), lockedParameters = emptySet(),
-                    parameterSnapshots = if (replace) before.parameterSnapshots else emptyList(),
-                    animationEnabled = false, simulationPreviewId = null,
-                    historySnapshot = if (replace) before.historySnapshot else null,
-                    historyAnnotations = if (replace) before.historyAnnotations else emptyMap(),
-                    projectOpenGeneration = if (replace) before.projectOpenGeneration else before.projectOpenGeneration + 1,
-                    projectDirty = true, projectEditVersion = current.projectEditVersion + 1,
-                    showProjectLocationDialog = false, statusText = summary,
-                ) }
-                val workspace = agentWorkspace as? io.github.psd2live.agent.ViewModelAgentWorkspace
-                if (replace) workspace?.editorChanged(summary) else {
-                    workspace?.importedPsd(recoverLegacy = false)
-                    workspace?.let { updateHistorySnapshot(it.history()) }
-                }
-                refreshSdkSession(preview)
+                _state.first { !it.canvasEditBusy }
+                val expected = workspace.snapshot()
+                updateState { it.copy(isAnalyzing = true, isIndeterminateProgress = true, errorMessage = null, statusText = status) }
+                withContext(io.github.psd2live.application.WorkspaceExecution(expected.projectId, expected.state, MutationAuthor.USER)) { action(workspace) }
+                updateState { it.copy(isAnalyzing = false, isIndeterminateProgress = false) }
+                afterImport()
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
                 updateState { it.copy(errorMessage = failure.message ?: failure.toString(), statusText = tr("status.failed", failure.message)) }
-            } finally {
-                updateState { it.copy(isAnalyzing = false, isIndeterminateProgress = false) }
-            }
+            } finally { updateState { it.copy(isAnalyzing = false, isIndeterminateProgress = false) } }
         }
     }
 
 	fun generateRig(targetOutputPath: String? = null) {
-		if (!targetOutputPath.isNullOrBlank()) {
-			setOutputPath(targetOutputPath)
+		if (!targetOutputPath.isNullOrBlank()) setOutputPath(targetOutputPath)
+		val current = _state.value
+		if (current.analysis == null) {
+			updateState { it.copy(errorMessage = tr("error.noPsdLoaded")) }; return
 		}
-		val rawInput = _state.value.inputPath.trim()
-		if (rawInput.isEmpty()) {
-			updateState { it.copy(errorMessage = tr("dialog.inputRequired")) }
-			return
-		}
-		var rawOutput = _state.value.outputPath.trim()
-		if (rawOutput.isEmpty()) {
-			try {
-				val p = Path.of(rawInput)
-				val parent = p.toAbsolutePath().parent
-				val name = p.fileName.toString().substringBeforeLast('.')
-				rawOutput = parent.resolve("$name-psd2live").toString()
-				setOutputPath(rawOutput)
-			} catch (_: Exception) {
-				updateState { it.copy(errorMessage = tr("dialog.outputRequired")) }
-				return
+		var output = current.outputPath.trim()
+		if (output.isEmpty()) {
+			val input = runCatching { Path.of(current.inputPath).toAbsolutePath().normalize() }.getOrNull()
+			if (input?.fileName == null) {
+				updateState { it.copy(errorMessage = tr("dialog.outputRequired")) }; return
 			}
+			output = input.parent.resolve(input.fileName.toString().substringBeforeLast('.') + "-psd2live").toString()
+			setOutputPath(output)
 		}
-		lastExportDirectory = rawOutput
-		val input = Path.of(rawInput)
-		val output = Path.of(rawOutput)
-		val config = _state.value.buildConfig()
-		val workspaceSource = _state.value.analysis?.source
-		if (!config.exportCmo3 && !config.exportMoc3) {
-			updateState { it.copy(errorMessage = tr("dialog.exportFormatRequired")) }
-			return
+		if (!current.exportCmo3 && !current.exportMoc3) {
+			updateState { it.copy(errorMessage = tr("dialog.exportFormatRequired")) }; return
 		}
-
-		activeWorkJob?.cancel()
-		activeWorkJob = scope.launch {
-			updateState {
-				val base = it.withLog(tr("status.generating"), level = LogLevel.INFO, tag = "Export")
-				val withUpscale = if (config.textureUpscale.scale > 1) {
-					base.withLog(
-						tr("log.upscaleExportActive", config.textureUpscale.scale),
-						level = LogLevel.INFO,
-						tag = "Upscale",
-					)
-				} else {
-					base
-				}
-				withUpscale.copy(
-					isGenerating = true,
-					isIndeterminateProgress = false,
-					progress = 0f,
-					statusText = tr("status.generating"),
-					errorMessage = null,
-					successExportMessage = null,
-				)
-			}
-			try {
-				val result = runInterruptible(Dispatchers.Default) {
-					val progress = ProgressListener { stage, fraction ->
-							updateState {
-								val tag = if (stage.contains("高清化") || stage.contains("upscal", true) || stage.contains("高解像度")) "Upscale" else "Export"
-								it.withLog("%3d%%  %s".format((fraction * 100).toInt(), stage), level = LogLevel.INFO, tag = tag).copy(
-									progress = fraction.toFloat().coerceIn(0f, 1f),
-									statusText = stage,
-								)
-							}
-						}
-					if (workspaceSource != null) {
-						pipeline.run(workspaceSource, _state.value.projectSourceName ?: input.fileName.toString(), output, config, progress)
-					} else {
-						pipeline.run(input, output, config, progress)
-					}
-				}
-				updateState { current ->
-					val outputLogs = listOf(
-						tr("log.outputFiles"),
-					) + result.exportedFiles.map { "• ${it.path} (${it.bytes} bytes)" }
-					val warningLogs = if (result.warnings.isNotEmpty()) {
-						listOf(tr("log.warnings")) + result.warnings.map { "• $it" }
-					} else emptyList()
-					val summary = tr("status.completed", result.exportedFiles.size, result.warnings.size)
-					current
-						.withLogs(outputLogs, level = LogLevel.INFO, tag = "Export")
-						.let { state ->
-							if (warningLogs.isNotEmpty()) {
-								state.withLogs(warningLogs, level = LogLevel.WARNING, tag = "Export")
-							} else state
-						}
-						.copy(
-							isGenerating = false,
-							progress = 1f,
-							analysis = result.previewModel.analysis,
-							loadedInputPath = current.loadedInputPath ?: input.toAbsolutePath().normalize().toString(),
-							loadedInputFileSignature = current.loadedInputFileSignature ?: runCatching {
-								"${Files.size(input)}:${Files.getLastModifiedTime(input).toMillis()}"
-							}.getOrNull(),
-							previewModel = result.previewModel,
-							statusText = summary,
-							successExportMessage = tr("dialog.exportSuccess", result.exportedFiles.size, output),
-						)
-				}
-				refreshSdkSession(result.previewModel)
-			} catch (failure: Throwable) {
-                if (failure is kotlinx.coroutines.CancellationException) throw failure
-				val detail = failure.message ?: failure.javaClass.simpleName
-				updateState {
-					it.withLog(tr("log.failed", detail), level = LogLevel.ERROR, tag = "Export").copy(
-						isGenerating = false,
-						statusText = tr("status.failed", detail),
-						errorMessage = detail,
-					)
-				}
+		val directory = Path.of(output).toAbsolutePath().normalize()
+		lastExportDirectory = directory.toString()
+		launchWorkspaceExport(false, { port, state -> port.exportModel(state, directory.toString()) }) { result ->
+			val files = result.getValue("files").jsonArray
+			val warnings = result.getValue("warnings").jsonArray.map { it.jsonPrimitive.content }
+			updateState { state ->
+				state.withLogs(listOf(tr("log.outputFiles")) + files.map {
+					"• " + it.jsonObject.getValue("path").jsonPrimitive.content + " (" +
+						it.jsonObject.getValue("bytes").jsonPrimitive.content + " bytes)"
+				}, level = LogLevel.INFO, tag = "Export").let {
+					if (warnings.isEmpty()) it else it.withLogs(listOf(tr("log.warnings")) + warnings.map { text -> "• $text" },
+						level = LogLevel.WARNING, tag = "Export")
+				}.copy(progress = 1f, statusText = tr("status.completed", files.size, warnings.size),
+					successExportMessage = tr("dialog.exportSuccess", files.size, directory))
 			}
 		}
 	}
@@ -5356,90 +5193,58 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun exportPsd(targetPath: Path, scale: Int = 1, includeGeneratedLayers: Boolean = true) {
-		val currentState = _state.value
-		val analysis = currentState.analysis ?: run {
-			updateState { it.copy(errorMessage = tr("error.noPsdLoaded")) }
-			return
+		if (_state.value.analysis == null) {
+			updateState { it.copy(errorMessage = tr("error.noPsdLoaded")) }; return
 		}
-		activeWorkJob?.cancel()
-		activeWorkJob = scope.launch {
-			updateState {
-				it.copy(
-					isExportingPsd = true,
-					showExportPsdDialog = false,
-					progress = 0.05f,
-					statusText = tr("exportPsd.starting", targetPath.fileName.toString()),
-				)
-			}
-			addLog(
-				message = tr("log.exportPsdStart", targetPath.toAbsolutePath().normalize().toString(), scale),
-				level = LogLevel.INFO,
-				tag = "Export",
-			)
-			try {
-				val effectiveLayers = if (includeGeneratedLayers) {
-					analysis.layers.map { it.source }
-				} else {
-					analysis.source.layers
-				}
-				val upscaledTextures = if (scale > 1) {
-					updateState { it.copy(statusText = tr("upscale.startingInference"), progress = 0.15f) }
-					io.github.psd2live.core.TextureUpscale.prepare(
-						layers = analysis.layers,
-						config = currentState.textureUpscale.copy(scale = scale),
-						progress = { stage, frac ->
-							updateState { it.copy(statusText = stage, progress = (0.15 + frac * 0.70).toFloat().coerceIn(0.15f, 0.85f)) }
-						}
-					)
-				} else emptyMap()
+		val target = targetPath.toAbsolutePath().normalize()
+		launchWorkspaceExport(true, { port, state -> port.exportPsd(state, target.toString(), scale, includeGeneratedLayers) }) { result ->
+			addLog(tr("log.exportPsdSuccess", target.fileName.toString(), result.getValue("layers").jsonPrimitive.int,
+				result.getValue("bytes").jsonPrimitive.long), level = LogLevel.SUCCESS, tag = "Export")
+			updateState { it.copy(progress = 1f, statusText = tr("exportPsd.completed", target.fileName.toString())) }
+		}
+	}
 
-				updateState { it.copy(statusText = tr("exportPsd.writingBytes"), progress = 0.90f) }
-				val bytes = withContext(Dispatchers.Default) {
-					org.umamo.format.psd.PsdWriter.write(
-						width = analysis.source.widthPx,
-						height = analysis.source.heightPx,
-						layers = effectiveLayers,
-						groups = analysis.source.groups,
-						scale = scale,
-						upscaledTextures = upscaledTextures,
-					)
+	private fun launchWorkspaceExport(psd: Boolean,
+		action: suspend (io.github.psd2live.application.WorkspaceOutputPort, String) -> kotlinx.serialization.json.JsonObject,
+		succeeded: (kotlinx.serialization.json.JsonObject) -> Unit) {
+		val workspace = workspaceBackend ?: return
+		flushEditorFields()
+		val expected = workspace.snapshot()
+		if (!expected.loaded || expected.projectId == null) return
+		val generation = _state.value.projectOpenGeneration
+		activeWorkJob?.cancel()
+		val exportJob = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+			val owner = kotlinx.coroutines.currentCoroutineContext()[Job]
+			fun currentExport() = activeWorkJob === owner && _state.value.projectId == expected.projectId &&
+				_state.value.projectOpenGeneration == generation
+			if (!currentExport()) return@launch
+			val completion = io.github.psd2live.application.WorkspaceJobCompletion()
+			updateState { it.copy(isGenerating = !psd, isExportingPsd = psd, showExportPsdDialog = false,
+				progress = 0f, isIndeterminateProgress = false, errorMessage = null, successExportMessage = null,
+				statusText = tr("status.generating")) }
+			try {
+				val settled = workspace.settleEditorDrafts(expected.projectId, expected.state)
+				val progress = io.github.psd2live.application.WorkspaceJobContext { fraction, message ->
+					if (currentExport()) updateState { it.copy(progress = fraction, statusText = message) }
 				}
-				withContext(Dispatchers.IO) {
-					val parent = targetPath.toAbsolutePath().parent
-					if (parent != null) Files.createDirectories(parent)
-					Files.write(targetPath, bytes)
+				val result = withContext(Dispatchers.Default + completion + progress +
+					io.github.psd2live.application.WorkspaceExecution(expected.projectId, settled, MutationAuthor.USER)) {
+					action(workspace, settled)
 				}
-				val fileSize = Files.size(targetPath)
-				val successMsg = tr("log.exportPsdSuccess", targetPath.fileName.toString(), effectiveLayers.size, fileSize)
-				addLog(
-					message = successMsg,
-					level = LogLevel.SUCCESS,
-					tag = "Export",
-				)
-				updateState {
-					it.copy(
-						isExportingPsd = false,
-						progress = 1f,
-						statusText = tr("exportPsd.completed", targetPath.fileName.toString()),
-					)
+				if (currentExport()) succeeded(result)
+			} catch (failure: Exception) {
+				val committed = completion.result
+				if (committed != null) { if (currentExport()) succeeded(committed.data) }
+				else {
+					if (failure is kotlinx.coroutines.CancellationException) throw failure
+					val detail = failure.message ?: failure.javaClass.simpleName
+					if (currentExport()) updateState { it.withLog(tr("log.failed", detail), level = LogLevel.ERROR, tag = "Export")
+						.copy(statusText = tr("status.failed", detail), errorMessage = detail) }
 				}
-			} catch (failure: Throwable) {
-				if (failure is kotlinx.coroutines.CancellationException) throw failure
-				val detail = failure.message ?: failure.javaClass.simpleName
-				addLog(
-					message = tr("log.failed", detail),
-					level = LogLevel.ERROR,
-					tag = "Export",
-				)
-				updateState {
-					it.copy(
-						isExportingPsd = false,
-						statusText = tr("status.failed", detail),
-						errorMessage = detail,
-					)
-				}
-			}
+			} finally { if (currentExport()) updateState { it.copy(isGenerating = false, isExportingPsd = false) } }
 		}
+		activeWorkJob = exportJob
+		exportJob.start()
 	}
 
 	/** Fast incremental update or CPU rebuild used by the authenticated Agent transaction boundary. */
@@ -5459,14 +5264,15 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 
     internal suspend fun sampleAgentMotion(bundle: io.github.psd2live.core.CubismRuntimeBundle,
-                                          parameters: List<ParameterId>, frames: Int, fps: Int): List<Map<ParameterId, Float>> =
-        kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
-            sdkSession.sampleMotion(bundle, parameters, "AgentObservation", frames, fps).get(45, java.util.concurrent.TimeUnit.SECONDS)
-        }
+                                          parameters: List<ParameterId>, frames: Int, fps: Int,
+                                          progress: (Float) -> Unit, cancelled: () -> Boolean): List<Map<ParameterId, Float>> =
+        sdkSession.sampleMotionAwait(bundle, parameters, "AgentObservation", frames, fps, progress, cancelled)
 
 	/** Publish one already-built authoritative workspace snapshot atomically to Compose and preview. */
 	internal fun applyAgentWorkspacePreview(
 		preview: RigPreviewModel,
+        expectedProjectId: String? = _state.value.projectId,
+        expectedProjectOpenGeneration: Long = _state.value.projectOpenGeneration,
 		expectedSource: SourceArt,
 		expectedLayerVisibility: Map<String, Boolean>,
 		expectedDeletedLayerIds: Set<String>,
@@ -5475,6 +5281,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		expectedRigEdits: RigEditOverlay,
         expectedSettings: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
 		expectedMeshOverrides: Map<String, MeshSettings> = emptyMap(),
+        expectedGenerationSource: SourceArt? = null,
+        expectedMeshSource: SourceArt? = null,
+        expectedPlacementSource: SourceArt? = null,
 		layerVisibility: Map<String, Boolean>,
 		deletedLayerIds: Set<String>,
 		layerOverrides: Map<String, LayerClassificationOverride>,
@@ -5483,24 +5292,29 @@ class PSD2LiveViewModel : AutoCloseable {
 		status: String,
         settings: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
 		meshOverrides: Map<String, MeshSettings> = emptyMap(),
+        generationSource: SourceArt? = null,
+        meshSource: SourceArt? = null,
+        placementSource: SourceArt? = null,
 	): Boolean {
-		previewRebuildJob?.cancel()
-		resetCanvasPaintSessions()
 		var applied = false
 		updateState { current ->
 			applied = false
 			if (
+                current.projectId != expectedProjectId || current.projectOpenGeneration != expectedProjectOpenGeneration ||
 				current.analysis?.source !== expectedSource ||
 				current.layerVisibility != expectedLayerVisibility ||
 				current.deletedLayerIds != expectedDeletedLayerIds ||
 				current.layerOverrides != expectedLayerOverrides ||
 				current.parentOverrides != expectedParentOverrides ||
 				current.rigEdits != expectedRigEdits ||
+                current.generationSource != expectedGenerationSource ||
+                current.meshSource != expectedMeshSource ||
+                current.placementSource != expectedPlacementSource ||
                 current.meshOverrides != expectedMeshOverrides ||
-                (expectedSettings.isNotEmpty() && io.github.psd2live.project.WorkspaceStateCodec.settings(current) != expectedSettings)
+                (expectedSettings.isNotEmpty() && io.github.psd2live.ui.state.WorkspaceStateCodec.settings(current) != expectedSettings)
 			) return@updateState current
 			applied = true
-			io.github.psd2live.project.WorkspaceStateCodec.decode(settings, current).copy(
+			io.github.psd2live.ui.state.WorkspaceStateCodec.decode(settings, current).copy(
 				analysis = preview.analysis,
 				previewModel = preview,
 				previewModelDirty = false,
@@ -5509,6 +5323,9 @@ class PSD2LiveViewModel : AutoCloseable {
 				layerOverrides = layerOverrides,
 				parentOverrides = parentOverrides,
 				rigEdits = rigEdits,
+				generationSource = generationSource,
+				meshSource = meshSource,
+                placementSource = placementSource,
 				meshOverrides = meshOverrides,
 				selectedLayerId = current.selectedLayerId?.takeIf { selected ->
 					preview.analysis.layers.any { it.source.id.raw == selected } && selected !in deletedLayerIds
@@ -5527,13 +5344,16 @@ class PSD2LiveViewModel : AutoCloseable {
 				errorMessage = null,
 			)
 		}
+		if (applied) {
+			previewRebuildJob?.cancel()
+			resetCanvasPaintSessions()
+		}
 		return applied
 	}
 
-	internal fun loadAgentWorkspacePreview(preview: RigPreviewModel) {
-		resetCanvasPaintSessions()
-		updateState { it.copy(previewModel = preview, analysis = preview.analysis, previewModelDirty = false) }
-		refreshSdkSession(preview)
+	internal fun refreshWorkspaceRenderer(preview: RigPreviewModel) = synchronized(stateLock) {
+		// Publication belongs to the runtime commit. Renderer activation must not restore an old model.
+		if (_state.value.previewModel === preview) refreshSdkSession(preview)
 	}
 
 	private fun scheduleRuntimeBundleUpdate() {
@@ -5710,28 +5530,18 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 	/** When the preview's frame pump last advanced the motion clock; the fallback loop stays out while it runs. */
 	private var lastPumpTickNanos = 0L
-	val activeMotionName: String? get() = motionPlayer.activeName
+	val activeMotionName: String? get() = processActiveMotion
 
-	/**
-	 * Plays [name] on the preview from its start. Cubism plays the exported motion, forced over whatever is
-	 * playing; the software clock plays the same tracks, and drives the preview until Cubism is up.
-	 */
+	/** Plays a one-shot or starts idle on the shared process clock. */
 	fun triggerMotion(name: String) {
-		// A generated motion whose group the model presets switched off is not in the model.
-		if (MotionClips.BUILTIN_NAMES.any { it.equals(name, ignoreCase = true) } && !_state.value.motionPresetGroupOn(name)) return
-		motionEditor.playing = false
-		updateState { it.copy(animationEnabled = true) }
-		ensureSdkSessionLoaded()
-		val current = _state.value
-		current.activeWorkspace.canvases.filter { it.mode == CanvasMode.PREVIEW && it.id !in current.activeWorkspace.hiddenModules }.forEach {
-            sdkSession.startMotion(name, priority = MOTION_PRIORITY_FORCE, viewId = canvasRenderKey(it.id))
-        }
-		if (name.equals("Idle", ignoreCase = true)) {
-			motionPlayer.stop()
-			elapsed = 0.0
-		} else {
-			motionPlayer.start(name, current.rigEdits.skeleton, current.rigEdits.motionClips, current.rigEdits.motionPresets)
-		}
+		configurePlayback("trigger", kotlinx.serialization.json.buildJsonObject { put("name", name) })
+	}
+
+	private fun stopProcessMotion(name: String? = null) {
+		if (name != null && !name.equals(processActiveMotion, true)) return
+		if (processActiveMotion == null) return
+		processActiveMotion = null
+		scope.launch { configurePlayback("stop_motion", kotlinx.serialization.json.buildJsonObject { name?.let { put("name", it) } }) }
 	}
 
 	private fun startMotionLoop() {
@@ -5752,7 +5562,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			throw cancelled
 		} catch (failure: Throwable) {
 			// One bad frame must not end the loop: nothing would play again until a restart.
-			motionPlayer.stop()
+			stopProcessMotion()
 			addLog(
 				message = failure.message ?: failure.javaClass.simpleName,
 				level = LogLevel.WARNING,
@@ -5772,40 +5582,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		val isMeshOnly = current.meshOnly
 		val anim = inPreview && current.animationEnabled && !isMeshOnly
 		val tracking = inPreview && current.mouseTrackingEnabled && !isMeshOnly && current.activeWorkspace.pose?.authoringPose != true
-		if (anim) elapsed += dt
-
-		// 0. The animation editor's own playback poses the paused preview.
-		advanceMotionEditor(dt)
-
-		// 1. Advance the triggered one-shot; a paused preview holds it where it is.
-		val motion = if (anim) motionPlayer.advance(dt) else emptyMap()
-
-		// 2. Eye Blink (Periodic + Triggered)
-		val hasBlink = anim && current.motionBasic && current.motionBlink
-		val periodicBlink = if (hasBlink) blinkAt(elapsed % 4.6) else 1f
-		val blink = minOf(
-			periodicBlink,
-			motion[StandardParameters.EYE_L_OPEN] ?: 1f,
-			motion[StandardParameters.EYE_R_OPEN] ?: 1f,
-		)
-
-		// 3. Idle Motion (Head & Body Sway, Mouse Tracking)
-		val hasIdle = anim && current.motionBasic && current.motionIdle
-		val idleX = if (hasIdle) (sin(elapsed * 0.47) * 0.12).toFloat() else 0f
-		val idleY = if (hasIdle) (sin(elapsed * 0.31 + 1.1) * 0.08).toFloat() else 0f
-		val targetX = if (pointerActive && tracking) pointerX else idleX
-		val targetY = if (pointerActive && tracking) pointerY else idleY
-		val response = (dt * 7.5f).coerceAtMost(1f)
-		followX += (targetX - followX) * response
-		followY += (targetY - followY) * response
-		val bodyResponse = (dt * BODY_FOLLOW_RATE).coerceAtMost(1f)
-		bodyFollowX += (followX - bodyFollowX) * bodyResponse
-		bodyFollowY += (followY - bodyFollowY) * bodyResponse
-
-		if (!pointerActive && kotlin.math.abs(followX - targetX) < 0.001f) followX = targetX
-		if (!pointerActive && kotlin.math.abs(followY - targetY) < 0.001f) followY = targetY
-		if (!pointerActive && kotlin.math.abs(bodyFollowX - followX) < 0.001f) bodyFollowX = followX
-		if (!pointerActive && kotlin.math.abs(bodyFollowY - followY) < 0.001f) bodyFollowY = followY
+		val processFrame = if (inPreview && current.previewModel != null && processPlaybackActive)
+			(workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort)?.playbackFrame(dt) else null
+		if (processFrame != null) applyPlaybackFrame(processFrame)
 
 		val model = current.previewModel
 		val pausedPhysicsOn = inPreview && !anim && current.generatePhysics && !isMeshOnly &&
@@ -5813,15 +5592,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (model != null && inPreview && (anim || tracking)) {
 			val liveParams = if (isMeshOnly) {
 				model.rig.puppet.parameters.associate { it.id to it.default }
-			} else computeLiveParameters(
-				model = model,
-				current = current,
-				blink = blink,
-				motion = motion,
-			).let { inputs ->
+			} else processFrameValues.let { inputs ->
 				// 4. Physics reads the posed inputs and writes its outputs over them, as Cubism evaluates it.
 				val boundedInputs = io.github.psd2live.core.boundedPreviewPose(inputs, model.rig.puppet.parameters)
-				if (anim) boundedInputs + stepSoftwarePhysics(PhysicsClock.PLAYING, current, model, boundedInputs, dt) else boundedInputs
+				if (anim) boundedInputs + stepSoftwarePhysics(true, current, model, boundedInputs, dt) else boundedInputs
 			}
 			val boundedLiveParams = io.github.psd2live.core.boundedPreviewPose(liveParams, model.rig.puppet.parameters)
 			latestLiveParameters = boundedLiveParams
@@ -5850,17 +5624,29 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (inPreview) stepSimulationPreview(current, model, dt)
 	}
 
-	/** What the software physics is stepping for; switching starts it from rest, as a fresh Cubism model would. */
-	private enum class PhysicsClock { NONE, PLAYING, PAUSED }
-	private var physicsClock = PhysicsClock.NONE
-
-	private fun stepSoftwarePhysics(clock: PhysicsClock, state: PSD2LiveState, model: RigPreviewModel,
+	private fun stepSoftwarePhysics(playing: Boolean, state: PSD2LiveState, model: RigPreviewModel,
 		inputs: Map<ParameterId, Float>, dt: Float): Map<ParameterId, Float> {
-		if (clock != physicsClock) {
-			softwarePhysics.reset()
-			physicsClock = clock
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return emptyMap()
+		val expected = currentWorkspaceState() ?: return emptyMap()
+		val result = port.previewPhysics(kotlinx.serialization.json.buildJsonObject {
+			put("state", expected); put("dt", dt); put("playing", playing)
+			putJsonObject("values") { inputs.forEach { (id, value) -> put(id.raw, value) } }
+		})
+		processPhysicsActive = true
+		if (!playing) pausedPhysicsSettled = result.getValue("settled").jsonPrimitive.boolean
+		return result.getValue("outputs").jsonObject.map { (id, value) -> ParameterId(id) to value.jsonPrimitive.float }.toMap()
+	}
+
+	@Volatile private var processPhysicsActive = false
+	private fun resetPreviewPhysics() {
+		if (!processPhysicsActive) return
+		processPhysicsActive = false
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+		scope.launch {
+			val expected = currentWorkspaceState() ?: return@launch
+			try { port.previewPhysics(kotlinx.serialization.json.buildJsonObject { put("state", expected); put("dt", 0); put("reset", true) }) }
+			catch (_: io.github.psd2live.application.WorkspaceConflict) { /* A replacement owns its own fresh clock. */ }
 		}
-		return softwarePhysics.step(state, model, inputs, dt)
 	}
 
 	/**
@@ -5869,14 +5655,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * and hands the outputs to the renderer with the pose.
 	 */
 	private var pausedPhysics: Map<ParameterId, Float> = emptyMap()
-	private var pausedPhysicsStillFor = 0f
 	/** True once the paused physics has come to rest; the preview then stops asking for frames. */
 	@Volatile var pausedPhysicsSettled = true
 		private set
 
 	private fun stepPausedPhysics(current: PSD2LiveState, model: RigPreviewModel?, on: Boolean, tracking: Boolean, dt: Float) {
 		if (!on || model == null || current.activeWorkspace.pose?.authoringPose == true) {
-			if (physicsClock == PhysicsClock.PAUSED) physicsClock = PhysicsClock.NONE
 			// The software preview let go of the swing: back to the edit pose, unless the pointer holds a look.
 			if (pausedPhysics.isNotEmpty() && current.sdkStatus != "ready" && !pointerActive) {
 				setLivePose(emptyMap())
@@ -5888,12 +5672,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		val panel = current.previewPanelState()
 		val pointer = if (tracking) canvasPointers[canvasRenderKey(panel.previewControlCanvas().id, CanvasMode.PREVIEW)] else null
-		val pose = io.github.psd2live.core.pointerPreviewPose(parameterScrubPose(current, panel.parameterValues),
+		val posed = if (motionEditor.clipId != null && processFrameValues.isNotEmpty()) processFrameValues else panel.parameterValues
+		val pose = io.github.psd2live.core.pointerPreviewPose(parameterScrubPose(current, posed),
 			pointer?.first ?: 0f, -(pointer?.second ?: 0f), model.rig.puppet.parameters, pointer != null, panel.lockedParameters)
-		val out = stepSoftwarePhysics(PhysicsClock.PAUSED, current, model, pose, dt).filterKeys { it !in panel.lockedParameters }
-		val moved = out.any { (id, value) -> kotlin.math.abs(value - (pausedPhysics[id] ?: Float.NaN)) > PAUSED_PHYSICS_REST || pausedPhysics[id] == null }
-		pausedPhysicsStillFor = if (moved) 0f else pausedPhysicsStillFor + dt
-		pausedPhysicsSettled = pausedPhysicsStillFor >= PAUSED_PHYSICS_REST_SECONDS
+		val out = stepSoftwarePhysics(false, current, model, pose, dt)
 		pausedPhysics = out
 		if (current.sdkStatus != "ready") {
 			val shown = io.github.psd2live.core.boundedPreviewPose(pose + out, model.rig.puppet.parameters)
@@ -5902,69 +5684,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
-	fun computeLiveParameters(
-		model: RigPreviewModel,
-		current: PSD2LiveState = _state.value,
-		blink: Float = blinkAt(elapsed % 4.6),
-		motion: Map<ParameterId, Float> = emptyMap(),
-	): Map<ParameterId, Float> {
-		if (current.meshOnly) {
-			return model.rig.puppet.parameters.associate { it.id to it.default }
-		}
-
-		val hasIdle = current.animationEnabled && current.motionBasic && current.motionIdle
-
-		val mouthPhase = elapsed % 5.8
-		val mouthOpen = if (mouthPhase in 1.25..2.45 && current.animationEnabled && hasIdle) {
-			sin((mouthPhase - 1.25) / 1.20 * PI).toFloat().coerceAtLeast(0f)
-		} else 0f
-
-		// The idle the export writes, body parameters and skeleton poses alike; pointer follow adds on top.
-		// An edited idle plays its clip; its blink joins the periodic one rather than replacing the eyes.
-		val idleOverride = MotionClips.overrideOf(current.rigEdits.motionClips, "Idle")
-		val idleSettings = current.rigEdits.motionPresets["Idle"] ?: MotionPresetSettings()
-		val idle = when {
-			!hasIdle -> emptyMap()
-			idleSettings.deleted -> emptyMap()
-			idleOverride != null -> MotionClips.sampleAll(idleOverride, elapsed, loop = true)
-			else -> io.github.psd2live.core.SkeletonMotions.liveIdle(model.config.rigEdits.skeleton, elapsed, idleSettings)
-		}
-		// A playing motion replaces the idle on what it drives, as Cubism's forced motion does; the pointer
-		// follow still adds on top, like Cubism's look updater.
-		fun idleOf(id: ParameterId) = motion[id] ?: idle[id] ?: 0f
-
-		val isTracking = pointerActive && current.mouseTrackingEnabled && !current.meshOnly
-		val headAngleX = if (hasIdle || isTracking) followX * 38f else 0f
-		val headAngleY = if (hasIdle || isTracking) -followY * 24f else 0f
-		// The body turns and shifts its weight toward the pointer after the head, leans in and sinks onto
-		// bent knees below it and stands up onto its toes above it (see BodyStance).
-		val bodyAngleX = if (hasIdle || isTracking) bodyFollowX * BODY_TRACKING else 0f
-		val bodyAngleY = if (hasIdle || isTracking) -bodyFollowY * BODY_TRACKING else 0f
-		val eyeBallX = if (hasIdle || isTracking) followX.coerceIn(-1f, 1f) else 0f
-		val eyeBallY = if (hasIdle || isTracking) (-followY).coerceIn(-1f, 1f) else 0f
-
-		val base = mapOf(
-			StandardParameters.ANGLE_X to (headAngleX + idleOf(StandardParameters.ANGLE_X)),
-			StandardParameters.ANGLE_Y to (headAngleY + idleOf(StandardParameters.ANGLE_Y)),
-			StandardParameters.ANGLE_Z to idleOf(StandardParameters.ANGLE_Z),
-			StandardParameters.BODY_X to (bodyAngleX + idleOf(StandardParameters.BODY_X)).coerceIn(-10f, 10f),
-			StandardParameters.BODY_Y to (bodyAngleY + idleOf(StandardParameters.BODY_Y)).coerceIn(-10f, 10f),
-			StandardParameters.BODY_Z to idleOf(StandardParameters.BODY_Z),
-			StandardParameters.EYE_BALL_X to eyeBallX,
-			StandardParameters.EYE_BALL_Y to eyeBallY,
-			StandardParameters.EYE_L_OPEN to minOf(blink, idle[StandardParameters.EYE_L_OPEN] ?: 1f),
-			StandardParameters.EYE_R_OPEN to minOf(blink, idle[StandardParameters.EYE_R_OPEN] ?: 1f),
-			StandardParameters.MOUTH_FORM to if (current.animationEnabled && hasIdle) sin(elapsed * 0.41).toFloat() * 0.18f else 0f,
-			StandardParameters.MOUTH_OPEN to mouthOpen,
-			StandardParameters.BREATH to idleOf(StandardParameters.BREATH),
-		)
-		val available = model.rig.puppet.parameters.mapTo(HashSet()) { it.id }
-		return base + idle.filterKeys { it !in base && it in available } + motion.filterKeys { it !in base && it in available }
-	}
-
-	private fun blinkAt(phase: Double): Float = if (phase in 4.18..4.46) {
-		(1.0 - sin((phase - 4.18) / 0.28 * PI)).toFloat().coerceIn(0f, 1f)
-	} else 1f
+	fun computeLiveParameters(model: RigPreviewModel, current: PSD2LiveState = _state.value,
+		blink: Float = 1f, motion: Map<ParameterId, Float> = emptyMap()): Map<ParameterId, Float> =
+		io.github.psd2live.core.boundedPreviewPose(processFrameValues.ifEmpty { current.parameterValues } + motion, model.rig.puppet.parameters)
 
 	fun requestSdkFrame(
 		width: Int,
@@ -6003,7 +5725,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		val previewValues = parameterValuesForPreview(
 			snapshot, presentation.animationEnabled, parameterScrubPose(snapshot, presentation.parameterValues),
 			presentation.lockedParameters, liveParams,
-		).let { if (!isAnim && snapshot.activeWorkspace.pose?.authoringPose != true && pausedPhysics.isNotEmpty()) it + pausedPhysics else it }
+		).let { pose ->
+			val framed = if (isAnim || tracking || motionEditor.clipId != null) pose + processFrameValues.filterKeys { it !in presentation.lockedParameters } else pose
+			parameterScrubPose(snapshot, if (!isAnim && snapshot.activeWorkspace.pose?.authoringPose != true && pausedPhysics.isNotEmpty()) framed + pausedPhysics else framed)
+		}
 		sdkSession.render(
 			CubismSdkPreviewSession.RenderRequest(
 				width = width,
@@ -6012,15 +5737,14 @@ class PSD2LiveViewModel : AutoCloseable {
 				offsetX = offsetX,
 				offsetY = offsetY,
 				deltaTime = deltaTime,
-				// Cubism receives the pointer target and performs its own critically damped tracking.
-				// X stays raw for native hair inertia; Y uses UI smoothing because it is applied
-				// separately to keep mouse tracking from owning ParamAngleZ.
+				// The shared process clock supplies tracking parameters; the raw pointer still
+				// reaches native hair inertia without evaluating tracking a second time.
 				pointerX = if (tracking) canvasPointers[viewId]?.first ?: 0f else 0f,
 				pointerY = if (tracking) -(canvasPointers[viewId]?.second ?: 0f) else 0f,
 				animationEnabled = isAnim,
 				parameterOverrides = previewValues,
 				parameterDefinitions = snapshot.previewModel?.rig?.puppet?.parameters.orEmpty(),
-				pointerTrackingEnabled = tracking && canvasPointers.containsKey(viewId),
+				pointerTrackingEnabled = false,
 				lockedParameters = presentation.lockedParameters,
 				frameTimeNanos = frameTimeNanos,
                 viewId = viewId,
@@ -6056,13 +5780,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		const val SDK_PARAMETER_PUBLISH_INTERVAL_NANOS = 100_000_000L
 		/** Without a pump frame for this long, the fallback loop runs the clock. */
 		const val PUMP_IDLE_NANOS = 100_000_000L
-		/** A paused physics output moving less than this per step is at rest. */
-		const val PAUSED_PHYSICS_REST = 1e-4f
-		/** How long paused physics stays still before the preview stops rendering it. */
-		const val PAUSED_PHYSICS_REST_SECONDS = 0.5f
-		/** How fast the body catches up with where the head looks, per second, and how far it turns there. */
-		const val BODY_FOLLOW_RATE = 2.6f
-		const val BODY_TRACKING = 8f
 		/** The fallback loop's step when the rate is unlimited. */
 		const val UNLIMITED_TICK_NANOS = 16_000_000L
 		/** Cubism's force priority: a triggered motion always replaces the one playing. */

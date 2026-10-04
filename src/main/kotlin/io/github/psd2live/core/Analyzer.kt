@@ -7,6 +7,18 @@ import org.umamo.format.art.SourceArt
 import kotlin.math.max
 
 object CharacterAnalyzer {
+	internal fun classify(layer: org.umamo.format.art.SourceLayer, config: PipelineConfig): ClassifiedLayer =
+		LayerClassifier.classify(layer, config.alphaThreshold).withOverride(config.layerOverrides[layer.id.raw])
+
+	/** Recreate retained legacy component identities without building a model or discarding deleted pixels. */
+	internal fun expandLayer(original: ClassifiedLayer, config: PipelineConfig): List<ClassifiedLayer> {
+		if (!preserveLegacySplit(original.source.id.raw, config)) return listOf(original)
+		return ComponentSplitter.split(original, config.meshSpacing.toFloat(), config.alphaThreshold).map { component ->
+			val override = config.layerOverrides[component.source.id.raw] ?: config.layerOverrides[original.source.id.raw]
+			component.withOverride(override, preserveSide = component.source.id != original.source.id)
+		}
+	}
+
 	fun analyze(source: SourceArt, config: PipelineConfig): PipelineAnalysis {
 		// A depth copy retains its original texture rectangle even when completely erased: its
 		// welded mesh must sample transparent pixels, never a neighbour's tile after a repack.
@@ -16,20 +28,12 @@ object CharacterAnalyzer {
 		val initiallyClassified = source.layers
 			.filter { it.raster.width > 0 && it.raster.height > 0 && it.id.raw !in config.deletedLayerIds }
 			.map { layer ->
-				LayerClassifier.classify(layer, config.alphaThreshold).withOverride(
-					config.layerOverrides[layer.id.raw],
-				)
+				classify(layer, config)
 			}.map { if (it.source.id.raw in depthLayerIds && it.opaquePixels == 0) it.copy(opaquePixels = 1) else it }
 		// Fresh layers stay intact until the UI offers a named split. Old projects may still
 		// reference generated :r/:l IDs, so retain those identities when they carry edits.
-		val layers = initiallyClassified.flatMap { original ->
-			if (!preserveLegacySplit(original.source.id.raw, config)) listOf(original)
-			else ComponentSplitter.split(original, config.meshSpacing.toFloat(), config.alphaThreshold).map { component ->
-				val override = config.layerOverrides[component.source.id.raw]
-					?: config.layerOverrides[original.source.id.raw]
-				component.withOverride(override, preserveSide = component.source.id != original.source.id)
-			}
-		}.filter { it.source.id.raw !in config.deletedLayerIds }
+		val layers = initiallyClassified.flatMap { expandLayer(it, config) }
+			.filter { it.source.id.raw !in config.deletedLayerIds }
 		val warnings = source.warnings.toMutableList()
 		val nonEmpty = layers.filter { it.opaquePixels > 0 }
 		require(nonEmpty.isNotEmpty()) { tr("error.psdNoVisibleLayers") }

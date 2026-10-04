@@ -150,10 +150,13 @@ internal object MotionCurveMath {
 		val hi = max(low, high)
 		return curve.copy(keys = curve.keys.map { key ->
 			val value = key.value.coerceIn(lo, hi)
+			fun constrain(handle: MotionHandle): MotionHandle {
+				val control = key.value + handle.y
+				return if (value == key.value && control in lo..hi) handle else handle.copy(y = control.coerceIn(lo, hi) - value)
+			}
 			key.copy(
 				value = value,
-				inHandle = key.inHandle.copy(y = (key.value + key.inHandle.y).coerceIn(lo, hi) - value),
-				outHandle = key.outHandle.copy(y = (key.value + key.outHandle.y).coerceIn(lo, hi) - value),
+				inHandle = constrain(key.inHandle), outHandle = constrain(key.outHandle),
 			)
 		})
 	}

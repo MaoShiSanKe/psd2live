@@ -38,12 +38,16 @@ class SimPreview {
      * Builds and calibrates the scene; slow, so call it off the frame thread. The scene starts at rest at
      * [pose]. Returns the setup notes, or throws what the edit got wrong.
      */
-    fun prepare(model: PuppetModel, edit: RigSimEdit, pose: Map<ParameterId, Float>): List<String> {
+    fun prepare(model: PuppetModel, edit: RigSimEdit, pose: Map<ParameterId, Float>, progress: (Float) -> Unit = {},
+                cancelled: () -> Boolean = { false }): List<String> {
         pending = model to edit
         try {
-            val scene = SimScene.build(model, edit)
-            scene.calibrate(model)
+            val checkpoint = { if (cancelled()) throw java.util.concurrent.CancellationException("Simulation preparation cancelled") }
+            val scene = SimScene.build(model, edit, checkpoint = checkpoint)
+            scene.calibrate(model, progress = progress, cancelled = cancelled)
+            checkpoint()
             scene.reset(model, pose)
+            checkpoint()
             if (pending?.let { it.first === model && it.second == edit } == true) prepared = Prepared(model, edit, scene)
             return scene.notes
         } catch (failure: Exception) {
@@ -55,16 +59,26 @@ class SimPreview {
     }
 
     /** Advances [dt] at [pose] and returns the frame, or null while nothing is ready for this rig and edit. */
-    fun step(model: PuppetModel, edit: RigSimEdit, pose: Map<ParameterId, Float>, dt: Float): SimulatedFrame? {
+    fun step(model: PuppetModel, edit: RigSimEdit, pose: Map<ParameterId, Float>, dt: Float, checkpoint: () -> Unit = {}): SimulatedFrame? {
         val ready = prepared ?: return null
         if (ready.model !== model || ready.edit != edit) return null
-        if (!ready.scene.drive(model, pose, dt)) return null
+        if (!ready.scene.drive(model, pose, dt, checkpoint)) return null
         return SimulatedFrame(edit.id, SimAuthoring.positions(ready.scene), ++serial)
     }
 
     /** Puts the running scene back at rest at [pose]. */
     fun restart(model: PuppetModel, pose: Map<ParameterId, Float>) {
-        prepared?.takeIf { it.model === model }?.scene?.reset(model, pose)
+        val ready = prepared?.takeIf { it.model === model } ?: return
+        ready.scene.reset(model, pose)
+        serial++
+    }
+
+    internal class Snapshot(val scene: SimScene.Snapshot, val serial: Long)
+    internal fun snapshot(): Snapshot = Snapshot(requireNotNull(prepared).scene.snapshot(), serial)
+    internal fun restore(snapshot: Snapshot) { requireNotNull(prepared).scene.restore(snapshot.scene); serial = snapshot.serial }
+    internal fun frame(): SimulatedFrame {
+        val ready = requireNotNull(prepared)
+        return SimulatedFrame(ready.edit.id, SimAuthoring.positions(ready.scene), serial)
     }
 
     fun clear() {

@@ -11,9 +11,8 @@ package org.umamo.runtime.model
 /**
  * The entity a keyform channel belongs to.
  *
- * Its own taxonomy rather than [SelectionTarget] because a glue is keyable but not selectable, and a glue
- * carries no id - it is addressed by the mesh pair it welds, which is stable across edits in a way a list
- * index is not.
+ * Its own taxonomy rather than [SelectionTarget] because a glue is keyable but not selectable.
+ * Authored Glue IDs distinguish ordered records sharing a mesh pair; legacy owners retain pair addressing.
  */
 sealed interface KeyformOwner {
 	/** A textured drawable mesh. */
@@ -25,8 +24,11 @@ sealed interface KeyformOwner {
 	/** A warp or rotation deformer. */
 	data class Deformer(val id: DeformerId) : KeyformOwner
 
-	/** A glue affecter, addressed by the pair of meshes it welds. */
-	data class Glue(val meshA: DrawableId, val meshB: DrawableId) : KeyformOwner
+	/** A glue affecter, with optional authored identity and a legacy mesh-pair address. */
+	data class Glue(val meshA: DrawableId, val meshB: DrawableId, val authoredId: String? = null) : KeyformOwner {
+        fun matches(glue: org.umamo.runtime.model.Glue): Boolean = if (authoredId != null) glue.id == authoredId
+            else glue.meshA == meshA && glue.meshB == meshB
+    }
 }
 
 /**
@@ -78,5 +80,5 @@ fun PuppetModel.channelGridsOf(owner: KeyformOwner): ChannelGrids? =
 		is KeyformOwner.Drawable -> drawables.firstOrNull { it.id == owner.id }?.channelGrids
 		is KeyformOwner.Part -> parts.firstOrNull { it.id == owner.id }?.channelGrids
 		is KeyformOwner.Deformer -> deformers.firstOrNull { it.id == owner.id }?.channelGrids
-		is KeyformOwner.Glue -> glues.firstOrNull { it.meshA == owner.meshA && it.meshB == owner.meshB }?.channelGrids
+		is KeyformOwner.Glue -> glues.firstOrNull { owner.matches(it) }?.channelGrids
 	}

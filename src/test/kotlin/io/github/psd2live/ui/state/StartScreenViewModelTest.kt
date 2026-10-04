@@ -1,6 +1,6 @@
 package io.github.psd2live.ui.state
 
-import io.github.psd2live.agent.ViewModelAgentWorkspace
+import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.core.Side
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
@@ -93,8 +93,8 @@ class StartScreenViewModelTest {
         }
         ImageIO.write(image, "png", png.toFile())
         PSD2LiveViewModel().use { vm ->
-            ViewModelAgentWorkspace(vm, temp.resolve("store")).use { workspace ->
-                vm.attachAgentWorkspace(workspace)
+            DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+                vm.attachWorkspace(workspace)
                 workspace.createArtwork(buildJsonObject {
                     put("width", 96); put("height", 48)
                     putJsonArray("layers") { add(buildJsonObject { put("path", png.toString()); put("name", "deco"); put("role", "objects") }) }
@@ -113,7 +113,13 @@ class StartScreenViewModelTest {
                 vm.applyStartScreen(StartQuickPreset.MINIMAL.choices,
                     listOf(PSD2LiveViewModel.LayerSplitDecision(split, listOf("deco-a", "deco-b"), listOf(Side.NONE, Side.NONE))))
                 assertNull(vm.pendingStartScreen)
-                waitUntil { !vm.state.value.motionBasic && vm.state.value.analysis!!.layers.size == 2 }
+                // Preset switches update asynchronously; one early switch does not mark the complete choice set.
+                waitUntil {
+                    val current = vm.state.value
+                    val parts = PresetParts.of(current.analysis)
+                    current.analysis!!.layers.size == 2 &&
+                        StartPresetChoices.of(current).within(parts) == StartQuickPreset.MINIMAL.choices.within(parts)
+                }
                 val state = vm.state.value
                 assertEquals(setOf("deco-a", "deco-b"), state.analysis!!.layers.map { it.source.name }.toSet())
                 assertTrue(layerId in state.deletedLayerIds)

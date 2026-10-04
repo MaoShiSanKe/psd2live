@@ -2,12 +2,68 @@ package io.github.psd2live.core
 
 import kotlinx.serialization.json.*
 import org.umamo.edit.MeshRefinementOps
+import org.umamo.edit.channelValueAt
+import org.umamo.edit.withParameterDeleted
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.*
 import kotlin.math.abs
 import kotlin.test.*
 
 class GlueEditingTest {
+    @Test fun channelCaptureCopyResetAndParameterRemovalKeepSamePairGlueIdentitiesSeparate() {
+        val a = DrawableId("a"); val b = DrawableId("b"); val parameter = Parameter(ParameterId("Shape"), "Shape", -1f, 1f, 0f)
+        val first = Glue(a, b, listOf(GluePair(0, 0, 0.2f, 0.8f)), intensity = 0.2f, id = "first")
+        val second = Glue(a, b, listOf(GluePair(1, 1, 0.4f, 0.6f)), intensity = 0.8f, id = "second")
+        val source = PuppetModel(listOf(parameter), emptyList(), emptyList(), emptyList(), emptyList(), null, glues = listOf(first, second))
+        fun target(id: String) = RigTargetRef(RigTargetKind.GLUE, a.raw, b.raw, glueId = id)
+        fun value(model: PuppetModel, id: String, shape: Float) = (model.channelValueAt(
+            KeyableTarget(target(id).asKeyformOwner(), FormChannel.GLUE_INTENSITY), mapOf(parameter.id to shape)) as ChannelValue.Scalar).value
+        val captured = applyKeyformSet(source, RigKeyformSetEdit(target("second"), mapOf("Shape" to 1f),
+            channels = RigKeyformChannelsEdit(glueIntensity = 0.6f)))
+        assertSame(first, captured.glues[0]); assertEquals(0.2f, value(captured, "first", 1f)); assertEquals(0.6f, value(captured, "second", 1f))
+        val copied = applyKeyformCopy(captured, RigKeyformCopyEdit(target("second"), mapOf("Shape" to 1f), target("first"),
+            mapOf("Shape" to -1f), listOf("glueIntensity")))
+        assertEquals(0.6f, value(copied, "first", -1f)); assertEquals(0.6f, value(copied, "second", 1f))
+        assertFailsWith<IllegalArgumentException> {
+            applyKeyformDelete(copied, RigKeyformDeleteEdit(target("second"), "Shape", channel = "glueIntensitty"))
+        }
+        assertEquals(0.6f, value(copied, "first", -1f)); assertEquals(0.6f, value(copied, "second", 1f))
+        val reset = applyKeyformDelete(copied, RigKeyformDeleteEdit(target("second"), "Shape", channel = "glueIntensity"))
+        assertSame(copied.glues[0], reset.glues[0]); assertEquals(0.6f, value(reset, "first", -1f))
+        val deleted = copied.withParameterDeleted(parameter.id)
+        assertEquals(listOf("first", "second"), deleted.glues.map { it.id })
+        assertEquals(0.2f, value(deleted, "first", 0f)); assertEquals(0.8f, value(deleted, "second", 0f))
+        assertTrue(deleted.glues.all { it.channelGrids.gridsByChannel.values.all { grid -> grid.axes.none { it.parameterId == parameter.id } } })
+    }
+
+    @Test fun strokesPreserveEveryContiguousGlueRecordAndAuthoredIdentity() {
+        fun drawable(id: String) = Drawable(DrawableId(id), id, null, BlendMode.Normal, emptyList(),
+            DrawableMesh(floatArrayOf(0f, 0f, 10f, 0f, 0f, 10f), FloatArray(6), intArrayOf(0, 1, 2)), null)
+        val a = drawable("a"); val b = drawable("b")
+        val first = Glue(a.id, b.id, listOf(GluePair(0, 0, 0.2f, 0.8f)), intensity = 0.3f, id = "first")
+        val other = Glue(a.id, a.id, listOf(GluePair(2, 1, 0.1f, 0f)), intensity = 0.4f, id = "between")
+        val last = Glue(b.id, a.id, listOf(GluePair(1, 1, 0.7f, 0.3f)), intensity = 0.9f, id = "last")
+        val model = PuppetModel(emptyList(), emptyList(), emptyList(), listOf(a, b),
+            listOf(OrgChild.Drawable(a.id), OrgChild.Drawable(b.id)), null, glues = listOf(first, other, last))
+        fun stroke(action: String) = buildJsonObject {
+            put("op", "canvas_glue_edit"); put("id", "first"); put("mesh_a", "a"); put("mesh_b", "b"); put("action", action)
+            put("weight_mode", "a"); put("delta", 0.1); putJsonArray("hits_a") { add(1) }
+        }
+        val painted = CanvasEdits.apply(model, stroke("weights"))
+        assertEquals(listOf("first", "between", "last"), painted.glues.map { it.id })
+        assertEquals(first.pairs[0].weightA, painted.glues[0].pairs[0].weightA)
+        assertEquals(first.intensity, painted.glues[0].intensity)
+        assertSame(other, painted.glues[1])
+        assertEquals(last.intensity, painted.glues[2].intensity)
+        assertTrue(painted.glues[2].pairs[0].weightB > last.pairs[0].weightB)
+        assertEquals(1, painted.glues[0].pairs.size); assertEquals(1, painted.glues[2].pairs.size)
+        val removed = CanvasEdits.apply(painted, stroke("unglue"))
+        assertEquals(listOf("first", "between"), removed.glues.map { it.id })
+        val owner = KeyformOwner.Glue(a.id, b.id, "last")
+        assertTrue(owner.matches(last)); assertFalse(owner.matches(first))
+        assertSame(last.channelGrids, model.channelGridsOf(owner))
+    }
+
     private fun glue(a: String, b: String, vararg pairs: Pair<Int, Int>) =
         Glue(DrawableId(a), DrawableId(b), pairs.map { GluePair(it.first, it.second, 0.5f, 0.5f) })
 

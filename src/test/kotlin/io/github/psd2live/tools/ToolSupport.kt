@@ -1,9 +1,10 @@
 package io.github.psd2live.tools
 
-import io.github.psd2live.agent.AgentViewBackground
-import io.github.psd2live.agent.AgentViewFrame
-import io.github.psd2live.agent.AgentViewOutputSpec
-import io.github.psd2live.agent.AgentViewRenderer
+import io.github.psd2live.application.WorkspaceViewRenderer
+
+import io.github.psd2live.project.WorkspaceViewBackground
+import io.github.psd2live.project.WorkspaceViewFrame
+import io.github.psd2live.project.WorkspaceViewOutputSpec
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigPreviewModel
@@ -62,8 +63,8 @@ internal class Renderer(private val preview: RigPreviewModel, private val size: 
 	val canvas = Bounds(0f, 0f, preview.analysis.source.widthPx.toFloat(), preview.analysis.source.heightPx.toFloat())
 
 	fun render(values: Map<String, Float>, rect: Bounds = canvas): BufferedImage {
-		val view = AgentViewRenderer.modelComposite(preview, "r", values, layers, emptySet(),
-			AgentViewFrame.CanvasRect(rect), AgentViewBackground.CHECKERBOARD, AgentViewOutputSpec(size))
+		val view = WorkspaceViewRenderer.modelComposite(preview, "r", values, layers, emptySet(),
+			WorkspaceViewFrame.CanvasRect(rect), WorkspaceViewBackground.CHECKERBOARD, WorkspaceViewOutputSpec(size))
 		return ImageIO.read(view.png.inputStream())
 	}
 }

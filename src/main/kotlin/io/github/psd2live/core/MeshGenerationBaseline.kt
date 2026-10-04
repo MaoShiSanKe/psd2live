@@ -1,0 +1,56 @@
+package io.github.psd2live.core
+
+import io.github.psd2live.project.WorkspaceSettingsCodec
+import kotlinx.serialization.json.*
+import org.umamo.runtime.model.PuppetModel
+
+/** Ordered topology records require the mesh generator that preceded the first record. */
+internal object MeshGenerationBaseline {
+    const val OP = "mesh_generation_baseline"
+    private val fields = setOf("meshSpacing", "meshOuterMargin", "meshEdgeMode", "meshEdgeWidth",
+        "meshMaxEdgeDistance", "meshInteriorDensity", "meshFillAlgorithm", "meshSuppressBoundaryDiagonals",
+        "meshFillParameters", "meshOverrides", "alphaThreshold")
+
+    fun present(overlay: RigEditOverlay) = overlay.authoringJournal.any { it["op"]?.jsonPrimitive?.contentOrNull == OP }
+
+    fun preserve(overlay: RigEditOverlay, config: PipelineConfig): RigEditOverlay {
+        if (present(overlay)) return overlay
+        val marker = buildJsonObject {
+            put("op", OP)
+            put("settings", JsonObject(WorkspaceSettingsCodec.encode(config).filterKeys { it in fields }))
+        }
+        return overlay.copy(authoringJournal = overlay.authoringJournal + marker)
+    }
+
+    fun restore(config: PipelineConfig): PipelineConfig {
+        val generation = RigGenerationBaseline.restore(config)
+        val markers = config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == OP }
+        if (markers.isEmpty()) return generation
+        require(markers.size == 1) { "Duplicate mesh generation baseline" }
+        val settings = settings(markers.single())
+        val overrides = settings.getValue("meshOverrides").jsonObject.mapValues { (_, value) ->
+            val mesh = value.jsonObject
+            MeshSettings(mesh.getValue("outerMargin").jsonPrimitive.float,
+                MeshEdgeMode.valueOf(mesh.getValue("edgeMode").jsonPrimitive.content),
+                mesh.getValue("edgeWidth").jsonPrimitive.float,
+                mesh.getValue("maxEdgeDistance").jsonPrimitive.float,
+                mesh.getValue("interiorDensity").jsonPrimitive.float,
+                MeshFillAlgorithm.valueOf(mesh.getValue("fillAlgorithm").jsonPrimitive.content),
+                mesh.getValue("suppressBoundaryDiagonals").jsonPrimitive.boolean,
+                WorkspaceSettingsCodec.decodeFillParameters(mesh.getValue("fillParameters")))
+        }
+        return WorkspaceSettingsCodec.decode(settings, generation).copy(meshOverrides = overrides)
+    }
+
+    private fun settings(command: JsonObject): JsonObject {
+        require(command.keys == setOf("op", "settings")) { "Invalid mesh generation baseline" }
+        return command.getValue("settings").jsonObject.also {
+            require(it.keys == fields) { "Invalid mesh generation baseline settings" }
+        }
+    }
+
+    fun replay(model: PuppetModel, command: JsonObject): PuppetModel {
+        settings(command)
+        return model
+    }
+}

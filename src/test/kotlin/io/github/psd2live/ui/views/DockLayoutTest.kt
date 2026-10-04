@@ -83,7 +83,7 @@ class DockLayoutTest {
 
     @Test fun olderWorkspaceHidingPhysicsAlsoHidesTheSimulationTab() {
         val state = io.github.psd2live.ui.state.PSD2LiveState()
-        val encoded = io.github.psd2live.project.WorkspaceStateCodec.encode(state)
+        val encoded = io.github.psd2live.ui.state.WorkspaceStateCodec.encode(state)
         fun withWorkspace(layout: String, hidden: List<String>) = kotlinx.serialization.json.JsonObject(encoded + ("workspaces" to
             kotlinx.serialization.json.JsonArray(encoded.getValue("workspaces").let { it as kotlinx.serialization.json.JsonArray }.map { workspace ->
                 kotlinx.serialization.json.JsonObject(workspace as kotlinx.serialization.json.JsonObject +
@@ -92,7 +92,7 @@ class DockLayoutTest {
             })))
         val old = dockJson.encodeToString(DockNode.serializer(), DockNode(modules = listOf("canvas", "physics")))
         fun hidden(layout: String, hidden: List<String>) =
-            io.github.psd2live.project.WorkspaceStateCodec.decode(withWorkspace(layout, hidden)).activeWorkspace.hiddenModules
+            io.github.psd2live.ui.state.WorkspaceStateCodec.decode(withWorkspace(layout, hidden)).activeWorkspace.hiddenModules
         assertEquals(setOf("physics", "simulation"), hidden(old, listOf("physics")))
         assertEquals(emptySet(), hidden(old, emptyList()))
         val current = dockJson.encodeToString(DockNode.serializer(), DockNode(modules = listOf("canvas", "physics", "simulation")))

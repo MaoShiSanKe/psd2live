@@ -79,9 +79,13 @@ object MotionClips {
 			val parameter = definitions[curve.parameterId] ?: return@mapNotNull null
 			curve.copy(keys = curve.keys.map { key ->
 				val value = key.value.coerceIn(parameter.min, parameter.max)
+				fun constrain(handle: MotionHandle): MotionHandle {
+					val control = key.value + handle.y
+					return if (value == key.value && control in parameter.min..parameter.max) handle
+					else handle.copy(y = control.coerceIn(parameter.min, parameter.max) - value)
+				}
 				key.copy(value = value,
-					inHandle = key.inHandle.copy(y = (key.value + key.inHandle.y).coerceIn(parameter.min, parameter.max) - value),
-					outHandle = key.outHandle.copy(y = (key.value + key.outHandle.y).coerceIn(parameter.min, parameter.max) - value))
+					inHandle = constrain(key.inHandle), outHandle = constrain(key.outHandle))
 			})
 		}) }
 	}

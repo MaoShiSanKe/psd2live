@@ -20,7 +20,11 @@ import io.github.psd2live.ui.theme.CustomTheme
 import io.github.psd2live.ui.theme.ThemeCatalog
 import io.github.psd2live.ui.theme.ToolColors
 
-import io.github.psd2live.agent.AgentHistorySnapshot
+import io.github.psd2live.core.defaultMeshSettings
+import io.github.psd2live.core.minimumAtlasSize
+import io.github.psd2live.project.WorkspaceHistorySnapshot
+import io.github.psd2live.project.ParameterSnapshot
+import io.github.psd2live.project.HistoryAnnotation
 
 /** Canvas rendering mode; [EDIT] shows rig geometry for editing, [PREVIEW] runs the animation. */
 enum class CanvasMode {
@@ -360,11 +364,11 @@ enum class InspectorTab {
 	PHYSICS,
 }
 
-data class HistoryAnnotation(val title: String = "", val note: String = "", val hidden: Boolean = false)
 
 @Immutable
 data class PSD2LiveState(
     val canvasEditBusy: Boolean = false,
+    val editorDraftBusy: Boolean = false,
 	val projectId: String? = null,
     val projectFile: String? = null,
 	/** Recently opened .psd2live / PSD paths. Application preference, not part of the project. */
@@ -468,7 +472,7 @@ data class PSD2LiveState(
 	val logLines: List<String> = emptyList(),
 	val logEntries: List<AppLogEntry> = emptyList(),
 	val logPanelHeight: Float = 190f,
-	val historySnapshot: AgentHistorySnapshot? = null,
+	val historySnapshot: WorkspaceHistorySnapshot? = null,
 	val selectedHistoryNodeId: String? = null,
 	val lightboxImage: ByteArray? = null,
 	val lightboxTitle: String? = null,
@@ -535,6 +539,9 @@ data class PSD2LiveState(
 	val drawOrderOverrides: Map<String, Float> = emptyMap(),
 	/** Durable parameter/keyform edits replayed after each generated-rig rebuild. */
 	val rigEdits: RigEditOverlay = RigEditOverlay.Empty,
+	val generationSource: org.umamo.format.art.SourceArt? = null,
+	val meshSource: org.umamo.format.art.SourceArt? = null,
+    val placementSource: org.umamo.format.art.SourceArt? = null,
 	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
 	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
@@ -630,7 +637,7 @@ data class PSD2LiveState(
 			bodyStrength = bodyStrength,
 			rigTuning = rigTuning,
 			meshOnly = meshOnly,
-			generateDeformers = !meshOnly,
+			generateDeformers = if (rigEdits.importedCmo3 != null) generateDeformers else !meshOnly,
 			featureDisplacementEnabled = featureDisplacementEnabled,
 			mouthOutlineEnabled = mouthOutlineEnabled,
 			mouthShape = mouthShape,
@@ -667,6 +674,8 @@ data class PSD2LiveState(
 			parentOverrides = parentOverrides,
 			drawOrderOverrides = drawOrderOverrides,
 			rigEdits = rigEdits,
+			generationSource = generationSource,
+			meshSource = meshSource,
 		)
 	}
 
@@ -677,30 +686,8 @@ data class PSD2LiveState(
 		return drawOrderOverrides[drawableId] ?: defaultOrder
 	}
 
-	fun getDefaultMeshSettings(layerId: String?): MeshSettings {
-		val layer = if (layerId != null) {
-			analysis?.layers?.firstOrNull { it.source.id.raw == layerId }
-		} else null
-		val semanticDensity = when (layer?.semantic?.tag) {
-			SemanticTag.FACE, SemanticTag.FRONT_HAIR, SemanticTag.BACK_HAIR, SemanticTag.TOPWEAR -> 0.65f
-			SemanticTag.IRIDES, SemanticTag.EYELASH, SemanticTag.EYEWHITE, SemanticTag.EYEBROW,
-			SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN, SemanticTag.MOUTH_CLOSE,
-			SemanticTag.TOOTH_T, SemanticTag.TOOTH_B, SemanticTag.TONGUE -> 0.45f
-			else -> 1f
-		}
-		// Face keeps the pre-edgeMode dual envelope; other parts follow the global mode.
-		val edgeMode = if (layer?.semantic?.tag == SemanticTag.FACE) MeshEdgeMode.DOUBLE else meshEdgeMode
-		return MeshSettings(
-			outerMargin = meshOuterMargin,
-			edgeMode = edgeMode,
-			edgeWidth = meshEdgeWidth,
-			maxEdgeDistance = kotlin.math.max(12f, meshMaxEdgeDistance * semanticDensity),
-			interiorDensity = kotlin.math.max(12f, meshInteriorDensity * semanticDensity),
-			fillAlgorithm = meshFillAlgorithm,
-			suppressBoundaryDiagonals = meshSuppressBoundaryDiagonals,
-			fillParameters = meshFillParameters,
-		)
-	}
+	fun getDefaultMeshSettings(layerId: String?): MeshSettings = buildConfig().defaultMeshSettings(
+        analysis?.layers?.firstOrNull { it.source.id.raw == layerId }?.semantic?.tag)
 
 	fun getEffectiveMeshSettings(layerId: String?): MeshSettings {
 		val defaultSettings = getDefaultMeshSettings(layerId)
@@ -757,17 +744,6 @@ data class PSD2LiveState(
 	val isBusy: Boolean
 		get() = isAnalyzing || isGenerating || isUpscaling
 
-	fun minRequiredAtlasSize(scale: Int = textureUpscale.scale): Int {
-		val effectiveLayers = previewModel?.analysis?.layers ?: analysis?.layers ?: return 1024
-		val valid = effectiveLayers.filter { it.source.raster.width > 0 && it.source.raster.height > 0 && it.opaquePixels > 0 }
-		if (valid.isEmpty()) return 1024
-		val largest = valid.maxOfOrNull {
-			maxOf(it.source.raster.width * scale, it.source.raster.height * scale) + texturePadding * 2
-		} ?: 1024
-		var size = 256
-		while (size < largest && size < 16384) {
-			size = size shl 1
-		}
-		return size.coerceIn(256, 16384)
-	}
+	fun minRequiredAtlasSize(scale: Int = textureUpscale.scale): Int =
+        minimumAtlasSize(previewModel?.analysis ?: analysis, scale, texturePadding)
 }

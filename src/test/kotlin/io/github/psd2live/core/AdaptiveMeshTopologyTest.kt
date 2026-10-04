@@ -19,16 +19,16 @@ class AdaptiveMeshTopologyTest {
             meshOverrides = mapOf("part" to MeshSettings(fillAlgorithm = MeshFillAlgorithm.SIMPLE_TRIANGLES,
                 suppressBoundaryDiagonals = true)),
         )
-        val restored = io.github.psd2live.project.WorkspaceStateCodec.decode(
-            io.github.psd2live.project.WorkspaceStateCodec.encode(state))
+        val restored = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(
+            io.github.psd2live.ui.state.WorkspaceStateCodec.encode(state))
         assertEquals(MeshFillAlgorithm.ADAPTIVE_QUADTREE, restored.meshFillAlgorithm)
         assertEquals(true, restored.meshSuppressBoundaryDiagonals)
         assertEquals(state.meshOverrides, restored.meshOverrides)
 
-        val legacy = JsonObject(io.github.psd2live.project.WorkspaceStateCodec.encode(state)
+        val legacy = JsonObject(io.github.psd2live.ui.state.WorkspaceStateCodec.encode(state)
             .filterKeys { it != "meshFillAlgorithm" })
         assertEquals(MeshFillAlgorithm.GRADED_POISSON,
-            io.github.psd2live.project.WorkspaceStateCodec.decode(legacy).meshFillAlgorithm)
+            io.github.psd2live.ui.state.WorkspaceStateCodec.decode(legacy).meshFillAlgorithm)
     }
 
     @Test fun fillParametersSurviveProjectStateRoundTripPerAlgorithm() {
@@ -41,24 +41,24 @@ class AdaptiveMeshTopologyTest {
             meshFillParameters = custom,
             meshOverrides = mapOf("part" to MeshSettings(fillParameters = custom.copy(quadtree = LatticeFillParameters(angle = 45f)))),
         )
-        val codec = io.github.psd2live.project.WorkspaceStateCodec
+        val codec = io.github.psd2live.ui.state.WorkspaceStateCodec
         val restored = codec.decode(codec.encode(state))
         assertEquals(custom, restored.meshFillParameters)
         assertEquals(state.meshOverrides, restored.meshOverrides)
         // Older projects have no fill groups; partial groups keep the other defaults.
         assertEquals(MeshFillParameters(), codec.decode(JsonObject(codec.encode(state).filterKeys { it != "meshFillParameters" }))
             .meshFillParameters)
-        val merged = codec.mergeFillParameters(custom, kotlinx.serialization.json.buildJsonObject {
+        val merged = io.github.psd2live.project.WorkspaceSettingsCodec.mergeFillParameters(custom, kotlinx.serialization.json.buildJsonObject {
             put("paving", kotlinx.serialization.json.buildJsonObject { put("maxRows", kotlinx.serialization.json.JsonPrimitive(8)) })
         })
         assertEquals(custom.copy(paving = custom.paving.copy(maxRows = 8)), merged)
-        assertTrue(runCatching { codec.mergeFillParameters(custom, kotlinx.serialization.json.buildJsonObject {
+        assertTrue(runCatching { io.github.psd2live.project.WorkspaceSettingsCodec.mergeFillParameters(custom, kotlinx.serialization.json.buildJsonObject {
             put("fractal", kotlinx.serialization.json.buildJsonObject { put("edgeRatio", kotlinx.serialization.json.JsonPrimitive(9)) })
         }) }.isFailure, "out-of-range fill parameters must be rejected")
     }
 
     @Test fun rigTuningSurvivesProjectStateRoundTrip() {
-        val codec = io.github.psd2live.project.WorkspaceStateCodec
+        val codec = io.github.psd2live.ui.state.WorkspaceStateCodec
         val tuning = RigTuning(turnDegrees = 20f, armSwingDegrees = -2f, breathLift = 5f, gazeX = 14f, backHairTilt = 1f)
         val state = io.github.psd2live.ui.state.PSD2LiveState(rigTuning = tuning)
         assertEquals(tuning, codec.decode(codec.encode(state)).rigTuning)
@@ -72,7 +72,7 @@ class AdaptiveMeshTopologyTest {
         val stored = kotlinx.serialization.json.buildJsonObject {
             put("turnDegrees", kotlinx.serialization.json.JsonPrimitive(99)); put("gone", kotlinx.serialization.json.JsonPrimitive(1))
         }
-        assertEquals(RigTuning(turnDegrees = 30f), codec.decodeRigTuning(stored))
+        assertEquals(RigTuning(turnDegrees = 30f), io.github.psd2live.project.WorkspaceSettingsCodec.decodeRigTuning(stored))
     }
 
     @Test fun gradedFillsDoNotRepeatTheContourRow() {

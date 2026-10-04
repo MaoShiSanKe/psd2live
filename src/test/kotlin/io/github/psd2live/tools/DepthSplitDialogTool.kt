@@ -2,8 +2,8 @@ package io.github.psd2live.tools
 
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PipelineConfig
 import io.github.psd2live.i18n.AppLanguage
@@ -31,7 +31,9 @@ class DepthSplitDialogTool {
             val preview = PSD2LivePipeline().buildPreview(WorkspaceSourceArt(100, 100,
                 listOf(layer("collar", "领子", 0), layer("neck", "脖子", 1)), emptyList()), PipelineConfig(atlasSize = 256))
             val ids = preview.rig.layerIdByDrawableId.entries.associate { it.value to it.key }
-            val offer = PSD2LiveViewModel.DepthSplitOffer(preview, ids.getValue("collar"), "preview", "preview", ids.getValue("neck"))
+            val expected = io.github.psd2live.project.WorkspaceProjectSnapshot("preview", "preview-revision", "preview-head", true,
+                "preview", 100, 100, false, "ready", null, emptyList(), emptyList(), state = "preview-state")
+            val offer = PSD2LiveViewModel.DepthSplitOffer(preview, ids.getValue("collar"), "preview", "preview", ids.getValue("neck"), expected)
             for ((name, colors, fontScale) in listOf(Triple("dark", ToolColors.Dark, 1f),
                 Triple("light", ToolColors.Light, 1f), Triple("large-text", ToolColors.Dark, 1.35f))) {
                 val scene = ImageComposeScene(720, 560, density = Density(1f)) {

@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.core.RigInformationOverlay
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -78,10 +80,10 @@ import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.ui.CanvasViewport
-import io.github.psd2live.ui.ComponentPalette
-import io.github.psd2live.ui.CubismViewport
-import io.github.psd2live.ui.RigCanvasSupport
+import io.github.psd2live.core.CanvasViewport
+import io.github.psd2live.core.ComponentPalette
+import io.github.psd2live.core.CubismViewport
+import io.github.psd2live.core.RigCanvasSupport
 import io.github.psd2live.ui.CachedSkiaPicture
 import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.visibleCanvasGuideIds
@@ -274,7 +276,7 @@ fun CanvasViewportComposable(
 	val paintSession = if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.PAINT)
 		editor.paintSession else null
 	val geometryPose = if (paintSession != null) emptyMap<org.umamo.runtime.model.ParameterId, Float>()
-		else canvasState.parameterValues
+		else viewModel.canvasPose(canvasState)
 	val editGeometry = remember(previewModel, geometryPose, mode) {
 		if (mode == CanvasMode.EDIT && previewModel != null) RigCanvasSupport.evaluate(previewModel, geometryPose)
 		else null
@@ -334,7 +336,7 @@ fun CanvasViewportComposable(
 	val warpPoints = remember(previewModel?.rig?.puppet, warpPose, warpIds) {
 		runCatching {
 			if (previewModel != null && warpIds.isNotEmpty())
-				io.github.psd2live.ui.RigInformationOverlay.warpPoints(previewModel.rig.puppet, warpPose, warpIds)
+				io.github.psd2live.core.RigInformationOverlay.warpPoints(previewModel.rig.puppet, warpPose, warpIds)
 			else emptyMap()
 		}.getOrDefault(emptyMap())
 	}
@@ -1223,7 +1225,7 @@ fun CanvasViewportComposable(
 						else -> rotationIds
 					}
 					if (globalRotationIds.isNotEmpty()) {
-						io.github.psd2live.ui.RigInformationOverlay.paintRotations(
+						io.github.psd2live.core.RigInformationOverlay.paintRotations(
 							g, model.rig.puppet,
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
 							viewport, globalRotationIds,
@@ -1274,7 +1276,7 @@ fun CanvasViewportComposable(
 					// work it out separately a mark could outlive the deformer it belongs to — which is
 					// exactly what it used to do.
 					if (warpIds.isNotEmpty()) {
-						io.github.psd2live.ui.RigInformationOverlay.paint(
+						io.github.psd2live.core.RigInformationOverlay.paint(
 							g, model.rig.puppet,
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
 							viewport, warpIds,
@@ -1312,7 +1314,7 @@ fun CanvasViewportComposable(
 						val pathIds = selectedPathIds + hoveredPathIds
 
 						if (pathIds.isNotEmpty()) {
-							io.github.psd2live.ui.RigInformationOverlay.paintDeformPaths(
+							io.github.psd2live.core.RigInformationOverlay.paintDeformPaths(
 								g = g,
 								model = model.rig.puppet,
 								geometry = geometry,

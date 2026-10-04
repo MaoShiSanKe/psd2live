@@ -1,0 +1,132 @@
+package io.github.psd2live.project
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
+import java.nio.file.Files
+import java.nio.file.Path
+
+/** Serializes saves, while model edits may continue against the next workspace revision. */
+internal class ProjectRepository(private val writeArchive: ((Path, Path, String) -> Unit)? = null) {
+    private val saves = Mutex()
+    suspend fun save(capture: ProjectSaveCapture, path: Path, onCommitted: () -> Unit = {}): String {
+        val caller = kotlinx.coroutines.currentCoroutineContext()
+        var staging: Path? = null
+        try {
+            return saves.withLock {
+                val root = withContext(Dispatchers.IO) {
+                    Files.createTempDirectory("psd2live-project-").also { staging = it }
+                }
+                withContext(Dispatchers.IO) {
+                    val store = WorkspaceStore(root.resolve("workspace"))
+                    store.persistHistory(capture.projectId, capture.history)
+                    capture.store.copyAuxiliary(capture.projectId, root.resolve("workspace").resolve(capture.projectId),
+                        capture.assetCatalog)
+                    capture.spatial.forEach { (id, spatial) -> store.persistSpatial(capture.projectId, id, spatial) }
+                    store.persistTasks(capture.projectId, capture.tasks)
+                    Files.createDirectories(root.resolve("source"))
+                    val original = capture.originalSource
+                    if (original == null) {
+                        // Generated artwork has no file-backed origin. The root source, not the edited
+                        // preview, becomes the portable v1 source; history still retains every revision.
+                        val source = capture.history.selections.single { it.node.parentId == null }.snapshot.source
+                        Files.write(root.resolve("source/original.psd"), org.umamo.format.psd.PsdWriter.write(source))
+                    } else {
+                        require(Files.isRegularFile(original)) { "Original source is unavailable: $original" }
+                        val sourceName = if (original.fileName.toString().endsWith(".cmo3", true)) "original.cmo3" else "original.psd"
+                        Files.copy(original, root.resolve("source/$sourceName"))
+                    }
+                    val ui = capture.presentation.toMutableMap()
+                    capture.auxiliary["assetCatalog"]?.let { ui["assetCatalog"] = it }
+                    ui["logEntries"] = JsonArray(ui["logEntries"]?.jsonArray.orEmpty().map { entry ->
+                        val log = entry.jsonObject.toMutableMap()
+                        log.remove("image")?.jsonPrimitive?.content?.let { encoded ->
+                            val bytes = java.util.Base64.getDecoder().decode(encoded)
+                            val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+                            val imagePath = "images/$hash.png"
+                            Files.createDirectories(root.resolve("images")); Files.write(root.resolve(imagePath), bytes)
+                            log["imagePath"] = JsonPrimitive(imagePath)
+                        }
+                        JsonObject(log)
+                    })
+                    ProjectArchive.writeJson(root.resolve("workspace.json"), JsonObject(ui))
+                    Files.writeString(root.resolve("README.txt"), "PSD2Live project v1. Unencrypted ZIP. manifest.json inventories SHA-256 checksums. source/original.psd is the original source; workspace/ contains immutable history snapshots, PNG resources, tasks and spatial references; workspace.json restores the UI. See docs/en/spec/PROJECT_FORMAT.md.\n")
+                    caller.ensureActive()
+                    if (writeArchive != null) writeArchive.invoke(root, path, capture.projectId)
+                    else ProjectArchive.write(root, path, capture.projectId) { caller.ensureActive() }
+                    // Runs before a dispatcher handoff can surface late cancellation.
+                    onCommitted()
+                }
+                capture.history.headNodeId
+            }
+        } finally {
+            staging?.let { withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { ProjectArchive.deleteTemporaryDirectory(it) } }
+        }
+    }
+
+    suspend fun open(path: Path): OpenedProject = saves.withLock {
+        var extracted: Path? = null
+        try {
+            withContext(Dispatchers.IO) {
+                val root = ProjectArchive.extract(path).also { extracted = it }
+                val manifest = ProjectArchive.readJson(root.resolve("manifest.json"))
+                val id = manifest.getValue("projectId").jsonPrimitive.content
+                val store = WorkspaceStore(root.resolve("workspace"))
+                val tree = withContext(Dispatchers.IO) { store.loadHistory(id) ?: error("Project has no history") }
+                val ui = ProjectArchive.readJson(root.resolve("workspace.json")).toMutableMap()
+                ui["logEntries"] = JsonArray(ui["logEntries"]?.jsonArray.orEmpty().map { entry ->
+                    val log = entry.jsonObject.toMutableMap()
+                    log.remove("imagePath")?.jsonPrimitive?.content?.let { name ->
+                        val image = root.resolve(name).normalize()
+                        require(!Path.of(name).isAbsolute && image.startsWith(root) && Files.isRegularFile(image)) { "Invalid log image reference" }
+                        log["image"] = JsonPrimitive(java.util.Base64.getEncoder().encodeToString(Files.readAllBytes(image)))
+                    }
+                    JsonObject(log)
+                })
+                val source = root.resolve("source/original.cmo3").takeIf(Files::isRegularFile) ?: root.resolve("source/original.psd")
+                require(Files.isRegularFile(source)) { "Project has no original source" }
+                store.validateAssetCatalog(id, WorkspaceAssetCatalog.read(JsonObject(ui)) ?: store.existingAssetCatalog(id))
+                OpenedProject(id, path.toAbsolutePath().normalize(), root, source, JsonObject(ui), tree, store)
+            }
+        } catch (failure: Throwable) {
+            extracted?.let { withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { ProjectArchive.deleteTemporaryDirectory(it) } }
+            throw failure
+        }
+    }
+}
+
+/** A save reads one captured history and presentation, never a live UI object. */
+internal data class ProjectSaveCapture(
+    val projectId: String,
+    val history: io.github.psd2live.history.WorkspaceHistoryState<WorkspaceDocument>,
+    val presentation: JsonObject,
+    val originalSource: Path?,
+    val store: WorkspaceStore,
+    val spatial: Map<String, WorkspaceViewSpatialMetadata> = emptyMap(),
+    val tasks: List<WorkspaceTaskSnapshot> = emptyList(),
+    val auxiliary: JsonObject = JsonObject(emptyMap()),
+) {
+    val assetCatalog = WorkspaceAssetCatalog.read(auxiliary) ?: store.existingAssetCatalog(projectId)
+}
+
+/** Extraction stays owned until a workspace adopts it; failed opens always clean up. */
+internal class OpenedProject(
+    val projectId: String,
+    val file: Path,
+    private val directory: Path,
+    val source: Path,
+    val presentation: JsonObject,
+    val history: io.github.psd2live.history.WorkspaceHistoryTree<WorkspaceDocument>,
+    val store: WorkspaceStore,
+) : AutoCloseable {
+    private var owned = true
+    fun transferDirectory(): Path {
+        check(owned) { "Project directory ownership already transferred" }
+        owned = false
+        return directory
+    }
+    override fun close() { if (owned) { ProjectArchive.deleteTemporaryDirectory(directory); owned = false } }
+}

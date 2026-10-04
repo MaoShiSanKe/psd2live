@@ -60,8 +60,8 @@ class LivePoseTest {
 		for (y in 2..13) for (x in 2..13) image.setRGB(x, y, 0xffff3366.toInt())
 		javax.imageio.ImageIO.write(image, "png", png.toFile())
 		PSD2LiveViewModel().use { vm ->
-			io.github.psd2live.agent.ViewModelAgentWorkspace(vm, temp.resolve("store")).use { workspace ->
-				vm.attachAgentWorkspace(workspace)
+			io.github.psd2live.ui.state.DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+				vm.attachWorkspace(workspace)
 				workspace.createArtwork(kotlinx.serialization.json.buildJsonObject {
 					put("width", kotlinx.serialization.json.JsonPrimitive(16)); put("height", kotlinx.serialization.json.JsonPrimitive(16))
 					put("layers", kotlinx.serialization.json.buildJsonArray {

@@ -599,6 +599,29 @@ internal class Cmo3StructureLowering(
 		return true
 	}
 
+	/** Affects shared vertices sequentially; pair-grouped diff order must not become file order. */
+	fun preserveGlueEvaluationOrder() {
+		val sourceSet = modelSource.affecterSourceSet as? org.umamo.format.cmo3.model.gen.CAffecterSourceSet ?: return
+		val entries = mutableGraphListOf(sourceSet._sources) ?: return
+		val byPair = index.glueSources.groupBy { source ->
+			index.drawableIdStrByUuid[Cmo3Import.uuidOf(source.targetArtMeshA_guid)] to
+				index.drawableIdStrByUuid[Cmo3Import.uuidOf(source.targetArtMeshB_guid)]
+		}
+		val ordinals = HashMap<Pair<String, String>, Int>()
+		val ordered = edited.glues.mapNotNull { glue ->
+			val pair = glue.meshA.raw to glue.meshB.raw
+			val ordinal = ordinals.getOrDefault(pair, 0)
+			ordinals[pair] = ordinal + 1
+			byPair[pair]?.getOrNull(ordinal)
+		}.toMutableList()
+		// Keep unsupported retained affecters and their non-glue slots intact.
+		ordered += index.glueSources.filter { source -> ordered.none { it === source } }
+		val slots = entries.indices.filter { entries[it] is org.umamo.format.cmo3.model.gen.CGlueSource }
+		if (slots.size != ordered.size || slots.indices.all { entries[slots[it]] === ordered[it] }) return
+		for (position in slots.indices) entries[slots[position]] = ordered[position]
+		editor.ensureChildSlot(sourceSet, "CAffecterSourceSet", "_sources")
+	}
+
 	/** Removes a deleted drawable's source and strips its guid from every panel child list. */
 	fun deleteDrawable(drawableId: DrawableId) {
 		val sourceSet = modelSource.drawableSourceSet as? org.umamo.format.cmo3.model.gen.CDrawableSourceSet ?: return

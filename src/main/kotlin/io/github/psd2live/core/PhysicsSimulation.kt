@@ -12,7 +12,9 @@ object PhysicsSimulation {
     private const val FPS = 60
 
     fun run(groups: List<PhysicsGroup>, parameters: List<Parameter>, arguments: JsonObject, physicsEnabled: Boolean,
-        physicsFps: Int = RigEditOverlay.DEFAULT_PHYSICS_FPS): JsonObject {
+        physicsFps: Int = RigEditOverlay.DEFAULT_PHYSICS_FPS, progress: (Float) -> Unit = {}, cancelled: () -> Boolean = { false }): JsonObject {
+        fun check() { if (cancelled()) throw java.util.concurrent.CancellationException("Physics sampling cancelled") }
+        check(); progress(0f)
         val ids = arguments["ids"]?.jsonArray?.map { it.jsonPrimitive.content }
         val chosen = groups.filter { if (ids == null) it.active else it.id in ids }
         ids?.firstOrNull { id -> groups.none { it.id == id } }?.let { throw IllegalArgumentException("Physics group not found: $it") }
@@ -32,12 +34,15 @@ object PhysicsSimulation {
         val frames = (duration * FPS).toInt()
         val traces = LinkedHashMap<String, FloatArray>()
         for (group in chosen) for (o in group.setting.outputs) traces.getOrPut(o.parameter) { FloatArray(frames + 1) }
-        engine.settle(rest).forEach { (p, v) -> traces[p]?.set(0, v) }
+        engine.settle(rest, progress = { progress(0.1f * it) }, cancelled = cancelled).forEach { (p, v) -> traces[p]?.set(0, v) }
         for (f in 1..frames) {
+            check()
             val t = f.toFloat() / FPS
             val values = if (t <= hold) rest + inputs else rest
             engine.step(values, 1f / FPS).forEach { (p, v) -> traces[p]?.set(f, v) }
+            progress(0.1f + 0.9f * f / frames)
         }
+        check()
         return buildJsonObject {
             if (!physicsEnabled) put("note", "Physics is switched off in settings; the model exports none of these groups")
             put("fps", physicsFps); put("hold", hold); put("duration", duration)
@@ -101,7 +106,9 @@ object PhysicsResponse {
     }
 
     fun trace(setting: RigPhysicsEdit, ranges: Map<String, PhysicsEngine.Range>, physicsFps: Int = RigEditOverlay.DEFAULT_PHYSICS_FPS,
-        hold: Float = 1f, duration: Float = 3.5f): Trace {
+        hold: Float = 1f, duration: Float = 3.5f, progress: (Float) -> Unit = {}, cancelled: () -> Boolean = { false }): Trace {
+        fun check() { if (cancelled()) throw java.util.concurrent.CancellationException("Physics fitting cancelled") }
+        check(); progress(0f)
         val fps = 60
         val frames = (duration * fps).toInt()
         val engine = PhysicsEngine(listOf(setting), ranges, physicsFps.toFloat())
@@ -110,9 +117,10 @@ object PhysicsResponse {
         val outputs = setting.outputs.map { it.parameter }.filter { it in ranges }.associateWith { FloatArray(frames) }
         val times = FloatArray(frames)
         val dragTrace = FloatArray(frames)
-        engine.settle(emptyMap())
+        engine.settle(emptyMap(), progress = { progress(0.1f * it) }, cancelled = cancelled)
         engine.strands.forEach { it.resetPeaks() }
         for (f in 0 until frames) {
+            check()
             val t = f.toFloat() / fps
             if (t < hold) drag.target(1f, 0f) else drag.release()
             drag.update(1f / fps)
@@ -124,7 +132,9 @@ object PhysicsResponse {
                 val half = maxOf(abs(r.max - r.default), abs(r.min - r.default)).coerceAtLeast(1e-6f)
                 trace[f] = ((out[p] ?: r.default) - r.default) / half
             }
+            progress(0.1f + 0.9f * (f + 1) / frames)
         }
+        check()
         val strand = engine.strands.single()
         val reach = setting.outputs.indices.filter { setting.outputs[it].parameter in ranges }
             .associateWith { strand.peakFraction(it, ranges.getValue(setting.outputs[it].parameter)) }

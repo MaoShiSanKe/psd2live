@@ -1,9 +1,18 @@
 package io.github.psd2live.ui.state
 
+import io.github.psd2live.core.RigInformationOverlay
+
 import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.core.CubismSdkFrame
 import io.github.psd2live.core.StandardParameters
 import java.awt.image.BufferedImage
+import java.nio.file.Path
+import javax.imageio.ImageIO
+import org.junit.jupiter.api.io.TempDir
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.*
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -11,6 +20,29 @@ import kotlinx.serialization.json.jsonObject
 import kotlin.test.*
 
 class MultiCanvasIsolationTest {
+    @TempDir lateinit var temporary: Path
+    private suspend fun settled(vm: PSD2LiveViewModel) {
+        withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+        assertNull(vm.state.value.errorMessage)
+    }
+    private suspend fun playbackFixture(action: suspend (PSD2LiveViewModel, DesktopWorkspace) -> Unit) {
+        val path = temporary.resolve("playback.png")
+        val image = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
+        for (y in 0..7) for (x in 0..7) image.setRGB(x, y, 0xff778899.toInt())
+        ImageIO.write(image, "png", path.toFile())
+        PSD2LiveViewModel().use { vm ->
+            vm.setStateForTest(vm.state.value.copy(meshOnly = true, atlasSize = 256, exportMoc3 = false))
+            DesktopWorkspace(vm, temporary.resolve("store")).use { workspace ->
+                vm.attachWorkspace(workspace)
+                workspace.createArtwork(buildJsonObject {
+                    put("width", 8); put("height", 8); putJsonArray("layers") { add(buildJsonObject {
+                        put("path", path.toString()); put("name", "Synthetic playback"); put("role", "objects")
+                    }) }
+                })
+                action(vm, workspace)
+            }
+        }
+    }
     @Test fun newWorkspaceDefaultCanvasHasTheSameEditSessionAsAnAddedCanvas() {
         PSD2LiveViewModel().use { vm ->
             vm.addWorkspace()
@@ -37,8 +69,8 @@ class MultiCanvasIsolationTest {
             vm.resetWorkspaceArrangement()
             assertEquals(WorkspacePreset.ANIMATION.hiddenModules, vm.state.value.activeWorkspace.hiddenModules)
 
-            val settings = io.github.psd2live.project.WorkspaceStateCodec.settings(vm.state.value)
-            val decoded = io.github.psd2live.project.WorkspaceStateCodec.decode(settings, vm.state.value)
+            val settings = io.github.psd2live.ui.state.WorkspaceStateCodec.settings(vm.state.value)
+            val decoded = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(settings, vm.state.value)
             assertEquals(WorkspacePreset.ANIMATION, decoded.workspaces.first { it.id == workspace.id }.preset)
 
             vm.addWorkspace(WorkspacePreset.ANIMATION)
@@ -97,8 +129,8 @@ class MultiCanvasIsolationTest {
             assertTrue(listOf("mesh", "parameters").all { it in hidden })
             assertFalse("hierarchy" in hidden, "hierarchy sits in the mesh preset's left sidebar")
 
-            val settings = io.github.psd2live.project.WorkspaceStateCodec.settings(vm.state.value)
-            val decoded = io.github.psd2live.project.WorkspaceStateCodec.decode(settings, vm.state.value)
+            val settings = io.github.psd2live.ui.state.WorkspaceStateCodec.settings(vm.state.value)
+            val decoded = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(settings, vm.state.value)
             assertEquals(vm.state.value.activeWorkspace.sidebarRestore, decoded.activeWorkspace.sidebarRestore)
 
             vm.toggleSidebar(SidebarSide.RIGHT)
@@ -123,8 +155,8 @@ class MultiCanvasIsolationTest {
             }
             val current = vm.state.value
             assertEquals(setOf("a", "b"), current.selectedLayerIds)
-            val settings = io.github.psd2live.project.WorkspaceStateCodec.settings(current)
-            val decoded = io.github.psd2live.project.WorkspaceStateCodec.decode(settings, current)
+            val settings = io.github.psd2live.ui.state.WorkspaceStateCodec.settings(current)
+            val decoded = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(settings, current)
             assertEquals(setOf("a", "b"), decoded.selectedLayerIds)
             val reconciled = reconcileCanvasPresentation(current, decoded)
             assertEquals(setOf("a", "b"), reconciled.selectedLayerIds)
@@ -290,7 +322,7 @@ class MultiCanvasIsolationTest {
             val secondId = vm.addCanvas(CanvasMode.EDIT)
             vm.selectDeformer("second")
             vm.setCanvasViewOptions(secondId, TabViewOptions(dimUnselected = false, showWarp = false))
-            val restored = io.github.psd2live.project.WorkspaceStateCodec.decode(io.github.psd2live.project.WorkspaceStateCodec.encode(vm.state.value))
+            val restored = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(io.github.psd2live.ui.state.WorkspaceStateCodec.encode(vm.state.value))
             assertEquals("second", restored.selectedDeformerId)
             assertEquals("first", restored.forCanvas(firstId).selectedLayerId)
             assertFalse(restored.forCanvas(firstId).isLayerVisible("hidden"))
@@ -353,8 +385,8 @@ class MultiCanvasIsolationTest {
         }
     }
 
-    @Test fun playbackControlsShareStateWithoutStealingCanvasFocus() {
-        PSD2LiveViewModel().use { vm ->
+    @Test fun playbackControlsShareStateWithoutStealingCanvasFocus() = runBlocking<Unit> {
+        playbackFixture { vm, workspace ->
             val editId = vm.state.value.activeCanvas.id
             val previewId = vm.addCanvas(CanvasMode.PREVIEW, focus = false)
             vm.setAnimationEnabled(true)
@@ -369,6 +401,7 @@ class MultiCanvasIsolationTest {
             vm.triggerMotion("Blink")
             assertEquals(editId, vm.state.value.activeCanvas.id)
             assertTrue(vm.state.value.animationEnabled)
+            assertEquals("blink", workspace.playbackFrame(0f).getValue("active_motion").jsonPrimitive.content)
         }
     }
 
@@ -458,8 +491,8 @@ class MultiCanvasIsolationTest {
             vm.setCanvasMode(id, CanvasMode.PREVIEW)
             vm.setCanvasViewOptions(id, TabViewOptions(showWarp = false, showRotation = true), CanvasMode.PREVIEW)
             vm.selectLayer("preview-layer")
-            val restored = io.github.psd2live.project.WorkspaceStateCodec.decode(
-                io.github.psd2live.project.WorkspaceStateCodec.encode(vm.state.value)
+            val restored = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(
+                io.github.psd2live.ui.state.WorkspaceStateCodec.encode(vm.state.value)
             )
             assertEquals("preview-layer", restored.selectedLayerId)
             assertFalse(restored.showWarp)
@@ -498,8 +531,8 @@ class MultiCanvasIsolationTest {
             assertFalse(mesh())
 
             editor.hierarchyMode = io.github.psd2live.ui.EditHierarchyMode.EDIT
-            val restored = io.github.psd2live.project.WorkspaceStateCodec.decode(
-                io.github.psd2live.project.WorkspaceStateCodec.encode(vm.state.value)
+            val restored = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(
+                io.github.psd2live.ui.state.WorkspaceStateCodec.encode(vm.state.value)
             )
             val session = restored.activeWorkspace.canvases.first { it.id == id }.editSession
             assertEquals(io.github.psd2live.ui.EditHierarchyMode.SELECT, session.viewMode)
@@ -514,7 +547,7 @@ class MultiCanvasIsolationTest {
             vm.setCanvasViewOptions(id, TabViewOptions(showWarp = false, showMesh = true))
             vm.setCanvasView(1.8f, 11f, -9f, id)
             vm.selectLayer("legacy-edit")
-            val encoded = io.github.psd2live.project.WorkspaceStateCodec.encode(vm.state.value)
+            val encoded = io.github.psd2live.ui.state.WorkspaceStateCodec.encode(vm.state.value)
             val workspace = encoded.getValue("workspaces").jsonArray.first().jsonObject
             val canvas = workspace.getValue("canvases").jsonArray.first().jsonObject
             val edit = canvas.getValue("editSession").jsonObject
@@ -525,7 +558,7 @@ class MultiCanvasIsolationTest {
             ))
             val oldWorkspace = JsonObject(workspace + ("canvases" to JsonArray(listOf(oldCanvas))))
             val oldDocument = JsonObject(encoded + ("workspaces" to JsonArray(listOf(oldWorkspace))))
-            val restored = io.github.psd2live.project.WorkspaceStateCodec.decode(oldDocument)
+            val restored = io.github.psd2live.ui.state.WorkspaceStateCodec.decode(oldDocument)
             assertEquals("legacy-edit", restored.selectedLayerId)
             assertTrue(restored.showMesh)
             assertEquals(1.8f, restored.canvasZoom)
@@ -553,13 +586,15 @@ class MultiCanvasIsolationTest {
         }
     }
 
-    @Test fun playbackPanelsAndTrackingUsePreviewSessionWhileEditingHasFocus() {
-        PSD2LiveViewModel().use { vm ->
+    @Test fun playbackPanelsAndTrackingUsePreviewSessionWhileEditingHasFocus() = runBlocking<Unit> {
+        playbackFixture { vm, workspace ->
             val id = vm.state.value.activeCanvas.id
             val parameter = StandardParameters.ANGLE_X
             vm.setParameterValue(parameter, 0.25f)
+            settled(vm)
             vm.setCanvasMode(id, CanvasMode.PREVIEW)
             vm.setParameterValue(parameter, -0.5f)
+            settled(vm)
             vm.updateCanvasPresentation(vm.state.value.activeWorkspace.id, id, CanvasMode.PREVIEW) {
                 it.copy(animationEnabled = true)
             }
@@ -572,9 +607,13 @@ class MultiCanvasIsolationTest {
             assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
             assertFalse(vm.state.value.previewPanelState().mouseTrackingEnabled)
             assertFalse(vm.state.value.forCanvas(id, mode = CanvasMode.EDIT).mouseTrackingEnabled)
+            assertFalse(workspace.playbackFrame(0f).getValue("tracking").jsonPrimitive.boolean)
 
             vm.resetPreviewParameters()
+            settled(vm)
             assertEquals(vm.state.value.parameterValues, vm.state.value.forCanvas(id, mode = CanvasMode.PREVIEW).parameterValues)
+            assertEquals(vm.state.value.previewModel!!.rig.puppet.parameters.first { it.id == parameter }.default,
+                workspace.previewSession().getValue("values").jsonObject.getValue(parameter.raw).jsonPrimitive.float)
         }
     }
 
@@ -618,7 +657,7 @@ class MultiCanvasIsolationTest {
             rootChildren = emptyList(),
             rootPartId = null,
         )
-        assertTrue(io.github.psd2live.ui.RigInformationOverlay.warpPoints(model, emptyMap(), setOf("gone")).isEmpty())
+        assertTrue(io.github.psd2live.core.RigInformationOverlay.warpPoints(model, emptyMap(), setOf("gone")).isEmpty())
     }
 
 }

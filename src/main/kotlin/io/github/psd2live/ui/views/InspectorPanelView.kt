@@ -71,6 +71,7 @@ import org.umamo.edit.withOrgChildMoved
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.ColorRgb
@@ -521,9 +522,10 @@ private fun ArtMeshInspector(
                 CompactNumberSpinner(
                     value = drawable.drawOrder.toDouble(),
                     onValueChange = { order ->
-                        viewModel.updatePuppetModel { it.withDrawableDrawOrder(drawable.id, order.toFloat()) }
+                        viewModel.beginEditorField("mesh.draw_order.${drawable.id.raw}")
                         viewModel.setLayerDrawOrder(drawable.id.raw, order.toFloat())
                     },
+                    onEditEnd = { viewModel.endEditorField("mesh.draw_order.${drawable.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 0.0,
                     max = 1000.0,
@@ -680,12 +682,8 @@ private fun WarpDeformerInspector(
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
 
-    var bezierCols by remember(warp.id.raw) {
-        mutableStateOf(editor.warpBezierDivisions[warp.id.raw]?.second ?: 2)
-    }
-    var bezierRows by remember(warp.id.raw) {
-        mutableStateOf(editor.warpBezierDivisions[warp.id.raw]?.first ?: 2)
-    }
+    val bezierCols = editor.warpBezierDivisions[warp.id.raw]?.second ?: 2
+    val bezierRows = editor.warpBezierDivisions[warp.id.raw]?.first ?: 2
 
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // 1. 名称 (Name)
@@ -800,12 +798,11 @@ private fun WarpDeformerInspector(
                     value = warp.columns.toDouble(),
                     onValueChange = { nextCols ->
                         val cols = nextCols.toInt().coerceIn(1, 32)
-                        viewModel.updatePuppetModel { model ->
-                            model.copy(deformers = model.deformers.map {
-                                if (it.id == warp.id && it is Deformer.Warp) it.copy(columns = cols) else it
-                            })
-                        }
+                        viewModel.applyWarpControlField("warp.columns.${warp.id.raw}", "warp_set_topology", buildJsonObject {
+                            put("target", "warp:${warp.id.raw}"); put("rows", warp.rows); put("columns", cols)
+                        })
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.columns.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 32.0,
@@ -818,12 +815,11 @@ private fun WarpDeformerInspector(
                     value = warp.rows.toDouble(),
                     onValueChange = { nextRows ->
                         val rows = nextRows.toInt().coerceIn(1, 32)
-                        viewModel.updatePuppetModel { model ->
-                            model.copy(deformers = model.deformers.map {
-                                if (it.id == warp.id && it is Deformer.Warp) it.copy(rows = rows) else it
-                            })
-                        }
+                        viewModel.applyWarpControlField("warp.rows.${warp.id.raw}", "warp_set_topology", buildJsonObject {
+                            put("target", "warp:${warp.id.raw}"); put("rows", rows); put("columns", warp.columns)
+                        })
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.rows.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 32.0,
@@ -858,10 +854,9 @@ private fun WarpDeformerInspector(
                     value = bezierCols.toDouble(),
                     onValueChange = {
                         val next = it.toInt().coerceIn(1, 16)
-                        bezierCols = next
-                        editor.warpBezierDivisions[warp.id.raw] = bezierRows to next
-                        editor.ensureBezierState()
+                        editor.setBezierDivisionsLive("warp.bezier.columns.${warp.id.raw}", bezierRows, next)
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.bezier.columns.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 16.0,
@@ -874,10 +869,9 @@ private fun WarpDeformerInspector(
                     value = bezierRows.toDouble(),
                     onValueChange = {
                         val next = it.toInt().coerceIn(1, 16)
-                        bezierRows = next
-                        editor.warpBezierDivisions[warp.id.raw] = next to bezierCols
-                        editor.ensureBezierState()
+                        editor.setBezierDivisionsLive("warp.bezier.rows.${warp.id.raw}", next, bezierCols)
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.bezier.rows.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 16.0,

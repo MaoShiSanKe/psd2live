@@ -1,9 +1,9 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
-import io.github.psd2live.ui.CanvasViewport
-import io.github.psd2live.ui.RigCanvasSupport
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.core.CanvasViewport
+import io.github.psd2live.core.RigCanvasSupport
 import org.umamo.format.art.ChannelMask
 import org.umamo.format.art.LayerBlend
 import org.umamo.format.art.LayerBounds

@@ -1,5 +1,9 @@
 package io.github.psd2live.core.sim
 
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.WorkspaceStore
+
 import io.github.psd2live.core.RigAuthoringJournal
 import io.github.psd2live.core.VertexGroupJournal
 import kotlinx.serialization.json.*
@@ -403,9 +407,9 @@ class SimulationTest {
                 authoringJournal = listOf(put),
                 simEdits = listOf(RigSimEdit("skirt", "Skirt", SimKind.CLOTH, listOf("skirt"), glueRoles = mapOf("band|skirt" to GlueRole.PIN))),
             )
-            val document = io.github.psd2live.agent.AgentWorkspaceDocument(
-                io.github.psd2live.agent.WorkspaceSourceArt(30, 20, emptyList(), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(), edits)
-            val store = io.github.psd2live.agent.AgentWorkspaceStore(temp)
+            val document = io.github.psd2live.project.WorkspaceDocument(
+                io.github.psd2live.project.WorkspaceSourceArt(30, 20, emptyList(), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(), edits)
+            val store = io.github.psd2live.project.WorkspaceStore(temp)
             store.persistHistory("sim", io.github.psd2live.history.WorkspaceHistoryTree(document, "revision", "snapshot").state())
             val restored = assertNotNull(store.loadHistory("sim")).head().snapshot.rigEdits
             assertEquals(edits.simEdits, restored.simEdits)

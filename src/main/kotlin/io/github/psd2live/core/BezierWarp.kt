@@ -5,6 +5,9 @@ import org.umamo.format.cmo3.model.gen.CDeformerSourceSet
 import org.umamo.format.cmo3.model.gen.CWarpDeformerBezierExtension
 import org.umamo.format.cmo3.model.gen.CWarpDeformerSource
 import org.umamo.format.cmo3.type.CArrayList
+import org.umamo.format.cmo3.Cmo3
+import org.umamo.interop.cmo3.Cmo3Import
+import java.util.Base64
 
 /** Direction of a Bezier tangent handle relative to its anchor point. */
 enum class BezierHandleDir { LEFT, RIGHT, TOP, BOTTOM }
@@ -252,22 +255,41 @@ class BezierDeformerState(
 
 /** Cubism stores the editable Bezier divisions separately from the baked deformation lattice. */
 internal object BezierWarp {
+    private var importedCache: Pair<String, Map<String, Pair<Int, Int>>>? = null
+
+    @Synchronized
+    fun importedDivisions(overlay: RigEditOverlay, id: String): Pair<Int, Int>? {
+        val encoded = overlay.importedCmo3 ?: return null
+        if (importedCache?.first != encoded) {
+            val model = Cmo3.read(Base64.getDecoder().decode(encoded)).root as CModelSource
+            val sources = Cmo3Import.elementsOf((model.deformerSourceSet as? CDeformerSourceSet)?._sources).filterIsInstance<CWarpDeformerSource>()
+            val values = sources.mapNotNull { source ->
+                val key = Cmo3Import.idStrOf(source.id) ?: return@mapNotNull null
+                val extension = Cmo3Import.elementsOf(source._extensions).filterIsInstance<CWarpDeformerBezierExtension>().lastOrNull() ?: return@mapNotNull null
+                if (extension.bezierRow !in 1..16 || extension.bezierCol !in 1..16) null else key to (extension.bezierRow to extension.bezierCol)
+            }.toMap()
+            importedCache = encoded to values
+        }
+        return importedCache?.second?.get(id)
+    }
     fun cubic(p0: Float, p1: Float, p2: Float, p3: Float, t: Float): Float {
         val s = 1f - t
         return s * s * s * p0 + 3f * s * s * t * p1 + 3f * s * t * t * p2 + t * t * t * p3
     }
 
-    fun configureEditor(model: CModelSource) {
+    fun configureEditor(model: CModelSource, overlay: RigEditOverlay = RigEditOverlay.Empty) {
         val sources = (model.deformerSourceSet as? CDeformerSourceSet)?._sources as? Iterable<*> ?: return
         for (warp in sources.filterIsInstance<CWarpDeformerSource>()) {
+            val id = Cmo3Import.idStrOf(warp.id) ?: continue
+            val (rows, columns) = RigBezierJournal.divisions(overlay, id)
             val extensions = CArrayList<Any?>()
             (warp._extensions as? Iterable<*>)?.filterNot { it is CWarpDeformerBezierExtension }?.forEach { extensions.add(it) }
             extensions.add(CWarpDeformerBezierExtension().apply {
                 guid = org.umamo.format.cmo3.model.identity.Guid("CExtensionGuid").apply { uuid = java.util.UUID.randomUUID().toString() }
                 _owner = warp
                 editLevel = 2
-                bezierCol = warp.col.coerceIn(1, 3)
-                bezierRow = warp.row.coerceIn(1, 3)
+                bezierCol = columns
+                bezierRow = rows
             })
             warp._extensions = extensions
         }
