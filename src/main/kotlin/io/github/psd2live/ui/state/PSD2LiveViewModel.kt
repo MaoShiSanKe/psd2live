@@ -2092,10 +2092,18 @@ class PSD2LiveViewModel : AutoCloseable {
         val expected = editorDraftExpected ?: workspaceBackend?.snapshot()
         editorDraftExpected = null
         val workspace: io.github.psd2live.application.WorkspaceEditorDraftPort = workspaceBackend ?: return null
-        val current = _state.value
-        if (current.analysis == null || expected?.loaded != true || expected.projectId == null) return null
-        val document = WorkspaceStateCodec.document(current)
-        if (!current.editorDraftBusy && io.github.psd2live.project.WorkspaceRevisions.of(document) == expected.revisionId) return null
+        if (expected?.loaded != true || expected.projectId == null) return null
+        val (current, document) = synchronized(stateLock) {
+            val captured = _state.value
+            if (captured.analysis == null) return null
+            val draft = WorkspaceStateCodec.document(captured)
+            if (!captured.editorDraftBusy && io.github.psd2live.project.WorkspaceRevisions.of(draft) == expected.revisionId) return null
+            // The draft's commit checks the state still holds this document and installs its own model. A local
+            // preview rebuild in flight would write rigEdits/atlasSize in between, so it is superseded here.
+            previewRebuildToken++
+            previewRebuildJob?.cancel()
+            captured to draft
+        }
         markWorkspaceChanged()
         val result = workspace.submitEditorDraft(expected.projectId, expected.state, document,
             summary ?: "Workspace changed in the editor", MutationAuthor.USER)
@@ -2292,6 +2300,8 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
 	private var previewRebuildJob: Job? = null
+	/** Changed under [stateLock] when a rebuild is scheduled or an editor draft takes over the preview. */
+	private var previewRebuildToken = 0L
 	private val previewMeshSettingsOverrides = mutableMapOf<String, MeshSettings>()
 	private var previewMeshSettingsBaseline: RigPreviewModel? = null
 	private var motionJob: Job? = null
@@ -5489,6 +5499,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (_state.value.isAnalyzing || _state.value.isGenerating) return
 
 		previewRebuildJob?.cancel()
+		val token = synchronized(stateLock) { ++previewRebuildToken }
 		previewRebuildJob = scope.launch {
 			delay(60)
 			val isUpscalingJob = _state.value.textureUpscale.scale > 1 && _state.value.textureUpscale != previous.config.textureUpscale
@@ -5537,7 +5548,10 @@ class PSD2LiveViewModel : AutoCloseable {
 					pipeline.rebuildPreview(previous, config, progress)
 				}
 				val packedAtlasSize = rebuilt.atlas.pages.firstOrNull()?.image?.width ?: config.atlasSize
+				var published = false
 				updateState { current ->
+					if (previewRebuildToken != token) return@updateState current
+					published = true
 					val validParamIds = rebuilt.rig.puppet.parameters.mapTo(mutableSetOf()) { it.id }
 					val completionMsg = if (isUpscalingJob) {
 						tr("log.upscaleCompleted", rebuilt.analysis.layers.size, packedAtlasSize, packedAtlasSize)
@@ -5564,7 +5578,7 @@ class PSD2LiveViewModel : AutoCloseable {
 						errorMessage = null,
 					)
 				}
-				refreshSdkSession(rebuilt)
+				if (published) refreshSdkSession(rebuilt)
 			} catch (failure: Throwable) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
 				val detail = failure.message ?: failure.javaClass.simpleName
