@@ -45,7 +45,7 @@
 | 10 | 图集与高清化：`PipelineConfig` / `TextureUpscale` | 项目设置与导出选项 | `settings_update textureUpscale` 等字段 | 2/4 倍输出需要本机高清化模型配置 |
 | 11 | 参数定义 CRUD：有序 `RigAuthoringJournal` | 参数面板 | `parameter_create / parameter_update / parameter_delete` | 定义、文件夹及关键点可原子提交；删除在此前关键形之后按最后默认值最近的关键点折叠轴 |
 | 12 | 参数文件夹 / XY 关联：持久结构编辑 | 参数树操作 | `rig_edit_structure` 中 param_group / link | 结构关系可保存、可历史恢复 |
-| 13 | 当前预览值 / 锁定：`WorkspacePreviewCommands` / `WorkspacePreviewPort` | 参数滑杆、锁定、重置及工作区复制 | `workspace_inspect scope=preview`、`preview_set/reset`、`snapshot_apply` | 查询、合并与保存使用已提交姿态/锁；逻辑无变化保留版本及历史但可校正界面；GUI 冻结当前工作区姿态，不覆盖其他工作区；姿态/自动打键及播放/跟踪已使用中立命令和会话 |
+| 13 | 当前预览值 / 锁定：`WorkspacePreviewCommands` / `WorkspacePreviewPort` | 参数滑杆、锁定、重置及工作区复制 | `workspace_inspect scope=preview`、`preview_set/reset`、`snapshot_apply` | 查询、合并与保存使用已提交姿态/锁；逻辑无变化保留版本及历史但可校正界面；GUI 冻结当前工作区姿态，不覆盖其他工作区；姿态/自动打键及播放/跟踪已使用中立命令和会话；GUI 修改先本地生效、按队列提交，失败回到已提交姿态 |
 | 14 | 关键形增删与复制：`RigAuthoringJournal` | 关键形面板、画布 | `keyform_apply (op: seed/copy/set/delete)` | 精确参数坐标，其他轴不应被意外覆盖 |
 | 15 | 连续形变：Mesh / Warp 几何编辑 | 画布形变笔刷与变换 | `rig_deform` | 明确绑定轴；操作作用于局部形状，父级运动继承 |
 | 16 | 拓扑：`CanvasEdits` | 画布网格工具 | `canvas_topology` | 持久化后重新打开仍有效 |
@@ -69,7 +69,8 @@
 
 - PSD/图片/CMO3 导入共用独立应用导入器，GUI 分析不直接运行流水线；MCP 返回可查询/等待/取消的进程任务，切换默认拒绝未保存修改，新工程使用新 ID/加载代次。
 - GUI 与 MCP 的保存、打开共用应用层生命周期接口及工程控制器；GUI 入口负责未保存确认，MCP 默认拒绝且不触发对话框。GUI 内部入口已移除对桌面后端的下转型，并保留起始状态和可信用户身份。
-- GUI 字段完成通过应用层队列异步进入候选/重建/CAS；保存等待完成，重开和外部编辑仍使旧状态失效。绘画和深度拆分在自己的提交完成后恢复画笔；查询只读取已提交捕获。
+- GUI 字段完成通过应用层队列异步进入候选/重建/CAS；保存等待完成，重开和外部编辑仍使旧状态失效。
+- GUI 参数修改（滑块、数值、锁、重置、IK 目标、吸附到关键帧）先写入作者姿态并登记为待提交值，再经 ViewModel 的 FIFO 姿态队列提交；每项携带手势开始时的 state，队列只沿自己已落地的提交前进。较早的提交落地时保留之后的待提交值，失败时撤销全部待提交值并回到 `WorkspacePreviewPort.authoredPose`。拖动滑块与提交相同地求解骨骼约束；其他编辑、撤销/重做和保存经 `workspaceEditBusy` 等待姿态队列。绘画和深度拆分在自己的提交完成后恢复画笔；查询只读取已提交捕获。
 - 设置、分类和网格配置经 `WorkspaceGenerationCommands` 使用与批量相同的候选；MCP 单项返回后台任务，准备/重建可取消，提交后立即保留精确结果。分类省略字段在核对状态后的捕获模型中合并。GUI 连续全局网格拖动、分类文字输入保留实时草稿，结束时提交一次；生成差异草稿由应用层转换为纯候选。单层网格预览确认恢复基线后正式提交，重置也使用同一入口。真实 GUI/MCP 保存重开与多姿态导出读回已有回归，复杂分类迁移仍待验收。
 - GUI 连通块拆分检测与确认保留同一起始状态，辅助修改即使不改变历史节点也使旧对话框失效。多层确认顺序重建后只提交一个 USER 节点，桌面不再准备拆分候选。`source_get_components` 使用独立捕获；公开连通块/多边形拆分及批量共用纯候选，保留原像素、分类/父级/可见性/网格/绘制顺序覆盖、稳定源图与网格 ID 及无关编辑；普通目标的关键形、通道、混合形、路径、顶点组和模拟通过有序日志迁移；连通块保留 Glue，多边形逐连接 Glue 插值和导入模型分区共用同一候选。独立应用回归与真实 GUI/MCP 回归验证取消/冲突、后项失败无前缀、历史重放、保存重开、CMO3 多姿态读回和 PNG 一致，见 `WorkspacePartitionCommandsTest` / `WorkspacePartitionIntegrationTest`。
 - GUI 深度拆分与 `source_split_depth` 共用独立候选，菜单、多选及对话框保留打开时的完整状态，一次 USER 提交后才进入前层绘画。辅助数据变更也使旧确认失效；专项验证 GUI/MCP 像素和运动一致、嘴部只新增所选网格、取消/冲突及后项失败无前缀、任务断线重试、历史重放、保存重开和 CMO3 多姿态/Glue 读回。架构规则见 [CLAUDE.md](../../../CLAUDE.md)，用例为 `WorkspaceDepthSplitCommandsTest` / `WorkspaceDepthSplitIntegrationTest`。

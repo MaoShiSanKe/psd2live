@@ -107,7 +107,9 @@ PR CI 在 `046a725` 上对同一源码运行 `gradlew test`，Ubuntu 与 Windows
 - 吸附动画每帧更新作者姿态（作为待提交值），结束时提交一次并等待落地后再继续画布操作；拖动滑块时与提交相同地求解骨骼约束。
 - `workspaceEditBusy = canvasEditBusy || poseCommitBusy` 取代原先各处对 `canvasEditBusy` 的读取：其他编辑、撤销/重做、保存仍等待姿态队列，避免从过期 state 开始。
 
-回归：`WorkspacePreviewPortTest` 新增 5 项（立即显示且较早提交不回拉、松手后保持值、失败回滚、吸附动画写作者姿态并只提交一次、拖动时跟随骨骼约束）。本机 Linux / JDK 21 全量 `gradlew test`：213 个类、1051 项，0 失败、0 错误、19 跳过（不含 Cubism SDK 与桌面窗口）；之后的两处小修正（项目重开后不提示过期姿态、后端不可用时撤回待提交值）复跑了姿态相关的 6 个测试类。GUI 行为仍需桌面手动确认。
+回归：`WorkspacePreviewPortTest` 新增 5 项（立即显示且较早提交不回拉、松手后保持值、失败回滚、吸附动画写作者姿态并只提交一次、拖动时跟随骨骼约束）。本机 Linux / JDK 21 全量 `gradlew test`：213 个类、1051 项，0 失败、0 错误、19 跳过（不含 Cubism SDK 与桌面窗口）；之后的两处小修正（项目重开后不提示过期姿态、后端不可用时撤回待提交值）复跑了姿态相关的 6 个测试类；包含这两处修正的 `a3fc546` 随后在 PR CI 的 Ubuntu 与 Windows 全量中通过。GUI 行为仍需桌面手动确认。
+
+文档核对（`a3fc546` 之后）：用测试导出的注册表核对全部文档中的工具名，170 项均出现在 MCP_AUTHORING（补上 `warp_get_controls`）；改正 `revision.list` → `history_list`、`model_preset` → `model_apply_preset`、规格中的 `inspect` → `workspace_inspect`，并按当前代码更新 AGENT_DESIGN 与 UI/MCP 对照中关于 GUI 姿态提交和迁移状态的描述。
 
 ### 此前通用阶段的历史证据
 
@@ -335,4 +337,4 @@ Windows CMO3 导入阶段全量 `gradlew.bat test --offline` 成功：656 项，
 - 物理选中组试听：面板另有 PhysicsEngine、PhysicsDrag、最大输出及重置时钟；现有 preview_physics 未覆盖它。公开拟合需能消费同一实测 peaks。 状态：已实现 `physics_audition*` 与 `physics_fit observed_peaks`，面板摆锤共用同一会话核心。
 - 多次输入画布草稿：Warp/Rotation 放置、刀切及路径绘制保存旧局部坐标或顶点索引，却在确认时清除起始 state；应保留首点或放置开始的捕获并拒绝外部修改后的旧草稿。 状态：已实现 `WorkspaceCanvasInputDraft` 并接入 GUI。
 
-其余主要域已核对公开入口及共享候选；主题、布局、快捷键和变形器辅助线呈现按范围排除。入口审计不替代运行时验收。完成上述业务后仍需源码审查、历史重放、归档重开、导出读回、视觉、并发/取消、HTTP 契约与认证，以及桌面窗口手动检查；同一源码的 Windows / Ubuntu 全量已由 `046a725` 的 PR CI 取得（不含 Cubism SDK、原生 GL 与桌面窗口），后续源码改动需重新取得。
+其余主要域已核对公开入口及共享候选；主题、布局、快捷键和变形器辅助线呈现按范围排除。入口审计不替代运行时验收。完成上述业务后仍需源码审查、历史重放、归档重开、导出读回、视觉、并发/取消、HTTP 契约与认证，以及桌面窗口手动检查；同一源码的 Windows / Ubuntu 全量已由 `a3fc546` 的 PR CI 取得（不含 Cubism SDK、原生 GL 与桌面窗口），后续源码改动需重新取得。

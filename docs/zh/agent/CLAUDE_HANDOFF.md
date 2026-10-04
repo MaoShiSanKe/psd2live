@@ -9,7 +9,7 @@
 - 工作目录：`D:\code\live2d\psd2live`；分支：`refactor/agent-mcp-application`。
 - 草稿 PR：[#19](https://github.com/tsunehimatoi/psd2live/pull/19)。第一份检查点提交为 `26f31137`。
 - 已处理与上游 `master` 的 20 个提交的合并，目标提交 `f66636ce`。保留 GPU 画布、指南、路径、参数快照 ghost、局部画笔上传和网格单位功能，没有恢复已退休的 Agent/ViewModel 接口。
-- 当前头部为 `046a725`，共 37 个提交。本页末尾的「当前合并验收记录」是暂停交接时的专项结果，保留作历史证据；最新状态以「五域之后的收口修复」及 PR CI 为准。
+- 最后一次代码修改为 `a3fc546`（GUI 参数同步），之后只有文档提交；当前头部以 `git log` 为准。本页末尾的「当前合并验收记录」是暂停交接时的专项结果，保留作历史证据；最新状态以「五域之后的收口修复」、REFACTOR_PROGRESS「GUI 参数同步修复」及 PR CI 为准。
 - `build/` 中的日志、XML、图片及辅助脚本是本机证据，未随源码提交。原始测试证据应保留，不能用后续专项覆盖旧全量结果。
 
 ## 已确定的目标与不可变式
@@ -37,7 +37,7 @@
 
 ## 本机全量基线（历史）与当时待复验的修复
 
-当前源码的两平台证据是 `046a725` 的 PR CI 全量（见「五域之后的收口修复」）。下面是此前最近一次本机全量，保留作历史证据：当时实际全量为 Windows / JDK 21，196 个类、976 项：**947 通过、19 失败、10 跳过**。日志 `build/parallel-refactor-checkpoint-full-3.log`，完整 XML `build/parallel-refactor-checkpoint-full-3-results/`，失败摘要 `build/parallel-refactor-checkpoint-full-3-failures.json`。绘制顺序新增 4 项、Warp/Bezier 新增 7 项在该次通过；合成图片已目视检查。
+当前源码的两平台证据是 `a3fc546` 的 PR CI 全量（Ubuntu 与 Windows 均通过）及同一提交的本机 Linux 全量（1051 项，0 失败、19 跳过）。下面是此前最近一次本机全量，保留作历史证据：当时实际全量为 Windows / JDK 21，196 个类、976 项：**947 通过、19 失败、10 跳过**。日志 `build/parallel-refactor-checkpoint-full-3.log`，完整 XML `build/parallel-refactor-checkpoint-full-3-results/`，失败摘要 `build/parallel-refactor-checkpoint-full-3-failures.json`。绘制顺序新增 4 项、Warp/Bezier 新增 7 项在该次通过；合成图片已目视检查。
 
 随后三个组已处理以下问题；之后的 PR CI 全量通过，但它不输出逐项计数，不能逐条对应原 19 项失败：
 

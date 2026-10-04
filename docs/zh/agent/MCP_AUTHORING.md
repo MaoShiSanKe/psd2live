@@ -81,6 +81,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `canvas_deform_stroke` | brush/smooth/inflate、多网格、连通限制及 Glue 保持；采样为画布像素，edit 保留图像，deform 写精确关键形；整笔一次提交 |
 | `canvas_glue_edit / vertex_group_paint` | Glue 刷接、方向权重、解绑、重连及模拟权重笔刷/渐变/反转；保留连续 Glue 顺序与动画通道 |
 | `layer_draw_order` | 以 `target` 设置 0–1000 的显式绘制顺序；`order:null` 重置为原有生成或作者动画顺序 |
+| `warp_get_controls` | 从一次已提交捕获读取 Bezier 分段数与编辑控制；`detail=summary` 不含控制点，`points` 按锚点、切线顺序分页（每页最多 256）；坐标为父级局部空间，`persisted=false` 表示控制由采样格点重建。CMO3 只保存采样几何与分段信息，不含这些编辑控制 |
 | `warp_set_topology` | 后台重采样全部普通与混合关键形；返回父级局部空间的实际表面采样误差 |
 | `warp_bezier_divisions / warp_bezier_anchor / warp_bezier_handle / warp_bezier_reset` | 后台保存分段数、锚点、切线或重置；控制坐标为父级局部空间，持久化完整编辑控制与采样格点 |
 | `swing_preview / swing_preview_get / swing_preview_render / swing_preview_commit` | 私有摆动草稿、试听时钟与 PNG 观察；确认一次历史提交，取消不发布草稿 |
@@ -114,7 +115,7 @@ CMO3 导入共用独立应用层导入器，GUI 入口确认后携带可信用�
 {"request":{"request_id":"export-001","project_id":"project-id-from-inspect","state":"opaque-state-from-inspect","output_directory":"D:/exports/model"}}
 ```
 
-所有修改操作都要求 `request_id`；工作区修改还要求 `project_id` 与 `state`。`workspace_inspect` 总是返回当前状态，包括未加载时的状态令牌。创建或导入空工作区时 `project_id` 为 `null`。`state` 是包含加载代次与持久版本的不透明令牌，重开同一历史节点后也会变化，不能填写历史 HEAD。文档写入返回自己的提交令牌及 `history_node_id`；无变化不建立节点。共享上下文由注册表发布并校验，提交端再次检查；请求等待断线不取消进程持有的执行。参数快照与历史注释已使用同一应用命令和持久版本，不追加 Rig 历史节点。GUI 和 MCP 的显式 pose 修改也推进状态，播放/物理求值帧及快照悬停不推进状态。剩余辅助状态迁移范围见 [重构验收进度](REFACTOR_PROGRESS.md)。
+所有修改操作都要求 `request_id`；工作区修改还要求 `project_id` 与 `state`。`workspace_inspect` 总是返回当前状态，包括未加载时的状态令牌。创建或导入空工作区时 `project_id` 为 `null`。`state` 是包含加载代次与持久版本的不透明令牌，重开同一历史节点后也会变化，不能填写历史 HEAD。文档写入返回自己的提交令牌及 `history_node_id`；无变化不建立节点。共享上下文由注册表发布并校验，提交端再次检查；请求等待断线不取消进程持有的执行。参数快照与历史注释已使用同一应用命令和持久版本，不追加 Rig 历史节点。GUI 和 MCP 的显式 pose 修改也推进状态，播放/物理求值帧及快照悬停不推进状态。GUI 改参数时先在本地显示，再按顺序提交；提交落地前 `scope=preview` 仍返回已提交的姿态。此时 MCP 先提交姿态或其他修改，GUI 排队中的修改会按冲突回滚到已提交姿态。剩余辅助状态迁移范围见 [重构验收进度](REFACTOR_PROGRESS.md)。
 
 `physics_simulate/simulation_simulate` 启动前核对请求的工程与状态，并捕获一次独立查询会话。后续修改或重开工程不改变此次采样；completed 的 `result` 包含原采样诊断及捕获时的 `project_id/state/revision`。用 `job_get/job_wait` 查询，用 `job_cancel` 中断校准、静置及逐帧求解；取消等待或断线仍让任务继续，原请求重试取回同一任务。它们保持 `read_only:true`，不增加历史、不改变持久版本，也不能加入文档批量。`simulation_simulate` 的 `hold/release` 各为 0–20 秒。
 
@@ -301,7 +302,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 - 批内编辑先验证与重建，成功后提交；一次 `rig_deform` / `keyform_apply` 可包含 1–128 条更改，单条形变可含 1–16 个操作。
 - 普通无变化写入不应制造历史节点；`checkpoint` 是显式留点的例外。恢复是写操作，会移动 HEAD；从旧节点继续编辑形成分支，原分支保留。
 - `project_save_as` 用绝对路径指定首次保存或另存位置；`project_save` 保存到当前位置。`project_open` 打开工程归档，未保存时先等待保存任务成功，或明确给出 `discard_unsaved=true`。这些操作不会打开 GUI 对话框。`project_export_model` 写出交付文件，但不替代工程保存。暂存素材不等于已经加入模型，也不等于已保存到磁盘。
-- 超时或断线后用 `workspace_inspect` 和 `revision.list` 检查是否已提交，再决定下一步。
+- 超时或断线后用 `workspace_inspect` 和 `history_list` 检查是否已提交，再决定下一步。
 - 多工具跨调用事务、结构化 `history_diff` 和 `task_*` 执行控制未作为当前公开接口提供。
 
 ## 形状、路径与物理
