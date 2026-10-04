@@ -2,21 +2,21 @@
 
 用户要求：完成当前冲突处理后暂停，准备交给 Claude。完整目标仍是“完成重构”，没有缩小为创建 PR 或通过编译。
 
-工作已恢复：`2045d15..e133d37` 实现了下面的五个业务缺口，并修复了交接时的保存差异和两处 GUI 问题；当前状态以「最后五个业务缺口」和「仍未结的问题」两节为准。实现并不等于验收：GUI 改动只经过 PR CI 编译与测试，没有本机桌面手动检查，也没有新的两平台全量。
+工作已恢复：`2045d15..e133d37` 实现了下面的五个业务缺口，并修复了交接时的保存差异和两处 GUI 问题；`49a6e86..046a725` 关闭了其后记录的字段会话设置开关、GUI 显隐绕过辅助 CAS 和形变笔刷 UV 差异三项问题，并修复 CI 暴露的异步竞态（见「五域之后的收口修复」）。当前头部 `046a725` 的 PR CI 在 Ubuntu 与 Windows 上运行同一源码的 `gradlew test` 均通过。实现并不等于验收：GUI 改动没有本机桌面手动检查；CI 不含 Cubism SDK、原生 GL 和桌面窗口。
 
 ## 工作区与 PR
 
 - 工作目录：`D:\code\live2d\psd2live`；分支：`refactor/agent-mcp-application`。
 - 草稿 PR：[#19](https://github.com/tsunehimatoi/psd2live/pull/19)。第一份检查点提交为 `26f31137`。
 - 已处理与上游 `master` 的 20 个提交的合并，目标提交 `f66636ce`。保留 GPU 画布、指南、路径、参数快照 ghost、局部画笔上传和网格单位功能，没有恢复已退休的 Agent/ViewModel 接口。
-- 本次合并验证结果与最终暂停提交以本页末尾记录及 `git log -2` 为准。不要沿用 PR 初始描述中的“上游尚未整合”。
+- 当前头部为 `046a725`，共 37 个提交。本页末尾的「当前合并验收记录」是暂停交接时的专项结果，保留作历史证据；最新状态以「五域之后的收口修复」及 PR CI 为准。
 - `build/` 中的日志、XML、图片及辅助脚本是本机证据，未随源码提交。原始测试证据应保留，不能用后续专项覆盖旧全量结果。
 
 ## 已确定的目标与不可变式
 
 面向外部 Agent，不内置聊天或模型服务。GUI 全部业务能力须有可调用的 MCP 入口，主题、布局、快捷键和纯显示用的变形器辅助线除外；本轮不增加独立无界面服务器。直接替换旧 API，不增加兼容别名。
 
-先阅读根目录 `AGENTS.md`、`CLAUDE.md`，架构改动还要核对源码。遵守仓库保密与 SDK 排除规则，验证使用合成或公开测试数据。架构规则集中在 `CLAUDE.md`；中立 `project` 不依赖 `application`，中立 `application/core` 不依赖 Compose、GUI、Agent 或 MCP。业务端口必须为抽象必需方法，不添加默认抛异常、空结果或委托 fallback。
+先阅读根目录 `AGENTS.md`、`CLAUDE.md`（两者目前未纳入版本库，只在维护者本机；没有时以本页与源码中的架构测试为准），架构改动还要核对源码。遵守仓库保密与 SDK 排除规则，验证使用合成或公开测试数据。架构规则集中在 `CLAUDE.md`；中立 `project` 不依赖 `application`，中立 `application/core` 不依赖 Compose、GUI、Agent 或 MCP。业务端口必须为抽象必需方法，不添加默认抛异常、空结果或委托 fallback。
 
 持久状态是 `WorkspaceDocument`、序列化编辑日志与辅助数据，`PuppetModel` 是重建结果。新编辑通过候选计算 → 重建/重放 → 起始 state CAS；必须覆盖历史、保存重开、导出读回和视觉。保持 v1 编解码、原历史节点和 ID，读取旧文档不能自动升级 revision。文档批量 1–128 项顺序读取前序候选，失败/取消不发布前缀，成功最多一个 Rig 历史节点。作者姿态和临时求值帧分开。
 
@@ -35,11 +35,11 @@
 - `a561f12` 修复交接时唯一的专项失败：网格单位合并后，`WorkspaceSettingsCodec.encode` 把 `meshUnits` 放在 `meshSpacing` 后，桌面设置投影却放在填充参数后；revision 对设置 JSON 文本取哈希，所以每次保存应用层写过的文档都会多出 `Save project` 节点。投影已改为规范键序，编解码测试固定该顺序；历史断言未放宽。
 - `6abe11c` 让 GUI 深度拆分对导入 CMO3 模型也可用，与公开 `source_split_depth` 一致。`4b36d1c` 修复实时姿态竞态：软件预览 tick 在首个 SDK 帧标记就绪之前读取状态，随后用自己的姿态覆盖该帧（Windows CI 上读到作者最大值而不是帧值）；现在到达的 SDK 帧保留实时姿态。
 
-## 最近测试基线与仍需复验的修复
+## 本机全量基线（历史）与当时待复验的修复
 
-最近一次实际全量为 Windows / JDK 21，196 个类、976 项：**947 通过、19 失败、10 跳过**。日志 `build/parallel-refactor-checkpoint-full-3.log`，完整 XML `build/parallel-refactor-checkpoint-full-3-results/`，失败摘要 `build/parallel-refactor-checkpoint-full-3-failures.json`。绘制顺序新增 4 项、Warp/Bezier 新增 7 项在该次通过；合成图片已目视检查。
+当前源码的两平台证据是 `046a725` 的 PR CI 全量（见「五域之后的收口修复」）。下面是此前最近一次本机全量，保留作历史证据：当时实际全量为 Windows / JDK 21，196 个类、976 项：**947 通过、19 失败、10 跳过**。日志 `build/parallel-refactor-checkpoint-full-3.log`，完整 XML `build/parallel-refactor-checkpoint-full-3-results/`，失败摘要 `build/parallel-refactor-checkpoint-full-3-failures.json`。绘制顺序新增 4 项、Warp/Bezier 新增 7 项在该次通过；合成图片已目视检查。
 
-随后三个组已处理以下问题，但最终必须用新全量确认，不能宣称 19 项全部消除：
+随后三个组已处理以下问题；之后的 PR CI 全量通过，但它不输出逐项计数，不能逐条对应原 19 项失败：
 
 - Sim start/restart 省略 values 时复用持久作者姿态；取消测试核对真实 restart 检查点和场景回滚。
 - 旧姿态/锁、Swing、播放和跟踪集成测试等待正确异步边界；多画布测试使用真实 Backend。
@@ -65,16 +65,28 @@
 
 5. **多次输入画布草稿的起始捕获。** Warp/Rotation placement、knife、path 仍可能在确认前清 gestureState，随后重取 token 解释旧坐标/顶点索引。保留首点/放置开始的 state、加载身份、模型、pose、目标与坐标映射；失败保留可取消草稿，成功后再清理和选择。复用已有 canvas_warp/rotation/topology/path_put 候选即可，不要求新增视觉 ghost 会话工具。骨架与此组会修改同一 CanvasEditor，需按精确区域分工。 **已实现**（`f9c9065`、`025f904`）：`application/WorkspaceCanvasInputDraft.kt` 在首个输入时捕获 state、加载/工作区/画布范围、模型、pose、目标与坐标映射；确认对该捕获编译 journal，并对同一 state 写入，冲突时草稿保持打开、可取消，未变化时关闭且不写历史。GUI 的 Warp/Rotation 放置在开始时捕获，knife 与 path 在首点（extendPath 在其开始）捕获；被拒绝的写入保留 ghost、切线或路径供 Esc 取消，成功后才清理和选择。
 
-上述五组实现后，接口文档与 UI/MCP 矩阵已按 `e133d37` 同步；还要同步当前架构说明，审查历史/归档/导出/视觉、冲突/取消、请求/终态/认证契约；最终同一份源码分别运行 Windows 与 Ubuntu 全量。不能用此前阶段的两平台成功记录代替当前代码证明。
+上述五组实现后，接口文档与 UI/MCP 矩阵已按 `e133d37` 同步，并在 `046a725` 后补记收口修复；物理、摆动、模拟与路径指南已改用当前操作名（`05b67df`、`5367f65`）。仍要审查历史/归档/导出/视觉、冲突/取消、请求/终态/认证契约，并做桌面手动检查。
+
+## 五域之后的收口修复（`49a6e86..046a725`）
+
+注册表计数不变（170 / 58 / 79）。
+
+- 字段会话设置开关（`1122a86`、`77270b9`）：会话内开关仍更新本地草稿用于显示，同时按顺序记录；提交草稿时 `prepareEditorDraft` 先经 `WorkspaceSettingsIntent` 重放这些开关，再应用其余差异，文档加辅助数据一次 CAS。关闭再开启也释放作者姿态；只含开关的会话同样提交。画布编辑运行中被拒绝的命令改为提示而不是静默丢弃。
+- GUI 显隐（`c9ef355`、`539b978`）：深度拆分新前层与导入图片经 `editCanvasVisibility` 在命令提交后的 state 上显示；CMO3 替换用 `CanvasVisibilityProcessor.endSolos` 在同一辅助候选中结束已保存的 solo。
+- 形变笔刷（`11e1352`、`648e684`、`046a725`）：预览与提交使用同一 `RigAuthoringJournal` 编译；笔触采样落在 1/1024 px 网格；笔触 journal 只捕获目标几何实际依赖的参数。比较容差未放宽。
+- 画布编辑姿态（`0b16237`、`082bef2`）：笔触姿态只保留模型现有参数并钳制到范围；拒绝信息带参数名。
+- 异步竞态（`49a6e86`、`c98671a`、`bf79f04`、`762c285`）：Cubism 预览会话只为已挂载画布加载；提交编辑草稿作废进行中的本地预览重建；动作循环的时钟帧不再切回画布动画开关，接受的帧在状态锁内一起发布姿态与就绪状态；骨架草稿测试等待 rest pose 提交。
+
+`046a725` 的 PR CI（`Test (ubuntu-latest)`、`Test (windows-latest)`，JDK 21 Temurin）通过。CI 日志不输出用例计数，依赖 SDK 或 GPU 的用例可能跳过；上文「最近测试基线」中的 976 项/19 失败本机全量已不是当前源码的结果，只作历史记录。
 
 ## 仍未结的问题
 
-- 设置：字段会话内的 meshOnly、动作子项和 generatePhysics 开关仍走本地草稿，草稿差异只记录最终设置；只有无字段会话时的开关和启动前的动作开关经 `WorkspaceSettingsPort` 提交。
 - 骨架：GUI 打开草稿是异步的（会话先以自己的姿态 CAS 重置 rest pose），打开完成前后的工具续接只有 CI 证据，需手动桌面检查。
 - 层级 reparent：journal 编辑使用 `space=local`，保留子对象的局部坐标，不做重新拟合；拖放到不同空间的父级时不会像重新拟合那样保持外观，是否需要拟合选项尚未决定。
 - 显隐：GUI 层级眼睛现在只是局部画布呈现，不再改变导出可见性，这是行为变化；文档可见性（导出）仍由 `object_edit_appearance` 等文档编辑修改，GUI 对应入口需另行确认。
-- 显隐：少数 GUI 内部写入仍绕过辅助 CAS 直接改画布显隐：深度拆分前层、图片导入以及 CMO3 替换时的隔离处理。它们不进入文档或导出，但不推进可见性辅助 state。
-- 形变：画布形变笔刷的预览与提交结果在 UV 上存在 1 ulp 差异，正在调查；不要通过放宽比较容差掩盖。
+- 验收：没有桌面窗口手动检查，也没有包含 Cubism SDK 与原生 GL 的全量运行；这两项仍是合并前的必要证据。
+
+已关闭（见「五域之后的收口修复」）：字段会话设置开关只记录最终设置、深度拆分/图片导入/CMO3 替换的显隐绕过辅助 CAS、形变笔刷预览与提交 UV 相差 1 ulp。
 
 ## 恢复与验收操作
 
@@ -89,7 +101,7 @@ $env:JAVA_HOME = 'C:\Program Files\Java\jdk-21'
 
 本机辅助脚本包括 `build/summarize-checkpoint.py`（只在确实运行本次 test 后复制 XML）、`build/test-discovery-audit.py`（检查所有 Test 方法返回 void）、`build/prepare-linux-files.py`、`build/prepare-refactor-final.py` 和 `build/finalize-refactor-final.py`。最后两个仍是未完成的辅助准备：视觉目录名、工具计数和 overall_complete 必须按最终实际证据更新，不能直接据其结果宣布完成。Ubuntu 验证使用独立 WSL rootfs/JDK 21 与显式 AWT headless；它不能证明桌面窗口启动或所有原生 GL 路径。
 
-## 当前合并验收记录
+## 当前合并验收记录（暂停交接时，历史）
 
 本次暂停前的专项运行完成：Windows / JDK 21，8 个测试类、27 项，**26 通过、1 失败、无错误或跳过**。生产和全部测试源码均已编译成功。日志 `build/refactor-merge-handoff-targeted-2.log`，原始 XML `build/refactor-merge-handoff-targeted-2-results/`，失败摘要 `build/refactor-merge-handoff-targeted-2-failures.json`。编译产物审计为 1003 个带 Test 注解的方法，全部返回 void；这不是运行了 1003 项测试。
 

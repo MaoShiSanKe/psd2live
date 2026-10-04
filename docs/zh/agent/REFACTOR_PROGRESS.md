@@ -1,8 +1,8 @@
 # AI / MCP 重构验收进度
 
-这是进行中的实现记录，完整重构尚未完成。架构规则集中在 [CLAUDE.md](../../../CLAUDE.md)，当前可调用接口见 [MCP_AUTHORING.md](MCP_AUTHORING.md)。
+这是进行中的实现记录，完整重构尚未完成。架构规则集中在 [CLAUDE.md](../../../CLAUDE.md)（该文件目前未纳入版本库，本文引用指向维护者本机副本），当前可调用接口见 [MCP_AUTHORING.md](MCP_AUTHORING.md)。
 
-用户要求处理上游冲突后暂停，准备 Claude 交接；之后工作已恢复，五个业务域已在 `e133d37` 前实现，仍待验收。当前源码、证据边界、未结问题和恢复步骤集中在 [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md)；下面各阶段记录保留其当时的测试范围（包括当时的操作计数），不代表最新全量通过。
+用户要求处理上游冲突后暂停，准备 Claude 交接；之后工作已恢复，五个业务域已在 `e133d37` 前实现，`49a6e86..046a725` 关闭了其后记录的三项未结问题并修复 CI 暴露的异步竞态，PR CI 两平台全量通过，仍待桌面手动验收。当前源码、证据边界、未结问题和恢复步骤集中在 [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md)；下面各阶段记录保留其当时的测试范围（包括当时的操作计数），不代表最新全量通过。
 
 ## 已确定的范围
 
@@ -78,11 +78,24 @@
 - 物理试听与实测拟合：`physics_fit` 接受 `observed_peaks` 并与面板 Fit 共用 `FitObserved` 候选；面板摆锤与新会话共用 `PhysicsAudition`，步进在副本上求解，读取不推进时钟，重开或组被删除后会话为 stale。
 - 骨架草稿：`core/SkeletonDraftEdits.kt` 的类型化意图与纯处理器由 GUI 骨骼编辑工具和 `skeleton_draft_*` 共用；会话以自身姿态 CAS 重置 rest pose 并只在该谱系上提交。
 - 局部显隐与层级：`CanvasVisibilityProcessor` 与辅助 CAS 只改所寻址的 workspace/canvas/mode 会话，不改文档、历史或导出；层级眼睛、solo、全部显隐/反转和变形器眼睛改走该处理器。文档图层可见性改为独立字段，GUI 眼睛不再改变导出可见性。层级拖放写一条 structure journal 的 bind/move（`space=local`，不重新拟合），旧 v1 parentOverrides 仍在构建时先应用。
-- 设置联动：见下文 `WorkspaceSettingsIntent` 与 `WorkspaceSettingsPolicy` 三条；字段会话内的开关仍走本地草稿。
+- 设置联动：见下文 `WorkspaceSettingsIntent` 与 `WorkspaceSettingsPolicy` 三条；字段会话内的开关在 `e133d37` 时仍只走本地草稿，已在下一节修复。
 - 多次输入画布草稿：`WorkspaceCanvasInputDraft` 在首个输入时捕获 state、范围、模型、pose、目标与映射，确认对同一捕获编译并写入；冲突时草稿保留可取消。GUI 的 Warp/Rotation 放置、knife 与 path 已接入。
 - GUI 修复：导入 CMO3 模型可在 GUI 中深度拆分前后层，与 `source_split_depth` 一致；到达的 SDK 帧不再被读取了旧状态的软件预览 tick 覆盖。
 
-新增非 GUI 回归：`SkeletonDraftEditsTest`、`WorkspaceSkeletonDraftSessionsTest`、`WorkspaceSkeletonDraftOperationsTest`、`WorkspaceCanvasVisibilityTest`、`WorkspaceHierarchyEditsTest`、`WorkspaceSettingsIntentTest`、`WorkspacePhysicsAuditionSessionsTest`、`WorkspaceCanvasInputDraftTest`，并扩展 `WorkspacePhysicsCommandsTest` 与 `WorkspaceSettingsCodecTest`。GUI 改动（`CanvasEditor`、`PSD2LiveViewModel`、`DesktopWorkspace`、`PendulumCanvas` 等）只由 PR CI 编译和运行测试，没有本机桌面手动检查；没有新的 Windows / Ubuntu 全量记录。未结问题（字段会话开关、骨架草稿异步打开、reparent 不拟合、GUI 眼睛与导出可见性、少数绕过辅助 CAS 的 GUI 显隐写入、形变笔刷预览/提交 UV 1 ulp 差异）见 [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md#仍未结的问题)。
+新增非 GUI 回归：`SkeletonDraftEditsTest`、`WorkspaceSkeletonDraftSessionsTest`、`WorkspaceSkeletonDraftOperationsTest`、`WorkspaceCanvasVisibilityTest`、`WorkspaceHierarchyEditsTest`、`WorkspaceSettingsIntentTest`、`WorkspacePhysicsAuditionSessionsTest`、`WorkspaceCanvasInputDraftTest`，并扩展 `WorkspacePhysicsCommandsTest` 与 `WorkspaceSettingsCodecTest`。GUI 改动（`CanvasEditor`、`PSD2LiveViewModel`、`DesktopWorkspace`、`PendulumCanvas` 等）只由 PR CI 编译和运行测试，没有本机桌面手动检查。
+
+### 五域之后的收口修复（`49a6e86..046a725`）
+
+注册表计数不变（170 / 58 / 79）。这一段关闭了 `e133d37` 时记录的三项未结问题，并修复 CI 暴露的异步竞态：
+
+- 字段会话设置开关（`1122a86`、`77270b9`）：字段会话内的 meshOnly、动作子项和 generatePhysics 开关仍更新本地草稿用于显示，同时按顺序记录；`WorkspaceDraftQueue` 改为准备文档加辅助数据草稿，`prepareEditorDraft` 先经 `WorkspaceSettingsIntent` 重放这些开关，再应用其余草稿差异，一次 CAS。关闭再开启同一开关也释放作者姿态；只含这类开关的会话同样提交。画布编辑运行中被拒绝的命令改为提示，不再静默丢弃。
+- GUI 显隐写入（`c9ef355`、`539b978`）：深度拆分的新前层与导入图片改经 `editCanvasVisibility` 在命令提交后的 state 上显示，图片放置从该显示发布的 state 继续；`CanvasVisibilityProcessor.endSolo/endSolos` 让 CMO3 替换在携带重置姿态的同一辅助候选中结束已保存的 solo。
+- 形变笔刷预览/提交一致性（`11e1352`、`648e684`、`046a725`）：预览改用与提交相同的 `RigAuthoringJournal` 编译，被无变化容差丢弃的命令也不进入返回模型；笔触采样落在 1/1024 px 网格上，指针笔触与等价命令提交的 UV 一致；笔触 journal 只捕获目标几何实际依赖的参数（关键形轴、混合形绑定及限制），不再把生成视图参数等无关值写入。比较容差未放宽，新增 `WorkspaceCanvasStrokePoseTest` 与 `CanvasDeformStrokeTest` 用例。
+- 画布编辑姿态（`0b16237`、`082bef2`）：笔触解析姿态只保留模型现有参数并钳制到范围，播放、摆动或过期面板值不再使共享几何命令以 “Unknown or out-of-range parameter” 拒绝；拒绝信息带参数名。
+- 异步竞态（`49a6e86`、`c98671a`、`bf79f04`、`762c285`）：Cubism 预览会话只为已挂载画布加载，迟到的加载结果不再覆盖已就绪帧；提交编辑草稿会作废进行中的本地预览重建，避免 “Editor draft changed before its commit”；动作循环的时钟帧只携带数值，不再把画布动画开关切回；暂停物理释放在状态锁内复查，接受的帧在同一锁内发布姿态与就绪状态；骨架草稿测试等待 rest pose 提交完成。
+- 文档（`05b67df`、`5367f65`）：物理、摆动、模拟、路径指南和规格改用当前注册表操作名，`inspect` 简称统一为 `workspace_inspect`。
+
+PR CI 在 `046a725` 上对同一源码运行 `gradlew test`，Ubuntu 与 Windows（JDK 21 Temurin，不含 Cubism SDK）均通过；CI 日志不输出用例计数，依赖 SDK 或 GPU 的用例在该环境中可能跳过。这是当前源码的两平台全量证据，但不包括桌面窗口、原生 GL 或 Cubism SDK 路径。仍未结的问题见 [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md#仍未结的问题)。
 
 ### 此前通用阶段的历史证据
 
@@ -154,13 +167,13 @@
 - GUI 直接分类、全局/单层网格、重置和临时网格预览确认经窄接口调用共享命令。连续拖动、分类文字输入保留实时草稿，在结束时提交一次；生成设置/分类/网格差异草稿由 `prepareDraft` 转成同一纯候选，复合差异顺序重建，混合草稿仍先规范化网格编辑。临时网格预览确认先恢复基线，再准备正式持久候选。其余业务草稿与复杂分类迁移仍待完成。
 
 - 设置联动与作者姿态进入中立 `WorkspaceSettingsIntent`：一次解析完整 patch 并校验，meshOnly 变化未显式给出 generateDeformers 时联动为 `!meshOnly`（导入 CMO3 除外），生成动作子项开关变化未显式给出 exportMotions 时联动为子项是否全开；显式字段优先。关闭 meshOnly 以外的来源时释放其驱动的作者姿态：meshOnly 开启释放全部参数，基础动作/待机/眨眼关闭释放对应标准参数，物理关闭释放物理组输出；Nod/Shake 只播放临时帧，不改作者姿态。释放按真实 `Parameter.default`，逐工作区跳过该工作区自己的锁，并保留每个工作区的持久姿态记录。
-- 文档与辅助数据共用私有候选：`WorkspaceRuntime.executeDraft` 让每个成员在同一草稿上更新文档、模型与辅助数据，最后一次 CAS 发布；`workspace_apply_edits` 的 settings_update 成员、单项 settings_update 及 GUI 设置开关都走它。批量中关闭再开启同一开关仍释放姿态，最终设置相同则只发布辅助数据而不产生历史节点；任一成员失败不发布前缀。GUI 的 meshOnly、动作子项和 generatePhysics 开关在无字段会话时经 `WorkspaceSettingsPort` 提交，提交锁内投影各工作区姿态；启动预设的两个动作开关在字段会话前作为一次意图提交。字段会话中的开关仍走本地草稿，草稿差异只记录最终设置。
+- 文档与辅助数据共用私有候选：`WorkspaceRuntime.executeDraft` 让每个成员在同一草稿上更新文档、模型与辅助数据，最后一次 CAS 发布；`workspace_apply_edits` 的 settings_update 成员、单项 settings_update 及 GUI 设置开关都走它。批量中关闭再开启同一开关仍释放姿态，最终设置相同则只发布辅助数据而不产生历史节点；任一成员失败不发布前缀。GUI 的 meshOnly、动作子项和 generatePhysics 开关在无字段会话时经 `WorkspaceSettingsPort` 提交，提交锁内投影各工作区姿态；启动预设的两个动作开关在字段会话前作为一次意图提交。字段会话中的开关先更新本地草稿，并按顺序记录，提交草稿时经同一意图重放后再应用其余差异，一次 CAS（`1122a86`、`77270b9`）。
 - raw/effective 策略集中在 `project/WorkspaceDocument.kt` 的 `WorkspaceSettingsPolicy`：文档只存原始设置，`rawConfig()` 读取原样值，`config()` 才套用生效规则（meshOnly 关闭变形器、动作与物理；显式 generateDeformers=false 与 exportMotions=false 生效；v1 桌面在全部生成动作关闭时写入的 exportMotions=false 仍按旧规则导出自定义动作）。PSD/素材创建与 CMO3 导入/替换改为保存原始设置，不再把生效值写回文档；GUI `buildConfig()` 与文档共用同一规则。
 
 - 源图多边形与网格连通块拆分进入独立 `WorkspacePartitionCommands` 和共享 `WorkspacePartitionEdits`，两项单项为后台任务并支持原子批量；新 `source_get_components` 使用独立查询捕获，返回相同版本的组件数量、排序和中心。GUI 检测保留原状态，确认经窄接口调用；多层决策顺序重建后一次 USER 提交，辅助版本变化也拒绝旧对话框，旧 GUI 候选准备已移除。拆分保留原层并软删除，提前固定新源图/Drawable ID，继承分类、父级、可见性、网格及绘制顺序覆盖，保留生成输入与无关对象编辑。任务 CAS 后立即保存精确结果，迟到取消及刷新失败保留成功；批量返回新 `layer:<id>` 与生成对象句柄，后续成员可引用指定的新 ID。像素/组件检测及重建检查原协程取消。普通已编辑目标的绑定迁移已继续补齐，见本页当前进度；多边形实时 Glue、导入模型分区及完整源图/分类/生成模式迁移仍待完成。
 - 请求 schema 新增实际执行的 `uniqueItems`，数值按值比较，嵌套对象忽略字段顺序，数组保留顺序；递归规范化后使用哈希集合，避免大量组件名称/ID 的两两比较。HTTP 能力与请求发布同一约束。组件名称/ID 不设低于 GUI 能力的额外数量上限，数量必须匹配当前检测结果。
 
-- GUI 深度拆分与新 `source_split_depth` 经 `WorkspacePartitionCommands` 共用独立 `WorkspaceDepthSplitEdits` 候选；单项为进程任务，也可作为原子批量成员。GUI 保留菜单、多选及对话框打开时的完整状态，一次 USER 提交后才进入绘画；旧确认不会绕过辅助版本冲突。提前固定源图/网格/Glue ID，保留生成输入、已删除像素及所选网格运动，嘴部只新增所选网格；前层可独立绘画，方向 Glue 保持后层运动，两层使用固定绘制顺序。纯候选/重建/CAS 与任务完成标记已有回归；导入 CMO3 不支持。详细架构规则见 [CLAUDE.md](../../../CLAUDE.md)。
+- GUI 深度拆分与新 `source_split_depth` 经 `WorkspacePartitionCommands` 共用独立 `WorkspaceDepthSplitEdits` 候选；单项为进程任务，也可作为原子批量成员。GUI 保留菜单、多选及对话框打开时的完整状态，一次 USER 提交后才进入绘画；旧确认不会绕过辅助版本冲突。提前固定源图/网格/Glue ID，保留生成输入、已删除像素及所选网格运动，嘴部只新增所选网格；前层可独立绘画，方向 Glue 保持后层运动，两层使用固定绘制顺序。纯候选/重建/CAS 与任务完成标记已有回归；导入 CMO3 模型同样支持，GUI 前后层入口自 `6abe11c` 起与之一致。详细架构规则见 [CLAUDE.md](../../../CLAUDE.md)。
 
 - 普通已编辑图层、深度前后层及导入 CMO3 的删除/恢复已补齐共享重放边界。普通工程首次实际修改成员，在新候选固定当前生成范围和所有源图/Drawable 身份，追加内部 `layer_membership` 标记；旧文档不自动升级。重建与导出先重放所有编辑再过滤活动对象，恢复保留关键形、Warp、路径、顶点组、遮罩和 Glue；删除期间网格设置仍保存隐藏网格的重绑结果。GUI、MCP 单项及批量共用应用候选；旧状态、准备取消、外部辅助 CAS 和投影拒绝不发布固定 ID 或标记。详细规则见 [CLAUDE.md](../../../CLAUDE.md)，工程仍为 v1。
 
@@ -305,9 +318,9 @@ Windows CMO3 导入阶段全量 `gradlew.bat test --offline` 成功：656 项，
 逐入口源码审计已收口为以下五个实质缺口。五项均已实现（见上文「恢复后的五域实现」），下面保留原缺口描述，每项末尾记录当前状态；仍须与实时模拟、形变笔刷、Warp/Bezier 和绘制顺序组一起完整验收：
 
 - 骨架编辑：批量变换、复制/镜像、细分/消解、链生成及手动权重绘制/清理/映射/转移仍由 GUI 准备；公开写最终骨架不等于可调用同一算法。骨架草稿应保留打开时 state，确认不能重取令牌绕过冲突。 状态：已实现，GUI 与 `skeleton_draft_*` 共用意图和会话；GUI 异步打开待手动检查。
-- 局部画布显隐与层级：单层/全部/反转/隔离属于每 workspace/canvas/mode 的持久呈现状态，不能改变共享模型或导出，已有多画布回归证明这一边界。需中立 processor 与辅助 CAS/公开控制读回，保留原 v1 presentation 字段。GUI reparent 改为共用结构 journal，继续读取旧 v1 父级覆盖。 状态：已实现 `canvas_visibility / canvas_visibility_get` 与 journal reparent（`space=local`）；少数 GUI 显隐写入仍绕过辅助 CAS。
-- 设置联动：meshOnly、动作及 generatePhysics 开关仍在 GUI 重置参数值或联动其他设置；需中立意图与一致的作者姿态边界。 状态：已实现；字段会话内的开关仍走本地草稿。
+- 局部画布显隐与层级：单层/全部/反转/隔离属于每 workspace/canvas/mode 的持久呈现状态，不能改变共享模型或导出，已有多画布回归证明这一边界。需中立 processor 与辅助 CAS/公开控制读回，保留原 v1 presentation 字段。GUI reparent 改为共用结构 journal，继续读取旧 v1 父级覆盖。 状态：已实现 `canvas_visibility / canvas_visibility_get` 与 journal reparent（`space=local`）；深度拆分前层、图片导入与 CMO3 替换的显隐写入已改经辅助 CAS（`c9ef355`、`539b978`）。
+- 设置联动：meshOnly、动作及 generatePhysics 开关仍在 GUI 重置参数值或联动其他设置；需中立意图与一致的作者姿态边界。 状态：已实现；字段会话内的开关经记录与重放进入同一意图（`1122a86`、`77270b9`）。
 - 物理选中组试听：面板另有 PhysicsEngine、PhysicsDrag、最大输出及重置时钟；现有 preview_physics 未覆盖它。公开拟合需能消费同一实测 peaks。 状态：已实现 `physics_audition*` 与 `physics_fit observed_peaks`，面板摆锤共用同一会话核心。
 - 多次输入画布草稿：Warp/Rotation 放置、刀切及路径绘制保存旧局部坐标或顶点索引，却在确认时清除起始 state；应保留首点或放置开始的捕获并拒绝外部修改后的旧草稿。 状态：已实现 `WorkspaceCanvasInputDraft` 并接入 GUI。
 
-其余主要域已核对公开入口及共享候选；主题、布局、快捷键和变形器辅助线呈现按范围排除。入口审计不替代运行时验收。完成上述业务后仍需源码审查、历史重放、归档重开、导出读回、视觉、并发/取消、HTTP 契约与认证，以及最终同一源码的 Windows / Ubuntu 全量测试；全部现行架构与接口文档需同步。
+其余主要域已核对公开入口及共享候选；主题、布局、快捷键和变形器辅助线呈现按范围排除。入口审计不替代运行时验收。完成上述业务后仍需源码审查、历史重放、归档重开、导出读回、视觉、并发/取消、HTTP 契约与认证，以及桌面窗口手动检查；同一源码的 Windows / Ubuntu 全量已由 `046a725` 的 PR CI 取得（不含 Cubism SDK、原生 GL 与桌面窗口），后续源码改动需重新取得。
