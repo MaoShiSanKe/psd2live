@@ -61,7 +61,9 @@ internal class WorkspaceSourceImporter(
             WorkspaceSettingsCodec.encode(config))
         progress(0.6f, "Rebuilding new source project")
         val preview = build(document)
-        val prepared = document.copy(rigEdits = preview.config.rigEdits, settings = WorkspaceSettingsCodec.encode(preview.config))
+        // The preview was generated from effective settings; the document keeps the raw ones it was given.
+        val prepared = document.copy(rigEdits = preview.config.rigEdits,
+            settings = WorkspaceSettingsCodec.encode(WorkspaceSettingsPolicy.restoreRaw(preview.config, config)))
         progress(0.9f, "Installing new source project")
         val id = newProjectId()
         val installed = runtime.install(state, id, prepared, preview,

@@ -75,16 +75,12 @@ internal data class WorkspaceSourceLayer(
 }
 
 
-/** The document, rather than a renderer or UI projection, supplies all durable generation inputs. */
-internal fun WorkspaceDocument.config(base: PipelineConfig = PipelineConfig()): PipelineConfig {
-    val saved = WorkspaceSettingsCodec.decode(settings, base)
-    // Match the desktop's existing effective-generation policy while retaining raw v1 settings.
-    val hasMotion = (saved.motionBasic && (saved.motionIdle || saved.motionBlink || saved.motionNod || saved.motionShake)) ||
-        saved.motionSkeleton || rigEdits.motionClips.any { it.builtin == null && it.enabled }
-    return saved.copy(
-        generateDeformers = if (rigEdits.importedCmo3 != null) saved.generateDeformers else !saved.meshOnly,
-        exportMotions = !saved.meshOnly && hasMotion,
-        generatePhysics = saved.generatePhysics && !saved.meshOnly,
+/**
+ * The document stores raw v1 settings: what the user or Agent chose, never the value generation derived from
+ * them. [WorkspaceSettingsPolicy.effective] is applied only where generation, export or queries consume them.
+ */
+internal fun WorkspaceDocument.rawConfig(base: PipelineConfig = PipelineConfig()): PipelineConfig =
+    WorkspaceSettingsCodec.decode(settings, base).copy(
         layerVisibility = layerVisibility,
         deletedLayerIds = deletedLayerIds,
         layerOverrides = layerOverrides,
@@ -94,4 +90,34 @@ internal fun WorkspaceDocument.config(base: PipelineConfig = PipelineConfig()): 
         generationSource = generationSource,
         meshSource = meshSource,
     )
+
+/** The document, rather than a renderer or UI projection, supplies all durable generation inputs. */
+internal fun WorkspaceDocument.config(base: PipelineConfig = PipelineConfig()): PipelineConfig =
+    WorkspaceSettingsPolicy.effective(rawConfig(base))
+
+/** The one raw-to-effective rule for the three settings that other settings gate. */
+internal object WorkspaceSettingsPolicy {
+    /** The generated-motion switches the desktop has always kept exportMotions in step with. */
+    fun motionOptionOn(config: PipelineConfig): Boolean = config.motionIdle || config.motionBlink ||
+        config.motionNod || config.motionShake || config.motionSkeleton
+
+    fun hasMotion(config: PipelineConfig): Boolean =
+        (config.motionBasic && (config.motionIdle || config.motionBlink || config.motionNod || config.motionShake)) ||
+            config.motionSkeleton || config.rigEdits.motionClips.any { it.builtin == null && it.enabled }
+
+    /**
+     * Mesh-only gates deformers, motions and physics. A raw false is honoured except where v1 files cannot tell
+     * it from the old derived value: exportMotions=false with every generated motion off was written by the
+     * desktop itself, and custom clips still exported then, so that combination keeps exporting them.
+     */
+    fun effective(raw: PipelineConfig): PipelineConfig = raw.copy(
+        generateDeformers = if (raw.rigEdits.importedCmo3 != null) raw.generateDeformers else !raw.meshOnly && raw.generateDeformers,
+        exportMotions = !raw.meshOnly && hasMotion(raw) && (raw.exportMotions || !motionOptionOn(raw)),
+        generatePhysics = raw.generatePhysics && !raw.meshOnly,
+    )
+
+    /** Undo [effective] on a config generation returned, so it can be stored as the document's raw settings. */
+    fun restoreRaw(generated: PipelineConfig, raw: PipelineConfig): PipelineConfig = generated.copy(
+        meshOnly = raw.meshOnly, generateDeformers = raw.generateDeformers,
+        exportMotions = raw.exportMotions, generatePhysics = raw.generatePhysics)
 }

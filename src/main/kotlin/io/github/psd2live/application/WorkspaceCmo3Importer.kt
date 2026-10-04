@@ -35,7 +35,8 @@ internal class WorkspaceCmo3Importer(
         val bytes = read(path)
         progress(0.3f, "Preparing source and imported rig")
         val current = before.capture?.takeIf { replacing }
-        val base = current?.document?.config() ?: initialConfig.copy(hairSimulationFront = false, hairSimulationBack = false)
+        // Raw settings in, raw settings out: the replaced document keeps what was chosen, not what generation derived.
+        val base = current?.document?.rawConfig() ?: initialConfig.copy(hairSimulationFront = false, hairSimulationBack = false)
         val (source, config) = runInterruptible(Dispatchers.Default) {
             Cmo3ModelImport.prepare(bytes, mode, current?.model, base)
         }
