@@ -63,6 +63,18 @@ class WorkspaceHierarchyEditsTest {
         assertEquals("parent", builder.build(reopened).rig.puppet.drawables.single().parentDeformerId?.raw)
     }
 
+    @Test fun hierarchyViewKeepsOldOverridesUntilAJournalReparentSupersedesThem() {
+        val overrides = linkedMapOf("ArtMeshFace" to "warp", "head" to null, "body" to "root")
+        assertSame(overrides, WorkspaceHierarchyEdits.displayParentOverrides(overrides, emptyList(), emptyList()))
+        val journal = WorkspaceHierarchyEdits.journal(buildJsonObject {
+            put("action", "bind"); put("kind", "mesh"); put("id", "ArtMeshFace"); put("parent_id", JsonNull); put("space", "local")
+        }).map { it.jsonObject }
+        val legacy = listOf(buildJsonObject { put("action", "move"); put("kind", "rotation"); put("id", "head"); put("parent_id", JsonNull); put("space", "local") },
+            buildJsonObject { put("action", "rename"); put("kind", "warp"); put("id", "body"); put("name", "Body") })
+        assertEquals(mapOf("body" to "root"), WorkspaceHierarchyEdits.displayParentOverrides(overrides, legacy, journal))
+        assertEquals(listOf("head", "body"), WorkspaceHierarchyEdits.displayParentOverrides(overrides, emptyList(), journal).keys.toList())
+    }
+
     @Test fun unchangedParentsAddNoHistoryAndInvalidDragsPublishNothing() = runBlocking<Unit> {
         val runtime = fixture(); val before = runtime.capture(); val history = runtime.history()
         val mesh = before.model.rig.puppet.drawables.single().id.raw

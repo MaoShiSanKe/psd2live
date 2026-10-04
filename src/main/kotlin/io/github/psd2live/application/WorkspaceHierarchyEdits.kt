@@ -27,4 +27,20 @@ object WorkspaceHierarchyEdits {
     fun journal(edit: JsonObject): JsonArray = buildJsonArray {
         add(buildJsonObject { put("op", "structure"); putJsonArray("edits") { add(edit) } })
     }
+
+    /**
+     * The old overrides a hierarchy view still layers over the built rig. A mesh override was never part of
+     * the build, so the view is its only reader; once a journal edit reparents an object, the rebuilt rig
+     * already shows the result and that object's override no longer applies to the view.
+     */
+    fun displayParentOverrides(parentOverrides: Map<String, String?>, structureEdits: List<JsonObject>,
+                               journal: List<JsonObject>): Map<String, String?> {
+        if (parentOverrides.isEmpty()) return parentOverrides
+        val edits = structureEdits + journal.filter { it["op"]?.jsonPrimitive?.contentOrNull == "structure" }
+            .flatMap { command -> (command["edits"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject } }
+        val reparented = edits.filter { it["action"]?.jsonPrimitive?.contentOrNull in setOf("bind", "move") &&
+            it["kind"]?.jsonPrimitive?.contentOrNull in setOf("mesh", "warp", "rotation") }
+            .mapNotNullTo(HashSet()) { it["id"]?.jsonPrimitive?.contentOrNull }
+        return if (reparented.none { it in parentOverrides }) parentOverrides else parentOverrides - reparented
+    }
 }
