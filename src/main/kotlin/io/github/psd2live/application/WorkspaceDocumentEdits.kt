@@ -195,8 +195,7 @@ internal object WorkspaceDocumentEdits {
 
     fun skeleton(document: WorkspaceDocument, model: RigPreviewModel, request: JsonObject): WorkspaceDocument {
         val spec = WorkspaceSkeletonMotionEdits.skeleton(document.rigEdits.skeleton, request) { SkeletonAutoBuilder.build(model.analysis, model.rig) }
-        val ids = model.rig.puppet.drawables.mapTo(HashSet()) { it.id.raw }
-        require(spec.bones.flatMap { it.drawableIds }.all { it in ids }) { "Skeleton binding references an unknown drawable" }
+        SkeletonDraftEdits.validated(spec, model.rig.puppet.drawables.mapTo(HashSet()) { it.id.raw })
         return document.copy(rigEdits = document.rigEdits.copy(skeleton = spec))
     }
 

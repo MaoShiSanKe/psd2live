@@ -13,6 +13,7 @@ import io.github.psd2live.core.MotionKeyRef
 import io.github.psd2live.core.MotionPresets
 import io.github.psd2live.core.MotionPresetSettings
 import io.github.psd2live.core.SkeletonBone
+import io.github.psd2live.core.SkeletonDraftEdits
 import io.github.psd2live.core.SkeletonSpec
 import kotlinx.serialization.json.*
 import kotlin.math.abs
@@ -54,14 +55,7 @@ internal object WorkspaceSkeletonMotionEdits {
             }
             else -> error("Unknown skeleton mode: $mode")
         }
-        require(spec.bones.size <= 128) { "A skeleton may contain at most 128 bones" }
-        require(spec.bones.flatMap { it.drawableIds }.distinct().size == spec.bones.sumOf { it.drawableIds.size }) {
-            "A drawable can be bound to only one bone"
-        }
-        require(spec.bones.filterNot { it.role.anchor }.map { it.parameterId }.distinct().size ==
-            spec.bones.count { !it.role.anchor }) { "Bones must have distinct parameter IDs" }
-        require(spec.bones.all { it.direction == 1f || it.direction == -1f }) { "Bone direction must be +1 or -1" }
-        return spec
+        return SkeletonDraftEdits.validated(spec)
     }
 
     fun motion(
