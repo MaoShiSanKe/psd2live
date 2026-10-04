@@ -454,8 +454,8 @@ jobs:
           body: |
             ## 主要更新
 
-            - 模拟烘焙可调性增强：可为每个输入设置训练范围；上下参数支持自动 / 开 / 关；每个模态输出可单独改参数 ID、范围与增益且无需重新烘焙；物理面板对模拟摆锤的修改在重新烘焙或输出变更后按三方合并保留。详见 [模拟与烘焙](https://github.com/tsunehimatoi/psd2live/blob/master/docs/zh/guide/SIMULATION.md)。
-            - 修复了物理模拟 Y 表现异常的问题
+            - 性能优化，画布使用 GPU 渲染
+            - 大尺寸 PSD 采样 mesh 缩放，避免过多顶点
 
             ## 下载
 
