@@ -173,7 +173,8 @@ compose.desktop {
 			// ModelDownloader uses java.net.http.HttpClient. Compose's automatic
 			// runtime module scan can miss this API because it is only loaded when
 			// the optional texture-upscale workflow is opened.
-			modules("java.net.http")
+			// LWJGL (the canvas GPU renderer) reaches native memory through sun.misc.Unsafe.
+			modules("java.net.http", "jdk.unsupported")
 			// Compose only packages formats supported on the build host; Deb is for Linux.
 			targetFormats(
 				org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe,

@@ -75,11 +75,13 @@ class GlHost private constructor(private val executor: ExecutorService, val desc
 			val started = CompletableFuture<String>()
 			executor.execute {
 				val errors = StringBuilder()
-				val callback = GLFWErrorCallback.create { code, message ->
-					errors.append("GLFW ").append(code).append(": ").append(GLFWErrorCallback.getDescription(message)).append('\n')
-				}
-				GLFW.glfwSetErrorCallback(callback)
+				// Everything, LWJGL's own loading included, sits inside the try: a failure that escaped it would
+				// leave the future pending and be reported as a bare timeout.
 				try {
+					val callback = GLFWErrorCallback.create { code, message ->
+						errors.append("GLFW ").append(code).append(": ").append(GLFWErrorCallback.getDescription(message)).append('\n')
+					}
+					GLFW.glfwSetErrorCallback(callback)
 					check(GLFW.glfwInit()) { "glfwInit failed. $errors" }
 					GLFW.glfwDefaultWindowHints()
 					GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE, GLFW.GLFW_FALSE)
@@ -111,7 +113,8 @@ class GlHost private constructor(private val executor: ExecutorService, val desc
 				failure = null
 				GlHost(executor, description)
 			} catch (thrown: Throwable) {
-				failure = (thrown.cause ?: thrown).message ?: thrown.javaClass.simpleName
+				val cause = thrown.cause ?: thrown
+				failure = cause.message?.let { "${cause.javaClass.simpleName}: $it" } ?: cause.javaClass.simpleName
 				executor.shutdownNow()
 				null
 			}
