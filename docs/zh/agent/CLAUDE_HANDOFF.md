@@ -53,7 +53,7 @@
 
 2. **局部画布显隐/隔离与 GUI reparent。** 此处审计已纠正：`layerVisibility/isolation` 是每 workspace/canvas/mode 的持久呈现状态；`PSD2LiveState.buildConfig` 明确不把 canvas visibility 写进共享模型，`MultiCanvasIsolationTest.visibilityAndSoloStayLocalAndNeverEnterModelConfiguration` 有直接证据。应增加中立 address/visibility processor、辅助 CAS 及 `canvas_visibility` 控制/查询，原 v1 presentation 字段保持原位读取保存；不能让局部 solo 改变其他画布或导出。GUI reparent 改为既有 structure journal 的 bind/move 候选，旧 v1 parentOverrides 继续按原序读取。
 
-3. **设置联动与作者姿态原子边界。** VM 的 meshOnly、动作子项及 generatePhysics 仍有 GUI-only reset/依赖，公开 generateDeformers/exportMotions 还可能被配置读取覆盖。建议完整 patch 一次解析中立设置 intent，明确 raw/effective policy，显式字段优先。批量每成员在私有候选上更新 document/model/aux，最后一次 CAS 发布，不能文档先提交再更新姿态。按真实 Parameter.default、各工作区 locks 处理，保留每 workspace 的持久作者姿态；Nod/Shake 不能依赖 GUI 的 processActiveMotion。复合预设/字段草稿的 off→on 顺序不能被最终 diff 吞掉。设计详见本机交接上下文，仍需源码核对后实现及文档说明。
+3. **设置联动与作者姿态原子边界。** VM 的 meshOnly、动作子项及 generatePhysics 仍有 GUI-only reset/依赖，公开 generateDeformers/exportMotions 还可能被配置读取覆盖。建议完整 patch 一次解析中立设置 intent，明确 raw/effective policy，显式字段优先。批量每成员在私有候选上更新 document/model/aux，最后一次 CAS 发布，不能文档先提交再更新姿态。按真实 Parameter.default、各工作区 locks 处理，保留每 workspace 的持久作者姿态；Nod/Shake 不能依赖 GUI 的 processActiveMotion。复合预设/字段草稿的 off→on 顺序不能被最终 diff 吞掉。设计详见本机交接上下文，仍需源码核对后实现及文档说明。**已实现**（`application/WorkspaceSettingsIntent.kt`、`WorkspaceRuntime.executeDraft`、`project/WorkspaceDocument.kt` 的 `WorkspaceSettingsPolicy`，说明见 REFACTOR_PROGRESS）；字段会话内的开关仍走本地草稿，GUI 改动待 CI 编译验证。
 
 4. **选中物理组试听与实测拟合。** `PendulumCanvas` 仍自己拥有 engine/drag/peaks/clock；现 preview_physics 是模型级预览。将 GUI 与应用私有会话接到已新增的 `PhysicsAudition`，暴露控制/步进/读帧，查询不推进时钟，文档变化/加载切换有陈旧语义。`WorkspacePhysicsIntent.FitObserved` 已能共享 GUI 实测拟合，但公开 `physics_fit` 仅标准 trace；应支持严格 observed peaks 并共用候选、验证索引/有限值/无响应。不要泄漏可变引擎、顶点数组或给取消步进留下前缀。
 

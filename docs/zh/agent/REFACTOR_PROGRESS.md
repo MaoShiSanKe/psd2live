@@ -139,6 +139,10 @@
 
 - GUI 直接分类、全局/单层网格、重置和临时网格预览确认经窄接口调用共享命令。连续拖动、分类文字输入保留实时草稿，在结束时提交一次；生成设置/分类/网格差异草稿由 `prepareDraft` 转成同一纯候选，复合差异顺序重建，混合草稿仍先规范化网格编辑。临时网格预览确认先恢复基线，再准备正式持久候选。其余业务草稿与复杂分类迁移仍待完成。
 
+- 设置联动与作者姿态进入中立 `WorkspaceSettingsIntent`：一次解析完整 patch 并校验，meshOnly 变化未显式给出 generateDeformers 时联动为 `!meshOnly`（导入 CMO3 除外），生成动作子项开关变化未显式给出 exportMotions 时联动为子项是否全开；显式字段优先。关闭 meshOnly 以外的来源时释放其驱动的作者姿态：meshOnly 开启释放全部参数，基础动作/待机/眨眼关闭释放对应标准参数，物理关闭释放物理组输出；Nod/Shake 只播放临时帧，不改作者姿态。释放按真实 `Parameter.default`，逐工作区跳过该工作区自己的锁，并保留每个工作区的持久姿态记录。
+- 文档与辅助数据共用私有候选：`WorkspaceRuntime.executeDraft` 让每个成员在同一草稿上更新文档、模型与辅助数据，最后一次 CAS 发布；`workspace_apply_edits` 的 settings_update 成员、单项 settings_update 及 GUI 设置开关都走它。批量中关闭再开启同一开关仍释放姿态，最终设置相同则只发布辅助数据而不产生历史节点；任一成员失败不发布前缀。GUI 的 meshOnly、动作子项和 generatePhysics 开关在无字段会话时经 `WorkspaceSettingsPort` 提交，提交锁内投影各工作区姿态；启动预设的两个动作开关在字段会话前作为一次意图提交。字段会话中的开关仍走本地草稿，草稿差异只记录最终设置。
+- raw/effective 策略集中在 `project/WorkspaceDocument.kt` 的 `WorkspaceSettingsPolicy`：文档只存原始设置，`rawConfig()` 读取原样值，`config()` 才套用生效规则（meshOnly 关闭变形器、动作与物理；显式 generateDeformers=false 与 exportMotions=false 生效；v1 桌面在全部生成动作关闭时写入的 exportMotions=false 仍按旧规则导出自定义动作）。PSD/素材创建与 CMO3 导入/替换改为保存原始设置，不再把生效值写回文档；GUI `buildConfig()` 与文档共用同一规则。
+
 - 源图多边形与网格连通块拆分进入独立 `WorkspacePartitionCommands` 和共享 `WorkspacePartitionEdits`，两项单项为后台任务并支持原子批量；新 `source_get_components` 使用独立查询捕获，返回相同版本的组件数量、排序和中心。GUI 检测保留原状态，确认经窄接口调用；多层决策顺序重建后一次 USER 提交，辅助版本变化也拒绝旧对话框，旧 GUI 候选准备已移除。拆分保留原层并软删除，提前固定新源图/Drawable ID，继承分类、父级、可见性、网格及绘制顺序覆盖，保留生成输入与无关对象编辑。任务 CAS 后立即保存精确结果，迟到取消及刷新失败保留成功；批量返回新 `layer:<id>` 与生成对象句柄，后续成员可引用指定的新 ID。像素/组件检测及重建检查原协程取消。普通已编辑目标的绑定迁移已继续补齐，见本页当前进度；多边形实时 Glue、导入模型分区及完整源图/分类/生成模式迁移仍待完成。
 - 请求 schema 新增实际执行的 `uniqueItems`，数值按值比较，嵌套对象忽略字段顺序，数组保留顺序；递归规范化后使用哈希集合，避免大量组件名称/ID 的两两比较。HTTP 能力与请求发布同一约束。组件名称/ID 不设低于 GUI 能力的额外数量上限，数量必须匹配当前检测结果。
 
