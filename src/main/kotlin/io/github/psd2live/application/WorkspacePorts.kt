@@ -175,6 +175,8 @@ interface WorkspacePreviewPort {
     fun previewPhysics(arguments: JsonObject): JsonObject
     /** Frozen GUI pose boundaries exclude animation/physics evaluation frames. */
     fun commitAuthoredPoses(state: String, poses: Map<String, WorkspacePose>)
+    /** [workspaceId]'s committed authored pose, normalized against the committed model. */
+    fun authoredPose(workspaceId: String): WorkspacePose
 }
 
 /** Per-canvas visibility and solo; the host supplies its live canvases and projects each committed record. */

@@ -229,7 +229,7 @@ fun HistoryTreeView(
 				OperationListSidebar(
 					chain = operationChain,
 					annotations = state.historyAnnotations,
-					enabled = !state.canvasEditBusy,
+					enabled = !state.workspaceEditBusy,
 					onCheckout = { viewModel.checkoutHistoryNode(it) },
 					paintSession = viewModel.canvasEditor.paintSession,
 					onJumpToPaintStroke = { viewModel.canvasEditor.jumpToPaintStroke(it) },
@@ -342,7 +342,7 @@ fun HistoryTreeView(
 								isInspectionPanelOpen = true
 							},
 							onDoubleClick = {
-								if (!node.isHead && !state.canvasEditBusy) viewModel.checkoutHistoryNode(node.id)
+								if (!node.isHead && !state.workspaceEditBusy) viewModel.checkoutHistoryNode(node.id)
 							},
 							modifier = Modifier
 								.offset { IntOffset(cardX, cardY) }
@@ -369,7 +369,7 @@ fun HistoryTreeView(
 					NodeInspector(
 						node = selectedNode,
 						annotation = state.historyAnnotations[selectedNode.id] ?: HistoryAnnotation(),
-						canCheckout = !state.canvasEditBusy,
+						canCheckout = !state.workspaceEditBusy,
 						onClose = { isInspectionPanelOpen = false },
 						onApply = { title, note, hidden -> viewModel.editHistoryAnnotation(selectedNode.id, title, note, hidden) },
 						onCheckout = { viewModel.checkoutHistoryNode(selectedNode.id) },

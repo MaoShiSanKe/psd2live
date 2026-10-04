@@ -1936,7 +1936,7 @@ private fun DrawableTreeItem(
                 CompactMenuItem(
                     text = if (viewModel.depthSplitMiddleIds(drawable.id.raw).isNotEmpty())
                         tr("editor.depthSplit.quick", drawable.name) else tr("editor.depthSplit.menu"),
-                    enabled = drawable.mesh != null && !state.isBusy && !state.canvasEditBusy,
+                    enabled = drawable.mesh != null && !state.isBusy && !state.workspaceEditBusy,
                     onClick = { showMenu = false; viewModel.requestDepthSplit(drawable.id.raw) },
                     icon = { IconDrawOrder(tint = colors.textMuted, modifier = Modifier.size(13.dp)) },
                 )

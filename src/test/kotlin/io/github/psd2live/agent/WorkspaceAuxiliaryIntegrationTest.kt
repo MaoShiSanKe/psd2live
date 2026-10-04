@@ -25,7 +25,7 @@ class WorkspaceAuxiliaryIntegrationTest {
     @TempDir lateinit var temporary: Path
     private val context = WorkspaceOperationContext(MutationAuthor.AGENT)
     private suspend fun settled(vm: PSD2LiveViewModel) {
-        withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+        withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
         assertNull(vm.state.value.errorMessage)
     }
 

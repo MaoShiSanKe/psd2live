@@ -56,7 +56,7 @@ class WorkspaceSkeletonEntryIntegrationTest {
 
     private suspend fun settled(vm: PSD2LiveViewModel, paused: PausedSkeleton) {
         withTimeout(10000) { paused.finished.await() }
-        withTimeout(10000) { while (vm.state.value.canvasEditBusy) delay(10) }
+        withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
         // The entry continuation runs on the same dispatcher after the edit releases its busy flag.
         withContext(Dispatchers.Main) { }
     }
@@ -73,7 +73,7 @@ class WorkspaceSkeletonEntryIntegrationTest {
             assertNull(editor.skeletonDraft)
             assertNull(backend.skeletonSpec())
             paused.release.complete(Unit)
-            withTimeout(10000) { while (editor.skeletonDraft == null || vm.state.value.canvasEditBusy) delay(10) }
+            withTimeout(10000) { while (editor.skeletonDraft == null || vm.state.value.workspaceEditBusy) delay(10) }
             assertEquals(EditHierarchyMode.SKELETON, editor.hierarchyMode)
             assertEquals(CanvasTool.SKELETON_EDIT, editor.tool)
             assertTrue(editor.skeletonSelected)
@@ -94,7 +94,7 @@ class WorkspaceSkeletonEntryIntegrationTest {
             val afterExternal = backend.snapshot().state
             val history = backend.history()
             paused.release.complete(Unit)
-            withTimeout(10000) { while (editor.error == null || vm.state.value.canvasEditBusy) delay(10) }
+            withTimeout(10000) { while (editor.error == null || vm.state.value.workspaceEditBusy) delay(10) }
             assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
             assertNull(editor.committedSkeleton)
             assertNull(editor.skeletonDraft)

@@ -32,7 +32,7 @@ class WorkspacePhysicsPanelIntegrationTest {
             suspend fun gui(action: () -> Unit) {
                 val nodes = workspace.history().nodes.size
                 action()
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy && !it.editorDraftBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy && !it.editorDraftBusy } }
                 assertNull(vm.state.value.errorMessage)
                 assertEquals(nodes + 1, workspace.history().nodes.size)
                 assertEquals("user", workspace.history().nodes.last().actor)

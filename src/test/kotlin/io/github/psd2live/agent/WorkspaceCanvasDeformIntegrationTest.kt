@@ -59,7 +59,7 @@ class WorkspaceCanvasDeformIntegrationTest {
         expected.drawables.zip(actual.drawables).forEach { (old, fresh) -> assertContentEquals(old.mesh!!.uvs, fresh.mesh!!.uvs) }
     }
     private suspend fun settled(editor: CanvasEditor, vm: PSD2LiveViewModel) = withTimeout(10000) {
-        while (editor.busy || vm.state.value.canvasEditBusy) delay(10)
+        while (editor.busy || vm.state.value.workspaceEditBusy) delay(10)
         assertNull(editor.error); assertNull(vm.state.value.errorMessage)
     }
     private suspend fun publicStroke(operations: WorkspaceOperations, workspace: DesktopWorkspace, operation: WorkspaceDocumentOperation, id: String) {

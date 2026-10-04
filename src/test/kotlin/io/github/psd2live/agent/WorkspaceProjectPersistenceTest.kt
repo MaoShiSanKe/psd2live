@@ -66,7 +66,7 @@ class WorkspaceProjectPersistenceTest {
                 viewModel.attachWorkspace(workspace)
                 create(workspace)
                 viewModel.createMotionClip()
-                kotlinx.coroutines.withTimeout(10000) { viewModel.state.first { !it.canvasEditBusy } }
+                kotlinx.coroutines.withTimeout(10000) { viewModel.state.first { !it.workspaceEditBusy } }
                 assertNull(viewModel.state.value.errorMessage)
                 viewModel.setMotionAutoKey(true)
                 val before = workspace.snapshot()

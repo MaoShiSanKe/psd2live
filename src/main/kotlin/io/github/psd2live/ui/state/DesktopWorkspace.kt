@@ -223,6 +223,11 @@ class DesktopWorkspace(
 
     override fun previewSession(): kotlinx.serialization.json.JsonObject = captureQueries().previewSession()
 
+    override fun authoredPose(workspaceId: String): io.github.psd2live.application.WorkspacePose {
+        val captured = runtime.capture()
+        return PreviewSessions.read(captured.model.rig.puppet.parameters, captured.auxiliary, workspaceId)
+    }
+
     override fun controlPlayback(arguments: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject = synchronized(historyLock) {
         val captured = runtime.capture()
         requireExpected(arguments.getValue("state").jsonPrimitive.content, captured)
@@ -247,8 +252,11 @@ class DesktopWorkspace(
         val captured = captureForMutation()
         requireExpected(arguments.getValue("state").jsonPrimitive.content, captured)
         val current = viewModel.state.value
-        val result = poseCommands.execute(captured.projectId, captured.state, current.activeWorkspace.id, arguments, mutationAuthor(author)) { _, document, model, pose ->
-            viewModel.projectAuthoredPose(current, pose, pose != PreviewSessions.read(captured.model.rig.puppet.parameters, captured.auxiliary, current.activeWorkspace.id)) {
+        // A queued GUI change lands in the workspace it was made in, even if focus has moved on since.
+        val commit = kotlinx.coroutines.currentCoroutineContext()[PendingPoseCommit]
+        val workspaceId = commit?.workspaceId ?: current.activeWorkspace.id
+        val result = poseCommands.execute(captured.projectId, captured.state, workspaceId, arguments, mutationAuthor(author)) { _, document, model, pose ->
+            viewModel.projectAuthoredPose(current, pose, pose != PreviewSessions.read(captured.model.rig.puppet.parameters, captured.auxiliary, workspaceId), commit) {
                 if (document != captured.document) applyPreviewOrThrow(model, documentFrom(current), document, "Author pose", current)
             }
         }
@@ -264,8 +272,9 @@ class DesktopWorkspace(
         val captured = captureForMutation()
         requireExpected(arguments.getValue("state").jsonPrimitive.content, captured)
         val current = viewModel.state.value
-        val result = previewCommands.edit(captured.projectId, captured.state, current.activeWorkspace.id, arguments) { _, pose, changed ->
-            viewModel.applyPreviewSession(current, pose, changed)
+        val commit = kotlinx.coroutines.currentCoroutineContext()[PendingPoseCommit]
+        val result = previewCommands.edit(captured.projectId, captured.state, commit?.workspaceId ?: current.activeWorkspace.id, arguments) { _, pose, changed ->
+            viewModel.applyPreviewSession(current, pose, changed, commit)
         }
         val frame = resetAuthoredPlayback(captured.projectId, result.getValue("state").jsonPrimitive.content, current)
         viewModel.applyPlaybackFrame(frame)

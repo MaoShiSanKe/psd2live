@@ -46,7 +46,7 @@ class WorkspaceWarpIntegrationTest {
                 val layer = workspace.snapshot().layers.single().id
                 vm.selectLayer(layer)
                 vm.editorForFocusedCanvas().createWarp()
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 assertNull(vm.state.value.errorMessage)
                 assertEquals("user", workspace.history().nodes.last().actor)
                 val guiParent = workspace.currentPuppet()!!.drawables.single().parentDeformerId

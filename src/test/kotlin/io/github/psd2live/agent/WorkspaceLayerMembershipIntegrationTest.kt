@@ -105,12 +105,12 @@ class WorkspaceLayerMembershipIntegrationTest {
                     assertEquals(false, noop.getValue("applied").jsonPrimitive.boolean)
                     assertEquals(activeCount, workspace.history().nodes.size)
                     vm.deleteLayer(layer)
-                    withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                     assertNull(vm.state.value.errorMessage)
                     assertEquals("user", workspace.history().nodes.last().actor)
                     assertTrue(workspace.currentPuppet()!!.drawables.none { it.id == mesh.id })
                     vm.restoreAllDeletedLayers()
-                    withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                     assertNull(vm.state.value.errorMessage)
                     assertEquals("user", workspace.history().nodes.last().actor)
                     assertContentEquals(originalPng, workspace.renderModel(frame).png)

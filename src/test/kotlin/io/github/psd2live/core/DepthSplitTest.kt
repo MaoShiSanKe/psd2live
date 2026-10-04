@@ -167,7 +167,7 @@ class DepthSplitTest {
                 editor.clearCurrentLayerPaint()
                 assertTrue(session.isDirty)
                 editor.promptCommitPaintSession()
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 assertNull(vm.state.value.errorMessage)
                 assertFalse(editor.showRebuildMeshDialog, "Depth-copy paint should apply without offering mesh reconstruction")
                 val painted = assertNotNull(vm.state.value.previewModel)

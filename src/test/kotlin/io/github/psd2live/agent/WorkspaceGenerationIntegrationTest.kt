@@ -48,7 +48,7 @@ class WorkspaceGenerationIntegrationTest {
                     }
                     suspend fun gui(action: () -> Unit) {
                         val count = workspace.history().nodes.size; action()
-                        withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                        withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                         assertNull(vm.state.value.errorMessage)
                         assertEquals(count + 1, workspace.history().nodes.size)
                         assertEquals("user", workspace.history().nodes.last().actor)

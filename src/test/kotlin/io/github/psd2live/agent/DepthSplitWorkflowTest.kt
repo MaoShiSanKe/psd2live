@@ -60,7 +60,7 @@ class DepthSplitWorkflowTest {
                     vm.confirmDepthSplit(middleIds.single())
                 }
                 withTimeout(15000) {
-                    while (vm.state.value.canvasEditBusy || vm.state.value.previewModel === before) {
+                    while (vm.state.value.workspaceEditBusy || vm.state.value.previewModel === before) {
                         vm.state.value.errorMessage?.let { fail(it) }
                         delay(20)
                     }

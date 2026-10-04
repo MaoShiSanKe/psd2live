@@ -142,7 +142,7 @@ class WorkspaceEditorDraftPortTest {
             assertEquals(listOf(34, 51, 68, 255), request.raster.rgba.slice(offset..offset + 3).map { it.toInt() and 255 })
             host.completion.complete(WorkspaceMutationResult("painted", "revision", summary = "Painted",
                 state = "load:1:1", projectId = "project"))
-            withTimeout(5000) { resumed.await(); vm.state.first { !it.canvasEditBusy } }
+            withTimeout(5000) { resumed.await(); vm.state.first { !it.workspaceEditBusy } }
             assertNull(vm.state.value.errorMessage)
         }
     }
@@ -156,7 +156,7 @@ class WorkspaceEditorDraftPortTest {
             vm.savePaintRaster(WorkspacePaintRaster.capture("art", image, false), expected, "Clear") { resumed = true }
             withTimeout(5000) { host.paintStarted.await() }
             host.completion.completeExceptionally(WorkspaceConflict(expected.state, "load:2:0"))
-            withTimeout(5000) { vm.state.first { !it.canvasEditBusy } }
+            withTimeout(5000) { vm.state.first { !it.workspaceEditBusy } }
             assertFalse(resumed)
             assertSame(original, vm.state.value.previewModel)
             assertNotNull(vm.state.value.errorMessage)

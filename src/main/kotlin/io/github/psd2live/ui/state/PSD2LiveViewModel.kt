@@ -69,6 +69,8 @@ import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -94,6 +96,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.float
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.putJsonArray
@@ -183,7 +186,7 @@ class PSD2LiveViewModel : AutoCloseable {
     internal fun beginSwing(targets: List<String>) {
         val state = _state.value
         if (state.previewModel == null) return
-        if (targets.isEmpty() || state.canvasEditBusy) return
+        if (targets.isEmpty() || state.workspaceEditBusy) return
         endSwing()
         setCanvasMode(state.activeCanvas.id, CanvasMode.EDIT)
         // One canvas session at a time: a pending placement would fight over the corner and the pointer.
@@ -356,7 +359,7 @@ class PSD2LiveViewModel : AutoCloseable {
         session: SwingSession,
         mutation: suspend (WorkspaceSwingPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
     ) {
-        if (_state.value.canvasEditBusy || session.busy) return
+        if (_state.value.workspaceEditBusy || session.busy) return
         swingDraftJob?.cancel(); swingPlayer?.cancel(); swingPlayer = null
         clearSwingProjection(session)
         session.busy = true
@@ -437,7 +440,7 @@ class PSD2LiveViewModel : AutoCloseable {
                         cancelled = { job?.isCancelled == true },
                     )
                 }
-                check(!_state.value.canvasEditBusy) { "Workspace has another edit in progress" }
+                check(!_state.value.workspaceEditBusy) { "Workspace has another edit in progress" }
                 updateState { it.copy(canvasEditBusy = true) }
                 performSimulationMutation("Baked simulation $id", { workspace, state ->
                     workspace.putSimulationBake(id, bake, state)
@@ -493,7 +496,7 @@ class PSD2LiveViewModel : AutoCloseable {
                     bakes to failures
                 }
                 if (bakes.isNotEmpty()) {
-                    check(!_state.value.canvasEditBusy) { "Workspace has another edit in progress" }
+                    check(!_state.value.workspaceEditBusy) { "Workspace has another edit in progress" }
                     updateState { it.copy(canvasEditBusy = true) }
                     performSimulationMutation("Baked simulations ${bakes.keys.joinToString()}", { workspace, state ->
                         workspace.putSimulationBakes(bakes, state)
@@ -739,7 +742,7 @@ class PSD2LiveViewModel : AutoCloseable {
         expected: io.github.psd2live.project.WorkspaceProjectSnapshot? = workspaceBackend?.snapshot(),
         mutation: suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
     ) {
-        if (_state.value.canvasEditBusy) return
+        if (_state.value.workspaceEditBusy) return
         updateState { it.copy(canvasEditBusy = true) }
         scope.launch { performSimulationMutation(summary, mutation, expected) }
     }
@@ -974,7 +977,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     internal fun savePaintSession(session: io.github.psd2live.application.WorkspacePaintSession,
         rebuildMesh: Boolean, preserveSourceRaster: Boolean, summary: String, onCommitted: () -> Unit) {
-        if (_state.value.canvasEditBusy || _state.value.editorDraftBusy) {
+        if (_state.value.workspaceEditBusy || _state.value.editorDraftBusy) {
             setErrorMessage("An editor operation is still being applied"); return
         }
         val backend = workspaceBackend ?: run { setErrorMessage("Project workspace unavailable"); return }
@@ -998,7 +1001,7 @@ class PSD2LiveViewModel : AutoCloseable {
     internal fun savePaintRaster(request: io.github.psd2live.application.WorkspacePaintRaster,
                                  expected: io.github.psd2live.project.WorkspaceProjectSnapshot?,
                                  summary: String, onCommitted: () -> Unit) {
-        if (_state.value.canvasEditBusy || _state.value.editorDraftBusy) {
+        if (_state.value.workspaceEditBusy || _state.value.editorDraftBusy) {
             setErrorMessage("An editor operation is still being applied"); return
         }
         val workspace = workspaceBackend ?: run { setErrorMessage("Project workspace unavailable"); return }
@@ -1222,7 +1225,7 @@ class PSD2LiveViewModel : AutoCloseable {
         awaitPreviewRebuild()
         _simulationStatus.value = SimulationStatus.Idle
         for ((summary, mutation) in steps) {
-            if (_state.value.canvasEditBusy) return
+            if (_state.value.workspaceEditBusy) return
             updateState { it.copy(canvasEditBusy = true) }
             performSimulationMutation(summary, mutation)
         }
@@ -1269,7 +1272,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     internal fun requestDepthSplit(drawableId: String) {
         val current = _state.value
-        if (current.isBusy || current.canvasEditBusy) return
+        if (current.isBusy || current.workspaceEditBusy) return
         val preview = current.previewModel ?: return
         if (preview.rig.puppet.drawables.none { it.id.raw == drawableId && it.mesh != null }) return
         if (canvasEditor.paintSession?.isDirty == true) {
@@ -1297,7 +1300,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     internal fun confirmDepthSplit(middleId: String) {
         val offer = pendingDepthSplit ?: return
-        if (_state.value.canvasEditBusy) return
+        if (_state.value.workspaceEditBusy) return
         pendingDepthSplit = null
         createDepthSplit(offer, listOf(middleId))
     }
@@ -1483,7 +1486,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     internal fun applyWarpControlField(token: String, operation: String, request: kotlinx.serialization.json.JsonObject) {
         val current = _state.value
-        if (current.canvasEditBusy || current.editorDraftBusy) return
+        if (current.workspaceEditBusy || current.editorDraftBusy) return
         val source = current.previewModel ?: return
         val expected = currentWorkspaceState() ?: return
         val edit = io.github.psd2live.application.WorkspaceDocumentOperation(operation, request)
@@ -1510,7 +1513,7 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     private fun saveWorkspaceEdit(onComplete: (String?) -> Unit, mutation: suspend () -> Unit) {
-        if (_state.value.canvasEditBusy || _state.value.editorDraftBusy) { onComplete("An editor operation is still being applied"); return }
+        if (_state.value.workspaceEditBusy || _state.value.editorDraftBusy) { onComplete("An editor operation is still being applied"); return }
         updateState { it.copy(canvasEditBusy = true) }
         scope.launch {
             try {
@@ -1812,7 +1815,7 @@ class PSD2LiveViewModel : AutoCloseable {
     fun requestProjectSave(saveAs: Boolean = false) {
         // A save captures the workspace, so it has to see the value still sitting in a focused field.
         flushEditorFields()
-        if (_state.value.canvasEditBusy) { queuedCanvasSave=saveAs; return }
+        if (_state.value.workspaceEditBusy) { queuedCanvasSave=saveAs; return }
         if (_state.value.analysis == null) return
         if (saveAs || _state.value.projectFile == null) {
             updateState { it.copy(showProjectLocationDialog = true, projectSaveError = null) }
@@ -2002,6 +2005,156 @@ class PSD2LiveViewModel : AutoCloseable {
 		val poseTarget: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
 	)
 
+	/**
+	 * One authored pose change the panels, canvases and physics already show while its commit waits in
+	 * [poseCommits]. A projected commit keeps every later pending change on top, so a slow commit never pulls a
+	 * slider back past a newer value.
+	 */
+	private class PendingPose(val id: Long, val generation: Long, val workspaceId: String,
+		@Volatile var values: Map<ParameterId, Float>)
+
+	/** Guarded by [stateLock]; in submission order. */
+	private val pendingPoses = ArrayList<PendingPose>()
+	private var nextPendingPoseId = 0L
+	private var poseCommitsQueued = 0
+	/** FIFO: each authored pose commit starts from the state the previous one published. */
+	private val poseCommits = kotlinx.coroutines.sync.Mutex()
+	/**
+	 * States this queue replaced with its own commits. A change captured before an earlier queued commit landed
+	 * continues from that commit; any other change since the capture still conflicts. Guarded by [stateLock].
+	 */
+	private val ownPoseSuccessors = object : LinkedHashMap<String, String>() {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>) = size > 64
+	}
+
+	/** [workspaceId]'s pending changes in order; [after] skips those up to the commit being projected. */
+	private fun pendingPoseValues(generation: Long, workspaceId: String, after: Long? = null): Map<ParameterId, Float> = synchronized(stateLock) {
+		var values = emptyMap<ParameterId, Float>()
+		for (pending in pendingPoses) {
+			if (pending.generation != generation || pending.workspaceId != workspaceId) continue
+			if (after != null && pending.id <= after) continue
+			values = values + pending.values
+		}
+		values
+	}
+
+	private fun pendingPoseValues(current: PSD2LiveState) = pendingPoseValues(current.projectOpenGeneration, current.activeWorkspace.id)
+
+	/** Removes [commit]'s change once it is projected and returns what stays shown over the committed pose. */
+	private fun consumePendingPose(generation: Long, workspaceId: String, commit: Long?): Map<ParameterId, Float> = synchronized(stateLock) {
+		if (commit != null) pendingPoses.removeAll { it.id == commit }
+		pendingPoseValues(generation, workspaceId, commit)
+	}
+
+	private fun ownPoseLineage(expected: String): String = synchronized(stateLock) {
+		var state = expected
+		val seen = HashSet<String>()
+		while (seen.add(state)) state = ownPoseSuccessors[state] ?: break
+		state
+	}
+
+	private fun publishPoseCommitBusy() {
+		val busy = synchronized(stateLock) { poseCommitsQueued > 0 }
+		updateState { if (it.poseCommitBusy == busy) it else it.copy(poseCommitBusy = busy) }
+		if (!busy && !_state.value.canvasEditBusy) queuedCanvasSave?.let { saveAs -> queuedCanvasSave = null; requestProjectSave(saveAs) }
+	}
+
+	/** Shows [values] at once as the authored pose of the active workspace and holds them until their commit lands. */
+	private fun showPendingPose(values: Map<ParameterId, Float>): PendingPose = synchronized(stateLock) {
+		val current = _state.value
+		val pending = PendingPose(++nextPendingPoseId, current.projectOpenGeneration, current.activeWorkspace.id, values)
+		if (values.isNotEmpty()) {
+			pendingPoses += pending
+			updateState { it.copy(animationEnabled = false, parameterValues = it.parameterValues + values)
+				.authoringPose(it.activeCanvas.mode == CanvasMode.EDIT) }
+		}
+		pending
+	}
+
+	/**
+	 * Commits one authored pose change after every change queued before it. [expected] is the state the gesture
+	 * started from; the queue's own earlier commits are followed, anything else since then still conflicts. A
+	 * failure puts the panels back on the committed pose instead of leaving a value the project never got.
+	 */
+	private fun commitPose(pending: PendingPose, expected: String,
+		commit: suspend (String) -> kotlinx.serialization.json.JsonObject,
+		onCommitted: (kotlinx.serialization.json.JsonObject) -> Unit = {}): kotlinx.coroutines.Deferred<Boolean> {
+		synchronized(stateLock) { poseCommitsQueued++ }
+		publishPoseCommitBusy()
+		return scope.async {
+			try {
+				poseCommits.withLock {
+					check(_state.value.projectOpenGeneration == pending.generation) { "The project changed before its pose was saved" }
+					val state = ownPoseLineage(expected)
+					val result = withContext(Dispatchers.Default + PendingPoseCommit(pending.id, pending.workspaceId)) { commit(state) }
+					val committed = result["state"]?.jsonPrimitive?.content
+					synchronized(stateLock) {
+						if (committed != null && committed != state) ownPoseSuccessors[state] = committed
+						// A commit that changed nothing is never projected; settle its pending values here.
+						if (pendingPoses.removeAll { it.id == pending.id }) {
+							val values = result["values"]?.jsonObject?.mapNotNull { (id, value) ->
+								value.jsonPrimitive.floatOrNull?.let { ParameterId(id) to it } }?.toMap()
+							if (values != null) projectWorkspacePose(pending.generation, pending.workspaceId, values, null)
+						}
+					}
+					onCommitted(result)
+				}
+				true
+			} catch (failure: Exception) {
+				if (failure is kotlinx.coroutines.CancellationException) throw failure
+				restoreCommittedPose(pending, failure.message ?: "Could not save the pose")
+				false
+			} finally {
+				synchronized(stateLock) { poseCommitsQueued-- }
+				publishPoseCommitBusy()
+			}
+		}
+	}
+
+	/**
+	 * Shows [values] (and [locked], when given) as [workspaceId]'s authored pose with its still-pending changes on
+	 * top. Another workspace keeps it as its stored pose until it is focused again.
+	 */
+	private fun projectWorkspacePose(generation: Long, workspaceId: String, values: Map<ParameterId, Float>,
+		locked: Set<ParameterId>?) = synchronized(stateLock) {
+		updateState { latest ->
+			val shown = values + pendingPoseValues(generation, workspaceId)
+			if (latest.projectOpenGeneration != generation) latest
+			else if (latest.activeWorkspace.id == workspaceId)
+				latest.copy(parameterValues = shown, lockedParameters = locked ?: latest.lockedParameters)
+			else latest.updateWorkspace(workspaceId) { workspace ->
+				val stored = workspace.pose ?: WorkspacePose.capture(workspace.activeCanvas.presentation)
+				workspace.withPose(stored.copy(parameterValues = shown, lockedParameters = locked ?: stored.lockedParameters,
+					previewParameterValues = emptyMap()))
+			}
+		}
+	}
+
+	/** Withdraws one change that will never be committed, such as a cancelled snap. */
+	private fun discardPendingPose(pending: PendingPose) {
+		if (synchronized(stateLock) { pendingPoses.none { it.id == pending.id } }) return
+		val committed = runCatching { workspaceBackend?.authoredPose(pending.workspaceId) }.getOrNull()
+		synchronized(stateLock) {
+			pendingPoses.removeAll { it.id == pending.id }
+			if (committed != null) projectWorkspacePose(pending.generation, pending.workspaceId, committed.values, null)
+		}
+	}
+
+	/**
+	 * Drops every pending change of [pending]'s workspace and shows the pose that workspace actually committed. A
+	 * project opened since then owns its own pose, so the stale change is dropped without a message.
+	 */
+	private fun restoreCommittedPose(pending: PendingPose, message: String) {
+		val reopened = _state.value.projectOpenGeneration != pending.generation
+		val committed = if (reopened) null else runCatching { workspaceBackend?.authoredPose(pending.workspaceId) }.getOrNull()
+		synchronized(stateLock) {
+			pendingPoses.removeAll { it.generation == pending.generation && it.workspaceId == pending.workspaceId }
+			if (reopened) return
+			if (committed != null) projectWorkspacePose(pending.generation, pending.workspaceId, committed.values, committed.locked)
+			updateState { it.copy(statusText = message) }
+		}
+	}
+
 	@Volatile private var parameterScrub: ParameterScrub? = null
 	private val parameterScrubValues = mutableStateMapOf<ParameterId, Float>()
 	var parameterScrubActive by mutableStateOf(false)
@@ -2176,12 +2329,12 @@ class PSD2LiveViewModel : AutoCloseable {
         editSavedProjectData(io.github.psd2live.application.WorkspaceAuxiliaryEdit.PutAnnotation(id, HistoryAnnotation(title, note, hidden)))
     }
     fun undoHistory() {
-        if (_state.value.canvasEditBusy) return
+        if (_state.value.workspaceEditBusy) return
         val history = _state.value.historySnapshot ?: return
         history.nodes.firstOrNull { it.id == history.headNodeId }?.parentId?.let(::checkoutHistoryNode)
     }
     fun redoHistory() {
-        if (_state.value.canvasEditBusy) return
+        if (_state.value.workspaceEditBusy) return
         val history = _state.value.historySnapshot ?: return
         val children = history.nodes.filter { it.parentId == history.headNodeId }
         if (children.size == 1) checkoutHistoryNode(children.single().id)
@@ -2752,7 +2905,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** Awaited form of [submitSettingsIntent] for a sequence that must see the commit; false when not applicable. */
 	private suspend fun applySettingsIntentNow(changes: kotlinx.serialization.json.JsonObject): Boolean {
-		val workspace = workspaceBackend?.takeUnless { editorSessions.anyOpen || _state.value.canvasEditBusy } ?: return false
+		val workspace = workspaceBackend?.takeUnless { editorSessions.anyOpen || _state.value.workspaceEditBusy } ?: return false
 		val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
 		val expected = workspace.snapshot()
 		val projectId = expected.projectId ?: return false
@@ -3480,7 +3633,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			}
 			// Entering Edit may reset the authored pose; its command must wait for this edit to finish.
 			scope.launch {
-				_state.first { !it.canvasEditBusy }
+				_state.first { !it.workspaceEditBusy }
 				val confirmed = committedState
 				val actual = currentWorkspaceState()
 				val outcome = failure ?: if (confirmed != null && confirmed != actual)
@@ -3892,7 +4045,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
 
 	fun setActiveWorkspace(id: String) {
-        if (_state.value.canvasEditBusy) return
+        if (_state.value.workspaceEditBusy) return
 		var changed = false
 		updateState { current ->
 			val target = current.workspaces.firstOrNull { it.id == id } ?: return@updateState current
@@ -4705,7 +4858,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
     private fun runWorkspaceCommand(after: suspend () -> Unit = {}, action: suspend (String) -> WorkspaceMutationResult) {
         // The command would act on a state the running edit is about to replace; say so rather than drop it.
-        if (_state.value.canvasEditBusy) { setErrorMessage(tr("error.workspaceCommandBusy")); return }
+        if (_state.value.workspaceEditBusy) { setErrorMessage(tr("error.workspaceCommandBusy")); return }
         flushEditorFields()
         val workspace = requireNotNull(workspaceBackend)
         val expected = workspace.snapshot()
@@ -4902,23 +5055,34 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (locked) putJsonObject("values") { put(id.raw, (currentValue ?: current.parameterValues[id] ?: parameter.default).coerceIn(parameter.min, parameter.max)) }
 		})
 	}
+	/** Locks and resets queue behind the authored values already shown, so neither can overtake the other. */
 	private fun editPreviewSession(request: kotlinx.serialization.json.JsonObject) {
 		val state = currentWorkspaceState() ?: return
 		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
-		saveWorkspaceEdit({ failure -> if (failure != null) updateState { it.copy(statusText = failure) } }) {
-			port.setPreviewSession(kotlinx.serialization.json.JsonObject(request + ("state" to kotlinx.serialization.json.JsonPrimitive(state))))
-		}
+		commitPose(showPendingPose(emptyMap()), state, { expected ->
+			port.setPreviewSession(kotlinx.serialization.json.JsonObject(request + ("state" to kotlinx.serialization.json.JsonPrimitive(expected))))
+		})
 	}
 
 	fun setParameterValue(id: ParameterId, value: Float) = setParameterValues(mapOf(id to value))
 
-	/** Samples remain transient; the captured gesture state owns the completed command. */
+	/**
+	 * Every panel, canvas and the physics preview show the change at once, with the skeleton's constrained
+	 * parameters following it as they will after the commit. Scrub samples stay transient until release; a
+	 * finished change commits through the pose queue from the state captured now.
+	 */
 	fun setParameterValues(values: Map<ParameterId, Float>) {
 		if (values.isEmpty()) return
-		val parameters = _state.value.previewModel?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
+		val current = _state.value
+		val model = current.previewModel
+		val parameters = model?.rig?.puppet?.parameters?.associateBy { it.id }.orEmpty()
 		val clamped = values.filterValues(Float::isFinite).mapValues { (id, value) -> parameters[id]?.let { value.coerceIn(it.min, it.max) } ?: value }
-		if (clamped.isEmpty() || updateParameterScrub(clamped)) return
-		submitParameterValues(clamped, currentWorkspaceState() ?: return)
+		if (clamped.isEmpty()) return
+		val constrained = model?.let { preview -> io.github.psd2live.core.SkeletonPoseSolver.solveTargets(preview.rig.puppet,
+			preview.config.rigEdits.skeleton, parameterScrubPose(current, current.parameterValues) + clamped) }.orEmpty()
+		val changed = clamped + constrained.filterKeys { it !in clamped }
+		if (updateParameterScrub(changed)) return
+		submitParameterValues(changed, currentWorkspaceState() ?: return)
 	}
 
 	private fun currentAutoKey(): kotlinx.serialization.json.JsonObject? = editingMotionClip().takeIf { motionEditor.autoKey }?.let { clip ->
@@ -4926,15 +5090,21 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 	private fun submitParameterValues(values: Map<ParameterId, Float>, expectedState: String,
 		extras: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()), autoKey: kotlinx.serialization.json.JsonObject? = currentAutoKey()) {
-		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
-		val request = kotlinx.serialization.json.buildJsonObject {
-			extras.forEach { (key, value) -> put(key, value) }
-			put("state", expectedState)
-			putJsonObject("values") { values.forEach { (id, value) -> put(id.raw, value) } }
-			autoKey?.let { put("auto_key", it) }
-		}
-		saveWorkspaceEdit({ failure -> if (failure != null) updateState { it.copy(statusText = failure) } }) {
-			val result = port.authorPose(request, io.github.psd2live.project.MutationAuthor.USER)
+		submitParameterValues(showPendingPose(values), expectedState, extras, autoKey)
+	}
+
+	private fun submitParameterValues(pending: PendingPose, expectedState: String,
+		extras: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
+		autoKey: kotlinx.serialization.json.JsonObject? = currentAutoKey()): kotlinx.coroutines.Deferred<Boolean>? {
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: run { discardPendingPose(pending); return null }
+		return commitPose(pending, expectedState, { state ->
+			port.authorPose(kotlinx.serialization.json.buildJsonObject {
+				extras.forEach { (key, value) -> put(key, value) }
+				put("state", state)
+				putJsonObject("values") { pending.values.forEach { (id, value) -> put(id.raw, value) } }
+				autoKey?.let { put("auto_key", it) }
+			}, io.github.psd2live.project.MutationAuthor.USER)
+		}) { result ->
 			motionEditor.selection = result.getValue("keyed").jsonArray.mapTo(linkedSetOf()) { item ->
 				val key = item.jsonObject; MotionKeyRef(key.getValue("parameter").jsonPrimitive.content, key.getValue("time").jsonPrimitive.float)
 			}
@@ -4955,11 +5125,16 @@ class PSD2LiveViewModel : AutoCloseable {
 		return true
 	}
 
-	/** The same authored pose for preview and paused physics, including uncommitted slider values. */
+	/**
+	 * The authored pose every view resolves at: [values] (the authored pose, or an evaluated frame built from the
+	 * committed one), then the changes still waiting for their commits, then the slider being dragged.
+	 */
 	internal fun parameterScrubPose(current: PSD2LiveState, values: Map<ParameterId, Float>): Map<ParameterId, Float> {
-		val scrub = parameterScrub ?: return values
+		val pending = pendingPoseValues(current)
+		val shown = if (pending.isEmpty()) values else values + pending
+		val scrub = parameterScrub ?: return shown
 		return if (scrub.generation == current.projectOpenGeneration && scrub.workspaceId == current.activeWorkspace.id && scrub.overrides.isNotEmpty())
-			values + scrub.overrides else values
+			shown + scrub.overrides else shown
 	}
 
 	private var parameterSnapJob: Job? = null
@@ -5008,24 +5183,39 @@ class PSD2LiveViewModel : AutoCloseable {
 		return true
 	}
 
+	/**
+	 * Eases [targets] in as the authored pose every view shows, then commits them once. The frames are a pending
+	 * change, so a commit landing meanwhile keeps them; a cancelled snap returns to the committed pose.
+	 */
 	private suspend fun animateParameterValues(targets: Map<ParameterId, Float>, durationMs: Long, state: String) {
 		val initial = _state.value
 		val from = targets.mapValues { (id, _) -> initial.parameterValues[id] ?: targets.getValue(id) }
-		val startedAt = System.nanoTime()
+		val pending = showPendingPose(from)
+		var submitted = false
 		try {
+			val startedAt = System.nanoTime()
 			while (true) {
 				val t = ((System.nanoTime() - startedAt) / 1_000_000.0 / durationMs).toFloat().coerceIn(0f, 1f)
 				val eased = t * t * (3f - 2f * t)
-				if (currentWorkspaceState() != state) throw io.github.psd2live.application.WorkspaceConflict(state, currentWorkspaceState() ?: "unloaded")
-				val values = initial.parameterValues + targets.mapValues { (id, to) -> from.getValue(id) + (to - from.getValue(id)) * eased }
-				updateState { it.copy(previewParameterValues = values) }
+				val current = currentWorkspaceState()
+				if (current != ownPoseLineage(state)) throw io.github.psd2live.application.WorkspaceConflict(state, current ?: "unloaded")
+				val values = targets.mapValues { (id, to) -> from.getValue(id) + (to - from.getValue(id)) * eased }
+				synchronized(stateLock) {
+					pending.values = values
+					updateState { latest ->
+						if (latest.projectOpenGeneration != pending.generation || latest.activeWorkspace.id != pending.workspaceId) latest
+						else latest.copy(parameterValues = latest.parameterValues + values).authoringPose(latest.activeCanvas.mode == CanvasMode.EDIT)
+					}
+				}
 				if (t >= 1f) break
 				delay(16L)
 			}
-			val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
-			port.authorPose(kotlinx.serialization.json.buildJsonObject { put("state", state); putJsonObject("values") { targets.forEach { (id, value) -> put(id.raw, value) } } }, io.github.psd2live.project.MutationAuthor.USER)
+			pending.values = targets
+			submitted = true
+			val committed = submitParameterValues(pending, state, autoKey = null) ?: return
+			check(committed.await()) { "Could not snap pose" }
 		} finally {
-			if (_state.value.projectOpenGeneration == initial.projectOpenGeneration) updateState { it.copy(previewParameterValues = emptyMap()) }
+			if (!submitted) discardPendingPose(pending)
 		}
 	}
 
@@ -5051,34 +5241,51 @@ class PSD2LiveViewModel : AutoCloseable {
 		lastTick = System.nanoTime()
 	}
 
-    /** Both projections validate before publishing any authored pose or document candidate. */
+    /**
+     * Both projections validate before publishing any authored pose or document candidate. The authored values
+     * themselves are not compared: a change the panels already show while its own commit waits is kept over the
+     * committed pose instead of failing an earlier commit.
+     */
     internal fun projectAuthoredPose(expected: PSD2LiveState, pose: io.github.psd2live.application.WorkspacePose,
-                                    changed: Boolean, documentProjection: () -> Unit) = synchronized(stateLock) {
-        val current = _state.value
-        check(current.projectId == expected.projectId && current.activeWorkspace.id == expected.activeWorkspace.id &&
-            current.projectOpenGeneration == expected.projectOpenGeneration && current.previewModel === expected.previewModel &&
-            current.parameterValues == expected.parameterValues && current.lockedParameters == expected.lockedParameters) {
-            "Preview session changed while the operation was being prepared"
-        }
+                                    changed: Boolean, commit: PendingPoseCommit? = null,
+                                    documentProjection: () -> Unit) = synchronized(stateLock) {
+        checkPoseProjection(expected)
         documentProjection()
-        applyPreviewSession(_state.value, pose, changed)
+        applyPreviewSession(_state.value, pose, changed, commit)
     }
 
-    /** Explicit session application: unlike a slider gesture, this cannot invoke automatic keying. */
-    internal fun applyPreviewSession(expected: PSD2LiveState, pose: io.github.psd2live.application.WorkspacePose,
-                                     persistedChange: Boolean) = synchronized(stateLock) {
+    private fun checkPoseProjection(expected: PSD2LiveState) {
         val current = _state.value
         check(current.projectId == expected.projectId && current.activeWorkspace.id == expected.activeWorkspace.id &&
             current.projectOpenGeneration == expected.projectOpenGeneration && current.previewModel === expected.previewModel &&
-            current.parameterValues == expected.parameterValues && current.lockedParameters == expected.lockedParameters) {
+            current.lockedParameters == expected.lockedParameters) {
             "Preview session changed while the operation was being prepared"
         }
-        if (current.parameterValues == pose.values && current.lockedParameters == pose.locked &&
+    }
+
+    /**
+     * Explicit session application: unlike a slider gesture, this cannot invoke automatic keying. [commit] names the
+     * queued GUI change this projects; the changes queued after it stay shown on top of [pose].
+     */
+    internal fun applyPreviewSession(expected: PSD2LiveState, pose: io.github.psd2live.application.WorkspacePose,
+                                     persistedChange: Boolean, commit: PendingPoseCommit? = null) = synchronized(stateLock) {
+        checkPoseProjection(expected)
+        val current = _state.value
+        val workspaceId = commit?.workspaceId ?: current.activeWorkspace.id
+        val shown = pose.values + consumePendingPose(current.projectOpenGeneration, workspaceId, commit?.id)
+        if (workspaceId != current.activeWorkspace.id) {
+            // Focus moved on while the change waited: it lands in the workspace it was made in.
+            projectWorkspacePose(current.projectOpenGeneration, workspaceId, pose.values, pose.locked)
+            if (persistedChange && current.analysis != null)
+                updateState { it.copy(projectDirty = true, projectEditVersion = it.projectEditVersion + 1) }
+            return@synchronized
+        }
+        if (current.parameterValues == shown && current.lockedParameters == pose.locked &&
             !current.animationEnabled && !motionEditor.playing && !persistedChange) return@synchronized
         resetMotionDynamics()
         motionEditor.playing = false
         updateState {
-            it.copy(animationEnabled = false, parameterValues = pose.values, previewParameterValues = pose.values,
+            it.copy(animationEnabled = false, parameterValues = shown, previewParameterValues = shown,
                 lockedParameters = pose.locked, projectDirty = it.projectDirty || (persistedChange && it.analysis != null),
                 projectEditVersion = it.projectEditVersion + if (persistedChange && it.analysis != null) 1 else 0)
                 .authoringPose(it.activeCanvas.mode == CanvasMode.EDIT)
@@ -5095,12 +5302,15 @@ class PSD2LiveViewModel : AutoCloseable {
                 val pose = poses[workspace.id]
                 if (pose == null || workspace.id == state.activeWorkspace.id) workspace
                 else workspace.withPose((workspace.pose ?: WorkspacePose.capture(workspace.activeCanvas.presentation))
-                    .copy(parameterValues = pose.values, lockedParameters = pose.locked, previewParameterValues = emptyMap()))
+                    .copy(parameterValues = pose.values + pendingPoseValues(state.projectOpenGeneration, workspace.id),
+                        lockedParameters = pose.locked, previewParameterValues = emptyMap()))
             }
             val active = poses[state.activeWorkspace.id]
             val next = state.copy(workspaces = workspaces)
-            if (active == null) next else next.copy(parameterValues = active.values, previewParameterValues = active.values,
-                lockedParameters = active.locked)
+            if (active == null) next else {
+                val shown = active.values + pendingPoseValues(state)
+                next.copy(parameterValues = shown, previewParameterValues = shown, lockedParameters = active.locked)
+            }
         }
     }
 
@@ -5273,7 +5483,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 catch (failure: Exception) {
                     if (failure is kotlinx.coroutines.CancellationException || !discardUnsaved) throw failure
                 }
-                _state.first { !it.canvasEditBusy }
+                _state.first { !it.workspaceEditBusy }
                 val expected = workspace.snapshot()
                 updateState { it.copy(isAnalyzing = true, isIndeterminateProgress = true, errorMessage = null, statusText = status) }
                 withContext(io.github.psd2live.application.WorkspaceExecution(expected.projectId, expected.state, MutationAuthor.USER)) { action(workspace) }
@@ -6115,3 +6325,9 @@ internal fun previewFrameMatchesState(
 	frameAnimationEnabled: Boolean,
 ): Boolean = state.previewLive &&
 	(frameAnimationEnabled == (state.animationEnabled && !state.meshOnly))
+
+/** Marks the coroutine that commits one queued GUI pose change, so its projection knows which change landed. */
+internal class PendingPoseCommit(val id: Long, val workspaceId: String) :
+    kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<PendingPoseCommit>
+}

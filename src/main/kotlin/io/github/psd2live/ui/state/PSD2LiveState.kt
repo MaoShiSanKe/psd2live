@@ -369,6 +369,8 @@ enum class InspectorTab {
 data class PSD2LiveState(
     val canvasEditBusy: Boolean = false,
     val editorDraftBusy: Boolean = false,
+    /** Authored pose changes the panels already show are still waiting for their commits, in order. */
+    val poseCommitBusy: Boolean = false,
 	val projectId: String? = null,
     val projectFile: String? = null,
 	/** Recently opened .psd2live / PSD paths. Application preference, not part of the project. */
@@ -757,6 +759,10 @@ data class PSD2LiveState(
 
 	val isBusy: Boolean
 		get() = isAnalyzing || isGenerating || isUpscaling
+
+	/** A workspace edit or a queued authored pose is still being committed; a new edit would start from a stale state. */
+	val workspaceEditBusy: Boolean
+		get() = canvasEditBusy || poseCommitBusy
 
 	fun minRequiredAtlasSize(scale: Int = textureUpscale.scale): Int =
         minimumAtlasSize(previewModel?.analysis ?: analysis, scale, texturePadding)

@@ -187,7 +187,7 @@ class WorkspaceDocumentBatchIntegrationTest {
                 vm.saveParameterDefinition(action, "GuiAxis", "GUI axis", -1f, 0f, 1f,
                     keyEdits = keys, parentGroupId = parent, onComplete = { completed.complete(it) })
                 val result = withTimeout(10000) { completed.await() }
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 return result
             }
             val before = workspace.snapshot()
@@ -253,7 +253,7 @@ class WorkspaceDocumentBatchIntegrationTest {
                 val completed = CompletableDeferred<String?>()
                 vm.saveAuthoringEdits(state, edits) { completed.complete(it) }
                 val result = withTimeout(10000) { completed.await() }
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 return result
             }
             assertNotNull(save(before.historyHeadNodeId!!))
@@ -320,12 +320,12 @@ class WorkspaceDocumentBatchIntegrationTest {
                 val simulation = io.github.psd2live.core.sim.RigSimEdit("GuiSim", "GUI simulation",
                     io.github.psd2live.core.sim.SimKind.CLOTH, listOf(mesh), autoBake = false)
                 vm.putSimulation(simulation)
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 assertEquals(simulation, workspace.listSimulations().single())
                 assertEquals("user", workspace.history().nodes.last().actor)
                 assertEquals(2, workspace.history().nodes.size)
                 vm.deleteSimulation(simulation.id)
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 assertTrue(workspace.listSimulations().isEmpty())
                 assertEquals("user", workspace.history().nodes.last().actor)
 
@@ -335,7 +335,7 @@ class WorkspaceDocumentBatchIntegrationTest {
                 workspace.createParameter(WorkspaceCreateParameterRequest("ConcurrentAxis", workspace.snapshot().state, "Concurrent axis"))
                 val changed = workspace.snapshot()
                 vm.commitSwing()
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 assertNotNull(vm.swingSession?.error)
                 assertEquals(changed.state, workspace.snapshot().state)
                 assertTrue(workspace.listSwings().isEmpty())
@@ -343,7 +343,7 @@ class WorkspaceDocumentBatchIntegrationTest {
                 vm.beginSwing(listOf(mesh))
                 withTimeout(10000) { while (vm.swingSession?.sessionId == null || vm.swingSession?.sessionId == oldSession) kotlinx.coroutines.delay(10) }
                 vm.commitSwing()
-                withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                 assertNull(vm.swingSession)
                 assertEquals(1, workspace.listSwings().size)
                 assertEquals("user", workspace.history().nodes.last().actor)

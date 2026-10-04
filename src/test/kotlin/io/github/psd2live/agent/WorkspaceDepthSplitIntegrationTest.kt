@@ -63,7 +63,7 @@ class WorkspaceDepthSplitIntegrationTest {
             }, MutationAuthor.USER)
             val root = workspace.snapshot(); val original = workspace.currentPuppet()!!
             vm.requestDepthSplit(source); assertNotNull(vm.pendingDepthSplit); vm.confirmDepthSplit(middle)
-            withTimeout(10000) { vm.state.first { !it.canvasEditBusy && it.previewModel!!.rig.puppet.drawables.size == 4 } }
+            withTimeout(10000) { vm.state.first { !it.workspaceEditBusy && it.previewModel!!.rig.puppet.drawables.size == 4 } }
             assertNull(vm.state.value.errorMessage)
             val gui = workspace.currentPuppet()!!; val frontId = vm.state.value.selectedLayerId!!
             val frontMesh = vm.state.value.previewModel!!.rig.layerIdByDrawableId.entries.single { it.value == frontId }.key
@@ -122,7 +122,7 @@ class WorkspaceDepthSplitIntegrationTest {
             // Imported slices use the same GUI candidate, public command and retained-model export.
             val importedBase = workspace.currentPuppet()!!
             vm.requestDepthSplit(source); assertNotNull(vm.pendingDepthSplit); vm.confirmDepthSplit(middle)
-            withTimeout(10000) { vm.state.first { !it.canvasEditBusy && it.previewModel!!.rig.puppet.drawables.size == importedBase.drawables.size + 1 } }
+            withTimeout(10000) { vm.state.first { !it.workspaceEditBusy && it.previewModel!!.rig.puppet.drawables.size == importedBase.drawables.size + 1 } }
             assertNull(vm.state.value.errorMessage)
             val importedGui = workspace.currentPuppet()!!
             val importedFrontLayer = vm.state.value.selectedLayerId!!

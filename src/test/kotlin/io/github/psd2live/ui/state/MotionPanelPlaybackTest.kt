@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
 class MotionPanelPlaybackTest {
 	private val nod = MotionEditorState.presetClipId("Nod")
 	@TempDir lateinit var temporary: Path
-	private suspend fun settled(vm: PSD2LiveViewModel) = withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+	private suspend fun settled(vm: PSD2LiveViewModel) = withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
 	private suspend fun fixture(action: suspend (PSD2LiveViewModel) -> Unit) {
 		val path = temporary.resolve("art.png")
 		val image = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)

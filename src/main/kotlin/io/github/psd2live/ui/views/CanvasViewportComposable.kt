@@ -643,12 +643,12 @@ fun CanvasViewportComposable(
 					?: return@onKeyEvent false
                 if (action == ShortcutAction.TEMPORARY_SELECT) {
                     if (event.type == KeyEventType.KeyDown && mode == CanvasMode.EDIT &&
-                        !canvasState.canvasEditBusy && editor.beginTemporarySelection()) temporarySelectKey = event.key
+                        !canvasState.workspaceEditBusy && editor.beginTemporarySelection()) temporarySelectKey = event.key
                     return@onKeyEvent true
                 }
                 if (action == ShortcutAction.QUICK_PREVIEW) {
                     // Toggle on release so holding the key never flips repeatedly through both modes.
-                    if (event.type == KeyEventType.KeyUp && previewModel != null && !canvasState.canvasEditBusy)
+                    if (event.type == KeyEventType.KeyUp && previewModel != null && !canvasState.workspaceEditBusy)
                         editor.toggleQuickPreview()
                     return@onKeyEvent true
                 }
@@ -668,12 +668,12 @@ fun CanvasViewportComposable(
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 CanvasModeChoice.entries.firstOrNull { it.shortcut == action }?.let { choice ->
                     if (previewModel == null) return@onKeyEvent false
-                    if (!editor.busy && !canvasState.canvasEditBusy) editor.chooseCanvasMode(choice)
+                    if (!editor.busy && !canvasState.workspaceEditBusy) editor.chooseCanvasMode(choice)
                     return@onKeyEvent true
                 }
 				if (mode != CanvasMode.EDIT || previewModel == null) return@onKeyEvent false
 				// Consumes rather than falls through while a commit is running.
-				if (editor.busy || canvasState.canvasEditBusy) return@onKeyEvent true
+				if (editor.busy || canvasState.workspaceEditBusy) return@onKeyEvent true
 				return@onKeyEvent when (action) {
 					ShortcutAction.SELECT_ALL -> { editor.selectAll(); true }
 					ShortcutAction.INVERT_SELECTION -> { editor.selectAll(true); true }

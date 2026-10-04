@@ -22,7 +22,7 @@ class WorkspacePoseTest {
     @TempDir lateinit var temporary: Path
 
     private suspend fun settled(vm: PSD2LiveViewModel) {
-        withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+        withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
         assertNull(vm.state.value.errorMessage)
     }
     private suspend fun putClip(workspace: DesktopWorkspace, clip: MotionClip) {

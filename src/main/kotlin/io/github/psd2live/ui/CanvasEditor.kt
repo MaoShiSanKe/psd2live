@@ -1517,7 +1517,7 @@ internal class CanvasEditor(
             val t = target() ?: return false
             return t.kind == "rotation" || vertices.any { it in 0 until t.count }
         }
-    val editable get() = !busy && !state.canvasEditBusy && !state.isGenerating && !state.isAnalyzing && state.historySnapshot != null
+    val editable get() = !busy && !state.workspaceEditBusy && !state.isGenerating && !state.isAnalyzing && state.historySnapshot != null
 
     fun target(source: PuppetModel? = preview ?: state.previewModel?.rig?.puppet, layerId: String? = state.selectedLayerId, deformerId: String? = state.selectedDeformerId): CanvasTarget? {
         // Panels can be composed before a project is loaded or while it is closing.

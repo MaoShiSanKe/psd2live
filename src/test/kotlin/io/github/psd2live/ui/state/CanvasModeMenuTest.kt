@@ -210,7 +210,7 @@ class CanvasModeMenuTest {
             assumeBones(spec)
 
             editor.setHierarchyMode(EditHierarchyMode.SKELETON)
-            withTimeout(10000) { while (vm.state.value.canvasEditBusy || editor.hierarchyMode != EditHierarchyMode.SKELETON) delay(10) }
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy || editor.hierarchyMode != EditHierarchyMode.SKELETON) delay(10) }
             assertEquals(EditHierarchyMode.SKELETON, editor.hierarchyMode)
             assertTrue(editor.skeletonSelected)
             assertEquals(listOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT), editor.palette())
@@ -218,12 +218,12 @@ class CanvasModeMenuTest {
             editor.activateTool(CanvasTool.SKELETON_EDIT)
             assertEquals(CanvasTool.SKELETON_EDIT, editor.tool)
             // The draft opens on its own rest-pose commit, so it appears once that write settles.
-            withTimeout(10000) { while (vm.state.value.canvasEditBusy) delay(10) }
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
             assertNotNull(editor.skeletonDraft)
 
             // Leaving the mode writes the draft back and gives the skeleton up for the mode gone to.
             editor.setHierarchyMode(EditHierarchyMode.SELECT)
-            withTimeout(10000) { while (vm.state.value.canvasEditBusy) delay(10) }
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
             assertNull(editor.skeletonDraft)
             assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
             assertNotNull(editor.committedSkeleton)

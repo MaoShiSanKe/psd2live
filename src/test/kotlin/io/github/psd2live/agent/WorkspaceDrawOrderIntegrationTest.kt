@@ -39,7 +39,7 @@ class WorkspaceDrawOrderIntegrationTest {
                 vm.setLayerDrawOrder(target.raw, 10f); vm.setLayerDrawOrder(target.raw, 40f)
                 assertEquals(before.state, workspace.snapshot().state); assertEquals(count, workspace.history().nodes.size)
                 vm.endEditorGesture(); workspace.awaitEditorDrafts()
-                withTimeout(10000) { vm.state.first { !it.editorDraftBusy && !it.canvasEditBusy } }
+                withTimeout(10000) { vm.state.first { !it.editorDraftBusy && !it.workspaceEditBusy } }
                 assertNull(vm.state.value.errorMessage)
                 assertEquals(count + 1, workspace.history().nodes.size); assertEquals("user", workspace.history().nodes.last().actor)
                 val gui = workspace.currentPuppet()!!
@@ -55,7 +55,7 @@ class WorkspaceDrawOrderIntegrationTest {
                     assertEquals(gui.drawables.map { it.drawOrder }, workspace.currentPuppet()!!.drawables.map { it.drawOrder })
                     val overridden = workspace.snapshot()
                     vm.resetLayerDrawOrder(target.raw)
-                    withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                     assertNull(vm.state.value.errorMessage)
                     assertEquals("user", workspace.history().nodes.last().actor)
                     val guiReset = workspace.currentPuppet()!!

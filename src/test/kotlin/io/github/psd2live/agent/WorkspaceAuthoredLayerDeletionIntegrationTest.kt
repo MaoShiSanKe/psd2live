@@ -78,7 +78,7 @@ class WorkspaceAuthoredLayerDeletionIntegrationTest {
                         frame = WorkspaceViewFrame.CanvasRect(Bounds(0f, 0f, 48f, 48f)),
                         background = WorkspaceViewBackground.TRANSPARENT, output = WorkspaceViewOutputSpec(256))
                     val originalPng = workspace.renderModel(frame).png
-                    vm.deleteLayer(layers[0]); withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    vm.deleteLayer(layers[0]); withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                     assertNull(vm.state.value.errorMessage); assertEquals("user", workspace.history().nodes.last().actor)
                     compare(before.withDrawablesDeleted(setOf(DrawableId(originalMesh))), workspace.currentPuppet()!!)
                     val deletedPng = workspace.renderModel(frame).png; assertFalse(originalPng.contentEquals(deletedPng))
@@ -105,7 +105,7 @@ class WorkspaceAuthoredLayerDeletionIntegrationTest {
                     assertTrue(workspace.currentPuppet()!!.drawables.isEmpty())
                     call("project_save", buildJsonObject {}); call("project_open", buildJsonObject { put("path", archive.toString()) })
                     assertTrue(workspace.currentPuppet()!!.drawables.isEmpty()); assertTrue(export("empty-export").second.drawables.isEmpty())
-                    vm.restoreAllDeletedLayers(); withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    vm.restoreAllDeletedLayers(); withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
                     assertNull(vm.state.value.errorMessage); compare(before, workspace.currentPuppet()!!)
                     assertContentEquals(originalPng, workspace.renderModel(frame).png)
                     val visuals = Path.of("build/authored-layer-delete-visual").toAbsolutePath(); Files.createDirectories(visuals)
