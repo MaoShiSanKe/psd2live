@@ -2371,25 +2371,29 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (canvas == null || canvas.id == current.activeCanvas.id) {
 			_sdkFrame.value = frame
 		}
-		if (canvas == null || canvas.id == current.previewControlCanvas().id) publishLivePose(current, frame)
-		val activeAnimatedCanvas = canvas != null && canvas.id == current.previewControlCanvas().id &&
-			animationEnabled && !current.meshOnly
-		val publishParameters = activeAnimatedCanvas &&
-			(lastSdkParameterCanvasId != frame.viewId || nowNanos - lastSdkParameterPublishNanos >= SDK_PARAMETER_PUBLISH_INTERVAL_NANOS)
-		if (publishParameters) {
-			lastSdkParameterCanvasId = frame.viewId
-			lastSdkParameterPublishNanos = nowNanos
-		}
-		if (publishParameters || current.sdkStatus != "ready") {
-			updateState { latest ->
-				if (canvas == null || latest.activeWorkspace.id != current.activeWorkspace.id ||
-					latest.previewControlCanvas().id != canvas.id || !previewFrameMatchesState(latest, frame.animationEnabled)) {
-					if (latest.sdkStatus == "ready") latest else latest.copy(sdkStatus = "ready")
-				} else {
-					val values = if (publishParameters) parameterValuesAfterPreviewFrame(latest, frame.parameters)
-						else latest.previewParameterValues
-					if (latest.sdkStatus == "ready" && values == latest.previewParameterValues) latest
-					else latest.copy(sdkStatus = "ready", previewParameterValues = values)
+		// The pose and the ready status publish together, so a software tick that checks the status under the
+		// same lock either clears the pose before this frame sets it or sees the frame and leaves it.
+		synchronized(stateLock) {
+			if (canvas == null || canvas.id == current.previewControlCanvas().id) publishLivePose(current, frame)
+			val activeAnimatedCanvas = canvas != null && canvas.id == current.previewControlCanvas().id &&
+				animationEnabled && !current.meshOnly
+			val publishParameters = activeAnimatedCanvas &&
+				(lastSdkParameterCanvasId != frame.viewId || nowNanos - lastSdkParameterPublishNanos >= SDK_PARAMETER_PUBLISH_INTERVAL_NANOS)
+			if (publishParameters) {
+				lastSdkParameterCanvasId = frame.viewId
+				lastSdkParameterPublishNanos = nowNanos
+			}
+			if (publishParameters || current.sdkStatus != "ready") {
+				updateState { latest ->
+					if (canvas == null || latest.activeWorkspace.id != current.activeWorkspace.id ||
+						latest.previewControlCanvas().id != canvas.id || !previewFrameMatchesState(latest, frame.animationEnabled)) {
+						if (latest.sdkStatus == "ready") latest else latest.copy(sdkStatus = "ready")
+					} else {
+						val values = if (publishParameters) parameterValuesAfterPreviewFrame(latest, frame.parameters)
+							else latest.previewParameterValues
+						if (latest.sdkStatus == "ready" && values == latest.previewParameterValues) latest
+						else latest.copy(sdkStatus = "ready", previewParameterValues = values)
+					}
 				}
 			}
 		}
@@ -3420,7 +3424,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		catch (failure: Exception) { updateState { it.copy(statusText = failure.message ?: "Could not change playback") } }
 	}
 
-	internal fun applyPlaybackFrame(frame: kotlinx.serialization.json.JsonObject) {
+	/**
+	 * [switches] is false for the motion loop's clock frames. Only a playback command changes the session's
+	 * animation and tracking switches, so a clock frame repeats the last command's; read before a later toggle
+	 * on the canvas, it would land after it and switch it back, dropping the frames the toggle let in.
+	 */
+	internal fun applyPlaybackFrame(frame: kotlinx.serialization.json.JsonObject, switches: Boolean = true) {
 		val current = _state.value
 		if (frame.getValue("workspace_id").jsonPrimitive.content != current.activeWorkspace.id) return
 		frame["clip_id"]?.jsonPrimitive?.content?.let {
@@ -3434,7 +3443,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		val values = frame.getValue("values").jsonObject.map { (id, value) -> ParameterId(id) to value.jsonPrimitive.float }.toMap()
 		processFrameValues = values
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
-			it.copy(animationEnabled = frame.getValue("animation").jsonPrimitive.boolean, previewParameterValues = values, mouseTrackingEnabled = frame.getValue("tracking").jsonPrimitive.boolean)
+			if (!switches) it.copy(previewParameterValues = values)
+			else it.copy(animationEnabled = frame.getValue("animation").jsonPrimitive.boolean, previewParameterValues = values, mouseTrackingEnabled = frame.getValue("tracking").jsonPrimitive.boolean)
 		}
 	}
 
@@ -5722,7 +5732,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val tracking = inPreview && current.mouseTrackingEnabled && !isMeshOnly && current.activeWorkspace.pose?.authoringPose != true
 		val processFrame = if (inPreview && current.previewModel != null && processPlaybackActive)
 			(workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort)?.playbackFrame(dt) else null
-		if (processFrame != null) applyPlaybackFrame(processFrame)
+		if (processFrame != null) applyPlaybackFrame(processFrame, switches = false)
 
 		val model = current.previewModel
 		val pausedPhysicsOn = inPreview && !anim && current.generatePhysics && !isMeshOnly &&
@@ -5802,8 +5812,14 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (!on || model == null || current.activeWorkspace.pose?.authoringPose == true) {
 			// The software preview let go of the swing: back to the edit pose, unless the pointer holds a look.
 			if (pausedPhysics.isNotEmpty() && current.sdkStatus != "ready" && !pointerActive) {
-				setLivePose(emptyMap())
-				updateState { latest -> if (latest.previewParameterValues == latest.parameterValues) latest else latest.copy(previewParameterValues = latest.parameterValues) }
+				updateState { latest ->
+					// An SDK frame may have arrived since this tick read the state; it owns the live pose then.
+					if (latest.sdkStatus == "ready") latest
+					else {
+						setLivePose(emptyMap())
+						if (latest.previewParameterValues == latest.parameterValues) latest else latest.copy(previewParameterValues = latest.parameterValues)
+					}
+				}
 			}
 			pausedPhysics = emptyMap()
 			pausedPhysicsSettled = true
