@@ -86,6 +86,21 @@ object CanvasVisibilityProcessor {
         }
     }
 
+    /**
+     * Replacing the source ends every solo without restoring it: the snapshot names layers of the old model,
+     * so each canvas keeps showing what it showed and the solo is simply forgotten.
+     */
+    fun endSolo(value: CanvasVisibility): CanvasVisibility =
+        if (value.isolatedLayerId == null && value.isolationSnapshot == null) value
+        else value.copy(isolatedLayerId = null, isolationSnapshot = null)
+
+    /** Applies [endSolo] to every stored canvas; untouched auxiliary data keeps its exact bytes. */
+    fun endSolos(auxiliary: JsonObject): JsonObject {
+        val records = CanvasVisibilityCodec.decode(auxiliary)
+        val ended = records.mapValues { endSolo(it.value) }
+        return if (ended == records) auxiliary else CanvasVisibilityCodec.withRecords(auxiliary, ended)
+    }
+
     /** A solo whose layer no longer exists reads as no solo; the stored record is not rewritten. */
     fun normalize(value: CanvasVisibility, scope: CanvasVisibilityScope): CanvasVisibility =
         if (value.isolatedLayerId == null || value.isolatedLayerId in scope.layerIds) value

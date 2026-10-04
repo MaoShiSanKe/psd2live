@@ -47,10 +47,12 @@ internal class WorkspaceCmo3Importer(
         progress(0.9f, "Committing imported document")
         val summary = "Imported CMO3 ${path.fileName}"
         val result = if (current != null) {
-            val auxiliary = current.auxiliary["posesByWorkspace"]?.jsonObject?.let { poses ->
+            val posed = current.auxiliary["posesByWorkspace"]?.jsonObject?.let { poses ->
                 val pose = PreviewSessions.encode(WorkspacePose(preview.rig.puppet.parameters.associate { it.id to it.default }, emptySet()))
                 JsonObject(current.auxiliary + ("posesByWorkspace" to JsonObject(poses.mapValues { pose })))
             } ?: current.auxiliary
+            // The desktop clears every canvas solo on replacement; the stored copy moves in the same commit.
+            val auxiliary = CanvasVisibilityProcessor.endSolos(posed)
             runtime.commitPrepared(current.projectId, state, summary, author, document, preview, auxiliary = auxiliary) { _, next, model ->
                 project(current, next, model, current.projectId)
             }

@@ -47,6 +47,26 @@ class WorkspaceCmo3ImporterTest {
         assertEquals(setOf("old", "shared"), runtime.capture().model.rig.puppet.drawables.map { it.id.raw }.toSet())
     }
 
+    @Test fun replacementEndsEveryStoredCanvasSoloInTheSameCommit() = runBlocking {
+        val runtime = runtime()
+        val importer = WorkspaceCmo3Importer(runtime)
+        val first = writeCmo3Fixture(temporary.resolve("first.cmo3"), "old", "shared")
+        val incoming = writeCmo3Fixture(temporary.resolve("incoming.cmo3"), "shared", "added")
+        val root = importer.import(first, Cmo3ImportMode.NEW, null, runtime.state.value.state, MutationAuthor.USER).capture
+        val soloed = CanvasAddress("main", "canvas", CanvasViewMode.EDIT)
+        val plain = CanvasAddress("main", "canvas", CanvasViewMode.PREVIEW)
+        val records = mapOf(soloed to CanvasVisibility(mapOf("old" to false, "shared" to true), mapOf("warp" to false), "shared", mapOf("old" to true)),
+            plain to CanvasVisibility(mapOf("old" to false)))
+        val stored = runtime.updateAuxiliary(root.projectId, root.state, CanvasVisibilityCodec.withRecords(root.auxiliary, records))
+        val replaced = importer.import(incoming, Cmo3ImportMode.REPLACE, stored.projectId, stored.state, MutationAuthor.USER).capture
+        assertEquals(mapOf(soloed to CanvasVisibility(mapOf("old" to false, "shared" to true), mapOf("warp" to false)),
+            plain to records.getValue(plain)), CanvasVisibilityCodec.decode(replaced.auxiliary))
+        assertEquals(2, runtime.history().selections.size)
+        // Without a solo the replacement leaves the stored auxiliary exactly as it was.
+        val again = importer.import(first, Cmo3ImportMode.REPLACE, replaced.projectId, replaced.state, MutationAuthor.USER).capture
+        assertEquals(replaced.auxiliary, again.auxiliary)
+    }
+
     @Test fun newImportRequiresExplicitDiscardAndRejectedProjectionLeavesTheOldProjectIntact() = runBlocking {
         val runtime = runtime()
         val importer = WorkspaceCmo3Importer(runtime)

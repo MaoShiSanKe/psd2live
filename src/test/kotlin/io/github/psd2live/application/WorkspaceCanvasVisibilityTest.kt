@@ -54,6 +54,22 @@ class WorkspaceCanvasVisibilityTest {
         assertEquals(CanvasVisibility(), CanvasVisibilityProcessor.normalize(stale, scope))
     }
 
+    @Test fun endingSolosKeepsWhatEachCanvasShowsAndLeavesUnsoloedAuxiliaryBytesAlone() {
+        val solo = CanvasVisibilityProcessor.apply(CanvasVisibility(mapOf("a" to false), mapOf("warp" to false)), CanvasVisibilityIntent.Solo("b"), scope)
+        val ended = CanvasVisibilityProcessor.endSolo(solo)
+        assertEquals(CanvasVisibility(solo.layers, mapOf("warp" to false)), ended)
+        assertEquals(CanvasVisibilityProcessor.hiddenLayerIds(solo, scope), CanvasVisibilityProcessor.hiddenLayerIds(ended, scope))
+        val plain = CanvasVisibility(mapOf("a" to false))
+        assertSame(plain, CanvasVisibilityProcessor.endSolo(plain))
+        val auxiliary = CanvasVisibilityCodec.withRecords(buildJsonObject { put("extension", "keep") }, mapOf(first to solo, second to plain))
+        val cleared = CanvasVisibilityProcessor.endSolos(auxiliary)
+        assertEquals(mapOf(first to ended, second to plain), CanvasVisibilityCodec.decode(cleared))
+        assertEquals(JsonPrimitive("keep"), cleared["extension"])
+        assertSame(cleared, CanvasVisibilityProcessor.endSolos(cleared))
+        val none = buildJsonObject { put("extension", "keep") }
+        assertSame(none, CanvasVisibilityProcessor.endSolos(none))
+    }
+
     @Test fun localSoloChangesOneSessionAndNeverTheDocumentHistoryOrExport() = runBlocking<Unit> {
         val runtime = fixture(); val commands = WorkspaceCanvasVisibilityCommands(runtime); val before = runtime.capture()
         val history = runtime.history()

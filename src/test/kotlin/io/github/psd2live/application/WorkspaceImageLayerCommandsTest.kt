@@ -49,6 +49,29 @@ class WorkspaceImageLayerCommandsTest {
         }
     }
 
+    @Test fun importedLayersAreRevealedOnTheirCanvasByAFollowUpVisibilityCas() = runBlocking<Unit> {
+        val runtime = fixture()
+        val canvas = CanvasAddress("main", "canvas", CanvasViewMode.EDIT)
+        val addresses = setOf(canvas)
+        val visibility = WorkspaceCanvasVisibilityCommands(runtime)
+        val existing = runtime.capture().model.analysis.layers.first().source.id.raw
+        val soloed = runtime.capture().let { visibility.edit(it.projectId, it.state, canvas, addresses, CanvasVisibilityIntent.Solo(existing)) }
+        val result = import(runtime, listOf(image("reveal.png"))).mutation
+        val ids = result.affectedLayerIds
+        assertTrue(ids.isNotEmpty())
+        // The new layer only exists in the committed model, so the reveal must run on that state.
+        assertFailsWith<WorkspaceConflict> {
+            visibility.edit(soloed.projectId, soloed.state, canvas, addresses, CanvasVisibilityIntent.Layers(ids.associateWith { true }))
+        }
+        val revealed = visibility.edit(result.projectId!!, result.state!!, canvas, addresses, CanvasVisibilityIntent.Layers(ids.associateWith { true }))
+        val record = CanvasVisibilityCodec.decode(runtime.capture().auxiliary).getValue(canvas)
+        assertEquals(revealed.canvases.getValue(canvas), record)
+        assertEquals(soloed.canvases.getValue(canvas).layers + ids.associateWith { true }, record.layers)
+        assertNull(record.isolatedLayerId); assertNull(record.isolationSnapshot)
+        assertEquals(result.historyNodeId, runtime.capture().historyHead)
+        assertTrue(ids.none { it in CanvasVisibilityProcessor.hiddenLayerIds(record, revealed.scope) })
+    }
+
     @Test fun completePngAndBmpBatchCommitsOnceAndPreservesPriorMotionAndRepeatedNames() = runBlocking<Unit> {
         val runtime = fixture(); val before = runtime.capture(); val history = runtime.history()
         val result = import(runtime, listOf(image("Decoration.png"), image("Decoration.bmp", true)))
