@@ -1252,9 +1252,6 @@ class PSD2LiveViewModel : AutoCloseable {
         val current = _state.value
         if (current.isBusy || current.canvasEditBusy) return
         val preview = current.previewModel ?: return
-        if (preview.config.rigEdits.importedCmo3 != null) {
-            setErrorMessage(tr("editor.depthSplit.imported")); return
-        }
         if (preview.rig.puppet.drawables.none { it.id.raw == drawableId && it.mesh != null }) return
         if (canvasEditor.paintSession?.isDirty == true) {
             setErrorMessage(tr("editor.depthSplit.pendingPaint")); return
