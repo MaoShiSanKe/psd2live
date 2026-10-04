@@ -617,9 +617,11 @@ data class PSD2LiveState(
 	fun motionPresetGroupOn(name: String): Boolean =
 		if (io.github.psd2live.core.MotionClips.isSkeletonPreset(name)) motionSkeleton else motionBasic
 
-	fun buildConfig(): PipelineConfig {
-		val hasAnyMotion = (motionBasic && (motionIdle || motionBlink || motionNod || motionShake)) || motionSkeleton ||
-			rigEdits.motionClips.any { it.builtin == null && it.enabled }
+	/** What generation consumes; the same raw-to-effective rule the document applies. */
+	fun buildConfig(): PipelineConfig = io.github.psd2live.project.WorkspaceSettingsPolicy.effective(rawConfig())
+
+	/** The settings as chosen, for a new document's raw settings. */
+	fun rawConfig(): PipelineConfig {
 		return PipelineConfig(
 			atlasSize = atlasSize,
 			textureUpscale = textureUpscale,
@@ -640,21 +642,21 @@ data class PSD2LiveState(
 			bodyStrength = bodyStrength,
 			rigTuning = rigTuning,
 			meshOnly = meshOnly,
-			generateDeformers = if (rigEdits.importedCmo3 != null) generateDeformers else !meshOnly,
+			generateDeformers = generateDeformers,
 			featureDisplacementEnabled = featureDisplacementEnabled,
 			mouthOutlineEnabled = mouthOutlineEnabled,
 			mouthShape = mouthShape,
             mouthCurve = mouthCurve,
             mouthColor = mouthColor,
             mouthThickness = mouthThickness,
-			exportMotions = !meshOnly && hasAnyMotion,
+			exportMotions = exportMotions,
 			motionBasic = motionBasic,
 			motionIdle = motionIdle,
 			motionBlink = motionBlink,
 			motionNod = motionNod,
 			motionShake = motionShake,
 			motionSkeleton = motionSkeleton,
-			generatePhysics = generatePhysics && !meshOnly,
+			generatePhysics = generatePhysics,
 			physicsFrontHair = physicsFrontHair,
 			physicsBackHair = physicsBackHair,
 			physicsEyeJelly = physicsEyeJelly,

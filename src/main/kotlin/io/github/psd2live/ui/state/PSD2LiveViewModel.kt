@@ -1139,11 +1139,22 @@ class PSD2LiveViewModel : AutoCloseable {
         val current = _state.value
         if (current.previewModel == null || current.meshOnly || current.rigEdits.importedCmo3 != null) return
         val parts = PresetParts.of(current.analysis)
+        // Both motion switches are one settings intent ahead of the field, so their pose releases are not left
+        // to a later diff of the field's draft.
+        val motions = buildJsonObject {
+            if (choices.motionBasic != current.motionBasic) put("motionBasic", choices.motionBasic)
+            if (choices.motionSkeleton != current.motionSkeleton) put("motionSkeleton", choices.motionSkeleton)
+        }
+        val motionsCommitted = motions.isNotEmpty() && applySettingsIntentNow(motions)
+        if (motionsCommitted) {
+            if (!choices.motionBasic) closePresetGroupMotion(skeleton = false)
+            if (!choices.motionSkeleton) closePresetGroupMotion(skeleton = true)
+        }
         val token = "startScreen"
         beginEditorField(token)
         try {
-            if (choices.motionBasic != current.motionBasic) setMotionBasic(choices.motionBasic)
-            if (choices.motionSkeleton != current.motionSkeleton) setMotionSkeleton(choices.motionSkeleton)
+            if (!motionsCommitted && choices.motionBasic != current.motionBasic) setMotionBasic(choices.motionBasic)
+            if (!motionsCommitted && choices.motionSkeleton != current.motionSkeleton) setMotionSkeleton(choices.motionSkeleton)
             if (choices.eyeJelly != current.physicsEyeJelly) {
                 if (parts.eyeJelly) setPhysicsEyeJelly(choices.eyeJelly)
                 else updateState { it.copy(physicsEyeJelly = choices.eyeJelly) }
@@ -2686,7 +2697,35 @@ class PSD2LiveViewModel : AutoCloseable {
         editorChanged()
     }
 
+	/**
+	 * Settings switches that link other settings or release authored poses go through the application's settings
+	 * intent, so the settings, the released poses of every workspace and the rebuilt model publish in one commit.
+	 * An open field session keeps the local draft; its settings are recorded when the session closes.
+	 */
+	private fun submitSettingsIntent(changes: kotlinx.serialization.json.JsonObject, after: suspend () -> Unit = {}): Boolean {
+		val workspace = workspaceBackend?.takeUnless { editorSessions.anyOpen } ?: return false
+		val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+		runWorkspaceCommand(after) { state -> port.updateProjectSettings(state, changes) }
+		return true
+	}
+
+	/** Awaited form of [submitSettingsIntent] for a sequence that must see the commit; false when not applicable. */
+	private suspend fun applySettingsIntentNow(changes: kotlinx.serialization.json.JsonObject): Boolean {
+		val workspace = workspaceBackend?.takeUnless { editorSessions.anyOpen || _state.value.canvasEditBusy } ?: return false
+		val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+		val expected = workspace.snapshot()
+		val projectId = expected.projectId ?: return false
+		val settled = workspace.settleEditorDrafts(projectId, expected.state)
+		withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(projectId, settled, MutationAuthor.USER)) {
+			port.updateProjectSettings(settled, changes)
+		}
+		return true
+	}
+
 	fun setMeshOnly(enabled: Boolean) {
+		if (submitSettingsIntent(buildJsonObject { put("meshOnly", enabled) }) {
+				if (enabled) { resetPreviewPhysics(); stopProcessMotion() }
+			}) return
 		updateState { current ->
 			val updated = current.copy(meshOnly = enabled, generateDeformers = !enabled)
 			if (enabled) {
@@ -2714,6 +2753,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * editor, the preview and the export together, each keeping its own switch and settings for when it is back.
 	 */
 	fun setMotionBasic(enabled: Boolean) {
+		if (submitSettingsIntent(buildJsonObject { put("motionBasic", enabled) }) {
+				if (!enabled) closePresetGroupMotion(skeleton = false)
+				scheduleRuntimeBundleUpdate()
+			}) return
 		updateState { current ->
 			if (enabled) return@updateState current.copy(motionBasic = true)
 			val rest = mapOf(
@@ -2746,6 +2789,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setMotionIdle(enabled: Boolean) {
+		if (submitSettingsIntent(buildJsonObject { put("motionIdle", enabled) }) { scheduleRuntimeBundleUpdate() }) return
 		updateState { current ->
 			val next = current.copy(motionIdle = enabled)
 			val updated = next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
@@ -2771,6 +2815,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setMotionBlink(enabled: Boolean) {
+		if (submitSettingsIntent(buildJsonObject { put("motionBlink", enabled) }) { scheduleRuntimeBundleUpdate() }) return
 		updateState { current ->
 			val next = current.copy(motionBlink = enabled)
 			val updated = next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
@@ -2787,43 +2832,41 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setMotionNod(enabled: Boolean) {
+		// Nod and Shake only play transient frames over the authored pose; stopping them leaves that pose alone.
+		if (!enabled) stopProcessMotion("nod")
+		if (submitSettingsIntent(buildJsonObject { put("motionNod", enabled) }) {
+				scheduleRuntimeBundleUpdate()
+				if (enabled) triggerMotion("Nod")
+			}) return
 		updateState { current ->
 			val next = current.copy(motionNod = enabled)
-			val updated = next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
-			if (!enabled && processActiveMotion == "nod") {
-				val nodReset = mapOf(
-					StandardParameters.ANGLE_Y to 0f,
-					StandardParameters.BODY_Y to 0f,
-				).filterKeys { key -> key !in updated.lockedParameters }
-				updated.copy(parameterValues = updated.parameterValues + nodReset)
-			} else updated
+			next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
 		}
-		if (!enabled) stopProcessMotion("nod")
 		scheduleRuntimeBundleUpdate()
 		if (enabled) triggerMotion("Nod")
 	    editorChanged()
 	}
 
 	fun setMotionShake(enabled: Boolean) {
+		if (!enabled) stopProcessMotion("shake")
+		if (submitSettingsIntent(buildJsonObject { put("motionShake", enabled) }) {
+				scheduleRuntimeBundleUpdate()
+				if (enabled) triggerMotion("Shake")
+			}) return
 		updateState { current ->
 			val next = current.copy(motionShake = enabled)
-			val updated = next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
-			if (!enabled && processActiveMotion == "shake") {
-				val shakeReset = mapOf(
-					StandardParameters.ANGLE_X to 0f,
-					StandardParameters.BODY_X to 0f,
-					StandardParameters.ANGLE_Z to 0f,
-				).filterKeys { key -> key !in updated.lockedParameters }
-				updated.copy(parameterValues = updated.parameterValues + shakeReset)
-			} else updated
+			next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
 		}
-		if (!enabled) stopProcessMotion("shake")
 		scheduleRuntimeBundleUpdate()
 		if (enabled) triggerMotion("Shake")
 	    editorChanged()
 	}
 
 	fun setMotionSkeleton(enabled: Boolean) {
+		if (submitSettingsIntent(buildJsonObject { put("motionSkeleton", enabled) }) {
+				if (!enabled) closePresetGroupMotion(skeleton = true)
+				scheduleRuntimeBundleUpdate()
+			}) return
 		updateState { current ->
 			val next = current.copy(motionSkeleton = enabled)
 			next.copy(exportMotions = next.motionIdle || next.motionBlink || next.motionNod || next.motionShake || next.motionSkeleton)
@@ -2834,6 +2877,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setGeneratePhysics(enabled: Boolean) {
+		if (submitSettingsIntent(buildJsonObject { put("generatePhysics", enabled) }) {
+				if (!enabled) resetPreviewPhysics()
+				scheduleRuntimeBundleUpdate()
+			}) return
 		updateState { current ->
 			val updated = current.copy(generatePhysics = enabled)
 			if (!enabled) updated.copy(parameterValues = updated.parameterValues + physicsRestValues(current, current.rigEdits)) else updated
@@ -4984,6 +5031,26 @@ class PSD2LiveViewModel : AutoCloseable {
                 .authoringPose(it.activeCanvas.mode == CanvasMode.EDIT)
         }
     }
+    /** Projects authored poses a settings commit released, in the same CAS that published them. */
+    internal fun projectWorkspacePoses(expected: PSD2LiveState, poses: Map<String, io.github.psd2live.application.WorkspacePose>) = synchronized(stateLock) {
+        val current = _state.value
+        check(current.projectId == expected.projectId && current.projectOpenGeneration == expected.projectOpenGeneration) {
+            "Workspace changed while the operation was being prepared"
+        }
+        updateState { state ->
+            val workspaces = state.workspaces.map { workspace ->
+                val pose = poses[workspace.id]
+                if (pose == null || workspace.id == state.activeWorkspace.id) workspace
+                else workspace.withPose((workspace.pose ?: WorkspacePose.capture(workspace.activeCanvas.presentation))
+                    .copy(parameterValues = pose.values, lockedParameters = pose.locked, previewParameterValues = emptyMap()))
+            }
+            val active = poses[state.activeWorkspace.id]
+            val next = state.copy(workspaces = workspaces)
+            if (active == null) next else next.copy(parameterValues = active.values, previewParameterValues = active.values,
+                lockedParameters = active.locked)
+        }
+    }
+
 	fun resetAllParameters() {
 		editPreviewSession(kotlinx.serialization.json.buildJsonObject { put("mode", "reset") })
 	}

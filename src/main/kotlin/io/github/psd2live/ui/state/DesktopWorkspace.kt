@@ -17,7 +17,7 @@ import io.github.psd2live.application.sampleSourceColor
 
 import io.github.psd2live.application.mergeProjectSettings
 
-import io.github.psd2live.project.config
+import io.github.psd2live.project.rawConfig
 
 import io.github.psd2live.project.WorkspaceSettingsCodec
 
@@ -146,6 +146,7 @@ class DesktopWorkspace(
         val current = viewModel.state.value
         if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
         val result = documentCommands.execute(before.projectId, before.state, summary, edits, mutationAuthor(author),
+            poses = { viewModel.projectWorkspacePoses(current, it) },
             beforeCommit = { _, document, model ->
                 applyPreviewOrThrow(model, documentFrom(current), document, summary, current)
             })
@@ -277,7 +278,7 @@ class DesktopWorkspace(
         val (state, current) = captureSourceImport(discardUnsaved)
         val input = Path.of(path)
         val result = sourceImporter.importPsd(input, state.capture?.projectId, state.state, discardUnsaved,
-            state.capture?.document?.config() ?: current.buildConfig()) { document, preview, id ->
+            state.capture?.document?.rawConfig() ?: current.rawConfig()) { document, preview, id ->
             viewModel.applySourceImport(current, document, preview, input, id)
         }
         finishSourceImport(result)
@@ -316,7 +317,7 @@ class DesktopWorkspace(
         if (current.isGenerating || current.projectSaving || (author != MutationAuthor.USER && current.isAnalyzing)) throw WorkspaceBusy()
         if (mode != io.github.psd2live.core.Cmo3ImportMode.REPLACE && !discardUnsaved && current.projectDirty) throw WorkspaceUnsavedChanges()
         val result = cmo3Importer.import(path, mode, state.capture?.projectId, state.state, author,
-            discardUnsaved, initialConfig = current.buildConfig()) { _, document, preview, id ->
+            discardUnsaved, initialConfig = current.rawConfig()) { _, document, preview, id ->
             viewModel.applyCmo3Import(current, document, preview, path, id, mode == io.github.psd2live.core.Cmo3ImportMode.REPLACE)
         }
         synchronized(historyLock) {
@@ -900,7 +901,8 @@ class DesktopWorkspace(
         require(recoveringProjectId != before.projectId) { "Workspace is still being restored; retry shortly" }
         val current = viewModel.state.value
         if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
-        val result = generationCommands.execute(before.projectId, before.state, operation, summary, mutationAuthor(MutationAuthor.AGENT)) { _, document, model ->
+        val result = generationCommands.execute(before.projectId, before.state, operation, summary, mutationAuthor(MutationAuthor.AGENT),
+            poses = { viewModel.projectWorkspacePoses(current, it) }) { _, document, model ->
             applyPreviewOrThrow(model, documentFrom(current), document, summary, current)
         }
         if (result.commit.applied) {
@@ -972,7 +974,7 @@ class DesktopWorkspace(
         val discard = arguments["discard_unsaved"]?.jsonPrimitive?.boolean ?: false
         val (state, current) = captureSourceImport(discard)
         val result = sourceImporter.createArtwork(arguments, state.capture?.projectId, state.state, discard,
-            state.capture?.document?.config() ?: current.buildConfig()) { document, preview, id ->
+            state.capture?.document?.rawConfig() ?: current.rawConfig()) { document, preview, id ->
             viewModel.applySourceImport(current, document, preview, null, id)
         }
         finishSourceImport(result)
