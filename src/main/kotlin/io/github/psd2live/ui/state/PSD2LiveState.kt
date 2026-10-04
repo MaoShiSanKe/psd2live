@@ -500,6 +500,8 @@ data class PSD2LiveState(
 	val hoveredLayerId: String? = null,
 	val hoveredDeformerId: String? = null,
 	val layerVisibility: Map<String, Boolean> = emptyMap(),
+	/** The document's own layer visibility. [layerVisibility] is the focused canvas's local filter and never enters it. */
+	val documentLayerVisibility: Map<String, Boolean> = emptyMap(),
 	val deformerVisibility: Map<String, Boolean> = emptyMap(),
 	val layerOverrides: Map<String, LayerClassificationOverride> = emptyMap(),
 	val isolationSnapshot: Map<String, Boolean>? = null,
@@ -674,7 +676,8 @@ data class PSD2LiveState(
 			exportIncludeDisplayInfo = exportIncludeDisplayInfo,
 			exportPixelsPerUnit = exportPixelsPerUnit,
 			layerOverrides = layerOverrides,
-			layerVisibility = emptyMap(), // Canvas visibility must never rewrite the shared model.
+			// Canvas visibility must never rewrite the shared model; only the document's own entries apply.
+			layerVisibility = documentLayerVisibility,
 			deletedLayerIds = deletedLayerIds,
 			parentOverrides = parentOverrides,
 			drawOrderOverrides = drawOrderOverrides,
@@ -702,6 +705,12 @@ data class PSD2LiveState(
 		return defaultSettings
 	}
 
+	/** Old v1 overrides the hierarchy still shows; a later journal reparent of the same object supersedes its entry. */
+	val hierarchyParentOverrides: Map<String, String?> by lazy {
+		io.github.psd2live.application.WorkspaceHierarchyEdits.displayParentOverrides(
+			parentOverrides, rigEdits.structureEdits, rigEdits.authoringJournal)
+	}
+
 	fun isLayerVisible(layerId: String, defaultVisible: Boolean = true): Boolean {
 		layerVisibility[layerId]?.let { return it }
 		val parentId = when {
@@ -727,13 +736,13 @@ data class PSD2LiveState(
 				val deformerById = model.rig.puppet.deformers.associateBy { it.id.raw }
 				fun isHidden(layerId: String): Boolean {
 					val drawId = drawableIdByLayerId[layerId]
-					var parent: String? = drawId?.let { parentOverrides[it] ?: drawableById[it]?.parentDeformerId?.raw }
+					var parent: String? = drawId?.let { hierarchyParentOverrides[it] ?: drawableById[it]?.parentDeformerId?.raw }
 					val visited = mutableSetOf<String>()
 					while (parent != null && visited.add(parent)) {
 						if (parent in hiddenDeformers) {
 							return true
 						}
-						parent = parentOverrides[parent] ?: deformerById[parent]?.parent?.raw
+						parent = hierarchyParentOverrides[parent] ?: deformerById[parent]?.parent?.raw
 					}
 					return false
 				}

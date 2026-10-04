@@ -1051,7 +1051,7 @@ fun CanvasViewportComposable(
 					canvasState.effectiveVisibleLayerIds.filter { it in keep }.toSet()
 				}
 				selectedDeformerId != null -> {
-					val desc = descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+					val desc = descendantLayerIds(model, selectedDeformerId, canvasState.hierarchyParentOverrides)
 					canvasState.effectiveVisibleLayerIds.filter { it in desc }.toSet()
 				}
 				else -> canvasState.effectiveVisibleLayerIds
@@ -1062,7 +1062,7 @@ fun CanvasViewportComposable(
                 mode==CanvasMode.EDIT && editor.objectMode && editor.objects.isNotEmpty() -> editor.objects
 				mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.EDIT && editor.objects.size > 1 -> editor.objects
 				selectedLayerId != null -> setOf(selectedLayerId)
-				selectedDeformerId != null -> descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+				selectedDeformerId != null -> descendantLayerIds(model, selectedDeformerId, canvasState.hierarchyParentOverrides)
 				else -> null
 			}
 			val isDimmingActive = dimUnselected && hasActiveSelection
@@ -1074,7 +1074,7 @@ fun CanvasViewportComposable(
 			val hoveredDeformerId = if (allowSelectionChrome) canvasState.hoveredDeformerId else null
 			val hoverTintLayerIds = when {
 				hoveredLayerId != null -> setOf(hoveredLayerId)
-				hoveredDeformerId != null -> descendantLayerIds(model, hoveredDeformerId, canvasState.parentOverrides)
+				hoveredDeformerId != null -> descendantLayerIds(model, hoveredDeformerId, canvasState.hierarchyParentOverrides)
 				else -> null
 			}
 			val hoverTintColor = (hoveredLayerId ?: hoveredDeformerId)?.let { ComponentPalette.strong(it).rgb } ?: 0
@@ -1126,7 +1126,7 @@ fun CanvasViewportComposable(
 						viewOptions, warpIds, rotationIds, warpPoints, targetVisibleLayerIds,
 						canvasState.selectedLayerId, canvasState.selectedDeformerId,
 						canvasState.hoveredLayerId, canvasState.hoveredDeformerId,
-						canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
+						canvasState.hierarchyParentOverrides, editor.hierarchyMode, editor.objects,
 						editor.glueSwapped, editor.drawsTransformBox,
 					)
 					val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
@@ -1150,7 +1150,7 @@ fun CanvasViewportComposable(
 					val pathsShown = mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()
 					val selectedPathIds: Set<String> = if (!pathsShown) emptySet() else {
 						val selectedLayerDescendants = if (selectedDeformerId != null) {
-							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+							descendantLayerIds(model, selectedDeformerId, canvasState.hierarchyParentOverrides)
 						} else emptySet()
 						model.rig.puppet.deformPaths.filter { path ->
 							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]

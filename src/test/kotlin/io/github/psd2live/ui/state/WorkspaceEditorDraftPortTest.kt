@@ -107,10 +107,10 @@ class WorkspaceEditorDraftPortTest {
             assertSame(source, WorkspaceStateCodec.document(state).generationSource)
             assertSame(source, state.buildConfig().generationSource)
             fun project(expected: SourceArt?) = vm.applyAgentWorkspacePreview(preview,
-                expectedSource = source, expectedLayerVisibility = state.layerVisibility,
+                expectedSource = source, expectedLayerVisibility = state.documentLayerVisibility,
                 expectedDeletedLayerIds = state.deletedLayerIds, expectedLayerOverrides = state.layerOverrides,
                 expectedParentOverrides = state.parentOverrides, expectedRigEdits = state.rigEdits,
-                expectedGenerationSource = expected, layerVisibility = state.layerVisibility,
+                expectedGenerationSource = expected, layerVisibility = state.documentLayerVisibility,
                 deletedLayerIds = state.deletedLayerIds, layerOverrides = state.layerOverrides,
                 parentOverrides = state.parentOverrides, rigEdits = state.rigEdits, status = "Projected",
                 generationSource = null)

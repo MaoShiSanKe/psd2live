@@ -24,7 +24,7 @@ internal fun visibleCanvasGuideIds(preview: RigPreviewModel, state: PSD2LiveStat
             grew = false
             for (deformer in deformers) {
                 if (deformer.id.raw in under) continue
-                val parent = state.parentOverrides[deformer.id.raw] ?: deformer.parent?.raw
+                val parent = state.hierarchyParentOverrides[deformer.id.raw] ?: deformer.parent?.raw
                 if (parent in under) {
                     under.add(deformer.id.raw)
                     grew = true

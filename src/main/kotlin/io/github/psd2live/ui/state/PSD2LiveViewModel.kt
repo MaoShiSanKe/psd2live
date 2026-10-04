@@ -1917,8 +1917,9 @@ class PSD2LiveViewModel : AutoCloseable {
             rigEdits = document.rigEdits, generationSource = document.generationSource,
             meshSource = document.meshSource,
             placementSource = document.placementSource,
-            layerOverrides = document.layerOverrides, layerVisibility = document.layerVisibility,
+            layerOverrides = document.layerOverrides, documentLayerVisibility = document.layerVisibility,
             deletedLayerIds = document.deletedLayerIds, parentOverrides = document.parentOverrides, meshOverrides = document.meshOverrides,
+            layerVisibility = if (replacing) current.layerVisibility else emptyMap(),
             deformerVisibility = if (replacing) current.deformerVisibility else emptyMap(),
             selectedLayerId = null, selectedLayerIds = emptySet(), selectedDeformerId = null,
             hoveredLayerId = null, hoveredDeformerId = null, isolatedLayerId = null, isolationSnapshot = null, clipMaskPickSourceId = null,
@@ -4533,92 +4534,72 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
-	fun setDeformerVisibility(deformerId: String, visible: Boolean) {
-		updateState {
-			val updated = it.deformerVisibility + (deformerId to visible)
-			it.copy(
-				deformerVisibility = updated,
-				statusText = tr("status.visibilityChanged"),
-			)
-		}
-		markWorkspaceChanged()
-	}
+	fun setDeformerVisibility(deformerId: String, visible: Boolean) =
+		editCanvasVisibility(io.github.psd2live.application.CanvasVisibilityIntent.Deformers(mapOf(deformerId to visible)))
 
 	fun toggleLayerVisibility(layerId: String) {
 		val current = _state.value.isLayerVisible(layerId)
 		setLayerVisibility(layerId, !current)
 	}
 
-	fun setLayerVisibility(layerId: String, visible: Boolean) {
-		updateState {
-			val updated = it.layerVisibility + (layerId to visible)
-			it.copy(
-				layerVisibility = updated,
-				statusText = tr("status.visibilityChanged"),
-				isolationSnapshot = null,
-				isolatedLayerId = null,
-			)
-		}
-	    markWorkspaceChanged()
-	}
+	fun setLayerVisibility(layerId: String, visible: Boolean) =
+		editCanvasVisibility(io.github.psd2live.application.CanvasVisibilityIntent.Layers(mapOf(layerId to visible)))
 
 	fun setAllLayersVisibility(visible: Boolean) {
-		val analysis = _state.value.analysis ?: return
-		val updated = analysis.layers.associate { it.source.id.raw to visible }
-		updateState {
-			it.copy(
-				layerVisibility = updated,
-				statusText = tr("status.visibilityChanged"),
-				isolationSnapshot = null,
-				isolatedLayerId = null,
-			)
-		}
-	    markWorkspaceChanged()
+		if (_state.value.analysis == null) return
+		editCanvasVisibility(io.github.psd2live.application.CanvasVisibilityIntent.AllLayers(visible))
 	}
 
 	fun invertLayerVisibility() {
-		val analysis = _state.value.analysis ?: return
-		val current = _state.value
-		val updated = analysis.layers.associate { layer ->
-			val id = layer.source.id.raw
-			id to !current.isLayerVisible(id, layer.source.visible)
-		}
-		updateState {
-			it.copy(
-				layerVisibility = updated,
-				statusText = tr("status.visibilityChanged"),
-				isolationSnapshot = null,
-				isolatedLayerId = null,
-			)
-		}
-	    markWorkspaceChanged()
+		if (_state.value.analysis == null) return
+		editCanvasVisibility(io.github.psd2live.application.CanvasVisibilityIntent.InvertLayers)
 	}
 
 	fun isolateLayer(layerId: String) {
-		val analysis = _state.value.analysis ?: return
+		if (_state.value.analysis == null) return
+		editCanvasVisibility(io.github.psd2live.application.CanvasVisibilityIntent.ToggleSolo(layerId))
+	}
+
+	/** The focused canvas session's visibility goes through the same processor and CAS as canvas_visibility. */
+	private fun editCanvasVisibility(intent: io.github.psd2live.application.CanvasVisibilityIntent) {
 		val current = _state.value
-		if (current.isolatedLayerId == layerId && current.isolationSnapshot != null) {
-			updateState {
-				it.copy(
-					layerVisibility = it.isolationSnapshot.orEmpty(),
-					isolationSnapshot = null,
-					isolatedLayerId = null,
-					statusText = tr("status.visibilityChanged"),
-				)
-			}
-		} else {
-			val snapshot = current.layerVisibility
-			val updated = analysis.layers.associate { it.source.id.raw to (it.source.id.raw == layerId) }
-			updateState {
-				it.copy(
-					layerVisibility = updated,
-					isolationSnapshot = snapshot,
-					isolatedLayerId = layerId,
-					statusText = tr("status.visibilityChanged"),
-				)
-			}
+		val address = io.github.psd2live.application.CanvasAddress(current.activeWorkspace.id, current.activeCanvas.id,
+			current.activeCanvas.mode.canvasViewMode())
+		val port: io.github.psd2live.application.WorkspaceCanvasVisibilityPort? = workspaceBackend
+		val state = currentWorkspaceState()
+		if (port != null && state != null) {
+			try { port.editCanvasVisibility(state, address, intent) }
+			catch (failure: Exception) { setErrorMessage(failure.message) }
+			return
 		}
-	    markWorkspaceChanged()
+		// Without a loaded workspace there is no CAS; the same processor edits this session directly.
+		val scope = current.previewModel?.let { io.github.psd2live.application.CanvasVisibilityScope.of(it) }
+		val next = try {
+			io.github.psd2live.application.CanvasVisibilityProcessor.apply(CanvasPresentation.capture(current).canvasVisibility(), intent, scope)
+		} catch (failure: IllegalArgumentException) { setErrorMessage(failure.message); return }
+		updateState {
+			it.copy(layerVisibility = next.layers, deformerVisibility = next.deformers, isolatedLayerId = next.isolatedLayerId,
+				isolationSnapshot = next.isolationSnapshot, statusText = tr("status.visibilityChanged"))
+		}
+		markWorkspaceChanged()
+	}
+
+	/** Projects a committed canvas record into its own session; other canvases and the document stay as they are. */
+	internal fun applyCanvasVisibility(expected: PSD2LiveState, address: io.github.psd2live.application.CanvasAddress,
+	                                   value: io.github.psd2live.application.CanvasVisibility, changed: Boolean) = synchronized(stateLock) {
+		val current = _state.value
+		check(current.projectId == expected.projectId && current.projectOpenGeneration == expected.projectOpenGeneration) {
+			"Workspace changed while canvas visibility was being prepared"
+		}
+		val mode = if (address.mode == io.github.psd2live.application.CanvasViewMode.EDIT) CanvasMode.EDIT else CanvasMode.PREVIEW
+		updateCanvasPresentation(address.workspaceId, address.canvasId, mode) {
+			it.copy(layerVisibility = value.layers, deformerVisibility = value.deformers,
+				isolatedLayerId = value.isolatedLayerId, isolationSnapshot = value.isolationSnapshot)
+		}
+		if (changed) updateState {
+			it.copy(statusText = tr("status.visibilityChanged"), projectDirty = it.projectDirty || it.analysis != null,
+				projectEditVersion = it.projectEditVersion + 1, projectAuxiliaryVersion = it.projectAuxiliaryVersion + 1)
+		}
 	}
 
 	fun deleteLayer(layerId: String) {
@@ -4682,31 +4663,16 @@ class PSD2LiveViewModel : AutoCloseable {
             } finally { updateState { it.copy(canvasEditBusy = false) } }
         }
     }
+	/** A hierarchy drag commits one structure journal edit; old v1 parentOverrides are never rewritten. */
 	fun reparentItem(childId: String, newParentId: String?) {
-		val model = _state.value.previewModel
-		val isDeformer = model?.rig?.puppet?.deformers?.any { it.id.raw == childId } ?: false
-		val deformerById = model?.rig?.puppet?.deformers?.associateBy { it.id.raw } ?: emptyMap()
-
-		// If child is a deformer, check for cycle
-		if (isDeformer && newParentId != null) {
-			if (childId == newParentId) return
-			var cur: String? = newParentId
-			val visited = mutableSetOf(childId)
-			while (cur != null) {
-				if (!visited.add(cur)) return
-				cur = _state.value.parentOverrides[cur] ?: deformerById[cur]?.parent?.raw
-			}
+		val puppet = _state.value.previewModel?.rig?.puppet ?: return
+		val edit = try { io.github.psd2live.application.WorkspaceHierarchyEdits.reparent(puppet, childId, newParentId) }
+			catch (failure: IllegalArgumentException) { setErrorMessage(failure.message); return }
+		if (edit == null) return
+		val port: io.github.psd2live.application.WorkspaceRigPort = workspaceBackend ?: return
+		runWorkspaceCommand(after = { updateState { it.copy(statusText = tr("status.hierarchyUpdated")) } }) { state ->
+			port.authorRig(state, io.github.psd2live.application.WorkspaceHierarchyEdits.journal(edit), MutationAuthor.USER)
 		}
-
-		updateState { current ->
-			val updated = current.parentOverrides + (childId to newParentId)
-			current.copy(
-				parentOverrides = updated,
-				statusText = tr("status.hierarchyUpdated"),
-			)
-		}
-		schedulePreviewRebuild()
-	    editorChanged()
 	}
 
 	/**
@@ -5428,7 +5394,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (
                 current.projectId != expectedProjectId || current.projectOpenGeneration != expectedProjectOpenGeneration ||
 				current.analysis?.source !== expectedSource ||
-				current.layerVisibility != expectedLayerVisibility ||
+				current.documentLayerVisibility != expectedLayerVisibility ||
 				current.deletedLayerIds != expectedDeletedLayerIds ||
 				current.layerOverrides != expectedLayerOverrides ||
 				current.parentOverrides != expectedParentOverrides ||
@@ -5444,7 +5410,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				analysis = preview.analysis,
 				previewModel = preview,
 				previewModelDirty = false,
-				layerVisibility = layerVisibility,
+				documentLayerVisibility = layerVisibility,
 				deletedLayerIds = deletedLayerIds,
 				layerOverrides = layerOverrides,
 				parentOverrides = parentOverrides,
@@ -5459,8 +5425,8 @@ class PSD2LiveViewModel : AutoCloseable {
 				selectedLayerIds = current.selectedLayerIds.filterTo(LinkedHashSet()) { selected ->
 					preview.analysis.layers.any { it.source.id.raw == selected } && selected !in deletedLayerIds
 				},
-				isolationSnapshot = null,
-				isolatedLayerId = null,
+				// Canvas solo is local presentation; a document commit neither ends nor forgets it.
+				isolationSnapshot = current.isolationSnapshot,
 				lockedParameters = current.lockedParameters.intersect(preview.rig.puppet.parameters.mapTo(mutableSetOf()) { it.id }),
 				parameterValues = preview.rig.puppet.parameters.associate { parameter ->
 					parameter.id to (current.parameterValues[parameter.id] ?: parameter.default).coerceIn(parameter.min, parameter.max)

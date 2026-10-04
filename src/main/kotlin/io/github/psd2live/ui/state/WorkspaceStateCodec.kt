@@ -28,7 +28,7 @@ internal object WorkspaceStateCodec {
     /** Capture a completed GUI draft without reading the mutable preview model as authority. */
     fun document(state: PSD2LiveState) = io.github.psd2live.project.WorkspaceDocument(
         source = requireNotNull(state.analysis).source,
-        layerVisibility = state.layerVisibility.toMap(),
+        layerVisibility = state.documentLayerVisibility.toMap(),
         deletedLayerIds = state.deletedLayerIds.toSet(),
         layerOverrides = state.layerOverrides.toMap(),
         parentOverrides = state.parentOverrides.toMap(),

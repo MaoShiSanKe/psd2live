@@ -108,6 +108,13 @@ data class CanvasPresentation(
     }
 }
 
+internal fun CanvasMode.canvasViewMode(): io.github.psd2live.application.CanvasViewMode =
+    if (this == CanvasMode.EDIT) io.github.psd2live.application.CanvasViewMode.EDIT else io.github.psd2live.application.CanvasViewMode.PREVIEW
+
+/** The presentation fields the shared canvas visibility processor owns. */
+internal fun CanvasPresentation.canvasVisibility() = io.github.psd2live.application.CanvasVisibility(
+    layerVisibility, deformerVisibility, isolatedLayerId, isolationSnapshot)
+
 /** Panels use the active canvas projection; canvas rendering always requests its explicit owner. */
 fun PSD2LiveState.forCanvas(
     canvasId: String,

@@ -186,7 +186,8 @@ class DesktopWorkspace(
     override fun sampleSourceColor(layerId: String, x: Int, y: Int): List<Int> =
         captureQueries().sampleSourceColor(layerId, x, y)
 
-    private fun auxiliaryJson(state: PSD2LiveState) = kotlinx.serialization.json.JsonObject(
+    /** Canvas records are read from the same v1 presentation the project archive stores. */
+    private fun auxiliaryJson(state: PSD2LiveState) = CanvasVisibilityCodec.withRecords(kotlinx.serialization.json.JsonObject(
         io.github.psd2live.project.WorkspaceAuxiliaryCodec.encode(auxiliaryFrom(state)) +
             ("posesByWorkspace" to kotlinx.serialization.json.buildJsonObject {
                 state.workspaces.forEach { workspace ->
@@ -195,7 +196,23 @@ class DesktopWorkspace(
                     val locks = if (workspace.id == state.activeWorkspace.id) state.lockedParameters else pose?.lockedParameters.orEmpty()
                     put(workspace.id, PreviewSessions.encode(io.github.psd2live.application.WorkspacePose(values, locks)))
                 }
-            }))
+            })), CanvasVisibilityCodec.fromPresentation(WorkspaceStateCodec.encode(state)))
+
+    private fun canvasAddresses(state: PSD2LiveState): List<CanvasAddress> = state.workspaces.flatMap { workspace ->
+        workspace.canvases.flatMap { canvas -> CanvasMode.entries.map { CanvasAddress(workspace.id, canvas.id, it.canvasViewMode()) } }
+    }
+
+    override fun canvasVisibility(): WorkspaceCanvasVisibilitySnapshot = synchronized(historyLock) {
+        canvasVisibilityCommands.snapshot(runtime.capture(), canvasAddresses(viewModel.state.value))
+    }
+
+    override fun editCanvasVisibility(state: String, address: CanvasAddress, intent: CanvasVisibilityIntent): WorkspaceCanvasVisibilitySnapshot =
+        synchronized(historyLock) {
+            val current = viewModel.state.value
+            canvasVisibilityCommands.edit(runtime.capture().projectId, state, address, canvasAddresses(current), intent) { _, value, changed ->
+                viewModel.applyCanvasVisibility(current, address, value, changed)
+            }
+        }
 
     /** Called only for an authored pose boundary, never for evaluated animation/physics frames. */
     override fun commitAuthoredPoses(state: String, poses: Map<String, io.github.psd2live.application.WorkspacePose>) = synchronized(historyLock) {
@@ -473,6 +490,7 @@ class DesktopWorkspace(
     private val warpCommands = WorkspaceWarpCommands(runtime)
     private val warpControlCommands = WorkspaceWarpControlCommands(runtime)
     private val previewCommands = WorkspacePreviewCommands(runtime)
+    private val canvasVisibilityCommands = WorkspaceCanvasVisibilityCommands(runtime)
     private val poseCommands = WorkspacePoseCommands(runtime)
     private val playbackSessions = WorkspacePlaybackSessions(runtime)
     private val swingSessions = WorkspaceSwingSessions(runtime)
@@ -526,7 +544,7 @@ class DesktopWorkspace(
         val persisted = WorkspaceStateCodec.decode(capture.document.settings, ui).copy(
             parameterSnapshots = auxiliary.parameterSnapshots, historyAnnotations = auxiliary.historyAnnotations,
             projectId = capture.projectId, analysis = capture.model.analysis, previewModel = capture.model,
-            layerVisibility = capture.document.layerVisibility, deletedLayerIds = capture.document.deletedLayerIds,
+            documentLayerVisibility = capture.document.layerVisibility, deletedLayerIds = capture.document.deletedLayerIds,
             layerOverrides = capture.document.layerOverrides, parentOverrides = capture.document.parentOverrides,
             rigEdits = capture.document.rigEdits, meshOverrides = capture.document.meshOverrides,
             generationSource = capture.document.generationSource,
@@ -712,7 +730,7 @@ class DesktopWorkspace(
                 viewModel.installProjectState(state.copy(
                 projectId = id, projectFile = file.toString(), inputPath = source.toString(), loadedInputPath = source.toString(),
                 analysis = preview.analysis, previewModel = preview,
-                layerVisibility = document.layerVisibility, layerOverrides = document.layerOverrides,
+                documentLayerVisibility = document.layerVisibility, layerOverrides = document.layerOverrides,
                 deletedLayerIds = document.deletedLayerIds, parentOverrides = document.parentOverrides, rigEdits = document.rigEdits,
                 generationSource = document.generationSource,
                 meshSource = document.meshSource,
