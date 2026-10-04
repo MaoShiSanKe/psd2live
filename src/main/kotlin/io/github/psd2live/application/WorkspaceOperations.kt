@@ -21,6 +21,7 @@ internal class WorkspaceOperations(private val workspace: WorkspaceBackend,
         registerWarpControlOperations(registry, workspace, jobs)
         registerPhysicsPresetApplyOperation(registry, workspace)
         registerPaintSessionOperations(registry, workspace, workspace, jobs)
+        registerSkeletonDraftOperations(registry, workspace)
         registerSimulationPreviewOperations(registry, workspace, workspace, jobs)
         registerPhysicsAuditionOperations(registry, workspace)
         registerDocumentBatch(registry, workspace, workspace, jobs)

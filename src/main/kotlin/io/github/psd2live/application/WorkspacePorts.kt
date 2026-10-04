@@ -143,6 +143,20 @@ interface WorkspaceSkeletonPort {
     suspend fun editSkeleton(state: String, request: JsonObject): WorkspaceMutationResult
 }
 
+/** The Skeleton Edit draft as an application session; the canvas editor and public operations share it. */
+interface WorkspaceSkeletonDraftPort {
+    /** Resets the active workspace pose to rest as the draft's own CAS on [state]; the draft continues from its result. */
+    suspend fun openSkeletonDraft(state: String): WorkspaceSkeletonDraft
+    fun skeletonDrafts(): List<WorkspaceSkeletonDraft>
+    fun skeletonDraft(sessionId: String): WorkspaceSkeletonDraft
+    fun skeletonDraftRevision(sessionId: String, revision: Long): SkeletonSpec?
+    /** [state] is the draft's lineage and [sessionState] its latest revision; all [intents] apply or none. */
+    fun editSkeletonDraft(sessionId: String, state: String, sessionState: String, intents: List<SkeletonDraftIntent>): WorkspaceSkeletonDraft
+    fun previewSkeletonWeightTransfer(sessionId: String, transfer: SkeletonDraftIntent.TransferWeights): Pair<Map<String, String>, SkeletonManualWeights.Transfer?>
+    suspend fun commitSkeletonDraft(sessionId: String, state: String, sessionState: String, author: MutationAuthor): WorkspaceSkeletonDraftCommit
+    fun cancelSkeletonDraft(sessionId: String): WorkspaceSkeletonDraft
+}
+
 interface WorkspaceMotionPort {
     suspend fun editMotion(state: String, request: JsonObject): WorkspaceMutationResult
 }
@@ -309,6 +323,7 @@ interface WorkspaceBackend :
     WorkspaceParameterPort,
     WorkspaceRigPort,
     WorkspaceSkeletonPort,
+    WorkspaceSkeletonDraftPort,
     WorkspaceMotionPort,
     WorkspacePreviewPort,
     WorkspacePhysicsPort,

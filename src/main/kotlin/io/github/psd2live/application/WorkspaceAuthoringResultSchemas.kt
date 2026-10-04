@@ -106,7 +106,7 @@ internal object WorkspaceAnimationResultSchemas {
         "savedPoses" to s.dictionary(values), "sampling" to s.obj(mapOf("tolerancePx" to s.number(0.25, 4), "minimumStepDegrees" to s.number(2.5, 20), "maxMeshKeyforms" to s.integer(100, 1200))),
         "bones" to s.array(bone),
     )
-    private val skeleton = s.obj(skeletonFields, skeletonFields.keys - "symmetryAxisX")
+    val skeleton = s.obj(skeletonFields, skeletonFields.keys - "symmetryAxisX")
     private val motionKeyFields = mapOf("time" to s.number(), "value" to s.number(),
         "interpolation" to s.choices(*MotionInterpolation.entries.map { it.name }.toTypedArray()), "out" to s.vector(2), "in" to s.vector(2))
     private val motionKey = s.obj(motionKeyFields, setOf("time", "value"))

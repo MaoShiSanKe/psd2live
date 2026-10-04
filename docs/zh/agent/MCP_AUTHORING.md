@@ -84,6 +84,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `warp_set_topology` | 后台重采样全部普通与混合关键形；返回父级局部空间的实际表面采样误差 |
 | `warp_bezier_divisions / warp_bezier_anchor / warp_bezier_handle / warp_bezier_reset` | 后台保存分段数、锚点、切线或重置；控制坐标为父级局部空间，持久化完整编辑控制与采样格点 |
 | `swing_preview / swing_preview_get / swing_preview_render / swing_preview_commit` | 私有摆动草稿、试听时钟与 PNG 观察；确认一次历史提交，取消不发布草稿 |
+| `skeleton_draft_open / skeleton_draft_list / skeleton_draft_get / skeleton_draft_edit / skeleton_draft_preview_transfer / skeleton_draft_commit / skeleton_draft_cancel` | 与骨骼编辑工具共用的私有骨架草稿：打开时以自身姿态 CAS 回到静止姿态，返回的 `state` 为草稿谱系；`edit` 以 1–128 项类型化意图（批量变换、复制/镜像、细分/消解、尾/翼链、权重绘制/清理/清除/转移、`revert` 等）全有或全无地修改草稿；`commit` 只在该谱系上 CAS，之后的姿态/文档修改、重开工程或新草稿均冲突，未变骨架不产生历史节点 |
 | `physics_preset_list / physics_preset_put / physics_preset_rename / physics_preset_delete / physics_apply_preset` | 稳定 ID 的全局输入/摆锤预设库，库修改使用 `library_state`，应用为可批量文档编辑 |
 | `simulation_preview / simulation_preview_step / simulation_preview_get / simulation_preview_render` | 私有实时模拟场景；启动/重启/停止和显式 dt 步进为后台会话，读取/渲染不会推进时钟 |
 | `paint_session_begin / paint_session_list / paint_session_control / paint_session_commit` | 私有多笔触草稿、撤销/重做/跳转/取色/PNG；确认前不修改工程像素，确认一次历史提交 |

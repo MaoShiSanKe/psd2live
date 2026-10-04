@@ -369,6 +369,51 @@ class DesktopWorkspace(
     override suspend fun editSkeleton(state: String, request: kotlinx.serialization.json.JsonObject): WorkspaceMutationResult =
         mutateModel(state, null, "Edited skeleton", "skeleton") { document, model -> WorkspaceDocumentEdits.skeleton(document, model, request) }
 
+    override suspend fun openSkeletonDraft(state: String): WorkspaceSkeletonDraft = editMutex.withLock {
+        val captured = captureForMutation()
+        requireExpected(state, captured)
+        val current = viewModel.state.value
+        if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
+        val opened = skeletonDraftSessions.open(captured.projectId, captured.state, current.activeWorkspace.id) { _, pose, changed ->
+            viewModel.applyPreviewSession(current, pose, changed)
+        }
+        viewModel.applyPlaybackFrame(resetAuthoredPlayback(captured.projectId, opened.state, current))
+        opened
+    }
+
+    override fun skeletonDrafts(): List<WorkspaceSkeletonDraft> = skeletonDraftSessions.list()
+
+    override fun skeletonDraft(sessionId: String): WorkspaceSkeletonDraft = skeletonDraftSessions.get(sessionId)
+
+    override fun skeletonDraftRevision(sessionId: String, revision: Long): io.github.psd2live.core.SkeletonSpec? =
+        skeletonDraftSessions.revision(sessionId, revision)
+
+    override fun editSkeletonDraft(sessionId: String, state: String, sessionState: String,
+                                   intents: List<io.github.psd2live.core.SkeletonDraftIntent>): WorkspaceSkeletonDraft =
+        skeletonDraftSessions.edit(sessionId, state, sessionState, intents)
+
+    override fun previewSkeletonWeightTransfer(sessionId: String, transfer: io.github.psd2live.core.SkeletonDraftIntent.TransferWeights) =
+        skeletonDraftSessions.weightTransfer(sessionId, transfer)
+
+    override suspend fun commitSkeletonDraft(sessionId: String, state: String, sessionState: String,
+                                             author: MutationAuthor): WorkspaceSkeletonDraftCommit = editMutex.withLock {
+        val captured = captureForMutation()
+        val current = viewModel.state.value
+        if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
+        // The session checks its own lineage; the live state is never substituted for it.
+        val result = skeletonDraftSessions.commit(sessionId, state, sessionState, mutationAuthor(author)) { _, document, model ->
+            applyPreviewOrThrow(model, documentFrom(current), document, "Edit skeleton", current)
+        }
+        if (result.mutation.applied) {
+            scheduleHistoryPersistence(captured.projectId)
+            viewModel.updateHistorySnapshot(history())
+            viewModel.refreshWorkspaceRenderer(runtime.capture().model)
+        }
+        result
+    }
+
+    override fun cancelSkeletonDraft(sessionId: String): WorkspaceSkeletonDraft = skeletonDraftSessions.cancel(sessionId)
+
     override fun solveSkeletonPose(request: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject = captureQueries().solveSkeletonPose(request)
 
     override fun motionClips(): List<io.github.psd2live.core.MotionClip> = captureQueries().motionClips()
@@ -431,6 +476,7 @@ class DesktopWorkspace(
     private val poseCommands = WorkspacePoseCommands(runtime)
     private val playbackSessions = WorkspacePlaybackSessions(runtime)
     private val swingSessions = WorkspaceSwingSessions(runtime)
+    private val skeletonDraftSessions = WorkspaceSkeletonDraftSessions(runtime)
     private val simulationPreviewSessions = WorkspaceSimulationPreviewSessions(runtime)
     private val physicsAuditionSessions = io.github.psd2live.application.WorkspacePhysicsAuditionSessions(runtime)
     private val projectController = ProjectController(viewModel)
