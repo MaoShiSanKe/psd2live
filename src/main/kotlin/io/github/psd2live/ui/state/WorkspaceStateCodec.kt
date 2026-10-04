@@ -298,6 +298,9 @@ internal object WorkspaceStateCodec {
         put("atlasSize", state.atlasSize)
         put("textureUpscale", Json.encodeToJsonElement(state.textureUpscale))
         put("meshSpacing", state.meshSpacing)
+        // Same key order as WorkspaceSettingsCodec.encode: a revision hashes the settings text, so an order
+        // difference alone makes every save see a change and commit a spurious history node.
+        put("meshUnits", state.meshUnits.name)
         put("meshOuterMargin", state.meshOuterMargin)
         put("meshEdgeMode", state.meshEdgeMode.name)
         put("meshEdgeWidth", state.meshEdgeWidth)
@@ -306,7 +309,6 @@ internal object WorkspaceStateCodec {
         put("meshFillAlgorithm", state.meshFillAlgorithm.name)
         put("meshSuppressBoundaryDiagonals", state.meshSuppressBoundaryDiagonals)
         put("meshFillParameters", encodeFillParameters(state.meshFillParameters))
-        put("meshUnits", state.meshUnits.name)
         putJsonObject("meshOverrides") {
             state.meshOverrides.toSortedMap().forEach { (k, v) ->
                 put(k, buildJsonObject {

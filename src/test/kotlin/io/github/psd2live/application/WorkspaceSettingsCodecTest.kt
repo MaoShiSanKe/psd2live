@@ -36,6 +36,8 @@ class WorkspaceSettingsCodecTest {
             val document = WorkspaceDocument(WorkspaceSourceArt(32, 32, emptyList(), emptyList()), emptyMap(),
                 emptySet(), emptyMap(), emptyMap(), state.rigEdits, WorkspaceStateCodec.settings(state))
             assertEquals(state.buildConfig(), document.config(), "Domain settings must reproduce the desktop configuration")
+            // A revision hashes the settings text, so the desktop projection must also keep the canonical key order.
+            assertEquals(WorkspaceSettingsCodec.encode(state.buildConfig()).keys.toList(), WorkspaceStateCodec.settings(state).keys.toList())
         }
     }
 
