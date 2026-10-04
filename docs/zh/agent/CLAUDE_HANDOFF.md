@@ -1,6 +1,8 @@
 # AI / MCP 重构交接
 
-用户要求：完成当前冲突处理后暂停，准备交给 Claude。完整目标仍是“完成重构”，没有缩小为创建 PR 或通过编译。暂停期间不要继续实施后续功能；用户恢复工作后，再按下面的状态接续。
+用户要求：完成当前冲突处理后暂停，准备交给 Claude。完整目标仍是“完成重构”，没有缩小为创建 PR 或通过编译。
+
+工作已恢复：`2045d15..e133d37` 实现了下面的五个业务缺口，并修复了交接时的保存差异和两处 GUI 问题；当前状态以「最后五个业务缺口」和「仍未结的问题」两节为准。实现并不等于验收：GUI 改动只经过 PR CI 编译与测试，没有本机桌面手动检查，也没有新的两平台全量。
 
 ## 工作区与 PR
 
@@ -25,11 +27,13 @@
 - 应用注册、状态、命令和任务：`application/WorkspaceOperations.kt`、`WorkspacePorts.kt`、`WorkspaceRuntime.kt`、`WorkspaceDocumentCommands.kt`、`WorkspaceDocumentEdits.kt`、`WorkspaceJobs.kt`；桌面适配为 `ui/state/DesktopWorkspace.kt`。
 - `project/WorkspaceDocument.kt`、`WorkspaceSettingsCodec.kt`、`WorkspaceStore.kt`、`ProjectRepository.kt` 拥有中立文档、编解码、历史及归档。GUI 编解码和控制器已移至 `ui/state`。
 - 导入、保存、导出、素材、图片放置、栅格绘画、分区与深度拆分、网格/生成迁移、姿态/FK/IK/自动打键、时间线/动作、播放/跟踪、物理预设、摆动草稿、PaintRasterSession 等已有中立业务与相关回归。
-- 第二组已实现实时模拟会话、CanvasDeformStroke、Warp 拓扑/Bezier 控制和绘制顺序。当前注册表契约基线为 **158 项公开操作、58 项后台操作、79 项批量成员**，来自最近全量中的严格契约测试；不要把未来设计工具计入。
+- 第二组已实现实时模拟会话、CanvasDeformStroke、Warp 拓扑/Bezier 控制和绘制顺序。当前注册表契约基线为 **170 项公开操作、58 项后台操作、79 项批量成员**（`WorkspaceAuthoringContractsTest`，`e133d37`）；比交接时的 158 项多出 `physics_audition` 3 项、`skeleton_draft_*` 7 项与 `canvas_visibility / canvas_visibility_get` 2 项，均不是后台任务或批量成员。不要把未来设计工具计入。
 - 当前合并补齐 `meshUnits`：应用 schema/校验、中立设置编解码、旧设置和旧生成基线按 `PIXELS` 读取、新基线保存实际单位、全局/语义迁移及隐藏图层查询的 unitScale。GUI 单位开关进入窄设置端口。
 - GPU 合并把核心指南的屏幕点统一为 `RenderPoint`，没有把 Compose `Offset` 引入 core。`PaintSession` 继续依赖中立 handle，GPU 读取其锁定快照，脏块队列和上传版本不会覆盖后来的笔触。
-- 骨架首次进入已改为提交成功后续接；保留 expectedState、实际 committedState、加载/工作区/画布身份及进入序号，显式离开后不抢回旧工具。**完整骨架草稿提交边界仍未迁移。**
-- 新增 `core/PhysicsAudition.kt` 与 `PhysicsAuditionTest.kt`：选中组试听的共享候选核心，复制粒子、drag、输出、峰值和时钟；取消不发布部分步进。**尚未接 GUI、应用会话或公开工具，不代表物理试听域已经完成。**
+- 骨架首次进入已改为提交成功后续接；保留 expectedState、实际 committedState、加载/工作区/画布身份及进入序号，显式离开后不抢回旧工具。完整骨架草稿提交边界已在缺口 1 中迁移。
+- `core/PhysicsAudition.kt` 是选中组试听的共享候选核心，复制粒子、drag、输出、峰值和时钟；取消不发布部分步进。现已接入面板摆锤、应用会话及公开工具，见缺口 4。
+- `a561f12` 修复交接时唯一的专项失败：网格单位合并后，`WorkspaceSettingsCodec.encode` 把 `meshUnits` 放在 `meshSpacing` 后，桌面设置投影却放在填充参数后；revision 对设置 JSON 文本取哈希，所以每次保存应用层写过的文档都会多出 `Save project` 节点。投影已改为规范键序，编解码测试固定该顺序；历史断言未放宽。
+- `6abe11c` 让 GUI 深度拆分对导入 CMO3 模型也可用，与公开 `source_split_depth` 一致。`4b36d1c` 修复实时姿态竞态：软件预览 tick 在首个 SDK 帧标记就绪之前读取状态，随后用自己的姿态覆盖该帧（Windows CI 上读到作者最大值而不是帧值）；现在到达的 SDK 帧保留实时姿态。
 
 ## 最近测试基线与仍需复验的修复
 
@@ -47,19 +51,30 @@
 
 上游合并后的首次全量尝试 `build/refactor-upstream-full-1.log` 在主源码编译失败，**未运行测试**；原因是自动合并留下指南的 `Offset` 类型，已改为 `RenderPoint`。不能把旧 XML 当作这次全量结果。
 
-## 最后五个业务缺口（待用户恢复后实施）
+## 最后五个业务缺口（已实现，待验收）
 
-1. **Skeleton 业务与草稿。** `CanvasEditor` 的批量变换、复制/镜像、细分/消解、链生成及手动权重绘制/清理/映射/转移仍在 GUI 准备。公开写最终 spec 不等于调用同一算法。建议中立 typed intents、纯候选处理器和应用拥有的草稿会话。特别注意 `openSkeletonDraft` 自己会异步重置 rest pose；会话只能承接自己成功的 pose CAS，之后保留这个 lineage，外部姿态/文档/重开仍冲突。不要简单保存 reset 前 token 或确认时 fresh capture。新工具命名和数量仍是设计，尚未注册。
+每项先保留当时的设计要求，粗体「已实现」之后是 `e133d37` 的实际状态。五项都有新增非 GUI 回归；GUI 改动只由 PR CI 编译和运行测试，没有本机桌面手动检查。
 
-2. **局部画布显隐/隔离与 GUI reparent。** 此处审计已纠正：`layerVisibility/isolation` 是每 workspace/canvas/mode 的持久呈现状态；`PSD2LiveState.buildConfig` 明确不把 canvas visibility 写进共享模型，`MultiCanvasIsolationTest.visibilityAndSoloStayLocalAndNeverEnterModelConfiguration` 有直接证据。应增加中立 address/visibility processor、辅助 CAS 及 `canvas_visibility` 控制/查询，原 v1 presentation 字段保持原位读取保存；不能让局部 solo 改变其他画布或导出。GUI reparent 改为既有 structure journal 的 bind/move 候选，旧 v1 parentOverrides 继续按原序读取。
+1. **Skeleton 业务与草稿。** `CanvasEditor` 的批量变换、复制/镜像、细分/消解、链生成及手动权重绘制/清理/映射/转移仍在 GUI 准备。公开写最终 spec 不等于调用同一算法。建议中立 typed intents、纯候选处理器和应用拥有的草稿会话。特别注意 `openSkeletonDraft` 自己会异步重置 rest pose；会话只能承接自己成功的 pose CAS，之后保留这个 lineage，外部姿态/文档/重开仍冲突。不要简单保存 reset 前 token 或确认时 fresh capture。新工具命名和数量仍是设计，尚未注册。 **已实现**（`38e66f5`、`463641e`、`e04da73`）：`core/SkeletonDraftEdits.kt` 提供类型化意图与纯候选处理器（批量变换、复制/镜像、细分/消解、尾/翼链、手动权重绘制/清理/清除/转移），与 `skeleton_put` 共用骨架不变式；`application/WorkspaceSkeletonDraftSessions.kt` 的会话以自己的姿态 CAS 重置 rest pose 并保留该结果为草稿谱系，编辑在内存中全有或全无，提交只在该谱系上 CAS，之后的姿态/文档修改、重开或更新的草稿都冲突。公开为 `skeleton_draft_open/_list/_get/_edit/_preview_transfer/_commit/_cancel`。`CanvasEditor` 经 `WorkspaceSkeletonDraftPort` 发送同一意图，提交经 `saveWorkspaceEdit`。GUI 打开草稿是异步的，首次进入后的工具续接需手动桌面检查。
 
-3. **设置联动与作者姿态原子边界。** VM 的 meshOnly、动作子项及 generatePhysics 仍有 GUI-only reset/依赖，公开 generateDeformers/exportMotions 还可能被配置读取覆盖。建议完整 patch 一次解析中立设置 intent，明确 raw/effective policy，显式字段优先。批量每成员在私有候选上更新 document/model/aux，最后一次 CAS 发布，不能文档先提交再更新姿态。按真实 Parameter.default、各工作区 locks 处理，保留每 workspace 的持久作者姿态；Nod/Shake 不能依赖 GUI 的 processActiveMotion。复合预设/字段草稿的 off→on 顺序不能被最终 diff 吞掉。设计详见本机交接上下文，仍需源码核对后实现及文档说明。**已实现**（`application/WorkspaceSettingsIntent.kt`、`WorkspaceRuntime.executeDraft`、`project/WorkspaceDocument.kt` 的 `WorkspaceSettingsPolicy`，说明见 REFACTOR_PROGRESS）；字段会话内的开关仍走本地草稿，GUI 改动待 CI 编译验证。
+2. **局部画布显隐/隔离与 GUI reparent。** 此处审计已纠正：`layerVisibility/isolation` 是每 workspace/canvas/mode 的持久呈现状态；`PSD2LiveState.buildConfig` 明确不把 canvas visibility 写进共享模型，`MultiCanvasIsolationTest.visibilityAndSoloStayLocalAndNeverEnterModelConfiguration` 有直接证据。应增加中立 address/visibility processor、辅助 CAS 及 `canvas_visibility` 控制/查询，原 v1 presentation 字段保持原位读取保存；不能让局部 solo 改变其他画布或导出。GUI reparent 改为既有 structure journal 的 bind/move 候选，旧 v1 parentOverrides 继续按原序读取。 **已实现**（`cb0aac7`、`5a76813`、`b0eb662`、`e133d37`）：`application/WorkspaceCanvasVisibility.kt` 的 `CanvasAddress`（workspace/canvas/mode）与 `CanvasVisibilityProcessor` 计算候选，辅助记录经运行时 CAS 提交，推进 state 但不改文档或历史；原 v1 presentation 位置原样读取。公开 `canvas_visibility`（layers/deformers/all_layers/invert_layers/solo/unsolo）与 `canvas_visibility_get`。层级眼睛、solo、全部显示/隐藏/反转和变形器眼睛改走该处理器，只投影到所寻址的画布会话；文档图层可见性改为独立字段，草稿、保存和 Agent 提交不再把局部显隐或 solo 带进共享模型或导出，文档提交也不再结束 solo。层级拖放由 `WorkspaceHierarchyEdits.reparent` 生成一条 structure journal 的 bind（Mesh）或 move（变形器）编辑，`space` 固定为 `local`；旧 v1 parentOverrides 留在文档中并在构建时先应用，被 journal 重新挂接的对象在层级视图中不再显示旧覆盖。
 
-4. **选中物理组试听与实测拟合。** `PendulumCanvas` 仍自己拥有 engine/drag/peaks/clock；现 preview_physics 是模型级预览。将 GUI 与应用私有会话接到已新增的 `PhysicsAudition`，暴露控制/步进/读帧，查询不推进时钟，文档变化/加载切换有陈旧语义。`WorkspacePhysicsIntent.FitObserved` 已能共享 GUI 实测拟合，但公开 `physics_fit` 仅标准 trace；应支持严格 observed peaks 并共用候选、验证索引/有限值/无响应。不要泄漏可变引擎、顶点数组或给取消步进留下前缀。
+3. **设置联动与作者姿态原子边界。** VM 的 meshOnly、动作子项及 generatePhysics 仍有 GUI-only reset/依赖，公开 generateDeformers/exportMotions 还可能被配置读取覆盖。建议完整 patch 一次解析中立设置 intent，明确 raw/effective policy，显式字段优先。批量每成员在私有候选上更新 document/model/aux，最后一次 CAS 发布，不能文档先提交再更新姿态。按真实 Parameter.default、各工作区 locks 处理，保留每 workspace 的持久作者姿态；Nod/Shake 不能依赖 GUI 的 processActiveMotion。复合预设/字段草稿的 off→on 顺序不能被最终 diff 吞掉。设计详见本机交接上下文，仍需源码核对后实现及文档说明。**已实现**（`ae9469c`、`e27dd1c`、`6450fb3`；`application/WorkspaceSettingsIntent.kt`、`WorkspaceRuntime.executeDraft`、`project/WorkspaceDocument.kt` 的 `WorkspaceSettingsPolicy`，说明见 REFACTOR_PROGRESS）；字段会话内的开关仍走本地草稿，GUI 改动只经 PR CI 验证。
 
-5. **多次输入画布草稿的起始捕获。** Warp/Rotation placement、knife、path 仍可能在确认前清 gestureState，随后重取 token 解释旧坐标/顶点索引。保留首点/放置开始的 state、加载身份、模型、pose、目标与坐标映射；失败保留可取消草稿，成功后再清理和选择。复用已有 canvas_warp/rotation/topology/path_put 候选即可，不要求新增视觉 ghost 会话工具。骨架与此组会修改同一 CanvasEditor，需按精确区域分工。
+4. **选中物理组试听与实测拟合。** `PendulumCanvas` 仍自己拥有 engine/drag/peaks/clock；现 preview_physics 是模型级预览。将 GUI 与应用私有会话接到已新增的 `PhysicsAudition`，暴露控制/步进/读帧，查询不推进时钟，文档变化/加载切换有陈旧语义。`WorkspacePhysicsIntent.FitObserved` 已能共享 GUI 实测拟合，但公开 `physics_fit` 仅标准 trace；应支持严格 observed peaks 并共用候选、验证索引/有限值/无响应。不要泄漏可变引擎、顶点数组或给取消步进留下前缀。 **已实现**（`7567514`、`617f811`）：`physics_fit` 接受 `observed_peaks`（输出序号 → 实测到达比例，1 为参数端点），与面板 Fit 共用 `FitObserved` 候选；非法序号、非数值和完全无响应在提交前拒绝。`application/WorkspacePhysicsAuditionSessions.kt` 与 `WorkspacePhysicsAuditionOperations.kt` 提供 `physics_audition`（start/target/release/reset/reset_peaks/stop）、`physics_audition_step`（dt ≤ 0.1，1–240 步，在副本上求解，被拒绝的请求不留前缀）和不推进时钟的 `physics_audition_get`。会话由工作区作者姿态驱动，同一加载内跟随文档编辑，重开或组被删除后变为 stale；面板摆锤改为运行在 `PhysicsAudition` 上，其 peaks 可直接交给 `physics_fit`。
 
-上述五组完成后，还要同步当前架构、接口及 UI/MCP 矩阵，审查历史/归档/导出/视觉、冲突/取消、请求/终态/认证契约；最终同一份源码分别运行 Windows 与 Ubuntu 全量。不能用此前阶段的两平台成功记录代替当前代码证明。
+5. **多次输入画布草稿的起始捕获。** Warp/Rotation placement、knife、path 仍可能在确认前清 gestureState，随后重取 token 解释旧坐标/顶点索引。保留首点/放置开始的 state、加载身份、模型、pose、目标与坐标映射；失败保留可取消草稿，成功后再清理和选择。复用已有 canvas_warp/rotation/topology/path_put 候选即可，不要求新增视觉 ghost 会话工具。骨架与此组会修改同一 CanvasEditor，需按精确区域分工。 **已实现**（`f9c9065`、`025f904`）：`application/WorkspaceCanvasInputDraft.kt` 在首个输入时捕获 state、加载/工作区/画布范围、模型、pose、目标与坐标映射；确认对该捕获编译 journal，并对同一 state 写入，冲突时草稿保持打开、可取消，未变化时关闭且不写历史。GUI 的 Warp/Rotation 放置在开始时捕获，knife 与 path 在首点（extendPath 在其开始）捕获；被拒绝的写入保留 ghost、切线或路径供 Esc 取消，成功后才清理和选择。
+
+上述五组实现后，接口文档与 UI/MCP 矩阵已按 `e133d37` 同步；还要同步当前架构说明，审查历史/归档/导出/视觉、冲突/取消、请求/终态/认证契约；最终同一份源码分别运行 Windows 与 Ubuntu 全量。不能用此前阶段的两平台成功记录代替当前代码证明。
+
+## 仍未结的问题
+
+- 设置：字段会话内的 meshOnly、动作子项和 generatePhysics 开关仍走本地草稿，草稿差异只记录最终设置；只有无字段会话时的开关和启动前的动作开关经 `WorkspaceSettingsPort` 提交。
+- 骨架：GUI 打开草稿是异步的（会话先以自己的姿态 CAS 重置 rest pose），打开完成前后的工具续接只有 CI 证据，需手动桌面检查。
+- 层级 reparent：journal 编辑使用 `space=local`，保留子对象的局部坐标，不做重新拟合；拖放到不同空间的父级时不会像重新拟合那样保持外观，是否需要拟合选项尚未决定。
+- 显隐：GUI 层级眼睛现在只是局部画布呈现，不再改变导出可见性，这是行为变化；文档可见性（导出）仍由 `object_edit_appearance` 等文档编辑修改，GUI 对应入口需另行确认。
+- 显隐：少数 GUI 内部写入仍绕过辅助 CAS 直接改画布显隐：深度拆分前层、图片导入以及 CMO3 替换时的隔离处理。它们不进入文档或导出，但不推进可见性辅助 state。
+- 形变：画布形变笔刷的预览与提交结果在 UV 上存在 1 ulp 差异，正在调查；不要通过放宽比较容差掩盖。
 
 ## 恢复与验收操作
 
@@ -80,6 +95,6 @@ $env:JAVA_HOME = 'C:\Program Files\Java\jdk-21'
 
 已通过：`GlCanvasParityTest` 5 项、`GpuPaintTest` 3 项、`MeshResolutionTest` 3 项、`WorkspaceMeshUnitsMigrationTest` 2 项、`WorkspaceSettingsCodecTest` 3 项、`WorkspaceSkeletonEntryIntegrationTest` 6 项、`PhysicsAuditionTest` 3 项，以及 CMO3 集成类的另 1 项。GPU 专项未跳过，但开发性能工具及桌面窗口验收没有执行。
 
-唯一失败为 `WorkspaceCmo3ImportIntegrationTest.mcpImportAndReplacementSurviveReconnectAndShareGuiPersistenceAndExport`，源码第 88 行的保存重开历史一致性断言。替换任务已经 completed、对象集合与作者姿态/锁断言通过；测试在保存前捕获两节点历史，`saveProjectNow` 后产生额外的 `Save project` / USER 节点，重开读到三节点。**并非重复导入失败。** 下一位应核对持久文档与 GUI 保存投影为什么产生设置差异，修正真实无变化语义，不能直接弱化历史断言。没有执行该断言之后的图像/后续历史验收。
+唯一失败为 `WorkspaceCmo3ImportIntegrationTest.mcpImportAndReplacementSurviveReconnectAndShareGuiPersistenceAndExport`，源码第 88 行的保存重开历史一致性断言。替换任务已经 completed、对象集合与作者姿态/锁断言通过；测试在保存前捕获两节点历史，`saveProjectNow` 后产生额外的 `Save project` / USER 节点，重开读到三节点。**并非重复导入失败。** 根因已在 `a561f12` 修复（桌面设置投影的 `meshUnits` 键序与规范编码不同），见「已完成与当前实现位置」；历史断言未弱化，该类需在新全量中复验。没有执行该断言之后的图像/后续历史验收。
 
 首轮专项 `build/refactor-merge-handoff-targeted-1.log` 在测试编译失败，未运行测试；上游的 `AdaptiveMeshTopologyTest` 和 `CanvasPerfTool` 仍引用旧 codec/adapter，已修为 `ui/state/WorkspaceStateCodec` 和真实 `DesktopWorkspace`，后者在 finally 关闭。本次之后不再修改源代码或启动新的功能迁移，按用户要求暂停。没有运行新的完整两平台验收；完整重构未完成。

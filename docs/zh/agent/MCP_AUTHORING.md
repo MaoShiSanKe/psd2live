@@ -30,7 +30,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `snapshot_create / snapshot_update / snapshot_delete / snapshot_apply` | `state`，更新/删除/应用要求 `id`；创建/更新可给 `name`、`values` | 保存、改名/覆盖、删除及应用参数快照；应用保留锁、忽略已删除参数并按当前范围钳制；不写时间线关键帧 |
 | `snapshot_get / snapshot_list` | 读取给 `id`；列表可给 `offset`、`limit` | 返回同一捕获的工程状态、快照 ID/编号；列表省略 values，详情返回 values |
 | `history_annotation_put / history_annotation_delete / history_annotation_get` | `node_id`；写入还须 `title`、`note`、`hidden` | 管理历史节点的显示注释；辅助数据保存到工程，历史节点及 Rig revision 不变 |
-| `settings_update` | `request` 内 `state`、`changes` | 后台修改自动 Rig、网格、贴图、高清化、物理预设、动作和导出配置；`rigTuning` 按字段合并 Rig 数值（头部转向、眼睛、眉毛、嘴巴、鼻子与耳朵、头发，以及身体的转身、上下、前后倾、大小变、身体 Z 与呼吸、立体与透视；单位与模型预设「Rig 数值」一致，超出范围或未知的字段会被拒绝）；先用 `workspace_inspect scope=settings` 读取 |
+| `settings_update` | `request` 内 `state`、`changes` | 后台修改自动 Rig、网格、贴图、高清化、物理预设、动作和导出配置；`rigTuning` 按字段合并 Rig 数值（头部转向、眼睛、眉毛、嘴巴、鼻子与耳朵、头发，以及身体的转身、上下、前后倾、大小变、身体 Z 与呼吸、立体与透视；单位与模型预设「Rig 数值」一致，超出范围或未知的字段会被拒绝）；`meshOnly` 变化而未显式给出 `generateDeformers` 时联动为 `!meshOnly`（导入 CMO3 除外），生成动作子项变化而未显式给出 `exportMotions` 时联动为子项是否全开，显式字段优先；关闭来源时把其驱动的作者姿态逐工作区释放到参数默认值（跳过锁定参数），与设置同次提交；文档保存原始设置；先用 `workspace_inspect scope=settings` 读取 |
 | `project_import_psd` | `path`，可选 `discard_unsaved` | 从绝对 PSD 路径后台创建新工程；已加载时可切换，默认拒绝未保存修改 |
 | `project_create_artwork` | `width`、`height`、`layers`，可选 `discard_unsaved` | 从本地 PNG/WebP/TIFF/BMP 按位置创建新工程，图层自底向顶；后台任务，切换须保存或显式放弃 |
 | `project_import_cmo3` | `path`、`mode`（`new/replace`），可选 `discard_unsaved` | 后台导入绝对路径的 CMO3；新建默认拒绝未保存切换；替换按对象 ID 更新、保留未出现对象，并作为一次历史编辑提交 |
@@ -52,7 +52,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `layer_import_images` | `request` | 从 PNG、无损 WebP、TIFF 或 BMP 文件一次导入多层源图，后台完成后返回图层与网格句柄 |
 | `source_get_components / source_split_components / source_split_polygon / source_split_depth / asset_prepare_reference / asset_import_png / asset_register / asset_preview_composite / layer_add_from_asset / layer_set_placement / layer_finalize_placement / asset_inspect / asset_reprocess / layer_soft_delete / layer_restore` | `request` | 源图拆分与素材的参考、导入、配准、预览、添加、定位、确认、检查、重处理、软删除和恢复 |
 | `swing_put / swing_delete` | `request` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
-| `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import` | `request` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、后台只读阶跃采样，通过任务结果返回峰值与稳定时间、按标准晃动调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
+| `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import` | `request` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、后台只读阶跃采样，通过任务结果返回峰值与稳定时间、按标准晃动或 `observed_peaks` 实测峰值调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
 | `simulation_put / simulation_delete / simulation_simulate / simulation_bake / simulation_clear_bake` | `request` 内 `state`、`id` | `put/delete/bake/clear_bake` 返回进程任务句柄（终态含原编辑结果与烘焙诊断）；`simulate` 同样返回只读任务句柄，不改变工程。网格上的 2D 布料 / 头发模拟，只在编辑器内运行；`bake` 把它烘焙成 -30…30 的 `ParamSim<id>_<k>` 参数（`keys` 个关键点，`blend_shapes` 选择写法，默认自动）与拟合摆锤 `PhysicsSim_<id>`，点头、身体上下和前后倾另外烘焙成由平移输入的摆锤 `PhysicsSim_<id>_y` 驱动的 `ParamSim<id>_Y`，并返回在检验动作上的 R²、误差、参数用量、顶到极值的帧占比和急动度比；`exaggeration` 放大模态摆动且无需重新烘焙；`auto_bake` 开启（默认）时 `put` 在同一步内重新烘焙；新建未给 `inputs` 时写入默认输入，空数组即没有输入；`output_names` 重命名烘焙出的参数和摆锤；`input_ranges` 按输入设置训练范围，`vertical` 开关上下参数（`null` 为自动），`outputs` 按生成的模态参数 ID 改写出的 ID、范围（±1…±100）和增益（0…3），不需要重新烘焙；物理面板对模拟摆锤的覆盖在重新烘焙后三方合并，见[模拟与烘焙](../guide/SIMULATION.md) |
 | `model_apply_preset` | `request` 内 `preset`、`state`、`layers`、`sway` | `front_hair/back_hair/clothing/auto_weights/classic_front_hair/classic_back_hair/remove_clothing`：后台生成权重组与预设物理体并烘焙，返回任务句柄，成功后只增加一个历史节点；头发预设移除该类头发的旧摆动参数、变形器与摆锤，`classic_*` 恢复（`sway:false` 则关闭传统摆动），`remove_clothing` 删除全部服装预设物理体；`clothing` 只模拟上衣、下装、领饰、袖子和腿部穿戴中宽松的部分，返回每张网格的部位（下装另含裙子 / 裤子判定与腰线、裆部、下摆）、宽松比例、悬垂起点与是否模拟，见[模拟与烘焙](../guide/SIMULATION.md#模型预设) |
 | `vertex_group_update` | `request` 内 `state`、`target`、`name` | 按规则 `fill/outline/gradient/glue/region` 生成或 `delete` 仅本软件使用的顶点权重组（固定点、刚度等），不导出 |
@@ -63,7 +63,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 
 表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
 
-全部 158 项公开操作都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
+全部 170 项公开操作（其中 58 项后台、79 项可批量）都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
 
 图片追加使用 `layer_import_images`：必需 `state` 和 1–128 个绝对路径组成的 `paths`，可选 `parent_deformer_id` 指向已有父变形器；省略时绑定模型根。透明边缘裁剪后居中，仅在超过画布时缩小。单文件最多 64 MiB、16 百万像素，整批最多 32 百万像素。一次成功只追加一个历史节点，任意文件失败则整批不发布；它读取文件，不能作为原子文档批量成员。新增源图及网格句柄从任务终态 `affectedLayerIds/affectedObjectIds` 获取。原图像素写入工程，后续重开不依赖输入文件。
 
@@ -85,6 +85,8 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `warp_bezier_divisions / warp_bezier_anchor / warp_bezier_handle / warp_bezier_reset` | 后台保存分段数、锚点、切线或重置；控制坐标为父级局部空间，持久化完整编辑控制与采样格点 |
 | `swing_preview / swing_preview_get / swing_preview_render / swing_preview_commit` | 私有摆动草稿、试听时钟与 PNG 观察；确认一次历史提交，取消不发布草稿 |
 | `skeleton_draft_open / skeleton_draft_list / skeleton_draft_get / skeleton_draft_edit / skeleton_draft_preview_transfer / skeleton_draft_commit / skeleton_draft_cancel` | 与骨骼编辑工具共用的私有骨架草稿：打开时以自身姿态 CAS 回到静止姿态，返回的 `state` 为草稿谱系；`edit` 以 1–128 项类型化意图（批量变换、复制/镜像、细分/消解、尾/翼链、权重绘制/清理/清除/转移、`revert` 等）全有或全无地修改草稿；`commit` 只在该谱系上 CAS，之后的姿态/文档修改、重开工程或新草稿均冲突，未变骨架不产生历史节点 |
+| `physics_audition / physics_audition_step / physics_audition_get` | 与物理面板摆锤共用的选中组试听会话，不改文档、历史或保存的姿态：`start` 以工作区作者姿态（可叠加 `values`）驱动 `group_id` 并结束该工作区之前的会话，`target` 拖动摆锤根部到 -1…1，`release/reset/reset_peaks/stop`；`step` 以 dt ≤ 0.1 秒推进 1–240 步，在副本上求解，被拒绝的请求不留前缀；`get` 不推进时钟。同一加载内的文档编辑会更新该组，重开工程或删除组后会话为 `stale`；返回的 `peaks` 可直接作为 `physics_fit` 的 `observed_peaks` |
+| `canvas_visibility / canvas_visibility_get` | 按 `workspace_id/canvas_id/mode`（edit/preview）寻址的局部图层/变形器显隐与 solo，与层级树眼睛和 solo 共用处理器；`action` 为 `layers/deformers/all_layers/invert_layers/solo/unsolo`，修改推进 `state` 但不改文档、历史、其他画布或导出，无变化不推进；查询返回每个画布会话的显隐、solo 记录与 `hidden_layer_ids`，未编辑过的画布全部可见。导出可见性仍由 `object_edit_appearance` 修改 |
 | `physics_preset_list / physics_preset_put / physics_preset_rename / physics_preset_delete / physics_apply_preset` | 稳定 ID 的全局输入/摆锤预设库，库修改使用 `library_state`，应用为可批量文档编辑 |
 | `simulation_preview / simulation_preview_step / simulation_preview_get / simulation_preview_render` | 私有实时模拟场景；启动/重启/停止和显式 dt 步进为后台会话，读取/渲染不会推进时钟 |
 | `paint_session_begin / paint_session_list / paint_session_control / paint_session_commit` | 私有多笔触草稿、撤销/重做/跳转/取色/PNG；确认前不修改工程像素，确认一次历史提交 |
@@ -393,7 +395,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 - 同一参数只能被一个生效组驱动；自定义组驱动生成组的输出时，生成组让位。`inspect scope=physics` 返回 `fps` 和按计算顺序排列的组，每组带 `origin`、`enabled`、`active`、`overridden`、`replaced_by` 与 `issue`。
 - `physics_config`：`order` 列出要先计算的组 ID，其余组按原顺序排在后面；Cubism 按顺序计算，后面的组在同一步里读到前面组的输出。`fps` 是工程唯一的帧率（预览、参数刷新和物理共用），为 1–240 的整数，0 表示无限制（预览跟随显示器，导出不声明 `Fps`）。
 - `physics_import`：`path` 为 physics3.json 的绝对路径。文件中的组成为自定义组（同 ID 替换已有组，生成组在 `physics_delete` 前保持被替换），按文件顺序排在现有组之后；驱动相同输出的其他自定义组被关闭；文件的 `Fps` 成为工程的计算 FPS。返回导入的 ID、被关闭的组和缺失参数。
-- `physics_fit`：用面板响应曲线的标准晃动（向右牵动 1 秒后松开）运行该组，把每个输出的倍率调整到峰值恰好达到参数端点的 `target`%（默认 100）；不动的输出保持原倍率。
+- `physics_fit`：用面板响应曲线的标准晃动（向右牵动 1 秒后松开）运行该组，把每个输出的倍率调整到峰值恰好达到参数端点的 `target`%（默认 100）；不动的输出保持原倍率。给出 `observed_peaks`（键为输出序号 `"0"`、`"1"`…，值为 `physics_audition` 返回的到达比例，1 为参数端点）时改按这次实测响应拟合，与面板拖动摆锤后的「按最大值调整倍率」共用候选；序号非法、值不是非负数或没有任何输出移动时在提交前拒绝。
 
 `physics_put/physics_delete/physics_config/physics_import/physics_fit` 返回进程任务句柄，均要求 `request_id/project_id/state`。使用 `job_wait/job_get` 读取提交后的状态和结果；导入结果还含 `imported`，以及适用的 `disabled/missing_parameters/fps`。读取、拟合、重建和提交报告进度；拟合静置及逐帧求解支持取消，提交前取消或状态冲突保留原工程，提交后迟到取消或界面刷新异常保留成功结果。断线不停止任务，原请求重试取回同一任务。拟合支持原子批量并读取前序候选；文件导入不支持批量。已达到目标倍率的再次拟合不创建历史节点，完全没有输出响应的组仍报错。
 - 先为输出参数制作运动端点，再接物理。静态姿态拼图不包含时间推进；用 `physics_simulate` 以阶跃输入检查幅度、过冲与稳定时间，整体动作用 `view_sample_motion`（其原生采样环境需可用）。
