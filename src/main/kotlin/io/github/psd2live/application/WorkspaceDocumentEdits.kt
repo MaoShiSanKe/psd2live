@@ -105,14 +105,9 @@ internal object WorkspaceDocumentEdits {
         }
     }
 
-    fun settings(document: WorkspaceDocument, model: RigPreviewModel, changes: JsonObject): WorkspaceDocument {
-        require(changes.isNotEmpty()) { "Provide at least one setting" }
-        val next = mergeProjectSettings(document.settings, changes)
-        val decoded = WorkspaceSettingsCodec.decode(next)
-        val minimum = minimumAtlasSize(RigLayerDeletion.generationAnalysis(model.analysis, model.config),
-            decoded.textureUpscale.scale, decoded.texturePadding)
-        return document.copy(settings = if (decoded.atlasSize < minimum) JsonObject(next + ("atlasSize" to JsonPrimitive(minimum))) else next)
-    }
+    /** Document-only view of [WorkspaceSettingsIntent]; draft commands also apply its authored-pose releases. */
+    fun settings(document: WorkspaceDocument, model: RigPreviewModel, changes: JsonObject): WorkspaceDocument =
+        document.copy(settings = WorkspaceSettingsIntent.parse(document, model, changes).settings)
 
     fun classify(document: WorkspaceDocument, model: RigPreviewModel, id: String, classification: LayerClassificationOverride): WorkspaceDocument {
         require(classification.switchId >= 0) { "switch_id must be nonnegative" }

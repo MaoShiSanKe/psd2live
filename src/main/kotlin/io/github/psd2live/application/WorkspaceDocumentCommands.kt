@@ -8,6 +8,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.PuppetModel
@@ -21,6 +22,7 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
     private val previews = WorkspacePreviewBuilder()
     suspend fun execute(projectId: String, state: String, summary: String, edits: List<WorkspaceDocumentOperation>,
                         author: MutationAuthor, taskId: String? = null,
+                        poses: (Map<String, WorkspacePose>) -> Unit = {},
                         beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceCommit<RigPreviewModel> {
         require(edits.size in 1..128) { "Use 1..128 edits" }
         require(edits.all { it.operation in WorkspaceDocumentEdits.supported }) { "Batch contains an unsupported document operation" }
@@ -33,9 +35,17 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
         val context = currentCoroutineContext()
         val batch = context[WorkspaceBatchJobExecution]
         require(batch == null || batch.edits == edits) { "A nested document command cannot replace the active batch" }
-        val result = runtime.execute(projectId, state, summary, author,
-            edits.mapIndexed { index, operation -> WorkspaceDocumentEdit { document, model ->
+        val result = runtime.executeDraft(projectId, state, summary, author,
+            edits.mapIndexed { index, operation -> WorkspaceDraftEdit { draft, model ->
                 batch?.preparing(index)
+                if (operation.operation == "settings_update") {
+                    // Settings also release authored poses; both stay in this member's private candidate.
+                    val next = runInterruptible(Dispatchers.Default) {
+                        WorkspaceSettingsIntent.parse(draft.document, model, operation.request.getValue("changes").jsonObject).apply(draft, model)
+                    }
+                    return@WorkspaceDraftEdit next.copy(document = previews.normalizeMeshEdits(next.document, model))
+                }
+                val document = draft.document
                 val candidate = runInterruptible(Dispatchers.Default) { WorkspaceDocumentEdits.apply(operation, document, model, simulationWork.cancellable(context) { id, value ->
                     batch?.baking(index, id, value) ?: context[WorkspaceJobContext]?.progress(0.1f + 0.75f * value, "Baking simulation $id")
                 }, physicsWork.cancellable(context) { id, fraction ->
@@ -43,14 +53,15 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
                 }, rasterWork.cancellable(context) { fraction, message ->
                     batch?.painting(index, fraction, message) ?: context[WorkspaceJobContext]?.progress(0.05f + 0.75f * fraction, message)
                 }, resources) }
-                previews.normalizeMeshEdits(candidate, model)
+                draft.copy(document = previews.normalizeMeshEdits(candidate, model))
             } },
             taskId = taskId, editFailure = { index, failure -> WorkspaceBatchEditException(index, edits[index].operation, failure) },
-            beforeCommit = { captured, document, model ->
+            beforeCommit = { captured, draft, model ->
                 batch?.committing()
-                WorkspaceAssetLayerEdits.validate(captured.document, document, model)
+                WorkspaceAssetLayerEdits.validate(captured.document, draft.document, model)
                 validateRegisteredNeutral(model, edits.filter { it.operation == "layer_set_bounds" }.mapTo(HashSet()) { it.request.getValue("layer_id").jsonPrimitive.content })
-                beforeCommit(captured, document, model)
+                beforeCommit(captured, draft.document, model)
+                changedPoses(captured, draft, model).takeIf { it.isNotEmpty() }?.let(poses)
             })
         // No suspension between the authoritative CAS and retaining its complete public result.
         batch?.committed(mutationResult(before, result, summary, edits))
@@ -75,7 +86,28 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
         }), taskId = taskId, beforeCommit = beforeCommit)
     }
 
+    /** Settings commands that may release authored poses; other generation inputs keep [executeCandidate]. */
+    suspend fun executeSettings(projectId: String, state: String, summary: String, author: MutationAuthor,
+                                changes: kotlinx.serialization.json.JsonObject,
+                                poses: (Map<String, WorkspacePose>) -> Unit = {},
+                                beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceCommit<RigPreviewModel> =
+        runtime.executeDraft(projectId, state, summary, author, listOf(WorkspaceDraftEdit { draft, model ->
+            val next = runInterruptible(Dispatchers.Default) { WorkspaceSettingsIntent.parse(draft.document, model, changes).apply(draft, model) }
+            next.copy(document = previews.normalizeMeshEdits(next.document, model))
+        })) { captured, draft, model ->
+            beforeCommit(captured, draft.document, model)
+            changedPoses(captured, draft, model).takeIf { it.isNotEmpty() }?.let(poses)
+        }
+
     companion object {
+        /** The authored poses a commit changes, read against the committed model as every later reader will. */
+        fun changedPoses(before: WorkspaceCapture<RigPreviewModel>, draft: WorkspaceDraft, model: RigPreviewModel): Map<String, WorkspacePose> {
+            val records = draft.auxiliary["posesByWorkspace"]?.jsonObject.orEmpty()
+            if (records == before.auxiliary["posesByWorkspace"]?.jsonObject.orEmpty()) return emptyMap()
+            return records.keys.filter { records[it] != before.auxiliary["posesByWorkspace"]?.jsonObject?.get(it) }
+                .associateWith { PreviewSessions.read(model.rig.puppet.parameters, draft.auxiliary, it) }
+        }
+
         fun mutationResult(before: WorkspaceCapture<RigPreviewModel>, result: WorkspaceCommit<RigPreviewModel>,
                            summary: String, edits: List<WorkspaceDocumentOperation>): WorkspaceMutationResult {
             val changed = if (!result.applied) emptyList() else edits.flatMap { edit ->

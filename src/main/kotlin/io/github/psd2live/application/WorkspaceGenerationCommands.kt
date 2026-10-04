@@ -57,6 +57,7 @@ internal class WorkspaceGenerationCommands(private val runtime: WorkspaceRuntime
 
     suspend fun execute(projectId: String, state: String, operation: WorkspaceDocumentOperation, summary: String,
         author: MutationAuthor,
+        poses: (Map<String, WorkspacePose>) -> Unit = {},
         beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceGenerationCommit {
         require(operation.operation in supported)
         val context = currentCoroutineContext()
@@ -67,14 +68,18 @@ internal class WorkspaceGenerationCommands(private val runtime: WorkspaceRuntime
         require(projectId == before.projectId) { "Operation targets another project" }
         context.ensureActive()
         context[WorkspaceJobContext]?.progress(0.1f, "Preparing generation settings")
-        val result = commands.executeCandidate(projectId, state, summary, author, mutation = { document, model ->
+        val commit = { capture: WorkspaceCapture<RigPreviewModel>, document: WorkspaceDocument, model: RigPreviewModel ->
+            context.ensureActive(); context[WorkspaceJobContext]?.progress(0.95f, "Committing generation candidate")
+            beforeCommit(capture, document, model)
+        }
+        val result = if (operation.operation == "settings_update") {
+            context[WorkspaceJobContext]?.progress(0.3f, "Rebuilding generation candidate")
+            commands.executeSettings(projectId, state, summary, author, operation.request.getValue("changes").jsonObject, poses, commit)
+        } else commands.executeCandidate(projectId, state, summary, author, mutation = { document, model ->
             WorkspaceDocumentEdits.apply(operation, document, model).also {
                 context.ensureActive(); context[WorkspaceJobContext]?.progress(0.3f, "Rebuilding generation candidate")
             }
-        }, beforeCommit = { capture, document, model ->
-            context.ensureActive(); context[WorkspaceJobContext]?.progress(0.95f, "Committing generation candidate")
-            beforeCommit(capture, document, model)
-        })
+        }, beforeCommit = commit)
         val layers = if (result.applied) listOfNotNull(operation.request["layer_id"]?.jsonPrimitive?.content) else emptyList()
         val mutation = WorkspaceMutationResult(result.capture.historyHead, result.capture.revision, layers, summary,
             affectedObjectIds = if (result.applied) WorkspaceDocumentCommands.createdObjectIds(before.model.rig.puppet,

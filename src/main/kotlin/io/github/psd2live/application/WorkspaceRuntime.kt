@@ -46,6 +46,14 @@ internal fun interface WorkspaceDocumentEdit<M> {
     suspend fun apply(document: WorkspaceDocument, model: M): WorkspaceDocument
 }
 
+/** A private candidate of everything one edit may change: the document and the auxiliary data beside it. */
+internal data class WorkspaceDraft(val document: WorkspaceDocument, val auxiliary: JsonObject)
+
+/** Like [WorkspaceDocumentEdit], for edits that also move auxiliary data such as authored poses. */
+internal fun interface WorkspaceDraftEdit<M> {
+    suspend fun apply(draft: WorkspaceDraft, model: M): WorkspaceDraft
+}
+
 internal data class WorkspaceCommit<M>(val capture: WorkspaceCapture<M>, val applied: Boolean)
 
 /**
@@ -137,6 +145,23 @@ internal class WorkspaceRuntime<M>(
         taskId: String? = null,
         editFailure: (Int, Exception) -> Exception = { _, failure -> failure },
         beforeCommit: (WorkspaceCapture<M>, WorkspaceDocument, M) -> Unit = { _, _, _ -> },
+    ): WorkspaceCommit<M> = executeDraft(projectId, expectedState, summary, author,
+        edits.map { edit -> WorkspaceDraftEdit { draft, model -> draft.copy(document = edit.apply(draft.document, model)) } },
+        taskId, editFailure) { capture, draft, model -> beforeCommit(capture, draft.document, model) }
+
+    /**
+     * Document and auxiliary data move together: each edit sees the previous candidate of both and one CAS
+     * publishes them, so a document is never committed ahead of the poses that belong to it.
+     */
+    suspend fun executeDraft(
+        projectId: String,
+        expectedState: String,
+        summary: String,
+        author: MutationAuthor,
+        edits: List<WorkspaceDraftEdit<M>>,
+        taskId: String? = null,
+        editFailure: (Int, Exception) -> Exception = { _, failure -> failure },
+        beforeCommit: (WorkspaceCapture<M>, WorkspaceDraft, M) -> Unit = { _, _, _ -> },
     ): WorkspaceCommit<M> {
         require(summary.isNotBlank()) { "History summary must not be blank" }
         require(edits.size in 1..128) { "Use 1..128 edits" }
@@ -145,24 +170,29 @@ internal class WorkspaceRuntime<M>(
             capture().also { require(it.projectId == projectId) { "Operation targets another project" } }
         }
         var document = before.document
+        var auxiliary = before.auxiliary
         var model = before.model
         var revision = WorkspaceRevisions.of(document)
         for ((index, edit) in edits.withIndex()) {
             currentCoroutineContext().ensureActive()
             try {
-                val candidate = edit.apply(document, model)
-                val nextRevision = WorkspaceRevisions.of(candidate)
+                val candidate = edit.apply(WorkspaceDraft(document, auxiliary), model)
+                val nextRevision = WorkspaceRevisions.of(candidate.document)
                 if (nextRevision != revision) {
                     // Later commands must observe the rig produced by earlier commands in this draft.
-                    model = rebuild(candidate)
-                    document = candidate
+                    model = rebuild(candidate.document)
+                    document = candidate.document
                     revision = nextRevision
                 }
+                auxiliary = candidate.auxiliary
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (failure: Exception) { throw editFailure(index, failure) }
         }
         currentCoroutineContext().ensureActive()
-        return commitPrepared(projectId, expectedState, summary, author, document, model, taskId, beforeCommit = beforeCommit)
+        val changed = auxiliary.takeIf { it != before.auxiliary }
+        return commitPrepared(projectId, expectedState, summary, author, document, model, taskId, auxiliary = changed) { capture, next, committed ->
+            beforeCommit(capture, WorkspaceDraft(next, changed ?: capture.auxiliary), committed)
+        }
     }
 
     /** The desktop adapter may prepare a model with incremental algorithms before entering this CAS. */
