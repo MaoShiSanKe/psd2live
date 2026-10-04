@@ -17,7 +17,8 @@ internal object CanvasDeformStroke {
     data class Request(val action: Action, val mode: Mode, val targets: List<Target>, val pose: Map<String, Float>,
                        val tip: CanvasBrushTip, val strength: Float, val connected: Boolean, val shrink: Boolean = false)
     private data class Surface(val target: Target, val geometry: RigGeometryTools.Geometry,
-                               val mapping: DrawableSpaceMapping, val indices: IntArray, val neighbors: List<IntArray>)
+                               val mapping: DrawableSpaceMapping, val indices: IntArray, val neighbors: List<IntArray>,
+                               val pose: Map<String, Float>)
 
     fun begin(model: PuppetModel, request: Request, press: Sample): Session = Session(model,
         request.copy(targets = request.targets.map { it.copy(key = it.key.toMap(), vertices = it.vertices?.toSet()) }, pose = request.pose.toMap()), press.canonical())
@@ -104,7 +105,15 @@ internal object CanvasDeformStroke {
                     }
                 }
                 val mapping = DrawableSpaceMapping(geometry.parent?.let { requireNotNull(worlds[DeformerId(it)]) { "Missing parent transform" } })
-                Surface(target, geometry, mapping, indices, neighbors)
+                val bindings: List<BlendShapeBinding<*>> = when (target.kind) {
+                    "mesh" -> source.drawables.single { it.id.raw == target.id }.blendShapes
+                    else -> (source.deformers.single { it.id.raw == target.id } as Deformer.Warp).blendShapes
+                }
+                val dependencies = (if (request.mode == Mode.DEFORM) target.key.keys else emptySet()) + geometry.axes.map { it.parameterId.raw } +
+                    bindings.flatMap { binding -> listOf(binding.parameterId.raw) + binding.limits.map { it.parameterId.raw } }
+                // Points have already been mapped into the target's parent space. Replay needs only its
+                // own geometry inputs; unrelated generated view parameters may not exist until after replay.
+                Surface(target, geometry, mapping, indices, neighbors, request.pose.filterKeys { it in dependencies })
             }
             initial = surfaces.map { surface(it, it.geometry.points) }
             val computed = reach(initial, press.point, press.point)
@@ -174,7 +183,7 @@ internal object CanvasDeformStroke {
                 val target = surfaces[at]
                 val local = target.mapping.worldToLocal(worlds[at], bases[at], moved[at])
                 require(local.all(Float::isFinite)) { "Non-finite deformed geometry" }
-                command(request.mode, target.target, request.pose, local, sample.preserveChildren)
+                command(request.mode, target.target, target.pose, local, sample.preserveChildren)
             }
             val merged = if (deform) edits else {
                 val previousCommands = pending.associateByTo(LinkedHashMap()) { it.getValue("id").jsonPrimitive.content }

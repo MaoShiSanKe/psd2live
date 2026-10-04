@@ -1,6 +1,7 @@
 package io.github.psd2live.core
 
 import io.github.psd2live.application.WorkspaceCanvasDeformEdits
+import kotlinx.serialization.json.jsonObject
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.keyform.channelGridsOf
 import org.umamo.runtime.model.*
@@ -140,6 +141,30 @@ class CanvasDeformStrokeTest {
         }
         assertFailsWith<IllegalArgumentException> { CanvasDeformStroke.begin(source, request(pose = pose), sample(0f, 0f)) }
         assertFailsWith<IllegalArgumentException> { CanvasDeformStroke.begin(source, request(targets = listOf(CanvasDeformStroke.Target("mesh", "a", mapOf("Shape" to 0f))), pose = pose), sample(0f, 0f)) }
+    }
+
+    @Test fun journalCapturesOnlyTargetGeometryInputsAndRetainsEveryActiveBlendAndLimit() {
+        val authored = boundModel()
+        val generated = ParameterId("ParamSimOther_1")
+        val source = authored.copy(parameters = authored.parameters + Parameter(generated, "Other simulation", -30f, 30f, 0f))
+        for (mode in CanvasDeformStroke.Mode.entries) for (value in listOf(0f, 12f)) {
+            val pose = mapOf("Shape" to 1f, "Blend" to 1f, "OtherBlend" to 0.5f, "Limit" to 1f, generated.raw to value)
+            val before = RigGeometryTools.geometry(source, "mesh", "a", pose).points
+            val stroke = CanvasDeformStroke.begin(source, request(mode = mode, targets = listOf(
+                CanvasDeformStroke.Target("mesh", "a", mapOf("Shape" to 1f, "Blend" to 1f), setOf(0))), pose = pose), sample(before[0], before[1]))
+            val preview = stroke.step(sample(before[0] + 7f, before[1] + 4f))
+            val commands = WorkspaceCanvasDeformEdits.commands(source, WorkspaceCanvasDeformEdits.operation(stroke))
+            val journal = RigAuthoringJournal.compile(source, commands).second
+            assertEquals(setOf("Shape", "Blend", "OtherBlend", "Limit"), journal.single().getValue("pose").jsonObject.keys)
+            val replayed = RigAuthoringJournal.replay(authored, journal.single())
+            val geometryPose = pose - generated.raw
+            sameCoordinates(RigGeometryTools.geometry(preview, "mesh", "a", geometryPose).points,
+                RigGeometryTools.geometry(replayed, "mesh", "a", geometryPose).points)
+            assertSame(authored.drawables.single().channelGrids, replayed.drawables.single().channelGrids)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CanvasDeformStroke.begin(authored, request(pose = mapOf("Unknown" to 0f)), sample(0f, 0f))
+        }
     }
 
     @Test fun realWarpParentMapsCanvasPixelsAndCtrlWarpPreservesChildMotion() {
