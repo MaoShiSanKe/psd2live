@@ -1314,9 +1314,9 @@ class PSD2LiveViewModel : AutoCloseable {
                     port.splitDepth(requireNotNull(offer.expected.state), request)
                 }
                 val frontLayerId = result.affectedLayerIds.single()
+                revealCanvasLayers(result.state, offer.workspaceId, offer.canvasId, listOf(frontLayerId))
                 updateCanvasPresentation(offer.workspaceId, offer.canvasId, CanvasMode.EDIT) {
-                    it.copy(selectedLayerId = frontLayerId, selectedLayerIds = setOf(frontLayerId),
-                        selectedDeformerId = null, layerVisibility = it.layerVisibility + (frontLayerId to true))
+                    it.copy(selectedLayerId = frontLayerId, selectedLayerIds = setOf(frontLayerId), selectedDeformerId = null)
                 }
                 if (_state.value.activeWorkspace.id == offer.workspaceId && _state.value.activeCanvas.id == offer.canvasId) {
                     setCanvasMode(offer.canvasId, CanvasMode.EDIT)
@@ -4599,6 +4599,19 @@ class PSD2LiveViewModel : AutoCloseable {
 		markWorkspaceChanged()
 	}
 
+	/**
+	 * Layers a command just created become visible on the edit canvas that asked for them, through the same
+	 * auxiliary CAS as the eye, on the state that command committed. A newer edit or a closed canvas skips it.
+	 * Returns the state to continue from, since a reveal publishes a new one.
+	 */
+	private fun revealCanvasLayers(state: String?, workspaceId: String, canvasId: String, layerIds: Collection<String>): String? {
+		val port: io.github.psd2live.application.WorkspaceCanvasVisibilityPort = workspaceBackend ?: return state
+		if (state == null || layerIds.isEmpty()) return state
+		val address = io.github.psd2live.application.CanvasAddress(workspaceId, canvasId, CanvasMode.EDIT.canvasViewMode())
+		return try { port.editCanvasVisibility(state, address, io.github.psd2live.application.CanvasVisibilityIntent.Layers(layerIds.associateWith { true })).state }
+		catch (_: IllegalStateException) { state } catch (_: IllegalArgumentException) { state }
+	}
+
 	/** Projects a committed canvas record into its own session; other canvases and the document stay as they are. */
 	internal fun applyCanvasVisibility(expected: PSD2LiveState, address: io.github.psd2live.application.CanvasAddress,
 	                                   value: io.github.psd2live.application.CanvasVisibility, changed: Boolean) = synchronized(stateLock) {
@@ -4731,19 +4744,19 @@ class PSD2LiveViewModel : AutoCloseable {
                 val ids = result.affectedLayerIds
                 val placeId = ids.lastOrNull() ?: return@launch
                 val source = preview.analysis.source.layers.singleOrNull { it.id.raw == placeId } ?: return@launch
+                val revealed = revealCanvasLayers(result.state, workspaceId, canvasId, ids)
                 updateCanvasPresentation(workspaceId, canvasId, CanvasMode.EDIT) {
-                    it.copy(layerVisibility = it.layerVisibility + ids.associateWith { true },
-                        selectedLayerId = placeId, selectedDeformerId = null)
+                    it.copy(selectedLayerId = placeId, selectedDeformerId = null)
                 }
                 yield()
-                if (workspaceBackend?.snapshot()?.state != result.state || _state.value.activeWorkspace.id != workspaceId) return@launch
+                if (workspaceBackend?.snapshot()?.state != revealed || _state.value.activeWorkspace.id != workspaceId) return@launch
                 if (_state.value.activeCanvas.id == canvasId && _state.value.activeCanvas.mode != CanvasMode.EDIT) {
                     setCanvasMode(canvasId, CanvasMode.EDIT)
                 }
                 val bounds = source.bounds
                 canvasEditorFor(canvasId).beginLayerPlacement(placeId, source.name, anchorLabel, parentDeformerId,
                     bounds.left.toFloat(), bounds.top.toFloat(), bounds.width.toFloat(), bounds.height.toFloat(), ids,
-                    requireNotNull(workspaceBackend).beginImagePlacement(requireNotNull(result.state), ids))
+                    requireNotNull(workspaceBackend).beginImagePlacement(requireNotNull(revealed), ids))
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
                 setErrorMessage(failure.message ?: tr("error.importLayerFailed"))
