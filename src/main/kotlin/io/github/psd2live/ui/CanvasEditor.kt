@@ -9,6 +9,9 @@ import io.github.psd2live.core.CanvasViewport
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import io.github.psd2live.application.CanvasDraftScope
+import io.github.psd2live.application.CanvasDraftSubmit
+import io.github.psd2live.application.WorkspaceCanvasInputDraft
 import io.github.psd2live.core.*
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.*
@@ -1342,6 +1345,24 @@ internal class CanvasEditor(
     /** The drawable [knifeDraft] belongs to, so switching targets drops a cut that could not apply. */
     private var knifeDrawableId: String? = null
 
+    /**
+     * What the open Warp/Rotation placement, knife cut and path were started on. Their later inputs and confirm
+     * are read against this capture, so an edit made elsewhere meanwhile is a conflict, not a reinterpretation.
+     */
+    private var placementInput: WorkspaceCanvasInputDraft<Unit, DrawableSpaceMapping>? = null
+    private var knifeInput: WorkspaceCanvasInputDraft<MeshRefinementOps.KnifeAnchor, CanvasTarget>? = null
+    private var pathInput: WorkspaceCanvasInputDraft<Pair<Float, Float>, CanvasTarget>? = null
+
+    private fun draftScope() = viewModel.uiState.value.let {
+        CanvasDraftScope(it.projectId, it.projectOpenGeneration, it.activeWorkspace.id, canvasId)
+    }
+
+    private fun <I, F> startInput(targetId: String, frame: F, inputs: List<I>): WorkspaceCanvasInputDraft<I, F>? {
+        val expected = viewModel.currentWorkspaceState() ?: return null
+        val source = state.previewModel ?: return null
+        return WorkspaceCanvasInputDraft(expected, draftScope(), source, state.parameterValues.toMap(), targetId, frame, inputs)
+    }
+
     /** The only say the artist has over snapping: how close, in screen pixels, counts as "on" a vertex or an
      *  edge. Snapping itself is not optional - outside this radius a click always drops a new point. */
     var knifeSnapRadius by mutableStateOf(10f)
@@ -1354,8 +1375,15 @@ internal class CanvasEditor(
 
     fun undoDraftPoint() {
         if (busy) return
-        if (tool == CanvasTool.KNIFE) knifeDraft = knifeDraft.dropLast(1)
-        else if (drawingPath) draft = draft.dropLast(1)
+        if (tool == CanvasTool.KNIFE) {
+            knifeInput?.dropLast()
+            knifeDraft = knifeDraft.dropLast(1)
+            if (knifeDraft.isEmpty()) knifeInput = null
+        } else if (drawingPath) {
+            pathInput?.dropLast()
+            draft = draft.dropLast(1)
+            if (draft.isEmpty()) pathInput = null
+        }
         error = null
     }
 
@@ -1970,6 +1998,7 @@ internal class CanvasEditor(
         swingHandle = null
         knifeDraft = emptyList(); knifeDrawableId = null; subdividing = false; subdivideEdges = emptySet()
         knifeHover = null; knifeSnapKind = null
+        placementInput = null; knifeInput = null; pathInput = null
         isCreatingWarp = false; isCreatingRotation = false; creationStart = null; creationCurrent = null
         // LAYER placement is a committed import waiting for confirm — do not treat gesture
         // cleanup (history refresh, focus loss, tool churn) as Esc/Cancel.
@@ -2213,6 +2242,7 @@ internal class CanvasEditor(
         if (createSessionReturnMode == null) createSessionReturnMode = hierarchyMode
         cancelKeepingReturnMode()
         deferredMode = null
+        placementInput = null; pathInput = null
         val spaceParentId = resolvePlacementSpaceParent(relation, anchorKind, anchorId, meshIds)
         val local = placementLocalBounds(meshIds, anchorKind, anchorId, spaceParentId)
         val cx = local[0] + local[2] / 2f
@@ -2255,6 +2285,9 @@ internal class CanvasEditor(
             bezierRows = warpCreateBezierRows,
             bezierCols = warpCreateBezierCols,
         )
+        if (kind == CreatePlacementKind.WARP || kind == CreatePlacementKind.ROTATION) {
+            placementInput = startInput(anchorId, placementMapping(spaceParentId), emptyList<Unit>())
+        }
         tool = when (kind) {
             CreatePlacementKind.WARP -> CanvasTool.CREATE_WARP
             CreatePlacementKind.ROTATION -> CanvasTool.CREATE_ROTATION
@@ -2408,6 +2441,7 @@ internal class CanvasEditor(
 
     private fun clearPlacementUi() {
         placement = null
+        placementInput = null; pathInput = null
         placementHandle = PlacementHandle.NONE
         placementDragStart = null
         placementDragSnapshot = null
@@ -2483,9 +2517,13 @@ internal class CanvasEditor(
                 }
             }
         }
-        placement = null
-        gestureState = null
-        commitWarpCreation(cmd, p.bezierRows, p.bezierCols)
+        val input = placementInput ?: return
+        val controls = try {
+            RigBezierJournal.prepare(CanvasEdits.apply(input.model.rig.puppet, cmd), input.model.config.rigEdits, "divisions", buildJsonObject {
+                put("target", "warp:$id"); put("rows", p.bezierRows); put("columns", p.bezierCols)
+            })
+        } catch (failure: Exception) { error = failure.message; return }
+        commitPlacedInput(input, listOf(cmd, controls), id)
     }
 
     private fun commitPlacedRotation(p: CreatePlacement) {
@@ -2515,13 +2553,37 @@ internal class CanvasEditor(
                 }
             }
         }
-        placement = null
-        gestureState = null
-        commit(cmd)
+        commitPlacedInput(placementInput ?: return, listOf(cmd), id)
+    }
+
+    /** The ghost stays up until the write lands, so a refused one can be adjusted or cancelled. */
+    private fun commitPlacedInput(input: WorkspaceCanvasInputDraft<Unit, DrawableSpaceMapping>, commands: List<JsonObject>, id: String) {
+        commitInput(input, commands) {
+            if (placementInput === input) { placementInput = null; placement = null }
+            finishCreateSession(id)
+        }
+    }
+
+    /** Confirms a multi-input draft against its own start; a refused write leaves the draft open for Esc. */
+    private fun <I, F> commitInput(input: WorkspaceCanvasInputDraft<I, F>, commands: List<JsonObject>, onSuccess: () -> Unit) {
+        topologyFills = null
+        if (!editable || !input.open) return
+        when (val submit = input.submit(draftScope(), JsonArray(commands))) {
+            is CanvasDraftSubmit.Rejected -> error = submit.failure
+            CanvasDraftSubmit.Unchanged -> onSuccess()
+            is CanvasDraftSubmit.Write -> {
+                preview = submit.preview; busy = true; error = null
+                viewModel.saveAuthoringEdits(submit.state, submit.edits) { failure ->
+                    busy = false; preview = null; error = failure
+                    if (input.settle(failure)) onSuccess()
+                }
+            }
+        }
     }
 
     /** Mapping for [CreatePlacement.spaceParentId]; root uses identity (model with camera Y-flip). */
     private fun placementMapping(spaceParentId: String?): DrawableSpaceMapping {
+        placementInput?.takeIf { placement?.spaceParentId == spaceParentId }?.let { return it.frame }
         val source = model
         if (cachedSource !== source || cachedPose != state.parameterValues) {
             cachedSource = source
@@ -3670,20 +3732,22 @@ internal class CanvasEditor(
     /** Commits the knife polyline. All or nothing - see [MeshRefinementOps.knifeCut]. */
     fun finishKnife() {
         val t = target() ?: return
-        if (!editable || t.kind != "mesh" || t.id != knifeDrawableId || knifeDraft.size < 2) return
-        val anchors = knifeDraft
-        gestureState = null
-        val mesh = state.previewModel?.rig?.puppet?.drawables?.firstOrNull { it.id.raw == t.id }?.mesh
+        val input = knifeInput ?: return
+        if (!editable || t.kind != "mesh" || t.id != knifeDrawableId || input.targetId != t.id || input.inputs.size < 2) return
+        val anchors = input.inputs
+        // The anchors were resolved against the mesh the first click saw, so the cut is built on that one too.
+        val mesh = input.model.rig.puppet.drawables.firstOrNull { it.id.raw == t.id }?.mesh
         val outcome = mesh?.let { runCatching { CanvasTopology.build(it, "knife", emptySet(), anchors) }.getOrNull() }
         if (outcome == null) {
             error = tr("editor.knifeCannotConnect")
             return
         }
-        commitBatch(listOf(buildJsonObject {
+        commitInput(input, listOf(buildJsonObject {
             put("op", "canvas_topology"); put("id", t.id); put("action", "knife")
             put("vertices", JsonArray(emptyList()))
             put("anchors", CanvasTopology.encodeAnchors(anchors))
         })) {
+            if (knifeInput === input) knifeInput = null
             knifeDraft = emptyList()
             vertices = CanvasTopology.selectedVertices(outcome)
             selectedEdges = emptySet(); selectedFaces = emptySet()
@@ -3753,27 +3817,32 @@ internal class CanvasEditor(
     fun finishPath() {
         val t = target() ?: return
         if (draft.size < 2 || t.kind != "mesh") return
+        val input = pathInput ?: return
+        val frame = input.frame
         try {
-            val previous = paths().firstOrNull { it.id == draftPathId }
-            val points = draft.mapIndexed { i, p -> DeformPathTools.bind(t.geometry.points, t.indices, p.first, p.second, previous?.points?.getOrNull(i)?.corner ?: false) }
+            val previous = input.model.rig.puppet.deformPaths.firstOrNull { it.id == draftPathId }
+            val points = input.inputs.mapIndexed { i, p -> DeformPathTools.bind(frame.geometry.points, frame.indices, p.first, p.second, previous?.points?.getOrNull(i)?.corner ?: false) }
             val path = previous?.copy(points = points, closed = if (previous.closed) previous.closed else pathClosed)
                 ?: DeformPath(
                     UUID.randomUUID().toString(),
-                    DrawableId(t.id),
+                    DrawableId(frame.id),
                     points,
                     pathWidth,
                     hardness = pathHardness,
                     closed = pathClosed && points.size >= 3,
                     editLevel = pathLevel,
                 )
-            gestureState = null; commit(DeformPathJournal.encode(path)); activePath = path.id; drawingPath = false; draft = emptyList()
-            placement = null
-            // After binding, enter EDIT so dragging control points rebinds without deforming.
-            createSessionReturnMode = null
-            hierarchyMode = EditHierarchyMode.EDIT
-            tool = CanvasTool.SELECT
-            pathClosed = false
-            clearHover()
+            commitInput(input, listOf(DeformPathJournal.encode(path))) {
+                if (pathInput === input) pathInput = null
+                activePath = path.id; drawingPath = false; draft = emptyList()
+                placement = null
+                // After binding, enter EDIT so dragging control points rebinds without deforming.
+                createSessionReturnMode = null
+                hierarchyMode = EditHierarchyMode.EDIT
+                tool = CanvasTool.SELECT
+                pathClosed = false
+                clearHover()
+            }
         } catch (e: Exception) { error = e.message }
     }
 
@@ -3786,6 +3855,7 @@ internal class CanvasEditor(
         val t = target() ?: return; val path = selectedPath() ?: return
         if (path.closed) return
         draft = DeformPathTools.positions(path, t.geometry.points); draftPathId = path.id; drawingPath = true; tool = CanvasTool.CREATE_DEFORM_PATH
+        pathInput = startInput(t.id, t, draft)
     }
 
     fun preciseTransform(vp: CanvasViewport? = null, first: Float, second: Float = 0f, scaleMode: Boolean = false, rotateMode: Boolean = false) {
@@ -5041,7 +5111,11 @@ internal class CanvasEditor(
             val t = target()
             if (t != null && t.kind == "mesh") {
                 if (drawingPath) {
-                    draft = draft + local(pos, t, viewport, draft.lastOrNull() ?: (0.5f to 0.5f))
+                    // Every point is read through the target the path started on, which is what it binds to.
+                    val input = pathInput
+                    val point = local(pos, input?.frame ?: t, viewport, draft.lastOrNull() ?: (0.5f to 0.5f))
+                    if (input == null) pathInput = startInput(t.id, t, draft + point) else if (!input.append(point)) return true
+                    draft = draft + point
                     return true
                 }
                 if (beginPathInteraction(pos, t, viewport, ctrl)) return true
@@ -5050,6 +5124,7 @@ internal class CanvasEditor(
                 drawingPath = true
                 draftPathId = null
                 draft = listOf(local(pos, t, viewport))
+                pathInput = startInput(t.id, t, draft)
                 return true
             }
             return true
@@ -5061,11 +5136,16 @@ internal class CanvasEditor(
             val t = target()
             if (t != null && t.kind == "mesh") {
                 if (t.id != knifeDrawableId) {
-                    knifeDraft = emptyList()
+                    knifeDraft = emptyList(); knifeInput = null
                     knifeDrawableId = t.id
                 }
-                val anchor = knifeAnchor(pos, t, viewport, shift)
-                if (anchor != knifeDraft.lastOrNull()) knifeDraft = knifeDraft + anchor
+                // Later clicks snap to the mesh the first one did, so every vertex index names the same mesh.
+                val input = knifeInput
+                val anchor = knifeAnchor(pos, input?.frame ?: t, viewport, shift)
+                if (anchor != knifeDraft.lastOrNull()) {
+                    if (input == null) knifeInput = startInput(t.id, t, listOf(anchor)) else if (!input.append(anchor)) return true
+                    knifeDraft = knifeDraft + anchor
+                }
             }
             return true
         }
