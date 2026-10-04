@@ -20,7 +20,17 @@ internal object CanvasDeformStroke {
                                val mapping: DrawableSpaceMapping, val indices: IntArray, val neighbors: List<IntArray>)
 
     fun begin(model: PuppetModel, request: Request, press: Sample): Session = Session(model,
-        request.copy(targets = request.targets.map { it.copy(key = it.key.toMap(), vertices = it.vertices?.toSet()) }, pose = request.pose.toMap()), press)
+        request.copy(targets = request.targets.map { it.copy(key = it.key.toMap(), vertices = it.vertices?.toSet()) }, pose = request.pose.toMap()), press.canonical())
+
+    /**
+     * Samples are kept on a 1/1024 px grid. A pointer stroke reaches the canvas through float screen coordinates,
+     * which lose an ulp or two on the way back, and image-keeping edits derive UVs from the moved positions; on the
+     * grid the panel's stroke and the same stroke sent as a command replay to identical geometry.
+     */
+    private fun Sample.canonical(): Sample {
+        fun grid(value: Float) = if (value.isFinite()) kotlin.math.round(value * 1024f) / 1024f else value
+        return copy(point = CanvasBrushPoint(grid(point.x), grid(point.y)))
+    }
 
     class Session internal constructor(private val source: PuppetModel, val request: Request, press: Sample) {
         private val samples = arrayListOf(press)
@@ -121,7 +131,8 @@ internal object CanvasDeformStroke {
             return result
         }
 
-        fun step(sample: Sample): PuppetModel {
+        fun step(input: Sample): PuppetModel {
+            val sample = input.canonical()
             check(!cancelled) { "Stroke was cancelled" }
             require(samples.size < 4096) { "Use at most 4096 samples" }
             require(sample.point.x.isFinite() && sample.point.y.isFinite())
