@@ -645,7 +645,7 @@ private fun registerCatalogRenderCommands(catalog: WorkspaceCommands, render: Wo
 private fun registerCatalogPoseCommands(catalog: WorkspaceCommands, render: WorkspaceRenderPort) {
     catalog.register(
         name = "view_render_poses",
-        description = "Compare 1..9 poses in one labeled sheet, in input order. parameters are shared; poses override them. target_long_edge/max_bytes bound the entire sheet. Each tile imageRect [x,y,width,height] maps to the shared canvasRect [left,top,right,bottom]; labels are excluded. Static poses, not physics or revision comparison.",
+        description = "Compare 1..9 poses in one labeled sheet, in input order. parameters are shared; poses override them. target_long_edge/max_bytes bound the entire sheet. Each tile imageRect [x,y,width,height] maps to the shared canvasRect [left,top,right,bottom]; labels are excluded. Static poses, not physics or revision comparison. Rendered off-screen from one captured committed version; use this, not preview_set, to compare poses without moving the user's parameter sliders.",
         inputSchema = WorkspaceCommandSchema(properties = JsonObject(requireNotNull(modelViewSchema().properties) + buildJsonObject {
             putJsonObject("poses") { put("type","array"); put("minItems",1); put("maxItems",9)
                 putJsonObject("items") { put("type","object"); putJsonObject("additionalProperties") { put("type","number") } }
@@ -1221,12 +1221,12 @@ private fun modelViewSchema(): WorkspaceCommandSchema = WorkspaceCommandSchema(
 		putJsonObject("point_indices") { put("type","boolean");put("default",false) }
 		putJsonObject("parameters") {
 			put("type", "object")
-			put("description", "Cubism parameter ID to value, for example {ParamAngleX: 10.0}")
+			put("description", "Cubism parameter ID to value, for example {ParamAngleX: 10.0}. Omitted parameters render at their defaults, not at the authored pose; read workspace_inspect scope=preview and pass its values to start from it. Rendering never changes the authored pose.")
 			putJsonObject("additionalProperties") { put("type", "number") }
 		}
 		putJsonObject("include_layer_ids") {
 			put("type", "array")
-			put("description", "Exact layer IDs to composite. Omit to use workspace visibility; [] renders no model layers.")
+			put("description", "Exact layer IDs to composite. Omit to follow the active canvas's local visibility, so layers the user hid, layers under a hidden deformer and layers outside a solo are missing; pass IDs for a result independent of the canvas. [] renders no model layers.")
 			putJsonObject("items") { put("type", "string") }
 		}
 		putJsonObject("annotate_layer_ids") {

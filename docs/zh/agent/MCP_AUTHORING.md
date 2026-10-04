@@ -330,7 +330,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 }
 ```
 
-`skeleton_pose` 用画布像素坐标求骨骼朝向；`ik: true` 求末端及最多两级父骨骼的角度。返回的 `values` 是计算结果，可交给 `preview_set` 检查姿态，或写入 `motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` 的参数轨道；它不改骨架、关键形或历史。骨骼形状已烘焙为参数、变形器和网格关键形，形状修正仍用 `keyform_apply` / `rig_deform`，物理用 `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import`。
+`skeleton_pose` 用画布像素坐标求骨骼朝向；`ik: true` 求末端及最多两级父骨骼的角度。返回的 `values` 是计算结果，可交给 `view_render_poses` 渲染检查（不移动用户的参数滑块），或写入 `motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` 的参数轨道；它不改骨架、关键形或历史。骨骼形状已烘焙为参数、变形器和网格关键形，形状修正仍用 `keyform_apply` / `rig_deform`，物理用 `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import`。
 
 ```json
 {
@@ -407,6 +407,9 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 `view_render_layer/view_render_context/view_render_model/view_render_poses/view_check_coverage` 各读取一次捕获的工程版本。多姿态的每张图共用该模型和可见图层，后续编辑、重开或切换工程不会混入结果，也不会使已经捕获的查询失效。PNG、空间映射及 revision 保持一致，图片和空间引用保存在捕获时的工程中。
 
 - `poses` 在同一版本、同一画布矩形内比较 1–9 个姿态，返回一张带标签拼图。总尺寸预算作用于整张图。
+- 对比姿态在后台从捕获的已提交版本渲染，不读取、也不修改作者姿态与 GUI 参数滑块；不要用 `preview_set` 切换姿态来出对比图，它会改变用户的作者姿态并推进 `state`。
+- 请求中未给出的参数按**参数默认值**渲染，而不是用户当前的作者姿态。要以当前姿态为基准，先用 `workspace_inspect scope=preview` 读取已提交的姿态，放入共享的 `parameters`，再在 `poses` 中只写差异。
+- 省略 `include_layer_ids` 时使用当前活动画布的局部显隐：用户隐藏的图层、被隐藏变形器下的图层以及 solo 之外的图层都不会出现在图中。需要与用户画布无关的稳定结果时，显式传入图层 ID（可从 `workspace_inspect scope=layers` 取得）。
 - `compare` 比较历史版本；`motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` 按时间采样；`coverage` 只测指定矩形和指定图层的 Alpha 覆盖。
 - 使用返回的像素↔画布映射定位；多姿态整张拼图不能直接作为单张素材的空间参考。
 - Alpha 覆盖、网格诊断和文件成功写出都不是美术质量分数，也不能证明未采样姿态正常。
