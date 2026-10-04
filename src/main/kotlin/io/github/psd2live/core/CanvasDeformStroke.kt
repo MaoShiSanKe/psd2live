@@ -170,7 +170,9 @@ internal object CanvasDeformStroke {
                 edits.forEach { previousCommands[it.getValue("id").jsonPrimitive.content] = it }
                 previousCommands.values.toList()
             }
-            val next = merged.fold(source) { model, command -> RigAuthoringJournal.apply(model, command) }
+            // The commit compiles these same commands, so the preview goes through compile too: a plain fold
+            // would also apply the edits compile drops as no-ops and drift from the committed rig.
+            val next = if (merged.isEmpty()) source else RigAuthoringJournal.compile(source, JsonArray(merged)).first
             samples += sample; previous = sample.point; pending = merged; preview = next
             return next
         }

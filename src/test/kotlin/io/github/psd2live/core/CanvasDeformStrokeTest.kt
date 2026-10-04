@@ -43,6 +43,25 @@ class CanvasDeformStrokeTest {
         assertFailsWith<IllegalStateException> { stroke.step(sample(8f, 4f)) }
     }
 
+    @Test fun editPreviewMatchesTheCommittedJournalWhenAnEditFallsInsideTheNoOpTolerance() {
+        // UVs that are not an affine image of the positions: any image-preserving edit that is applied
+        // re-derives them, so a preview that applies an edit the commit drops shows different pixels.
+        val quad = Drawable(DrawableId("a"), "a", null, BlendMode.Normal, emptyList(), DrawableMesh(
+            floatArrayOf(0f, 0f, 100f, 0f, 0f, 100f, 100f, 100f), floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 0.9f, 0.9f),
+            intArrayOf(0, 1, 2, 1, 3, 2)), null)
+        val source = PuppetModel(emptyList(), emptyList(), emptyList(), listOf(quad), emptyList(), null)
+        val edit = request(mode = CanvasDeformStroke.Mode.EDIT, targets = listOf(CanvasDeformStroke.Target("mesh", "a", vertices = setOf(0))))
+        for (path in listOf(listOf(sample(4e-7f, 0f)), listOf(sample(6f, 3f), sample(0f, 0f)))) {
+            val stroke = CanvasDeformStroke.begin(source, edit, sample(0f, 0f))
+            val preview = path.map { stroke.step(it) }.last()
+            val materialized = WorkspaceCanvasDeformEdits.commands(source, WorkspaceCanvasDeformEdits.operation(stroke))
+            val committed = RigAuthoringJournal.compile(source, materialized).second.fold(source) { model, command -> RigAuthoringJournal.apply(model, command) }
+            assertContentEquals(committed.drawables.single().mesh!!.positions, preview.drawables.single().mesh!!.positions)
+            assertContentEquals(committed.drawables.single().mesh!!.uvs, preview.drawables.single().mesh!!.uvs)
+            assertContentEquals(source.drawables.single().mesh!!.uvs, preview.drawables.single().mesh!!.uvs)
+        }
+    }
+
     @Test fun smoothingAccumulatesAndShiftBrushUsesTheSameNeighborAverages() {
         val source = model()
         val smooth = CanvasDeformStroke.begin(source, request(CanvasDeformStroke.Action.SMOOTH), sample(0f, 0f))

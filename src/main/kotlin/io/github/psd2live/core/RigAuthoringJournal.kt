@@ -180,9 +180,14 @@ internal object RigAuthoringJournal {
             // already holds what the command writes, and applying first would make every command look
             // like a no-op. Dropping the ineffective ones here is what lets the workspace funnel's
             // change guard fire — see RigCommandDelta.
-            val before = current
-            current = apply(current, compiled)
-            if ((op != "parameter_keys" || current !== before) && !RigCommandDelta.isNoOp(before, compiled)) journal += compiled
+            // A dropped command must not reach the returned model either: replay of the journal never sees
+            // it, and a canvas_geometry edit inside the no-op tolerance still re-derives the mesh's UVs, so
+            // keeping it here would preview pixels the committed rig does not have.
+            val applied = apply(current, compiled)
+            if ((op != "parameter_keys" || applied !== current) && !RigCommandDelta.isNoOp(current, compiled)) {
+                journal += compiled
+                current = applied
+            }
         }
         return current to journal
     }
