@@ -5635,7 +5635,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			// first lets the software canvas alternate between resting and swinging parts.
 			if (current.sdkStatus != "ready" && !pausedPhysicsOn) {
 				updateState { latest ->
-					if (!latest.previewLive) latest
+					// An SDK frame may have arrived since this tick read the state; it owns the live pose then.
+					if (!latest.previewLive || latest.sdkStatus == "ready") latest
 					else {
 						val mergedValues = io.github.psd2live.core.boundedPreviewPose(
 							parameterValuesAfterSoftwareFrame(latest, boundedLiveParams, pointerActive), model.rig.puppet.parameters)
