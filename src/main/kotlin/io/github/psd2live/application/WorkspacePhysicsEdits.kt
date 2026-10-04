@@ -44,7 +44,13 @@ internal object WorkspacePhysicsEdits {
         "physics_delete" -> WorkspaceDocumentEdits.removePhysics(document, model, operation.request.text("id"))
         "physics_config" -> WorkspaceDocumentEdits.configurePhysics(document, model,
             operation.request["order"]?.jsonArray?.map { it.jsonPrimitive.content }, operation.request["fps"]?.jsonPrimitive?.int)
-        "physics_fit" -> fit(document, model, operation.request.text("id"), (operation.request["target"]?.jsonPrimitive?.float ?: 100f) / 100f, work)
+        "physics_fit" -> {
+            val target = (operation.request["target"]?.jsonPrimitive?.float ?: 100f) / 100f
+            val observed = operation.request["observed_peaks"]?.let(::observedPeaks)
+            if (observed == null) fit(document, model, operation.request.text("id"), target, work)
+            else WorkspaceDocumentEdits.physics(document, model, WorkspacePhysicsIntents.operation(document, model,
+                WorkspacePhysicsIntent.FitObserved(operation.request.text("id"), observed, target)).request)
+        }
         PRESET -> {
             val intent = WorkspacePhysicsIntent.Preset(operation.request.text("id"), PhysicsPresets.Preset.fromJson(operation.request.getValue("preset").jsonObject))
             val prepared = WorkspacePhysicsIntents.operation(document, model, intent)
@@ -77,6 +83,17 @@ internal object WorkspacePhysicsEdits {
             if (imported.missing.isNotEmpty()) put("missing_parameters", JsonObject(imported.missing.mapValues { (_, ids) -> JsonArray(ids.map(::JsonPrimitive)) }))
             imported.fps?.let { put("fps", it) }
         })
+    }
+
+    /** Output index to observed reach, as `physics_fit.observed_peaks` and an audition frame's `peaks` carry it. */
+    fun observedPeaks(value: JsonElement): Map<Int, Float> {
+        val entries = (value as? JsonObject) ?: throw IllegalArgumentException("observed_peaks must map output indexes to reaches")
+        require(entries.isNotEmpty()) { "observed_peaks must name at least one output" }
+        return entries.entries.associate { (key, reach) ->
+            val index = requireNotNull(key.toIntOrNull()?.takeIf { it >= 0 && key == it.toString() }) { "observed_peaks key $key is not an output index" }
+            val number = (reach as? JsonPrimitive)?.takeIf { !it.isString }?.floatOrNull
+            index to requireNotNull(number) { "observed_peaks.$key must be a number" }
+        }
     }
 
     private fun JsonObject.text(key: String) = getValue(key).jsonPrimitive.content

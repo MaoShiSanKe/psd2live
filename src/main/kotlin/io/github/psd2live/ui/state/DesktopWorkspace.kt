@@ -1354,9 +1354,13 @@ class DesktopWorkspace(
             expectedState, "Imported physics ${Path.of(path).fileName}")
     }
 
-    override suspend fun fitPhysics(id: String, target: Float, expectedState: String): WorkspaceMutationResult =
+    override suspend fun fitPhysics(id: String, target: Float, expectedState: String,
+                                    observedPeaks: Map<Int, Float>?): WorkspaceMutationResult =
         physicsCommand(WorkspaceDocumentOperation("physics_fit", kotlinx.serialization.json.buildJsonObject {
             put("id", id); put("target", target * 100f)
+            observedPeaks?.let { peaks -> put("observed_peaks", kotlinx.serialization.json.buildJsonObject {
+                peaks.toSortedMap().forEach { (index, reach) -> put(index.toString(), reach) }
+            }) }
         }), expectedState, "Fitted physics scales $id").first
 
     private suspend fun physicsCommand(operation: WorkspaceDocumentOperation, expectedState: String, summary: String,

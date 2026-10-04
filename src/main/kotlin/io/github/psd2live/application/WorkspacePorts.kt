@@ -170,7 +170,8 @@ interface WorkspacePhysicsPort {
     /** Imports a physics3.json at [path] as user groups; the result lists what it did. */
     suspend fun importPhysics(path: String, expectedState: String): Pair<WorkspaceMutationResult, JsonObject>
     /** Scales group [id]'s outputs so a standard head sway swings each to [target] of its parameter's end. */
-    suspend fun fitPhysics(id: String, target: Float, expectedState: String): WorkspaceMutationResult
+    /** With [observedPeaks] (output index to reach, as an audition measured it) the standard sway is not traced. */
+    suspend fun fitPhysics(id: String, target: Float, expectedState: String, observedPeaks: Map<Int, Float>? = null): WorkspaceMutationResult
 }
 
 interface WorkspaceSimulationPort {

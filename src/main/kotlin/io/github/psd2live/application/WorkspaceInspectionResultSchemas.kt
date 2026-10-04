@@ -81,6 +81,7 @@ internal object WorkspaceSettingsResultTypes {
         listOf("atlasSize", "meshSpacing", "texturePadding", "alphaThreshold").associateWith { s.integer() } +
         listOf("meshOuterMargin", "meshEdgeWidth", "meshMaxEdgeDistance", "meshInteriorDensity", "headStrength", "bodyStrength", "mouthThickness").associateWith { s.number() } +
         mapOf("textureUpscale" to upscale, "meshEdgeMode" to meshFields.getValue("edgeMode"), "meshFillAlgorithm" to meshFields.getValue("fillAlgorithm"),
+            "meshUnits" to s.choices(*io.github.psd2live.core.MeshUnits.entries.map { it.name }.toTypedArray()),
             "meshFillParameters" to fill, "meshOverrides" to s.dictionary(s.obj(meshFields)), "drawOrderOverrides" to s.dictionary(s.number()),
             "rigTuning" to s.obj(RigTuning.fields.associate { it.id to s.number() }), "mouthShape" to s.choices("flat", "smile", "w", "custom"),
             "mouthCurve" to s.array(s.obj(mapOf("x" to s.number(), "y" to s.number()))), "mouthColor" to s.nullable(s.integer(0, 0xFFFFFF)),

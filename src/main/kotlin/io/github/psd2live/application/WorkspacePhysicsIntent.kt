@@ -13,7 +13,8 @@ sealed interface WorkspacePhysicsIntent {
     data class Move(val id: String, val by: Int) : WorkspacePhysicsIntent
     data class Fps(val fps: Int) : WorkspacePhysicsIntent
     data class Preset(val id: String, val preset: PhysicsPresets.Preset) : WorkspacePhysicsIntent
-    data class FitObserved(val id: String, val peaks: Map<Int, Float>) : WorkspacePhysicsIntent
+    /** [peaks] are each output's observed reach toward its parameter's end; [target] is the reach to scale it to. */
+    data class FitObserved(val id: String, val peaks: Map<Int, Float>, val target: Float = 1f) : WorkspacePhysicsIntent
 }
 
 internal object WorkspacePhysicsIntents {
@@ -50,7 +51,8 @@ internal object WorkspacePhysicsIntents {
                     "Observed physics peaks must be finite, nonnegative and identify an output"
                 }
                 require(intent.peaks.values.any { it > 0.01f }) { "No physics output has a measured response" }
-                put(PhysicsAuthoring.fitScales(setting, intent.peaks))
+                require(intent.target.isFinite() && intent.target in 0.1f..3f) { "Target fraction must be in 0.1..3" }
+                put(PhysicsAuthoring.fitScales(setting, intent.peaks, intent.target))
             }
         }
     }

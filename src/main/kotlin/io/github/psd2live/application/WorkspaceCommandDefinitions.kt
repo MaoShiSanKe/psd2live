@@ -741,15 +741,21 @@ private fun registerCatalogPhysicsCommands(catalog: WorkspaceCommands, physics: 
 
     catalog.register(
         name = "physics_fit",
-        description = "Scale a group's outputs so a standard head sway (the panel's response curve: pulled fully right for 1 s, then let go) swings each output to target percent of its parameter's end (default 100). Outputs that do not move keep their scale.",
+        description = "Scale a group's outputs so a standard head sway (the panel's response curve: pulled fully right for 1 s, then let go) swings each output to target percent of its parameter's end (default 100). Outputs that do not move keep their scale. " +
+            "observed_peaks fits to a measured response instead of the standard sway: keys are output indexes (\"0\", \"1\"...), each mapped to the reach physics_audition reported as peaks (1 = the parameter's end), as the panel's Fit after dragging the pendulum. At least one output must have moved.",
         inputSchema = WorkspaceCommandSchema(properties = buildJsonObject {
             putJsonObject("id") { put("type", "string") }
             putJsonObject("target") { put("type", "number"); put("minimum", 10); put("maximum", 300) }
+            putJsonObject("observed_peaks") {
+                put("type", "object"); put("minProperties", 1)
+                putJsonObject("additionalProperties") { put("type", "number"); put("minimum", 0) }
+            }
             putJsonObject("state") { put("type", "string") }
         }, required = listOf("id", "state")), hints = MUTATING,
     ) { request -> mutationResult {
         val target = (request.arguments.get("target")?.jsonPrimitive?.floatOrNull ?: 100f) / 100f
-        physics.fitPhysics(request.requiredString("id"), target, request.requiredString("state")).toJson()
+        val observed = request.arguments["observed_peaks"]?.let(WorkspacePhysicsEdits::observedPeaks)
+        physics.fitPhysics(request.requiredString("id"), target, request.requiredString("state"), observed).toJson()
     } }
 }
 

@@ -53,7 +53,11 @@ class WorkspacePhysicsCommandsTest {
             order?.let { put("order", JsonArray(it.map(::JsonPrimitive))) }; fps?.let { put("fps", it) }
         }).first
         override suspend fun importPhysics(path: String, expectedState: String) = execute("physics_import", expectedState, buildJsonObject { put("path", path) })
-        override suspend fun fitPhysics(id: String, target: Float, expectedState: String) = execute("physics_fit", expectedState, buildJsonObject { put("id", id); put("target", target * 100) }).first
+        override suspend fun fitPhysics(id: String, target: Float, expectedState: String, observedPeaks: Map<Int, Float>?) =
+            execute("physics_fit", expectedState, buildJsonObject {
+                put("id", id); put("target", target * 100)
+                observedPeaks?.let { peaks -> put("observed_peaks", buildJsonObject { peaks.forEach { (k, v) -> put(k.toString(), v) } }) }
+            }).first
         override suspend fun applyDocumentEdits(state: String, summary: String, edits: List<WorkspaceDocumentOperation>, author: MutationAuthor): WorkspaceMutationResult {
             val before = runtime.capture()
             val result = batch.execute(before.projectId, state, summary, edits, author)
@@ -67,6 +71,30 @@ class WorkspacePhysicsCommandsTest {
     private suspend fun WorkspaceOperations.call(id: String, input: JsonObject) = registry.invoke(id, input, agent).data
     private suspend fun WorkspaceOperations.wait(job: JsonObject) = call("job_wait", buildJsonObject { put("id", job.getValue("id")) })
     private suspend fun WorkspaceOperations.cancel(job: JsonObject) = call("job_cancel", buildJsonObject { put("request_id", "cancel"); put("id", job.getValue("id")) })
+
+    @Test fun observedPeaksFitTheMeasuredReachAndRejectBadIndexesOrNoResponseWithoutPublishing() = runBlocking<Unit> {
+        val runtime = fixture()
+        val commands = WorkspacePhysicsCommands(runtime)
+        suspend fun apply(data: JsonObject): WorkspacePhysicsCommit {
+            val c = runtime.capture(); return commands.execute(c.projectId, c.state, WorkspaceDocumentOperation("physics_fit", data), "fit", MutationAuthor.USER)
+        }
+        val c = runtime.capture()
+        commands.execute(c.projectId, c.state, WorkspaceDocumentOperation("physics_import", buildJsonObject { put("path", file().toString()) }), "import", MutationAuthor.USER)
+        val before = runtime.capture().document.rigEdits.physicsEdits.first { it.id == "imported" }.outputs.single().scale
+        val history = runtime.history()
+        for (bad in listOf(buildJsonObject { put("1", 0.5f) }, buildJsonObject { put("0", -0.1f) }, buildJsonObject { put("0", 0.001f) },
+            buildJsonObject { put("x", 0.5f) }, buildJsonObject { put("00", 0.5f) }, buildJsonObject { put("0", "0.5") })) {
+            assertFailsWith<IllegalArgumentException>(bad.toString()) {
+                apply(JsonObject(fields("imported") + ("observed_peaks" to bad)))
+            }
+        }
+        assertEquals(history, runtime.history())
+        val fitted = apply(JsonObject(fields("imported") + buildJsonObject { put("target", 50); putJsonObject("observed_peaks") { put("0", 0.25f) } }))
+        assertTrue(fitted.mutation.applied)
+        // Half the end over a quarter reached doubles the scale, the same rounding the panel's Fit uses.
+        assertEquals(kotlin.math.round(before * 0.5f / 0.25f * 1000f) / 1000f,
+            fitted.commit.capture.document.rigEdits.physicsEdits.first { it.id == "imported" }.outputs.single().scale)
+    }
 
     @Test fun importReportsDisabledAndMissingParametersAndAllCommandsReplayWithoutDesktopState() = runBlocking<Unit> {
         val runtime = fixture(); val before = runtime.capture()
