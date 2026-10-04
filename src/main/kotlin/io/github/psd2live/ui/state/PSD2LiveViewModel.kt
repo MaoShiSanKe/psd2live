@@ -296,8 +296,16 @@ class PSD2LiveViewModel : AutoCloseable {
         swingPreviewValues = emptyMap()
     }
 
-    internal fun canvasPose(current: PSD2LiveState): Map<ParameterId, Float> =
-        parameterScrubPose(current, if (processPlaybackActive) processFrameValues else current.parameterValues) + swingPreviewValues
+    /**
+     * The pose canvas edits are resolved at. Playback, swing and stale panel values can name parameters the model no
+     * longer has or sit past a range, and the shared geometry commands reject both, so the pose is kept to the model.
+     */
+    internal fun canvasPose(current: PSD2LiveState): Map<ParameterId, Float> {
+        val pose = parameterScrubPose(current, if (processPlaybackActive) processFrameValues else current.parameterValues) + swingPreviewValues
+        val parameters = current.previewModel?.rig?.puppet?.parameters ?: return pose
+        val known = parameters.mapTo(HashSet()) { it.id }
+        return io.github.psd2live.core.boundedPreviewPose(pose.filterKeys { it in known }, parameters)
+    }
 
     internal fun applySwingPreview(preview: io.github.psd2live.application.WorkspaceSwingPreview) {
         val current = _state.value
