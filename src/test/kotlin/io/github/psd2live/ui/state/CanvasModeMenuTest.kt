@@ -217,6 +217,8 @@ class CanvasModeMenuTest {
 
             editor.activateTool(CanvasTool.SKELETON_EDIT)
             assertEquals(CanvasTool.SKELETON_EDIT, editor.tool)
+            // The draft opens on its own rest-pose commit, so it appears once that write settles.
+            withTimeout(10000) { while (vm.state.value.canvasEditBusy) delay(10) }
             assertNotNull(editor.skeletonDraft)
 
             // Leaving the mode writes the draft back and gives the skeleton up for the mode gone to.
