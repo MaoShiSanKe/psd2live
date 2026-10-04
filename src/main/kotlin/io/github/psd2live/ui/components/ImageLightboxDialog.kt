@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.components
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -44,7 +45,7 @@ fun ImageLightboxDialog(
 		runCatching { ImageIO.read(ByteArrayInputStream(imageBytes)) }.getOrNull()
 	}
 	val bitmap = remember(bufferedImage) {
-		bufferedImage?.toComposeImageBitmap()
+		bufferedImage?.toImageBitmapFast()
 	}
 
 	fun copyImageToClipboard() {

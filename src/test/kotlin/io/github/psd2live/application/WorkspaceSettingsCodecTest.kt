@@ -9,6 +9,20 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class WorkspaceSettingsCodecTest {
+    @Test fun meshUnitsRoundTripAndLegacyArchivesKeepSourcePixelUnits() {
+        for (units in MeshUnits.entries) {
+            val config = PipelineConfig(meshUnits = units)
+            assertEquals(config, WorkspaceSettingsCodec.decode(WorkspaceSettingsCodec.encode(config)))
+        }
+        assertEquals(MeshUnits.PIXELS, WorkspaceSettingsCodec.decode(buildJsonObject { put("meshSpacing", 40) }).meshUnits)
+        assertEquals(MeshUnits.DOCUMENT, WorkspaceSettingsCodec.decode(buildJsonObject {}).meshUnits)
+        val document = WorkspaceSettingsCodec.encode(PipelineConfig(meshUnits = MeshUnits.DOCUMENT))
+        assertEquals(MeshUnits.PIXELS, WorkspaceSettingsCodec.decode(
+            mergeProjectSettings(document, buildJsonObject { put("meshUnits", "PIXELS") })).meshUnits)
+        assertFailsWith<IllegalArgumentException> {
+            mergeProjectSettings(document, buildJsonObject { put("meshUnits", "invalid") })
+        }
+    }
     @Test fun documentConfigPreservesDesktopGenerationPolicyAndCustomSettings() {
         val cases = listOf(
             PSD2LiveState(),

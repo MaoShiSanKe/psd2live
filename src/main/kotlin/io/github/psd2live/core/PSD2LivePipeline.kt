@@ -316,7 +316,8 @@ class PSD2LivePipeline {
 		before.meshEdgeMode != config.meshEdgeMode || before.meshEdgeWidth != config.meshEdgeWidth ||
 		before.meshMaxEdgeDistance != config.meshMaxEdgeDistance || before.meshInteriorDensity != config.meshInteriorDensity ||
 		before.meshFillAlgorithm != config.meshFillAlgorithm || before.meshSuppressBoundaryDiagonals != config.meshSuppressBoundaryDiagonals ||
-		before.meshFillParameters != config.meshFillParameters || before.alphaThreshold != config.alphaThreshold
+		before.meshFillParameters != config.meshFillParameters || before.meshUnits != config.meshUnits ||
+		before.alphaThreshold != config.alphaThreshold
 
 	private fun meshControlsChanged(before: PipelineConfig, config: PipelineConfig) =
 		globalMeshControlsChanged(before, config) || before.meshOverrides != config.meshOverrides
@@ -707,7 +708,7 @@ class PSD2LivePipeline {
 		{
 		  "version": 1,
 		  "model": ${quote(baseName)},
-		  "generator": "PSD2Live 2.0.2",
+		  "generator": "PSD2Live 2.0.3",
 		  "runtimeTarget": ${quote(rig.puppet.runtimeTarget.name)},
 		  "mocVersion": ${rig.puppet.runtimeTarget.mocVersion().byteValue},
 		  "cmo3TargetVersionNo": ${rig.puppet.runtimeTarget.cmo3TargetVersionNo()},

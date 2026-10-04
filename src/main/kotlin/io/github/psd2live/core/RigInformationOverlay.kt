@@ -35,24 +35,16 @@ internal object RigInformationOverlay {
         return warps.zip(probes).mapNotNull { (warp,probe) -> geometry.worldPositions[probe.id]?.let { warp.id.raw to it } }.toMap()
     }
 
-    fun paint(
-        g: Graphics2D,
+    /** Each shown warp's lattice and the look it is drawn in; the Java2D and GPU guides both draw from this. */
+    fun warpLayers(
         model: PuppetModel,
-        parameters: Map<ParameterId, Float>,
-        viewport: CanvasViewport,
+        points: Map<String, FloatArray>,
         ids: Set<String>,
-        labels: Boolean = true,
-        pointIndices: Boolean = false,
-        selectedDeformerId: String? = null,
-        hoveredDeformerId: String? = null,
-        dimUnselected: Boolean = false,
-        pointsById: Map<String, FloatArray>? = null,
-    ) {
-        if (ids.isEmpty()) return
-        val points = pointsById ?: warpPoints(model, parameters, ids)
-        // Laid out once for the whole pass, because a mark's size depends on what else shares its corner.
-        val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model, points), viewport)
-        val layers = model.deformers.filterIsInstance<Deformer.Warp>().filter { it.id.raw in ids }.mapNotNull { w ->
+        selectedDeformerId: String?,
+        hoveredDeformerId: String?,
+        dimUnselected: Boolean,
+    ): List<WarpLayer> {
+        return model.deformers.filterIsInstance<Deformer.Warp>().filter { it.id.raw in ids }.mapNotNull { w ->
             val p = points[w.id.raw] ?: return@mapNotNull null
             val isSelected = selectedDeformerId != null && w.id.raw == selectedDeformerId
             val isHovered = hoveredDeformerId != null && w.id.raw == hoveredDeformerId && !isSelected
@@ -83,6 +75,26 @@ internal object RigInformationOverlay {
                 isDimmed = isDimmed,
             )
         }
+    }
+
+    fun paint(
+        g: Graphics2D,
+        model: PuppetModel,
+        parameters: Map<ParameterId, Float>,
+        viewport: CanvasViewport,
+        ids: Set<String>,
+        labels: Boolean = true,
+        pointIndices: Boolean = false,
+        selectedDeformerId: String? = null,
+        hoveredDeformerId: String? = null,
+        dimUnselected: Boolean = false,
+        pointsById: Map<String, FloatArray>? = null,
+    ) {
+        if (ids.isEmpty()) return
+        val points = pointsById ?: warpPoints(model, parameters, ids)
+        // Laid out once for the whole pass, because a mark's size depends on what else shares its corner.
+        val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model, points), viewport)
+        val layers = warpLayers(model, points, ids, selectedDeformerId, hoveredDeformerId, dimUnselected)
 
         // Pass 1: the rig itself - every lattice, every control point, every corner mark.
         for (layer in layers) {
@@ -147,7 +159,7 @@ internal object RigInformationOverlay {
      * a different dimming than the lattice it belongs to - the two would then be able to disagree about
      * which deformer is selected.
      */
-    private class WarpLayer(
+    class WarpLayer(
         val warp: Deformer.Warp,
         val points: FloatArray,
         val baseColor: Color,
@@ -178,12 +190,40 @@ internal object RigInformationOverlay {
         dimUnselected: Boolean = false,
     ) {
         if (ids.isEmpty()) return
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        for (needle in rotationNeedles(model, parameters, viewport, ids, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
+            paintRotationNeedle(g, needle.pivot.x, needle.pivot.y, needle.tip.x, needle.tip.y, needle.color, needle.dimmed)
+            if (labels && !needle.dimmed) {
+                val label = "${needle.rotation.name} [${needle.rotation.id.raw}]"
+                val left = needle.pivot.x.toInt().coerceAtLeast(0)
+                val baseline = (needle.pivot.y - 10f).toInt().coerceAtLeast(16)
+                g.color = Color(20, 20, 24, 220)
+                g.fillRect(left, baseline - 14, g.fontMetrics.stringWidth(label) + 6, 17)
+                g.color = needle.color
+                g.drawString(label, left + 3, baseline)
+            }
+        }
+    }
+
+    /** One rotation guide: its pivot and tip on screen and the colour it is drawn in. */
+    class RotationNeedle(val rotation: Deformer.Rotation, val pivot: RenderPoint, val tip: RenderPoint, val color: Color, val dimmed: Boolean)
+
+    /** The rotation needles [paintRotations] draws, for the GPU guides to draw alike. */
+    fun rotationNeedles(
+        model: PuppetModel,
+        parameters: Map<ParameterId, Float>,
+        viewport: CanvasViewport,
+        ids: Set<String>,
+        selectedDeformerId: String?,
+        hoveredDeformerId: String?,
+        dimUnselected: Boolean,
+    ): List<RotationNeedle> {
+        if (ids.isEmpty()) return emptyList()
         val pose = parameters.mapKeys { it.key.raw }
         val defaults = model.parameters.associate { it.id to it.default }
         val paramValue: (ParameterId) -> Float = { id -> parameters[id] ?: defaults[id] ?: 0f }
         val worlds = buildDeformerWorlds(model.deformers, paramValue, { defaults[it] ?: 0f })
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-
+        val out = ArrayList<RotationNeedle>()
         for (rotation in model.deformers.filterIsInstance<Deformer.Rotation>()) {
             if (rotation.id.raw !in ids) continue
             val geo = runCatching { RigGeometryTools.geometry(model, "rotation", rotation.id.raw, pose) }.getOrNull()
@@ -207,18 +247,9 @@ internal object RigInformationOverlay {
                 isDimmed -> Color(baseColor.red, baseColor.green, baseColor.blue, 90)
                 else -> baseColor
             }
-            paintRotationNeedle(g, pivot.x, pivot.y, tip.x, tip.y, color, isDimmed)
-
-            if (labels && !isDimmed) {
-                val label = "${rotation.name} [${rotation.id.raw}]"
-                val left = pivot.x.toInt().coerceAtLeast(0)
-                val baseline = (pivot.y - 10f).toInt().coerceAtLeast(16)
-                g.color = Color(20, 20, 24, 220)
-                g.fillRect(left, baseline - 14, g.fontMetrics.stringWidth(label) + 6, 17)
-                g.color = color
-                g.drawString(label, left + 3, baseline)
-            }
+            out += RotationNeedle(rotation, pivot, tip, color, isDimmed)
         }
+        return out
     }
 
     /** Compact Graphics2D stand-in for the Compose deform-mode needle. */
@@ -275,14 +306,35 @@ internal object RigInformationOverlay {
         g.fill(Ellipse2D.Float(px - hub * 0.28f, py - hub * 0.28f, hub * 0.56f, hub * 0.56f))
     }
 
-    fun paintDeformPaths(
-        g: Graphics2D,
+    /**
+     * One deform path as the guides draw it: its points and curve on screen, which points are corners, and the
+     * look its selection, hover and dimming give it. Shared by the Java2D and GPU guides.
+     */
+    class DeformPathLook(
+        val path: DeformPath,
+        val screenPoints: List<Pair<Float, Float>>,
+        val curvePoints: List<Pair<Float, Float>>,
+        val isSelected: Boolean,
+        val isHovered: Boolean,
+        val isDimmed: Boolean,
+        val curveColor: Color,
+        val strokeWidth: Float,
+        val drawWidth: Boolean,
+        val drawHardness: Boolean,
+        val outerRadiusPx: Float,
+        val innerRadiusPx: Float,
+    ) {
+        fun isCorner(i: Int) = path.points.getOrNull(i)?.corner == true
+        val haloColor: Color get() = if (isDimmed) Color(20, 20, 24, 25) else Color(20, 20, 24, 180)
+        fun pointRadius(): Int = if (isSelected || isHovered) 5 else if (isDimmed) 2 else 4
+        fun diamondSize(): Float = if (isSelected || isHovered) 6f else if (isDimmed) 3f else 4.5f
+    }
+
+    fun deformPathLooks(
         model: PuppetModel,
         geometry: DeformedGeometry?,
         viewport: CanvasViewport,
         pathIds: Set<String>,
-        labels: Boolean = false,
-        pointIndices: Boolean = false,
         showWidth: Boolean = false,
         showHardness: Boolean = false,
         showRadius: Boolean = false,
@@ -291,7 +343,7 @@ internal object RigInformationOverlay {
         hoveredPathId: String? = null,
         hoveredPathIds: Set<String> = emptySet(),
         dimUnselected: Boolean = false,
-    ): List<String> {
+    ): List<DeformPathLook> {
         if (pathIds.isEmpty()) return emptyList()
         val allPaths = model.deformPaths
         val targets = if (pathIds.contains("*")) {
@@ -305,12 +357,7 @@ internal object RigInformationOverlay {
                     (pathIds.contains("level:3") && path.editLevel == 3)
             }
         }
-        if (targets.isEmpty()) return emptyList()
-
-        val renderedPathIds = mutableListOf<String>()
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
-
+        val out = ArrayList<DeformPathLook>()
         for (path in targets) {
             val drawable = model.drawables.firstOrNull { it.id == path.drawableId } ?: continue
             val mesh = drawable.mesh ?: continue
@@ -321,7 +368,6 @@ internal object RigInformationOverlay {
                 continue
             }
             if (points.size < 2) continue
-            renderedPathIds.add(path.id)
 
             val isSelected = selectedPathIds.contains(path.id) || (selectedPathId != null && path.id == selectedPathId)
             val isHovered = hoveredPathIds.contains(path.id) || (hoveredPathId != null && path.id == hoveredPathId && !isSelected)
@@ -340,12 +386,45 @@ internal object RigInformationOverlay {
                 isDimmed -> 0.8f
                 else -> 1.8f
             }
-
             val screenPoints = points.map { (wx, wy) ->
                 viewport.x(wx).toFloat() to viewport.yFromWorld(wy).toFloat()
             }
-
             val curvePoints = DeformPathTools.curve(screenPoints, path.points.map { it.corner }, path.closed)
+            val drawWidth = (showWidth || showRadius) && path.width > 0f && !isDimmed
+            val drawHardness = (showHardness || showRadius) && path.width > 0f && path.hardness > 0f && !isDimmed
+            val outerRadiusPx = (path.safeWidth * viewport.scale).toFloat()
+            out += DeformPathLook(path, screenPoints, curvePoints, isSelected, isHovered, isDimmed, curveColor, strokeWidth,
+                drawWidth, drawHardness, outerRadiusPx, outerRadiusPx * (path.safeHardness / 100f))
+        }
+        return out
+    }
+
+    fun paintDeformPaths(
+        g: Graphics2D,
+        model: PuppetModel,
+        geometry: DeformedGeometry?,
+        viewport: CanvasViewport,
+        pathIds: Set<String>,
+        labels: Boolean = false,
+        pointIndices: Boolean = false,
+        showWidth: Boolean = false,
+        showHardness: Boolean = false,
+        showRadius: Boolean = false,
+        selectedPathId: String? = null,
+        selectedPathIds: Set<String> = emptySet(),
+        hoveredPathId: String? = null,
+        hoveredPathIds: Set<String> = emptySet(),
+        dimUnselected: Boolean = false,
+    ): List<String> {
+        val looks = deformPathLooks(model, geometry, viewport, pathIds, showWidth, showHardness, showRadius,
+            selectedPathId, selectedPathIds, hoveredPathId, hoveredPathIds, dimUnselected)
+        if (looks.isEmpty()) return emptyList()
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+
+        for (look in looks) {
+            val path = look.path
+            val curvePoints = look.curvePoints
             if (curvePoints.size >= 2) {
                 val curvePath = Path2D.Float()
                 curvePath.moveTo(curvePoints[0].first, curvePoints[0].second)
@@ -354,24 +433,20 @@ internal object RigInformationOverlay {
                 }
                 if (path.closed) curvePath.closePath()
 
-                g.color = if (isDimmed) Color(20, 20, 24, 25) else Color(20, 20, 24, 180)
-                g.stroke = BasicStroke(strokeWidth + 2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                g.color = look.haloColor
+                g.stroke = BasicStroke(look.strokeWidth + 2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                 g.draw(curvePath)
 
-                g.color = curveColor
-                g.stroke = BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                g.color = look.curveColor
+                g.stroke = BasicStroke(look.strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                 g.draw(curvePath)
             }
 
-            val drawWidth = (showWidth || showRadius) && path.width > 0f && !isDimmed
-            val drawHardness = (showHardness || showRadius) && path.width > 0f && path.hardness > 0f && !isDimmed
-
-            if (drawWidth || drawHardness) {
-                val worldWidth = path.safeWidth
-                val outerRadiusPx = (worldWidth * viewport.scale).toFloat()
-                val innerRadiusPx = outerRadiusPx * (path.safeHardness / 100f)
-                for (pt in screenPoints) {
-                    if (drawHardness && innerRadiusPx > 1f) {
+            if (look.drawWidth || look.drawHardness) {
+                val outerRadiusPx = look.outerRadiusPx
+                val innerRadiusPx = look.innerRadiusPx
+                for (pt in look.screenPoints) {
+                    if (look.drawHardness && innerRadiusPx > 1f) {
                         val innerBoundary = Ellipse2D.Float(pt.first - innerRadiusPx, pt.second - innerRadiusPx,
                             innerRadiusPx * 2, innerRadiusPx * 2)
                         g.color = Color(33, 150, 243, 35)
@@ -380,7 +455,7 @@ internal object RigInformationOverlay {
                         g.stroke = BasicStroke(1.2f)
                         g.draw(innerBoundary)
                     }
-                    if (drawWidth && outerRadiusPx > 1f) {
+                    if (look.drawWidth && outerRadiusPx > 1f) {
                         g.color = Color(244, 67, 54, 180)
                         g.stroke = BasicStroke(1.4f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0f, floatArrayOf(4f, 4f), 0f)
                         g.draw(Ellipse2D.Float(pt.first - outerRadiusPx, pt.second - outerRadiusPx,
@@ -389,12 +464,12 @@ internal object RigInformationOverlay {
                 }
             }
 
-            for (i in screenPoints.indices) {
-                val pt = screenPoints[i]
-                val isCorner = path.points.getOrNull(i)?.corner == true
-
-                if (isCorner) {
-                    val d = if (isSelected || isHovered) 6f else if (isDimmed) 3f else 4.5f
+            val isDimmed = look.isDimmed
+            val curveColor = look.curveColor
+            for (i in look.screenPoints.indices) {
+                val pt = look.screenPoints[i]
+                if (look.isCorner(i)) {
+                    val d = look.diamondSize()
                     val diamond = Path2D.Float().apply {
                         moveTo(pt.first, pt.second - d)
                         lineTo(pt.first + d, pt.second)
@@ -408,7 +483,7 @@ internal object RigInformationOverlay {
                     g.stroke = BasicStroke(1.2f)
                     g.draw(diamond)
                 } else {
-                    val r = if (isSelected || isHovered) 5 else if (isDimmed) 2 else 4
+                    val r = look.pointRadius()
                     g.color = if (isDimmed) Color(curveColor.red, curveColor.green, curveColor.blue, 50) else curveColor
                     g.fillOval((pt.first - r).toInt(), (pt.second - r).toInt(), r * 2, r * 2)
                     g.color = if (isDimmed) Color(20, 20, 24, 40) else Color.WHITE
@@ -416,7 +491,7 @@ internal object RigInformationOverlay {
                     g.drawOval((pt.first - r).toInt(), (pt.second - r).toInt(), r * 2, r * 2)
                 }
 
-                if (pointIndices && (!isDimmed || isSelected || isHovered)) {
+                if (pointIndices && (!isDimmed || look.isSelected || look.isHovered)) {
                     val idx = i.toString()
                     val ix = (pt.first + 6).toInt()
                     val iy = (pt.second - 4).toInt()
@@ -428,6 +503,6 @@ internal object RigInformationOverlay {
                 }
             }
         }
-        return renderedPathIds
+        return looks.map { it.path.id }
     }
 }

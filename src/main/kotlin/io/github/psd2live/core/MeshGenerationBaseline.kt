@@ -7,9 +7,10 @@ import org.umamo.runtime.model.PuppetModel
 /** Ordered topology records require the mesh generator that preceded the first record. */
 internal object MeshGenerationBaseline {
     const val OP = "mesh_generation_baseline"
-    private val fields = setOf("meshSpacing", "meshOuterMargin", "meshEdgeMode", "meshEdgeWidth",
+    private val legacyFields = setOf("meshSpacing", "meshOuterMargin", "meshEdgeMode", "meshEdgeWidth",
         "meshMaxEdgeDistance", "meshInteriorDensity", "meshFillAlgorithm", "meshSuppressBoundaryDiagonals",
         "meshFillParameters", "meshOverrides", "alphaThreshold")
+    private val fields = legacyFields + "meshUnits"
 
     fun present(overlay: RigEditOverlay) = overlay.authoringJournal.any { it["op"]?.jsonPrimitive?.contentOrNull == OP }
 
@@ -39,13 +40,17 @@ internal object MeshGenerationBaseline {
                 mesh.getValue("suppressBoundaryDiagonals").jsonPrimitive.boolean,
                 WorkspaceSettingsCodec.decodeFillParameters(mesh.getValue("fillParameters")))
         }
-        return WorkspaceSettingsCodec.decode(settings, generation).copy(meshOverrides = overrides)
+        val basis = if ("meshUnits" in settings) generation else generation.copy(meshUnits = MeshUnits.PIXELS)
+        return WorkspaceSettingsCodec.decode(settings, basis).copy(meshOverrides = overrides)
     }
 
     private fun settings(command: JsonObject): JsonObject {
         require(command.keys == setOf("op", "settings")) { "Invalid mesh generation baseline" }
         return command.getValue("settings").jsonObject.also {
-            require(it.keys == fields) { "Invalid mesh generation baseline settings" }
+            require(it.keys == fields || it.keys == legacyFields) { "Invalid mesh generation baseline settings" }
+            it["meshUnits"]?.jsonPrimitive?.content?.let { units ->
+                require(MeshUnits.entries.any { value -> value.name == units }) { "Invalid baseline mesh units" }
+            }
         }
     }
 

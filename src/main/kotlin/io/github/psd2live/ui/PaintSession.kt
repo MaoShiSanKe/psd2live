@@ -1,5 +1,6 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -7,7 +8,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import io.github.psd2live.application.WorkspacePaintSession
 import io.github.psd2live.core.RasterPaintEngine
 import io.github.psd2live.i18n.tr
@@ -35,8 +35,63 @@ class PaintSession(val handle: WorkspacePaintSession) {
     var previewTiles by mutableStateOf<List<PreviewTile>>(emptyList())
         private set
     class PreviewTile(val x: Int, val y: Int, val width: Int, val height: Int, val image: ImageBitmap)
+
+    /**
+     * The canvas shows this session through the GPU renderer, which keeps the raster as one texture and is
+     * handed only the rectangles that changed: no preview tiles are painted or converted then. Set by the canvas
+     * that draws the session; switching it off repaints every tile for the software canvas.
+     */
+    var gpuPreview: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) {
+                markDirty(Rectangle(0, 0, docWidth, docHeight))
+                refreshPreview()
+            }
+        }
+
+    /** Bumped whenever the raster changed while [gpuPreview] is on, so a draw scope reading it redraws. */
+    var gpuVersion by mutableStateOf(0)
+        private set
+
+    /** Changed areas the GPU texture has not been given yet. */
+    private val previewLock = Any()
+    private val gpuDirty = ArrayList<Rectangle>()
+
+    /**
+     * The changes since the last call, as one rectangle of premultiplied RGBA pixels copied off the raster here
+     * through the shared session's locked raster snapshot, so GL never reads a half-written stroke. [full] asks for the
+     * whole raster, for a texture that has just been made.
+     */
+    internal fun takeGpuUpload(full: Boolean): io.github.psd2live.render.PaintUpload? {
+        // Release this lock before reading the raster: session observers hold the raster lock while publishing.
+        val area = synchronized(previewLock) {
+            val area = if (full) Rectangle(0, 0, docWidth, docHeight) else {
+                if (gpuDirty.isEmpty()) return null
+                gpuDirty.reduce { a, b -> a.union(b) }.intersection(Rectangle(0, 0, docWidth, docHeight))
+            }
+            gpuDirty.clear()
+            area
+        }
+        if (area.isEmpty) return null
+        val argb = handle.tile(area.x, area.y, area.width, area.height).getRGB(0, 0, area.width, area.height, null, 0, area.width)
+        val bytes = ByteArray(argb.size * 4)
+        for (i in argb.indices) {
+            val c = argb[i]
+            val a = c ushr 24
+            if (a == 0) continue
+            bytes[i * 4] = (((c ushr 16 and 0xff) * a + 127) / 255).toByte()
+            bytes[i * 4 + 1] = (((c ushr 8 and 0xff) * a + 127) / 255).toByte()
+            bytes[i * 4 + 2] = (((c and 0xff) * a + 127) / 255).toByte()
+            bytes[i * 4 + 3] = a.toByte()
+        }
+        return io.github.psd2live.render.PaintUpload(area.x, area.y, area.width, area.height, bytes)
+    }
+
     private val published = HashMap<Long, PreviewTile>()
-    private val stale = HashSet<Long>()
+    private val stale = HashMap<Long, Long>()
+    private var dirtyVersion = 0L
     private val detach: () -> Unit
     init {
         detach = handle.observe { regions ->
@@ -56,20 +111,35 @@ class PaintSession(val handle: WorkspacePaintSession) {
     private fun markDirty(rect: Rectangle) {
         val area = rect.intersection(Rectangle(0, 0, docWidth, docHeight))
         if (area.isEmpty) return
-        for (ty in area.y / PREVIEW_TILE until (area.y + area.height + PREVIEW_TILE - 1) / PREVIEW_TILE)
-            for (tx in area.x / PREVIEW_TILE until (area.x + area.width + PREVIEW_TILE - 1) / PREVIEW_TILE)
-                stale += (tx.toLong() shl 32) or (ty.toLong() and 0xFFFFFFFFL)
+        synchronized(previewLock) {
+            gpuDirty += Rectangle(area)
+            val version = ++dirtyVersion
+            for (ty in area.y / PREVIEW_TILE until (area.y + area.height + PREVIEW_TILE - 1) / PREVIEW_TILE)
+                for (tx in area.x / PREVIEW_TILE until (area.x + area.width + PREVIEW_TILE - 1) / PREVIEW_TILE)
+                    stale[(tx.toLong() shl 32) or (ty.toLong() and 0xFFFFFFFFL)] = version
+        }
     }
     fun refreshPreview() {
-        if (stale.isEmpty()) return
-        for (key in stale.toList()) {
+        if (gpuPreview) {
+            // The GPU canvas takes the changed areas themselves (see takeGpuUpload); the tiles wait until a
+            // software canvas asks for them.
+            synchronized(previewLock) { if (gpuDirty.isNotEmpty()) gpuVersion++ }
+            return
+        }
+        val dirty = synchronized(previewLock) { stale.toMap() }
+        if (dirty.isEmpty()) return
+        for ((key, version) in dirty) {
             val x = (key ushr 32).toInt() * PREVIEW_TILE
             val y = (key and 0xFFFFFFFFL).toInt() * PREVIEW_TILE
             val width = min(PREVIEW_TILE, docWidth - x); val height = min(PREVIEW_TILE, docHeight - y)
-            if (width > 0 && height > 0) published[key] =
-                PreviewTile(x, y, width, height, handle.tile(x, y, width, height).toComposeImageBitmap())
+            if (width > 0 && height > 0) {
+                val tile = PreviewTile(x, y, width, height, handle.tile(x, y, width, height).toImageBitmapFast())
+                synchronized(previewLock) {
+                    if (stale[key] == version) { published[key] = tile; stale.remove(key) }
+                }
+            }
         }
-        stale.clear(); previewTiles = published.values.toList()
+        synchronized(previewLock) { previewTiles = published.values.toList() }
     }
     internal fun beginStroke() = handle.beginStroke()
     internal fun segment(x0: Float, y0: Float, x1: Float, y1: Float, tip: RasterPaintEngine.Tip,

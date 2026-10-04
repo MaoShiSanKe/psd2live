@@ -31,6 +31,17 @@ class AdaptiveMeshTopologyTest {
             io.github.psd2live.ui.state.WorkspaceStateCodec.decode(legacy).meshFillAlgorithm)
     }
 
+    @Test fun meshUnitsSurviveRoundTripAndOlderProjectsKeepSourcePixels() {
+        val codec = io.github.psd2live.ui.state.WorkspaceStateCodec
+        val fresh = io.github.psd2live.ui.state.PSD2LiveState()
+        assertEquals(MeshUnits.DOCUMENT, fresh.buildConfig().meshUnits)
+        assertEquals(MeshUnits.DOCUMENT, codec.decode(codec.encode(fresh)).meshUnits)
+        val pixels = fresh.copy(meshUnits = MeshUnits.PIXELS)
+        assertEquals(MeshUnits.PIXELS, codec.decode(codec.settings(pixels)).meshUnits)
+        // Saved before mesh units: the lengths were source pixels, so the same meshes come back.
+        assertEquals(MeshUnits.PIXELS, codec.decode(JsonObject(codec.encode(fresh).filterKeys { it != "meshUnits" })).meshUnits)
+    }
+
     @Test fun fillParametersSurviveProjectStateRoundTripPerAlgorithm() {
         val custom = MeshFillParameters(
             poisson = PoissonFillParameters(edgeRatio = 3f, gradation = 0.5f, jitter = 0.1f),

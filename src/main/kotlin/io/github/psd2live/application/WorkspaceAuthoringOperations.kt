@@ -170,6 +170,11 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
         }, listOf("x", "y")), 7, 7))
         put("meshEdgeMode", choices("SINGLE", "DOUBLE", "TRIPLE"))
         put("meshFillAlgorithm", choices(*io.github.psd2live.core.MeshFillAlgorithm.entries.map { it.name }.toTypedArray()))
+        put("meshUnits", buildJsonObject {
+            put("type", "string"); put("enum", JsonArray(listOf(JsonPrimitive("DOCUMENT"), JsonPrimitive("PIXELS"))))
+            put("description", "Unit of every mesh length: DOCUMENT is pixels of the document scaled to a " +
+                "${io.github.psd2live.core.MeshResolution.REFERENCE_SIDE} px long side (same mesh at any resolution); PIXELS is source pixels")
+        })
         put("runtimeTarget", string()); put("textureUpscale", upscaleSettings)
         put("meshFillParameters", fillParameterFields)
         put("rigTuning", rigTuningFields)

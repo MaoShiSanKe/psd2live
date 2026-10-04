@@ -11,9 +11,9 @@ object CharacterAnalyzer {
 		LayerClassifier.classify(layer, config.alphaThreshold).withOverride(config.layerOverrides[layer.id.raw])
 
 	/** Recreate retained legacy component identities without building a model or discarding deleted pixels. */
-	internal fun expandLayer(original: ClassifiedLayer, config: PipelineConfig): List<ClassifiedLayer> {
+	internal fun expandLayer(original: ClassifiedLayer, config: PipelineConfig, unitScale: Float = 1f): List<ClassifiedLayer> {
 		if (!preserveLegacySplit(original.source.id.raw, config)) return listOf(original)
-		return ComponentSplitter.split(original, config.meshSpacing.toFloat(), config.alphaThreshold).map { component ->
+		return ComponentSplitter.split(original, config.meshSpacing.toFloat(), config.alphaThreshold, unitScale).map { component ->
 			val override = config.layerOverrides[component.source.id.raw] ?: config.layerOverrides[original.source.id.raw]
 			component.withOverride(override, preserveSide = component.source.id != original.source.id)
 		}
@@ -32,7 +32,8 @@ object CharacterAnalyzer {
 			}.map { if (it.source.id.raw in depthLayerIds && it.opaquePixels == 0) it.copy(opaquePixels = 1) else it }
 		// Fresh layers stay intact until the UI offers a named split. Old projects may still
 		// reference generated :r/:l IDs, so retain those identities when they carry edits.
-		val layers = initiallyClassified.flatMap { expandLayer(it, config) }
+		val unitScale = MeshResolution.unitScale(config, source)
+		val layers = initiallyClassified.flatMap { expandLayer(it, config, unitScale) }
 			.filter { it.source.id.raw !in config.deletedLayerIds }
 		val warnings = source.warnings.toMutableList()
 		val nonEmpty = layers.filter { it.opaquePixels > 0 }

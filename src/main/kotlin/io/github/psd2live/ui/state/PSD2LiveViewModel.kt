@@ -2507,6 +2507,20 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
+	/** Switches what every mesh length is measured in; the meshes are rebuilt like any global mesh change. */
+	fun setMeshUnits(units: io.github.psd2live.core.MeshUnits) {
+		if (state.value.meshUnits == units) return
+        workspaceBackend?.takeUnless { editorSessions.anyOpen }?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+            runWorkspaceCommand { state -> port.updateProjectSettings(state,
+                kotlinx.serialization.json.buildJsonObject { put("meshUnits", units.name) }) }
+            return
+        }
+		updateState { it.copy(meshUnits = units) }
+		schedulePreviewRebuild()
+		editorChanged()
+	}
+
 	fun setPartMeshSettings(layerId: String, settings: MeshSettings) {
 		clearMeshSettingsPreviewState(layerId)
         workspaceBackend?.let { workspace ->
@@ -3363,10 +3377,31 @@ class PSD2LiveViewModel : AutoCloseable {
 	// endregion
 
 	/** Commit an edited armature as one undoable project change and rebuild its derived rig. */
-	fun setSkeleton(spec: io.github.psd2live.core.SkeletonSpec) {
-		val state = currentWorkspaceState() ?: return
-		saveDocumentEdits(state, "Edit skeleton", listOf(io.github.psd2live.application.WorkspaceDocumentOperation("skeleton_put",
-			kotlinx.serialization.json.buildJsonObject { put("spec", spec.toJson()) }))) { failure -> if (failure != null) updateState { it.copy(statusText = failure) } }
+	fun setSkeleton(spec: io.github.psd2live.core.SkeletonSpec, expectedState: String? = currentWorkspaceState(),
+		onComplete: (String?) -> Unit = {}) {
+		if (expectedState == null) { onComplete("Project workspace unavailable"); return }
+		val started = _state.value
+		var committedState: String? = null
+		saveWorkspaceEdit({ failure ->
+			if (failure != null) updateState {
+				if (it.projectId == started.projectId && it.projectOpenGeneration == started.projectOpenGeneration &&
+					it.activeWorkspace.id == started.activeWorkspace.id) it.copy(statusText = failure) else it
+			}
+			// Entering Edit may reset the authored pose; its command must wait for this edit to finish.
+			scope.launch {
+				_state.first { !it.canvasEditBusy }
+				val confirmed = committedState
+				val actual = currentWorkspaceState()
+				val outcome = failure ?: if (confirmed != null && confirmed != actual)
+					io.github.psd2live.application.WorkspaceConflict(confirmed, actual ?: "unloaded").message else null
+				onComplete(outcome)
+			}
+		}) {
+			val workspace: io.github.psd2live.application.WorkspaceDocumentPort = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+			committedState = workspace.applyDocumentEdits(expectedState, "Edit skeleton",
+				listOf(io.github.psd2live.application.WorkspaceDocumentOperation("skeleton_put",
+					kotlinx.serialization.json.buildJsonObject { put("spec", spec.toJson()) })), MutationAuthor.USER).state
+		}
 	}
 
 	fun setSkeletonPoseMetadata(spec: io.github.psd2live.core.SkeletonSpec) = setSkeleton(spec)

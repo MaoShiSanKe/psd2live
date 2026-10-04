@@ -480,23 +480,35 @@ internal class CanvasEditor(
 	fun beginSkeletonEdit() {
 		if (busy) return
 		if (placement != null) cancelPlacement()
-		if (!ensureSkeleton()) return
-		enterSkeletonMode(CanvasTool.SKELETON_EDIT)
+		ensureSkeleton { enterSkeletonMode(CanvasTool.SKELETON_EDIT) }
 	}
 
 	/** Enters Skeleton mode on the Pose tool, which turns the bones of an enabled armature. */
 	fun beginSkeletonPose() {
 		if (busy) return
+		skeletonEntrySerial++
 		if (committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
 		enterSkeletonMode(CanvasTool.SKELETON_POSE)
 	}
 
 	/** Proposes an armature from the layers' tags when the project has none yet. */
-	private fun ensureSkeleton(): Boolean {
-		if (committedSkeleton != null) return true
-		val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return false
-		viewModel.setSkeleton(spec.copy(enabled = true))
-		return committedSkeleton != null
+	private var skeletonEntrySerial = 0L
+
+	private fun ensureSkeleton(onReady: () -> Unit) {
+		val serial = ++skeletonEntrySerial
+		if (committedSkeleton != null) { onReady(); return }
+		val started = viewModel.uiState.value
+		val expected = viewModel.currentWorkspaceState() ?: return
+		val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return
+		if (spec.bones.isEmpty()) return
+		viewModel.setSkeleton(spec.copy(enabled = true), expected) { failure ->
+			val current = viewModel.uiState.value
+			if (serial != skeletonEntrySerial || current.projectId != started.projectId ||
+				current.projectOpenGeneration != started.projectOpenGeneration || current.activeWorkspace.id != workspaceId ||
+				current.workspaces.none { it.id == workspaceId && it.canvases.any { canvas -> canvas.id == canvasId } }) return@setSkeleton
+			if (failure != null) error = failure
+			else if (committedSkeleton != null) onReady()
+		}
 	}
 
 	private fun enterSkeletonMode(next: CanvasTool) {
@@ -1050,6 +1062,45 @@ internal class CanvasEditor(
     var paintBrushSize by mutableStateOf(16f)
     var paintPencilSize by mutableStateOf(4f)
     var paintEraserSize by mutableStateOf(24f)
+
+    /** The open document's longest side in pixels; 0 with nothing open. */
+    val documentLongSide: Int
+        get() = state.let { it.analysis ?: it.previewModel?.analysis }?.source?.let { maxOf(it.widthPx, it.heightPx) } ?: 0
+
+    /**
+     * The largest size any brush takes: never below [MIN_BRUSH_SIZE_LIMIT], and otherwise the document's longest
+     * side, since a brush wider than the document has nothing more to cover.
+     */
+    val brushSizeLimit: Float
+        get() = maxOf(MIN_BRUSH_SIZE_LIMIT, documentLongSide.toFloat())
+
+    /**
+     * How much larger brushes start on this document: 1 up to [io.github.psd2live.core.MeshResolution.REFERENCE_SIDE],
+     * in proportion above it, so a default stroke covers the same share of a large document as of a small one.
+     */
+    val brushScale: Float
+        get() = (documentLongSide.toFloat() / io.github.psd2live.core.MeshResolution.REFERENCE_SIDE).coerceAtLeast(1f)
+
+    private var brushScaleApplied = 1f
+
+    /**
+     * Scales every brush size - paint, pencil, eraser, the deform and weight brushes - by the change in [brushScale]
+     * since the last call, so the defaults suit a newly opened document and sizes the user picked keep their share
+     * of it. Nothing happens with no document open.
+     */
+    fun fitBrushesToDocument() {
+        if (documentLongSide <= 0) return
+        val scale = brushScale
+        if (scale == brushScaleApplied) return
+        val k = scale / brushScaleApplied
+        val limit = brushSizeLimit
+        paintBrushSize = (paintBrushSize * k).coerceIn(1f, limit)
+        paintPencilSize = (paintPencilSize * k).coerceIn(1f, limit)
+        paintEraserSize = (paintEraserSize * k).coerceIn(1f, limit)
+        radius = (radius * k).coerceIn(1f, limit)
+        skeletonWeightRadius = (skeletonWeightRadius * k).coerceIn(1f, limit)
+        brushScaleApplied = scale
+    }
 
     /** Edge softness of the paint and erase tips: 1 is a pen, 0 fades the whole tip to nothing. */
     var paintHardness by mutableStateOf(0.85f)
@@ -1902,6 +1953,7 @@ internal class CanvasEditor(
     }
 
     fun cancel() {
+        skeletonEntrySerial++
         if (busy) return
         if (poseDrag != null) {
             poseDrag = null; draggingIkTargetId = null; ikTargetDragOrigin = null; ikTargetDragValues = null; ikTargetPoseDraft = null
@@ -1959,6 +2011,7 @@ internal class CanvasEditor(
      */
     fun activateTool(next: CanvasTool) {
         if (busy) return
+        skeletonEntrySerial++
         endTemporarySelection()
         if (next in CREATION_TOOLS) {
             activateCreationTool(next)
@@ -2808,12 +2861,14 @@ internal class CanvasEditor(
     @JvmName("changeHierarchyMode")
     fun setHierarchyMode(next: EditHierarchyMode) {
         if (busy) return
+        if (next != EditHierarchyMode.SKELETON) skeletonEntrySerial++
         endTemporarySelection()
         if (next == EditHierarchyMode.SKELETON) {
             if (hierarchyMode == EditHierarchyMode.SKELETON) return
             if (placement != null) cancelPlacement()
-            if (!ensureSkeleton()) return
-            enterSkeletonMode(if (committedSkeleton?.enabled == true) CanvasTool.SKELETON_POSE else CanvasTool.SKELETON_EDIT)
+            ensureSkeleton {
+                enterSkeletonMode(if (committedSkeleton?.enabled == true) CanvasTool.SKELETON_POSE else CanvasTool.SKELETON_EDIT)
+            }
             return
         }
         if (!hasPartFor(next)) { deferMode(next, null); return }
@@ -3158,6 +3213,14 @@ internal class CanvasEditor(
     private var cachedGeometryPose = emptyMap<ParameterId, Float>()
     private var cachedGeometry: DeformedGeometry? = null
 
+    /** Bounds of [cachedGeometry]'s drawables; the hover asks for them on every pointer move. */
+    private var cachedBoundsGeometry: DeformedGeometry? = null
+    private var cachedBounds = emptyMap<String, Bounds>()
+
+    private var cachedCornersPoints: Map<String, FloatArray>? = null
+    private var cachedCornersViewport: CanvasViewport? = null
+    private var cachedCorners = emptyMap<String, java.awt.geom.Area>()
+
     private var warpOutlineSource: PuppetModel? = null
     private var warpOutlinePose = emptyMap<ParameterId, Float>()
     private var warpOutlineIds = emptySet<String>()
@@ -3189,9 +3252,13 @@ internal class CanvasEditor(
     private fun layerCandidates(pos: Offset, viewport: CanvasViewport): List<String> {
         val source = state.previewModel ?: return emptyList()
         val geometry = evaluatedGeometry() ?: return emptyList()
+        if (cachedBoundsGeometry !== geometry) {
+            cachedBounds = RigCanvasSupport.boundsByDrawable(geometry)
+            cachedBoundsGeometry = geometry
+        }
         return RigCanvasSupport.hitLayers(
             source,
-            RigCanvasSupport.boundsByDrawable(geometry),
+            cachedBounds,
             viewport.canvasX(pos.x.toInt()),
             viewport.canvasY(pos.y.toInt()),
             state.effectiveVisibleLayerIds,
@@ -3214,7 +3281,14 @@ internal class CanvasEditor(
         val source = drawnPreview?.rig?.puppet ?: return emptyMap()
         val ids = activeWarpIds()
         if (ids.isEmpty()) return emptyMap()
-        return RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(source, warpOutlinePoints(source, ids)), viewport)
+        // The marks are constructive Areas, rebuilt only when the lattices or the camera move, not per hover.
+        val points = warpOutlinePoints(source, ids)
+        if (cachedCornersPoints !== points || cachedCornersViewport != viewport) {
+            cachedCorners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(source, points), viewport)
+            cachedCornersPoints = points
+            cachedCornersViewport = viewport
+        }
+        return cachedCorners
     }
 
     /**
@@ -5729,7 +5803,7 @@ internal class CanvasEditor(
         }
         if (paintBrushActive) {
             when (brushAxis) {
-                BrushAdjustAxis.RADIUS -> paintSize = (paintSizeAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(1f, 512f)
+                BrushAdjustAxis.RADIUS -> paintSize = (paintSizeAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(1f, brushSizeLimit)
                 BrushAdjustAxis.HARDNESS -> paintHardness = (paintHardnessAtStart + dy / BRUSH_HARDNESS_SPAN_PX).coerceIn(0f, 1f)
                 BrushAdjustAxis.OPACITY -> paintOpacity = (paintOpacityAtStart + dy / BRUSH_HARDNESS_SPAN_PX).coerceIn(0.01f, 1f)
                 BrushAdjustAxis.ANGLE, null -> Unit
@@ -5737,7 +5811,7 @@ internal class CanvasEditor(
             return
         }
         when (brushAxis) {
-            BrushAdjustAxis.RADIUS -> radius = (brushRadiusAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(4f, 500f)
+            BrushAdjustAxis.RADIUS -> radius = (brushRadiusAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(4f, brushSizeLimit)
             BrushAdjustAxis.HARDNESS -> hardness = (brushHardnessAtStart + dy / BRUSH_HARDNESS_SPAN_PX * 0.95f).coerceIn(0f, 0.95f)
             BrushAdjustAxis.ANGLE -> brushAngle = (brushAngleAtStart + dx * 0.75f).mod(360f)
             BrushAdjustAxis.OPACITY, null -> Unit
@@ -5808,6 +5882,9 @@ internal fun brushWeight(distance: Float, radius: Float, hardness: Float, fallof
 
 /** Travel in raw px that equals one `]` press (one 1.2x step) in the Alt + right-drag radius gesture. */
 private const val BRUSH_RADIUS_STEP_PX = 12f
+
+/** The brush size limit on documents smaller than this. */
+private const val MIN_BRUSH_SIZE_LIMIT = 512f
 
 /** Vertical travel in raw px that spans the whole 0f..0.95f hardness range in the same gesture. */
 private const val BRUSH_HARDNESS_SPAN_PX = 200f

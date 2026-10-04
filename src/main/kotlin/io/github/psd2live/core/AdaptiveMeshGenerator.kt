@@ -98,6 +98,7 @@ internal object AdaptiveMeshGenerator {
 
 	/** [spacing] controls the edge guides; [interiorSpacing] controls the interior fill.
 	 * The default interior step is 35% larger (about 45% fewer bulk samples for a large region).
+	 * Lengths are in mesh units, [unitScale] source pixels each (see [MeshResolution]).
 	 */
 	fun generate(
 		width: Int,
@@ -105,6 +106,7 @@ internal object AdaptiveMeshGenerator {
 		rgba: ByteArray,
 		alphaThreshold: Int,
 		settings: MeshSettings,
+		unitScale: Float = 1f,
 	): Result? = generate(
 		width = width,
 		height = height,
@@ -118,6 +120,7 @@ internal object AdaptiveMeshGenerator {
 		fillAlgorithm = settings.fillAlgorithm,
 		suppressBoundaryDiagonals = settings.suppressBoundaryDiagonals,
 		fillParameters = settings.fillParameters,
+		unitScale = unitScale,
 	)
 
 	fun generate(
@@ -133,10 +136,18 @@ internal object AdaptiveMeshGenerator {
 		fillAlgorithm: MeshFillAlgorithm = MeshFillAlgorithm.GRADED_POISSON,
 		suppressBoundaryDiagonals: Boolean = false,
 		fillParameters: MeshFillParameters = MeshFillParameters(),
+		unitScale: Float = 1f,
 	): Result? {
 		if (width <= 0 || height <= 0 || width.toLong() * height * 4 > rgba.size ||
 			!spacing.isFinite() || !interiorSpacing.isFinite() ||
 			!outerMargin.isFinite() || !edgeWidth.isFinite() || edgeWidth < 0f) return null
+		// Mesh at the scale the lengths are measured in: every pixel tolerance below then holds at any
+		// resolution, and contour tracing, smoothing and triangulation see a fraction of the pixels.
+		MeshResolution.reduce(width, height, rgba, unitScale)?.let { reduced ->
+			return generate(reduced.width, reduced.height, reduced.rgba, alphaThreshold, spacing, interiorSpacing,
+				outerMargin, edgeMode, edgeWidth, fillAlgorithm, suppressBoundaryDiagonals, fillParameters)
+				?.scaledBy(reduced.scale)
+		}
 		val threshold = alphaThreshold.coerceIn(1, 255)
 		val hardened = AlphaEdgePreprocessor.process(width, height, rgba, threshold)
 		val geometryRgba = hardened?.rgba ?: ByteArray(rgba.size)
@@ -309,6 +320,12 @@ internal object AdaptiveMeshGenerator {
 			}
 		}
 		return Result(positions, indices, globalBoundaryLoops, globalMiddleLoops, globalInnerLoops, globalSpines)
+	}
+
+	/** The same mesh in a raster [scale] times larger; topology and loops are unchanged. */
+	private fun Result.scaledBy(scale: Double): Result {
+		val factor = scale.toFloat()
+		return copy(positions = FloatArray(positions.size) { positions[it] * factor })
 	}
 
 	private data class BandedMesh(

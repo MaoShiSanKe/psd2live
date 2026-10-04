@@ -2,6 +2,21 @@ package io.github.psd2live.ui.views
 
 import io.github.psd2live.core.RigInformationOverlay
 
+import io.github.psd2live.ui.PanShift
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import io.github.psd2live.render.ArtworkDrawList
+import io.github.psd2live.render.ArtworkOptions
+import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.CanvasScene
+import io.github.psd2live.render.MeshWireframe
+import io.github.psd2live.render.OverlayItem
+import io.github.psd2live.render.OverlayScene
+import io.github.psd2live.render.RigGuides
+import io.github.psd2live.render.WireItem
+import io.github.psd2live.ui.state.AppSettings
+import androidx.compose.ui.graphics.asComposeImageBitmap
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -312,11 +327,34 @@ fun CanvasViewportComposable(
 	val snapshotArtworkCache = remember { CachedSkiaPicture() }
 	DisposableEffect(snapshotArtworkCache) { onDispose { snapshotArtworkCache.close() } }
 	val guideCache = remember { CanvasGuideImageCache() }
+	// The GPU renderer draws this canvas's artwork when it can; the Skia painter above stays the fallback.
+	val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
+	LaunchedEffect(softwareCanvas) { if (!softwareCanvas) CanvasRenderService.ensureStarted() }
+	val gpuStatus by CanvasRenderService.status.collectAsState()
+	val gpuReady = !softwareCanvas && gpuStatus is CanvasRenderService.Status.Ready
+	val gpuFrame by remember(renderKey) { CanvasRenderService.frames(renderKey) }.collectAsState()
+	val gpuImage = remember(gpuFrame) { gpuFrame?.bitmap?.asComposeImageBitmap() }
+	val gpuSubmission = remember(renderKey) { GpuSceneSubmission(renderKey) }
+	// The last snapshot ghost's geometry: its frame must not show at full strength once the hover has moved on.
+	val ghostGeometry = remember(renderKey) { arrayOfNulls<org.umamo.render.eval.DeformedGeometry>(1) }
+	// The last regular frame and its image, shown while a ghost frame is the newest one.
+	val lastArtwork = remember(renderKey) { arrayOfNulls<Pair<io.github.psd2live.render.RenderedFrame, ImageBitmap>>(1) }
+	// The paint session this view's GPU texture holds in full; another session, or a new view, uploads all of it.
+	val paintUploaded = remember(renderKey) { arrayOfNulls<Any>(1) }
+	DisposableEffect(renderKey) { onDispose { CanvasRenderService.release(renderKey) } }
+	val drawnGeometry = remember { DrawnGeometryMemo() }
+	// A session shown by the GPU hands it changed areas instead of painting preview tiles.
+	LaunchedEffect(paintSession, gpuReady) { paintSession?.gpuPreview = gpuReady }
+	// Brushes start at a size that suits the open document, and keep their share of it across documents.
+	val documentLongSide = editor.documentLongSide
+	LaunchedEffect(editor, documentLongSide) { editor.fitBrushesToDocument() }
+	val guideLabelMeasurer = rememberTextMeasurer(cacheSize = 128)
+	val guideLabels = remember { GuideLabelMemo() }
 	val sdkFrame by frameFlow.collectAsState()
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
 	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
 	val simulated = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
-	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toComposeImageBitmap() }
+	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toImageBitmapFast() }
 	val background = canvasState.canvasBackground
 	val checkerLight = background.checkerLight?.let(::opaqueColor) ?: colors.checkerLight
 	val checkerDark = background.checkerDark?.let(::opaqueColor) ?: colors.checkerDark
@@ -379,6 +417,14 @@ fun CanvasViewportComposable(
         viewModel.setCanvasView(zoom.toFloat(), panX.toFloat(), panY.toFloat(), canvasId, mode)
     }
 
+    // The document learns the camera once the wheel settles; a pan still hands it over on release.
+    LaunchedEffect(zoom, panX, panY, cameraDirty, isDragging) {
+        if (cameraDirty && !isDragging) {
+            delay(CAMERA_PERSIST_DELAY_MILLIS)
+            persistCamera()
+        }
+    }
+
     // A mode or workspace switch can remove this viewport before it receives Release.
     DisposableEffect(viewModel, canvasId, mode, canvasState.projectOpenGeneration, canvasState.activeWorkspace.id) {
         val projectGeneration = canvasState.projectOpenGeneration
@@ -430,8 +476,9 @@ fun CanvasViewportComposable(
 		val centered = computeViewport(model, viewSize.width, viewSize.height)
 		panX += mouseX - (centered.offsetX + canvasX * centered.scale)
 		panY += mouseY - (centered.offsetY + canvasY * centered.scale)
-        cameraDirty = false
-        viewModel.setCanvasView(zoom.toFloat(), panX.toFloat(), panY.toFloat(), canvasId, mode)
+		// Kept local while the wheel turns, as a pan is while it drags: writing the camera into the document on
+		// every notch recomposes every dock panel (the hierarchy tree most of all) once per notch.
+		cameraDirty = true
 	}
 
 	// Vsync-driven frame pump. Cubism conflates requests while busy, so the newest
@@ -727,8 +774,8 @@ fun CanvasViewportComposable(
 						true
 					}
 					ShortcutAction.BRUSH_RADIUS_UP -> {
-						if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(512f)
-						else editor.radius = (editor.radius * 1.2f).coerceAtMost(500f)
+						if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(editor.brushSizeLimit)
+						else editor.radius = (editor.radius * 1.2f).coerceAtMost(editor.brushSizeLimit)
 						true
 					}
 					// Never let the deform brush's hardness reach 1.0: brushWeight divides by (1 - hardness).
@@ -965,6 +1012,13 @@ fun CanvasViewportComposable(
 			}
 
 			val viewport = computeViewport(model, w, h)
+			// While the camera pans, cached passes are drawn shifted rather than drawn again every step;
+			// the pan's release draws them once more at the final camera.
+			val panning = isDragging
+			fun panShift(key: List<Any?>): PanShift = PanShift(
+				key.map { if (it === viewport) viewport.copy(offsetX = 0.0, offsetY = 0.0) else it },
+				viewport.offsetX, viewport.offsetY, panning,
+			)
 
 			// 2. Draw canvas boundary
 			drawRect(
@@ -1063,154 +1117,18 @@ fun CanvasViewportComposable(
 				// keeps showing the last committed atlas, never an in-progress stroke.
 				// Document-space paint tiles only line up with the mesh at rest; driving the other
 				// layers with the live pose would leave the stroke floating off the art.
-				val geometry = (editGeometry ?: RigCanvasSupport.evaluate(model, informationPose)).let { evaluated ->
-					if (simulated == null) evaluated else org.umamo.render.eval.DeformedGeometry(
-						evaluated.worldPositions + simulated.positions.filterKeys { it in evaluated.worldPositions },
-						evaluated.drawOrder, evaluated.opacity,
+				// One geometry per (model, pose, simulation frame): every redraw (a GPU frame arriving, a hover) must
+				// see the same instance, or the passes keyed on it would draw again and again.
+				val geometry = drawnGeometry.geometry(model, editGeometry, informationPose, simulated)
+
+					val guideKey = listOf(
+						model, geometryPose, editGeometry, informationPose, viewport, w, h,
+						viewOptions, warpIds, rotationIds, warpPoints, targetVisibleLayerIds,
+						canvasState.selectedLayerId, canvasState.selectedDeformerId,
+						canvasState.hoveredLayerId, canvasState.hoveredDeformerId,
+						canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
+						editor.glueSwapped, editor.drawsTransformBox,
 					)
-				}
-
-					// 3a. Texture Channel. The artwork always renders opaque; legibility of the
-					// overlays comes from the focus/dim options instead of a global transparency.
-					if (showTexture) {
-						val paintLayerId = paintSession?.layerId
-						val effectiveVisible = if (paintLayerId != null) {
-							targetVisibleLayerIds - setOf(paintLayerId)
-						} else {
-							targetVisibleLayerIds
-						}
-						if (editingPainter != null) drawIntoCanvas { target ->
-							val key = listOf(
-								editingPainter, model.rig.puppet, geometry, viewport, w, h,
-								effectiveVisible, canvasState.drawOrderOverrides, dimUnselected,
-								highlightedLayerIds, hoverTintLayerIds, hoverTintColor,
-							)
-							artworkCache.draw(target.skiaCanvas, key, w, h) { recording ->
-								editingPainter.paint(
-									recording, model, geometry, viewport, 1.0f,
-									visibleLayerIds = effectiveVisible,
-									drawOrderOverrides = canvasState.drawOrderOverrides,
-									dimUnselected = dimUnselected,
-									highlightedLayerIds = highlightedLayerIds,
-									dimmedAlphaMultiplier = 0.22f,
-									tintLayerIds = hoverTintLayerIds,
-									tintColor = hoverTintColor,
-								)
-							}
-						}
-					}
-
-				val guideKey = listOf(
-					model, geometryPose, editGeometry, informationPose, viewport, w, h,
-					viewOptions, warpIds, rotationIds, warpPoints, targetVisibleLayerIds,
-					canvasState.selectedLayerId, canvasState.selectedDeformerId,
-					canvasState.hoveredLayerId, canvasState.hoveredDeformerId,
-					canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
-					editor.glueSwapped, editor.drawsTransformBox,
-				)
-				val guideImage = guideCache.imageFor(guideKey, w, h) { g ->
-					g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-
-					// 3b. Mesh Channel (Wireframe)
-					// Outside SELECT mode, mesh wires are focus chrome for the active artmesh only —
-					// every other part stays texture-only so the canvas stays readable while editing.
-					// In SELECT (object) mode every mesh is drawn faded; only the selection is crisp.
-					if (showMesh) {
-						fun drawMeshWireframe(drawable: org.umamo.runtime.model.Drawable, selected: Boolean, dimmed: Boolean = false) {
-							val mesh = drawable.mesh ?: return
-							val positions = geometry.worldPositions[drawable.id] ?: return
-							val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: return
-							if (layerId !in targetVisibleLayerIds) return
-							val awtColor = ComponentPalette.strong(layerId)
-							val strokeWidth = if (selected) 2.2f else if (dimmed) 0.65f else 1.1f
-							val wireColor = when {
-								selected -> awtColor.brighter()
-								dimmed -> java.awt.Color(awtColor.red, awtColor.green, awtColor.blue, 65)
-								else -> awtColor
-							}
-							if (selected) {
-								g.color = java.awt.Color.WHITE
-								val radius = 2
-								for (i in 0 until mesh.vertexCount) {
-									val vx = viewport.x(positions[i * 2]).toInt()
-									val vy = viewport.yFromWorld(positions[i * 2 + 1]).toInt()
-									g.fillOval(vx - radius, vy - radius, radius * 2 + 1, radius * 2 + 1)
-								}
-							}
-							// Opaque artwork needs a dark halo under every wire so the mesh stays readable.
-							fun drawEdges(color: java.awt.Color, width: Float) {
-								g.color = color
-								g.stroke = BasicStroke(width)
-								for (offset in mesh.indices.indices step 3) {
-									val a = mesh.indices[offset]
-									val b = mesh.indices[offset + 1]
-									val c = mesh.indices[offset + 2]
-									g.drawLine(
-										viewport.x(positions[a * 2]).toInt(),
-										viewport.yFromWorld(positions[a * 2 + 1]).toInt(),
-										viewport.x(positions[b * 2]).toInt(),
-										viewport.yFromWorld(positions[b * 2 + 1]).toInt(),
-									)
-									g.drawLine(
-										viewport.x(positions[b * 2]).toInt(),
-										viewport.yFromWorld(positions[b * 2 + 1]).toInt(),
-										viewport.x(positions[c * 2]).toInt(),
-										viewport.yFromWorld(positions[c * 2 + 1]).toInt(),
-									)
-									g.drawLine(
-										viewport.x(positions[c * 2]).toInt(),
-										viewport.yFromWorld(positions[c * 2 + 1]).toInt(),
-										viewport.x(positions[a * 2]).toInt(),
-										viewport.yFromWorld(positions[a * 2 + 1]).toInt(),
-									)
-								}
-							}
-							if (showTexture && !dimmed) drawEdges(java.awt.Color(12, 13, 16, 150), strokeWidth + 1.6f)
-							drawEdges(wireColor, strokeWidth)
-						}
-
-						val selectedId = selectedLayerId
-						val meshFocusOnly = mode == CanvasMode.EDIT && !editor.objectMode
-						if (meshFocusOnly) {
-							// Edit mode draws its meshes on the editor overlay - every edited mesh in one style,
-							// glued points merged - so the guide adds nothing there. Deform keeps the active mesh.
-							if (selectedId != null && editor.hierarchyMode != EditHierarchyMode.EDIT) {
-								for (drawable in model.rig.puppet.drawables) {
-									val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-									if (layerId == selectedId) {
-										drawMeshWireframe(drawable, selected = true, dimmed = false)
-									}
-								}
-							}
-						} else {
-							// Object mode: every mesh stays faded until it is in the selection;
-							// selected wires (and vertex dots for the primary) draw at full strength.
-							val objectModeMeshes = mode == CanvasMode.EDIT && editor.objectMode
-							for (drawable in model.rig.puppet.drawables) {
-								val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-								if (layerId != selectedId) {
-									val inFocus = highlightedLayerIds != null && layerId != null && layerId in highlightedLayerIds
-									val isDimmed = when {
-										objectModeMeshes -> !inFocus
-										else -> isDimmingActive && !inFocus
-									}
-									drawMeshWireframe(drawable, selected = false, dimmed = isDimmed)
-								}
-							}
-							if (selectedId != null) {
-								for (drawable in model.rig.puppet.drawables) {
-									val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-									if (layerId == selectedId) {
-										drawMeshWireframe(drawable, selected = true, dimmed = false)
-									}
-								}
-							}
-						}
-					}
-
-					// 3c. Rotation Channel (RigInformationOverlay). Same ownership as warps: the
-					// editor decides which rotations show via showRotation; the Compose overlay draws
-					// the interactive needle for the edit target when that toggle is on.
 					val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
 					val deformerBounds = RigCanvasSupport.boundsByDeformer(model, drawableBounds)
 					val deformEditTarget = selectedDeformerId?.takeIf {
@@ -1224,7 +1142,224 @@ fun CanvasViewportComposable(
 						deformEditTarget != null -> rotationIds - deformEditTarget
 						else -> rotationIds
 					}
-					if (globalRotationIds.isNotEmpty()) {
+					val transformBoxOwnsSelection = mode == CanvasMode.EDIT && editor.drawsTransformBox
+					// The rig guides the GPU draws itself; their names and indices are Compose text over its frame.
+					// 3e's paths. A path belongs to the part it deforms, so it is drawn only while that part (or the part's
+					// deformer) is selected -- an edit-time guide, never part of the Preview tab's render. Hovering a
+					// part in the tree previews its path, the instant feedback the warp channel gives.
+					val pathsShown = mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()
+					val selectedPathIds: Set<String> = if (!pathsShown) emptySet() else {
+						val selectedLayerDescendants = if (selectedDeformerId != null) {
+							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+						} else emptySet()
+						model.rig.puppet.deformPaths.filter { path ->
+							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
+							(selectedLayerId != null && layerId == selectedLayerId) ||
+								(selectedDeformerId != null && layerId != null && layerId in selectedLayerDescendants)
+						}.mapTo(HashSet()) { it.id }
+					}
+					val hoveredPathIds: Set<String> = if (!pathsShown) emptySet() else model.rig.puppet.deformPaths.filter { path ->
+						hoveredLayerId != null && model.rig.layerIdByDrawableId[path.drawableId.raw] == hoveredLayerId
+					}.mapTo(HashSet()) { it.id }
+					val pathIds = selectedPathIds + hoveredPathIds
+					val gpuWarpGuides = gpuReady
+					val gpuRotationGuides = gpuReady
+					val gpuBoxGuides = gpuReady
+					fun gpuRigGuides(): List<OverlayItem> {
+						if (!gpuReady) return emptyList()
+						val guides = RigGuides(viewport)
+						val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
+						if (gpuRotationGuides && globalRotationIds.isNotEmpty()) {
+							guides.rotations(io.github.psd2live.core.RigInformationOverlay.rotationNeedles(model.rig.puppet, guidePose,
+								viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected))
+						}
+						if (gpuBoxGuides && showSelectionBounds && !transformBoxOwnsSelection) {
+							selectedLayerId?.let { layerId ->
+								val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
+								drawableId?.let(drawableBounds::get)?.let { guides.selectionBox(it, ComponentPalette.strong(layerId).brighter()) }
+							}
+							if (mode == CanvasMode.EDIT) selectedDeformerId?.let { defId ->
+								val def = model.rig.puppet.deformers.firstOrNull { it.id.raw == defId }
+								if (def !is org.umamo.runtime.model.Deformer.Warp) {
+									deformerBounds[defId]?.let { guides.selectionBox(it, ComponentPalette.strong(defId).brighter()) }
+								}
+							}
+						}
+						if (gpuWarpGuides && warpIds.isNotEmpty()) {
+							val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model.rig.puppet, warpPoints), viewport)
+							guides.warps(io.github.psd2live.core.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints, warpIds,
+								selectedDeformerId, hoveredDeformerId, dimUnselected), corners)
+						}
+						if (pathIds.isNotEmpty()) {
+							guides.paths(io.github.psd2live.core.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
+								pathIds, showWidth = canvasState.pathShowWidth, showHardness = canvasState.pathShowHardness,
+								selectedPathIds = selectedPathIds, hoveredPathIds = hoveredPathIds))
+						}
+						return guides.items
+					}
+
+					// 3b's choice of meshes. The GPU draws them in its frame; the Java2D guide pass draws them in software.
+					// Outside SELECT mode, mesh wires are focus chrome for the active artmesh only - every other part
+					// stays texture-only so the canvas stays readable while editing. In SELECT (object) mode every mesh
+					// is drawn faded; only the selection is crisp.
+					val wireItems: List<WireItem> = if (!showMesh) emptyList() else buildList {
+						fun wire(drawable: org.umamo.runtime.model.Drawable, selected: Boolean, dimmed: Boolean) {
+							if (drawable.mesh == null || drawable.id !in geometry.worldPositions) return
+							val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: return
+							if (layerId !in targetVisibleLayerIds) return
+							add(WireItem(drawable, layerId, selected, dimmed))
+						}
+						val selectedId = selectedLayerId
+						val meshFocusOnly = mode == CanvasMode.EDIT && !editor.objectMode
+						if (meshFocusOnly) {
+							// Edit mode draws its meshes on the editor overlay - every edited mesh in one style,
+							// glued points merged - so the guide adds nothing there. Deform keeps the active mesh.
+							if (selectedId != null && editor.hierarchyMode != EditHierarchyMode.EDIT) {
+								for (drawable in model.rig.puppet.drawables) {
+									if (model.rig.layerIdByDrawableId[drawable.id.raw] == selectedId) wire(drawable, selected = true, dimmed = false)
+								}
+							}
+						} else {
+							// Object mode: every mesh stays faded until it is in the selection;
+							// selected wires (and vertex dots for the primary) draw at full strength.
+							val objectModeMeshes = mode == CanvasMode.EDIT && editor.objectMode
+							for (drawable in model.rig.puppet.drawables) {
+								val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
+								if (layerId != selectedId) {
+									val inFocus = highlightedLayerIds != null && layerId != null && layerId in highlightedLayerIds
+									val isDimmed = if (objectModeMeshes) !inFocus else isDimmingActive && !inFocus
+									wire(drawable, selected = false, dimmed = isDimmed)
+								}
+							}
+							if (selectedId != null) {
+								for (drawable in model.rig.puppet.drawables) {
+									if (model.rig.layerIdByDrawableId[drawable.id.raw] == selectedId) wire(drawable, selected = true, dimmed = false)
+								}
+							}
+						}
+					}
+
+					// 3a. Texture Channel. The artwork always renders opaque; legibility of the
+					// overlays comes from the focus/dim options instead of a global transparency.
+					val paintLayerId = paintSession?.layerId
+					val effectiveVisible = if (paintLayerId != null) {
+						targetVisibleLayerIds - setOf(paintLayerId)
+					} else {
+						targetVisibleLayerIds
+					}
+					if (gpuReady) {
+						val options = ArtworkOptions(
+							visibleLayerIds = effectiveVisible,
+							drawOrderOverrides = canvasState.drawOrderOverrides,
+							dimUnselected = dimUnselected,
+							highlightedLayerIds = highlightedLayerIds,
+							tintLayerIds = hoverTintLayerIds,
+							tintColor = hoverTintColor,
+						)
+						val wireKey = wireItems.map { Triple(it.drawable.id, it.selected, it.dimmed) }
+						val gpuPaint = paintSession?.takeIf { showTexture && it.gpuPreview }
+						gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey,
+							guideKey, pathIds, canvasState.pathShowWidth, canvasState.pathShowHardness, gpuPaint, gpuPaint?.gpuVersion)) {
+							val paint = gpuPaint?.let { session ->
+								val full = paintUploaded[0] !== session
+								paintUploaded[0] = session
+								io.github.psd2live.render.PaintScene(session, session.docWidth, session.docHeight,
+									listOfNotNull(session.takeGpuUpload(full)))
+							}
+							CanvasScene(w, h, viewport, model, geometry,
+								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
+								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()),
+								paint)
+						}
+						val latest = gpuFrame
+						val latestImage = gpuImage
+						if (latest != null && latestImage != null && latest.scene.geometry !== ghostGeometry[0]) {
+							lastArtwork[0] = latest to latestImage
+						}
+						// A ghost frame still in flight: keep the last regular one, unless the service has released it.
+						val shown = lastArtwork[0]?.takeIf { !it.first.bitmap.isClosed }
+						val frame = shown?.first
+						val image = shown?.second
+						if (frame != null && image != null) {
+							// The frame may be a step behind the camera: move it to where the camera is now, so a pan
+							// or zoom follows the pointer at once and the exact frame replaces it when it lands.
+							val k = (viewport.scale / frame.viewport.scale).toFloat()
+							val tx = (viewport.offsetX - frame.viewport.offsetX * k).toFloat()
+							val ty = (viewport.offsetY - frame.viewport.offsetY * k).toFloat()
+							if (k == 1f && tx == 0f && ty == 0f) drawImage(image)
+							else withTransform({
+								translate(tx, ty)
+								scale(k, k, pivot = Offset.Zero)
+							}) { drawImage(image) }
+						}
+					} else if (showTexture && editingPainter != null) drawIntoCanvas { target ->
+						val key = listOf(
+							editingPainter, model.rig.puppet, geometry, viewport, w, h,
+							effectiveVisible, canvasState.drawOrderOverrides, dimUnselected,
+							highlightedLayerIds, hoverTintLayerIds, hoverTintColor,
+						)
+						artworkCache.draw(target.skiaCanvas, key, w, h, panShift(key)) { recording ->
+							editingPainter.paint(
+								recording, model, geometry, viewport, 1.0f,
+								visibleLayerIds = effectiveVisible,
+								drawOrderOverrides = canvasState.drawOrderOverrides,
+								dimUnselected = dimUnselected,
+								highlightedLayerIds = highlightedLayerIds,
+								dimmedAlphaMultiplier = 0.22f,
+								tintLayerIds = hoverTintLayerIds,
+								tintColor = hoverTintColor,
+							)
+						}
+					}
+
+				// The Java2D guide pass is the software path's: with the GPU every guide is in its frame.
+				val guideImage = if (gpuReady) null else guideCache.imageFor(guideKey, w, h, panShift(guideKey)) { g ->
+					g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+					// Whether any section drew: an empty pass is neither converted nor composited.
+					var painted = false
+
+					// 3b. Mesh Channel (Wireframe), in software only; the GPU draws it in its frame.
+					if (!gpuReady && wireItems.isNotEmpty()) {
+						painted = true
+						for (item in wireItems) {
+							val mesh = item.drawable.mesh ?: continue
+							val positions = geometry.worldPositions[item.drawable.id] ?: continue
+							val strokeWidth = MeshWireframe.strokeWidth(item)
+							if (item.selected) {
+								g.color = java.awt.Color.WHITE
+								val radius = 2
+								for (i in 0 until mesh.vertexCount) {
+									val vx = viewport.x(positions[i * 2]).toInt()
+									val vy = viewport.yFromWorld(positions[i * 2 + 1]).toInt()
+									g.fillOval(vx - radius, vy - radius, radius * 2 + 1, radius * 2 + 1)
+								}
+							}
+							// Opaque artwork needs a dark halo under every wire so the mesh stays readable.
+							fun drawEdges(color: java.awt.Color, width: Float) {
+								g.color = color
+								g.stroke = BasicStroke(width)
+								val edges = MeshWireframe.uniqueEdges(mesh.indices)
+								for (e in edges.indices step 2) {
+									val a = edges[e]
+									val b = edges[e + 1]
+									g.drawLine(
+										viewport.x(positions[a * 2]).toInt(),
+										viewport.yFromWorld(positions[a * 2 + 1]).toInt(),
+										viewport.x(positions[b * 2]).toInt(),
+										viewport.yFromWorld(positions[b * 2 + 1]).toInt(),
+									)
+								}
+							}
+							if (showTexture && !item.dimmed) drawEdges(java.awt.Color(12, 13, 16, 150), strokeWidth + 1.6f)
+							drawEdges(MeshWireframe.wireColor(item), strokeWidth)
+						}
+					}
+
+					// 3c. Rotation Channel (RigInformationOverlay). Same ownership as warps: the
+					// editor decides which rotations show via showRotation; the Compose overlay draws
+					// the interactive needle for the edit target when that toggle is on.
+					if (!gpuRotationGuides && globalRotationIds.isNotEmpty()) {
+						painted = true
 						io.github.psd2live.core.RigInformationOverlay.paintRotations(
 							g, model.rig.puppet,
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
@@ -1242,12 +1377,12 @@ fun CanvasViewportComposable(
 					// while this one frames a single layer — so letting both draw stacks two different
 					// rectangles over the same artwork. The transform box wins: it is the one that is
 					// dragged. Every other tool leaves this as the only selection feedback.
-					val transformBoxOwnsSelection = mode == CanvasMode.EDIT && editor.drawsTransformBox
-					if (showSelectionBounds && !transformBoxOwnsSelection) {
+					if (!gpuBoxGuides && showSelectionBounds && !transformBoxOwnsSelection) {
 						selectedLayerId?.let { layerId ->
 							val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
 							val bounds = drawableId?.let(drawableBounds::get)
 							if (bounds != null) {
+								painted = true
 								val selColor = ComponentPalette.strong(layerId).brighter()
 								RigCanvasSupport.paintSelectionBounds(g, bounds, viewport, selColor, stroke = 2.0f, isDashed = false)
 							}
@@ -1258,6 +1393,7 @@ fun CanvasViewportComposable(
 								if (def !is org.umamo.runtime.model.Deformer.Warp) {
 									val bounds = deformerBounds[defId]
 									if (bounds != null) {
+										painted = true
 										val selColor = ComponentPalette.strong(defId).brighter()
 										RigCanvasSupport.paintSelectionBounds(g, bounds, viewport, selColor, stroke = 2.0f, isDashed = false)
 									}
@@ -1275,7 +1411,8 @@ fun CanvasViewportComposable(
 					// not this file's: the editor is what picks their corner marks, and were the two to
 					// work it out separately a mark could outlive the deformer it belongs to — which is
 					// exactly what it used to do.
-					if (warpIds.isNotEmpty()) {
+					if (!gpuWarpGuides && warpIds.isNotEmpty()) {
+						painted = true
 						io.github.psd2live.core.RigInformationOverlay.paint(
 							g, model.rig.puppet,
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
@@ -1292,48 +1429,71 @@ fun CanvasViewportComposable(
 					// 3e. Deform Paths (RigInformationOverlay). A path belongs to the part it
 					// deforms, so it is drawn only while that part (or the part's deformer) is
 					// selected -- an edit-time guide, never part of the Preview tab's render.
-					if (mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()) {
-						val selectedLayerDescendants = if (selectedDeformerId != null) {
-							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
-						} else {
-							emptySet()
-						}
-						val selectedPathIds = model.rig.puppet.deformPaths.filter { path ->
-							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
-							(selectedLayerId != null && layerId == selectedLayerId) ||
-								(selectedDeformerId != null && layerId != null && layerId in selectedLayerDescendants)
-						}.map { it.id }.toSet()
-
-						val hoveredPathIds = model.rig.puppet.deformPaths.filter { path ->
-							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
-							hoveredLayerId != null && layerId == hoveredLayerId
-						}.map { it.id }.toSet()
-
-						// Hovering a part in the tree previews its path -- same instant feedback the
-						// warp channel gives, without bringing back the always-on rig clutter.
-						val pathIds = selectedPathIds + hoveredPathIds
-
-						if (pathIds.isNotEmpty()) {
-							io.github.psd2live.core.RigInformationOverlay.paintDeformPaths(
-								g = g,
-								model = model.rig.puppet,
-								geometry = geometry,
-								viewport = viewport,
-								pathIds = pathIds,
-								labels = false,
-								pointIndices = informationIndices,
-								showWidth = canvasState.pathShowWidth,
-								showHardness = canvasState.pathShowHardness,
-								selectedPathIds = selectedPathIds,
-								hoveredPathIds = hoveredPathIds,
-							)
+					if (!gpuReady && pathIds.isNotEmpty()) {
+						painted = true
+						io.github.psd2live.core.RigInformationOverlay.paintDeformPaths(
+							g = g,
+							model = model.rig.puppet,
+							geometry = geometry,
+							viewport = viewport,
+							pathIds = pathIds,
+							labels = false,
+							pointIndices = informationIndices,
+							showWidth = canvasState.pathShowWidth,
+							showHardness = canvasState.pathShowHardness,
+							selectedPathIds = selectedPathIds,
+							hoveredPathIds = hoveredPathIds,
+						)
+					}
+					painted
+				}
+				if (guideImage != null) drawImage(guideImage, topLeft = guideCache.offset)
+				if (gpuReady && (informationNames || informationIndices)) {
+					// guideKey misses the simulated geometry the paths follow, so the label key adds it.
+					val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
+					val labels = guideLabels.labels(guideKey + listOf(geometry, pathIds)) {
+						buildList {
+							for (layer in io.github.psd2live.core.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints,
+								warpIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
+								if (layer.isDimmed) continue
+								val p = layer.points
+								val w = layer.warp
+								if (informationIndices) for (i in 0 until minOf(p.size / 2, (w.rows + 1) * (w.columns + 1))) {
+									add(GuideLabel(i.toString(), viewport.x(p[i * 2]).toFloat() + 3f,
+										viewport.yFromWorld(p[i * 2 + 1]).toFloat() - 3f, layer.wireColor.rgb, plate = false))
+								}
+								if (informationNames && p.size >= 2) add(GuideLabel("${w.name} [${w.id.raw}] ${w.columns}×${w.rows}",
+									viewport.x(p[0]).toFloat().coerceAtLeast(0f) + 3f, viewport.yFromWorld(p[1]).toFloat().coerceAtLeast(16f),
+									layer.wireColor.rgb, plate = true))
+							}
+							if (informationIndices && pathIds.isNotEmpty()) {
+								for (look in io.github.psd2live.core.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
+										pathIds, selectedPathIds = selectedPathIds, hoveredPathIds = hoveredPathIds)) {
+									if (look.isDimmed && !look.isSelected && !look.isHovered) continue
+									look.screenPoints.forEachIndexed { i, (x, y) ->
+										add(GuideLabel(i.toString(), x + 6f, y - 4f, -1, plate = true))
+									}
+								}
+							}
+							if (informationNames) for (needle in io.github.psd2live.core.RigInformationOverlay.rotationNeedles(model.rig.puppet,
+									guidePose, viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
+								if (needle.dimmed) continue
+								add(GuideLabel("${needle.rotation.name} [${needle.rotation.id.raw}]", needle.pivot.x.coerceAtLeast(0f) + 3f,
+									(needle.pivot.y - 10f).coerceAtLeast(16f), needle.color.rgb, plate = true))
+							}
 						}
 					}
+					for (label in labels) {
+						val layout = guideLabelMeasurer.measure(label.text, GuideLabelStyle)
+						val top = label.baseline - layout.firstBaseline
+						if (label.plate) drawRect(Color(20, 20, 24, 220), Offset(label.x - 3f, label.baseline - 14f),
+							Size(layout.size.width + 6f, 17f))
+						drawText(layout, color = Color(label.argb), topLeft = Offset(label.x, top))
+					}
 				}
-				drawImage(guideImage)
 				// Session tiles sit above the mesh overlays and never write into RigPreviewModel —
 				// Apply (commitPaintSession) is what publishes them to the shared preview.
-				if (showTexture && paintSession != null) {
+				if (showTexture && paintSession != null && !paintSession.gpuPreview) {
 					val scale = viewport.scale
 					for (tile in paintSession.previewTiles) {
 						val left = Math.round(viewport.offsetX + tile.x * scale)
@@ -1354,7 +1514,23 @@ fun CanvasViewportComposable(
 			}
 			// One faded layer for the whole saved pose, sharing the canvas camera and visibility.
 			// Composite after rendering its parts so overlapping meshes do not darken the ghost.
-			if (snapshotGeometry != null && editingPainter != null) drawIntoCanvas { target ->
+			if (snapshotGeometry != null && gpuReady) {
+				ghostGeometry[0] = snapshotGeometry
+				// The GPU frame is already one flattened layer, so fading the whole of it is the ghost.
+				val options = ArtworkOptions(visibleLayerIds = targetVisibleLayerIds, drawOrderOverrides = canvasState.drawOrderOverrides)
+				gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, snapshotGeometry, viewport, w, h, options, "snapshot")) {
+					CanvasScene(w, h, viewport, model, snapshotGeometry, ArtworkDrawList.build(model, snapshotGeometry, options))
+				}
+				val frame = gpuFrame
+				val image = gpuImage
+				if (frame != null && image != null && frame.scene.geometry === snapshotGeometry) {
+					val k = (viewport.scale / frame.viewport.scale).toFloat()
+					withTransform({
+						translate((viewport.offsetX - frame.viewport.offsetX * k).toFloat(), (viewport.offsetY - frame.viewport.offsetY * k).toFloat())
+						scale(k, k, pivot = Offset.Zero)
+					}) { drawImage(image, alpha = 0.6f) }
+				}
+			} else if (snapshotGeometry != null && editingPainter != null) drawIntoCanvas { target ->
 				val key = listOf(editingPainter, model, snapshotGeometry, viewport, w, h,
 					targetVisibleLayerIds, canvasState.drawOrderOverrides)
 				snapshotArtworkCache.draw(target.skiaCanvas, key, w, h) { recording ->
@@ -1486,27 +1662,103 @@ fun CanvasViewportComposable(
     }
 }
 
+/** One guide's name or point index, drawn as text over the GPU frame; [baseline] as Java2D's drawString takes it. */
+private class GuideLabel(val text: String, val x: Float, val baseline: Float, val argb: Int, val plate: Boolean)
+
+private val GuideLabelStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+
+/** The guide labels laid out for one set of guide inputs, kept across redraws that change nothing they show. */
+private class GuideLabelMemo {
+    private var key: List<Any?>? = null
+    private var labels: List<GuideLabel> = emptyList()
+    fun labels(key: List<Any?>, build: () -> List<GuideLabel>): List<GuideLabel> {
+        if (this.key != key) { labels = build(); this.key = key }
+        return labels
+    }
+}
+
+/** Hands the GPU renderer a new scene only when what it shows changed; redraws in between submit nothing. */
+private class GpuSceneSubmission(private val viewId: String) {
+    private var key: List<Any?>? = null
+
+    fun submit(key: List<Any?>, scene: () -> CanvasScene) {
+        if (this.key == key) return
+        this.key = key
+        CanvasRenderService.submit(viewId, scene())
+    }
+}
+
+/**
+ * The geometry the canvas draws, kept while its inputs stay the same: the edit tab's own, or the pose evaluated
+ * here, with a live simulation's vertices laid over it.
+ */
+private class DrawnGeometryMemo {
+    private var puppet: org.umamo.runtime.model.PuppetModel? = null
+    private var edit: org.umamo.render.eval.DeformedGeometry? = null
+    private var pose: Map<org.umamo.runtime.model.ParameterId, Float>? = null
+    private var simulation: Any? = null
+    private var geometry: org.umamo.render.eval.DeformedGeometry? = null
+
+    fun geometry(
+        model: RigPreviewModel,
+        editGeometry: org.umamo.render.eval.DeformedGeometry?,
+        pose: Map<org.umamo.runtime.model.ParameterId, Float>,
+        simulated: io.github.psd2live.core.sim.SimulatedFrame?,
+    ): org.umamo.render.eval.DeformedGeometry {
+        val cached = geometry
+        if (cached != null && puppet === model.rig.puppet && edit === editGeometry && simulation === simulated &&
+            (editGeometry != null || this.pose == pose)) return cached
+        val evaluated = editGeometry ?: RigCanvasSupport.evaluate(model, pose)
+        val next = if (simulated == null) evaluated else org.umamo.render.eval.DeformedGeometry(
+            evaluated.worldPositions + simulated.positions.filterKeys { it in evaluated.worldPositions },
+            evaluated.drawOrder, evaluated.opacity,
+        )
+        puppet = model.rig.puppet
+        edit = editGeometry
+        this.pose = pose
+        simulation = simulated
+        geometry = next
+        return next
+    }
+}
+
 /** The Java2D guide pass is rebuilt only when this canvas's visible inputs change. */
 private class CanvasGuideImageCache {
     private var key: List<Any?>? = null
     private var image: ImageBitmap? = null
+    private var built = false
+    /** Reused between rebuilds: a canvas-sized allocation per hover change or pan step adds up. */
+    private var buffer: BufferedImage? = null
+    private var shift: PanShift? = null
+    /** Where the last image goes this frame: shifted by the pan since it was drawn, or in place. */
+    var offset: Offset = Offset.Zero
+        private set
 
-    fun imageFor(key: List<Any?>, width: Int, height: Int, paint: (Graphics2D) -> Unit): ImageBitmap {
-        if (image == null || this.key != key) {
-            val buffer = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+    /** The guides for [key], or null when [paint] drew nothing, so there is nothing to composite. */
+    fun imageFor(key: List<Any?>, width: Int, height: Int, pan: PanShift? = null, paint: (Graphics2D) -> Boolean): ImageBitmap? {
+        val cached = shift
+        if (pan != null && pan.panning && cached != null && built && cached.stableKey == pan.stableKey) {
+            offset = Offset((pan.offsetX - cached.offsetX).toFloat(), (pan.offsetY - cached.offsetY).toFloat())
+            return image
+        }
+        offset = Offset.Zero
+        if (!built || this.key != key) {
+            val buffer = buffer?.takeIf { it.width == width && it.height == height }
+                ?: BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE).also { buffer = it }
+            java.util.Arrays.fill((buffer.raster.dataBuffer as java.awt.image.DataBufferInt).data, 0)
             val graphics = buffer.createGraphics()
             try {
-                paint(graphics)
-                image = buffer.toComposeImageBitmap()
+                image = if (paint(graphics)) buffer.toImageBitmapFast() else null
                 this.key = key
+                shift = pan
+                built = true
             } catch (_: Exception) {
                 // A bad guide frame must not escape into composition and stop this canvas.
             } finally {
                 graphics.dispose()
             }
-            return image ?: buffer.toComposeImageBitmap()
         }
-        return requireNotNull(image)
+        return image
     }
 }
 
@@ -1536,6 +1788,9 @@ private class ActualFpsCounter {
 
 private val TransparentCanvasFill = Color(0f, 0f, 0f, 1f / 255f)
 
+/** How long the camera must rest before a wheel zoom is written into the document. */
+private const val CAMERA_PERSIST_DELAY_MILLIS = 250L
+
 private fun opaqueColor(rgb: Int): Color = Color(0xFF000000L or (rgb.toLong() and 0xFFFFFF))
 
 private fun createCheckerboardBrush(light: Color, dark: Color, cellSize: Int = 14): Brush {
@@ -1551,7 +1806,7 @@ private fun createCheckerboardBrush(light: Color, dark: Color, cellSize: Int = 1
 	} finally {
 		graphics.dispose()
 	}
-	return RepeatedImageBrush(tile.toComposeImageBitmap())
+	return RepeatedImageBrush(tile.toImageBitmapFast())
 }
 
 private class RepeatedImageBrush(private val image: ImageBitmap) : ShaderBrush() {

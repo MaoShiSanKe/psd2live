@@ -7,6 +7,7 @@ import io.modelcontextprotocol.kotlin.sdk.server.ClientConnection
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import org.junit.jupiter.api.io.TempDir
 import org.umamo.format.cmo3.Cmo3
@@ -58,7 +59,11 @@ class WorkspaceCmo3ImportIntegrationTest {
                     vm.saveParameterSnapshot("Keep snapshot")
                     val snapshots = vm.state.value.parameterSnapshots
                     vm.setParameterValue(ParameterId("ParamCustom"), 1f)
+                    withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    assertEquals(1f, workspace.previewSession().getValue("values").jsonObject.getValue("ParamCustom").jsonPrimitive.float)
                     vm.toggleParameterLock(ParameterId("ParamCustom"))
+                    withTimeout(10000) { vm.state.first { !it.canvasEditBusy } }
+                    assertEquals(listOf("ParamCustom"), workspace.previewSession().getValue("locked").jsonArray.map { it.jsonPrimitive.content })
                     val replaced = wait(server, call(server, "project_import_cmo3", request(workspace, "replace", incoming, "replace")))
                     assertEquals("completed", replaced.getValue("status").jsonPrimitive.content, replaced.toString())
                     assertEquals(setOf("kept", "shared", "added"), workspace.currentPuppet()!!.drawables.map { it.id.raw }.toSet())

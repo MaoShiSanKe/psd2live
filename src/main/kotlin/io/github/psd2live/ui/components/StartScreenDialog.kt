@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.components
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -97,7 +98,7 @@ internal fun StartScreenDialog(
     val splits = offer.splits
     val itemStates = remember(splits) { splits.orEmpty().map { BatchSplitItemState(it) } }
     val previewsByOffer = remember(splits) {
-        splits.orEmpty().associate { split -> split.layerId to split.plan.previewImages.map { it.toComposeImageBitmap() } }
+        splits.orEmpty().associate { split -> split.layerId to split.plan.previewImages.map { it.toImageBitmapFast() } }
     }
     var choices by remember(offer.initial) { mutableStateOf(offer.initial) }
     var showOnImport by remember { mutableStateOf(AppSettings.autoDetectMeshSplitsOnImport) }

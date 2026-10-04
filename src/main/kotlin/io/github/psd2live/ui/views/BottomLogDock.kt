@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -608,7 +609,7 @@ private fun LogEntryRow(
 				runCatching { ImageIO.read(ByteArrayInputStream(imgBytes)) }.getOrNull()
 			}
 			val bitmap = remember(buffered) {
-				buffered?.toComposeImageBitmap()
+				buffered?.toImageBitmapFast()
 			}
 
 			if (bitmap != null) {

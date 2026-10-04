@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Divider
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -177,7 +178,7 @@ fun SettingsDialog(
 						color = colors.textPrimary,
 					)
 					Text(
-						text = "v2.0.2",
+						text = "v2.0.3",
 						style = typography.monoSmall.copy(fontSize = 10.sp),
 						color = colors.textMuted,
 					)
@@ -595,6 +596,39 @@ private fun SettingsCanvasSection(
 				color = colors.textPrimary,
 			)
 		}
+		val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
+		val gpuStatus by io.github.psd2live.render.CanvasRenderService.status.collectAsState()
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+				.clickable { AppSettings.softwareCanvas = !softwareCanvas }
+				.padding(vertical = 2.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(8.dp),
+		) {
+			Text(
+				text = if (softwareCanvas) "✓" else " ",
+				style = typography.body.copy(fontWeight = FontWeight.Bold),
+				color = if (softwareCanvas) colors.accent else Color.Transparent,
+				modifier = Modifier.width(16.dp),
+			)
+			Text(
+				text = tr("dialog.settings.canvas.softwareRendering"),
+				style = typography.body.copy(fontSize = 11.5.sp),
+				color = colors.textPrimary,
+			)
+		}
+		Text(
+			text = if (softwareCanvas) tr("dialog.settings.canvas.rendererSoftware") else when (val status = gpuStatus) {
+				is io.github.psd2live.render.CanvasRenderService.Status.Ready -> tr("dialog.settings.canvas.rendererGpu", status.description)
+				is io.github.psd2live.render.CanvasRenderService.Status.Unavailable -> tr("dialog.settings.canvas.rendererUnavailable", status.reason)
+				io.github.psd2live.render.CanvasRenderService.Status.Starting -> tr("dialog.settings.canvas.rendererStarting")
+			},
+			style = typography.caption.copy(fontSize = 10.5.sp),
+			color = colors.textMuted,
+			modifier = Modifier.padding(start = 24.dp),
+		)
 	}
 }
 

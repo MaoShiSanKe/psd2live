@@ -82,7 +82,8 @@ internal class WorkspaceReadSession(
         }.flatMap { source ->
             val settings = requireNotNull(config)
             if (settings.rigEdits.importedCmo3 != null) listOf(LayerClassifier.classify(source, settings.alphaThreshold))
-            else CharacterAnalyzer.expandLayer(CharacterAnalyzer.classify(source, settings), settings)
+            else CharacterAnalyzer.expandLayer(CharacterAnalyzer.classify(source, settings), settings,
+                MeshResolution.unitScale(settings, requireNotNull(document).source))
         }.filter { it.source.id.raw in missingDeleted }.map { classified ->
             val source = classified.source
             val id = source.id.raw

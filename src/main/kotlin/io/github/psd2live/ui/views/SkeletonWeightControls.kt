@@ -28,7 +28,7 @@ internal fun SkeletonWeightControls(editor: CanvasEditor) {
         CompactDropdown(SkeletonWeightBrushMode.entries, editor.skeletonWeightBrushMode, { editor.skeletonWeightBrushMode = it },
             itemLabel = { tr("skeleton.weights.mode.${it.name.lowercase()}") }, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            CompactNumberSpinner(editor.skeletonWeightRadius.toDouble(), { editor.skeletonWeightRadius = it.toFloat() }, min = 1.0, max = 500.0,
+            CompactNumberSpinner(editor.skeletonWeightRadius.toDouble(), { editor.skeletonWeightRadius = it.toFloat() }, min = 1.0, max = editor.brushSizeLimit.toDouble(),
                 unit = tr("skeleton.weights.radius"), modifier = Modifier.weight(1f))
             CompactNumberSpinner(editor.skeletonWeightStrength.toDouble(), { editor.skeletonWeightStrength = it.toFloat() }, min = 0.0, max = 1.0, step = 0.05,
                 decimals = 2, unit = tr("skeleton.weights.strength"), modifier = Modifier.weight(1f))

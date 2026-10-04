@@ -82,6 +82,7 @@ internal object WorkspaceSettingsCodec {
         put("atlasSize", config.atlasSize)
         put("textureUpscale", Json.encodeToJsonElement(config.textureUpscale))
         put("meshSpacing", config.meshSpacing)
+        put("meshUnits", config.meshUnits.name)
         put("meshOuterMargin", config.meshOuterMargin)
         put("meshEdgeMode", config.meshEdgeMode.name)
         put("meshEdgeWidth", config.meshEdgeWidth)
@@ -152,6 +153,10 @@ internal object WorkspaceSettingsCodec {
         drawOrderOverrides = value["drawOrderOverrides"]?.jsonObject?.mapValues { it.value.jsonPrimitive.float.coerceIn(0f, 1000f) } ?: base.drawOrderOverrides,
         texturePadding = value["texturePadding"]?.jsonPrimitive?.intOrNull ?: base.texturePadding,
         meshSpacing = value["meshSpacing"]?.jsonPrimitive?.intOrNull ?: base.meshSpacing,
+        // v1 settings written before units measured every length in source pixels.
+        meshUnits = value["meshUnits"]?.jsonPrimitive?.contentOrNull
+            ?.let { runCatching { io.github.psd2live.core.MeshUnits.valueOf(it) }.getOrNull() }
+            ?: if ("meshSpacing" in value) io.github.psd2live.core.MeshUnits.PIXELS else base.meshUnits,
         meshOuterMargin = value["meshOuterMargin"]?.jsonPrimitive?.floatOrNull ?: base.meshOuterMargin,
         meshEdgeMode = value["meshEdgeMode"]?.jsonPrimitive?.contentOrNull?.let { runCatching { io.github.psd2live.core.MeshEdgeMode.valueOf(it) }.getOrNull() } ?: base.meshEdgeMode,
         meshEdgeWidth = value["meshEdgeWidth"]?.jsonPrimitive?.floatOrNull ?: value["meshInnerMargin"]?.jsonPrimitive?.floatOrNull?.let { (value["meshOuterMargin"]?.jsonPrimitive?.floatOrNull ?: base.meshOuterMargin) + it } ?: base.meshEdgeWidth,
