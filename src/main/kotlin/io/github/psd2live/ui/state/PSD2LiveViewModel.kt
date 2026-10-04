@@ -3450,6 +3450,33 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun setSkeletonPoseMetadata(spec: io.github.psd2live.core.SkeletonSpec) = setSkeleton(spec)
 
+	/** The application session the Skeleton Edit tool drafts in; public operations reach the same sessions. */
+	internal val skeletonDraftPort: io.github.psd2live.application.WorkspaceSkeletonDraftPort? get() = workspaceBackend
+
+	/** Opens the draft on the current state; the rest-pose reset is the session's own commit, not a separate edit. */
+	internal fun openSkeletonDraft(onComplete: (io.github.psd2live.application.WorkspaceSkeletonDraft?, String?) -> Unit) {
+		val port = workspaceBackend
+		val expected = currentWorkspaceState()
+		if (port == null || expected == null) { onComplete(null, "Project workspace unavailable"); return }
+		var opened: io.github.psd2live.application.WorkspaceSkeletonDraft? = null
+		saveWorkspaceEdit({ failure -> onComplete(opened.takeIf { failure == null }, failure) }) {
+			opened = port.openSkeletonDraft(expected)
+		}
+	}
+
+	/** Commits on the draft's own lineage; anything that moved the workspace since it opened is reported as a conflict. */
+	internal fun commitSkeletonDraft(draft: io.github.psd2live.application.WorkspaceSkeletonDraft) {
+		val port = workspaceBackend ?: return
+		val started = _state.value
+		saveWorkspaceEdit({ failure ->
+			if (failure != null) updateState {
+				if (it.projectId == started.projectId && it.projectOpenGeneration == started.projectOpenGeneration) it.copy(statusText = failure) else it
+			}
+		}) {
+			port.commitSkeletonDraft(draft.id, draft.state, draft.sessionState, MutationAuthor.USER)
+		}
+	}
+
 	fun setExportCmo3(enabled: Boolean) {
 		updateState { it.copy(exportCmo3 = enabled) }
 	    editorChanged()
