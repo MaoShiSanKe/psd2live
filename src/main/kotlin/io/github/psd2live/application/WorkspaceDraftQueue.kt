@@ -27,22 +27,25 @@ internal class WorkspaceDraftQueue<M>(
                author: MutationAuthor,
                beforeCommit: (WorkspaceCapture<M>, WorkspaceDocument, M, WorkspaceDocument?) -> Unit,
                committed: (WorkspaceCommit<M>) -> Unit = {},
-               prepare: suspend (WorkspaceDocument, M, WorkspaceDocument) -> WorkspaceDocument = { _, _, draft -> draft }): Deferred<WorkspaceCommit<M>> = synchronized(lock) {
+               prepare: suspend (WorkspaceDraft, M, WorkspaceDocument) -> WorkspaceDraft = { before, _, draft -> before.copy(document = draft) },
+               auxiliary: (WorkspaceCapture<M>, WorkspaceDraft, M) -> Unit = { _, _, _ -> }): Deferred<WorkspaceCommit<M>> = synchronized(lock) {
         val previous = tail?.takeUnless { it.result.isCompleted }
         val entry = Entry(projectId, state, document, previous)
         entry.result = scope.async(start = CoroutineStart.LAZY) {
             val preceding = previous?.result?.await()
             val follows = preceding != null && previous.projectId == projectId && state in previous.lineage
             val expected = if (follows) preceding.capture.state else state
-            val result = runtime.execute(projectId, expected, summary, author,
-                listOf(WorkspaceDocumentEdit { before, model -> prepare(before, model, document) })) { before, next, model ->
+            // A draft may also move auxiliary data, such as the poses a settings switch released during the session.
+            val result = runtime.executeDraft(projectId, expected, summary, author,
+                listOf(WorkspaceDraftEdit { before, model -> prepare(before, model, document) })) { before, next, model ->
                 val following = synchronized(lock) {
                     val newest = tail
                     var cursor = newest?.previous
                     while (cursor != null && cursor !== entry) cursor = cursor.previous
                     newest?.document?.takeIf { cursor === entry && newest.projectId == projectId }
                 }
-                beforeCommit(before, next, model, following)
+                beforeCommit(before, next.document, model, following)
+                auxiliary(before, next, model)
             }
             entry.lineage = (if (follows) previous.lineage else emptySet()) + state + result.capture.state
             entry.completedState = result.capture.state

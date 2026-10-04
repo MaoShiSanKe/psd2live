@@ -172,4 +172,84 @@ class WorkspaceSettingsIntentTest {
         assertEquals(0.5f, pose(runtime, "b").values.getValue(output))
         assertEquals(mapOf("a" to pose(runtime, "a")), projected)
     }
+
+    /** A GUI field session's draft, committed through the same queue and preparation as the desktop editor. */
+    private suspend fun submitDraft(runtime: WorkspaceRuntime<RigPreviewModel>, document: WorkspaceDocument,
+                                    intents: List<JsonObject>, poses: (Map<String, WorkspacePose>) -> Unit = {}): WorkspaceCommit<RigPreviewModel> {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val before = runtime.capture(); val commands = WorkspaceGenerationCommands(runtime)
+            return WorkspaceDraftQueue(runtime, scope).submit(before.projectId, before.state, document, "Workspace changed in the editor",
+                MutationAuthor.USER, beforeCommit = { _, _, _, _ -> },
+                prepare = { draft, model, gui -> commands.prepareEditorDraft(draft, model, gui, intents) },
+                auxiliary = { captured, draft, model ->
+                    WorkspaceDocumentCommands.changedPoses(captured, draft, model).takeIf { it.isNotEmpty() }?.let(poses)
+                }).await()
+        } finally { scope.cancel() }
+    }
+
+    private fun changes(vararg fields: Pair<String, Boolean>) = buildJsonObject { fields.forEach { (key, value) -> put(key, value) } }
+
+    @Test fun offThenOnInsideOneFieldSessionStillReleasesThePoseInOneCommit() = runBlocking {
+        val runtime = runtime()
+        val angle = StandardParameters.ANGLE_X
+        posed(runtime, mapOf(angle to 15f), emptySet(), setOf(angle))
+        val before = runtime.capture(); val history = runtime.history()
+        var projected: Map<String, WorkspacePose>? = null
+        // The session's final settings equal the start; only the recorded switches show the off in between.
+        val result = submitDraft(runtime, before.document, listOf(changes("motionIdle" to false), changes("motionIdle" to true))) { projected = it }
+        assertTrue(result.applied)
+        assertEquals(before.document.settings, runtime.capture().document.settings)
+        assertEquals(history, runtime.history())
+        assertEquals(default(runtime, angle), pose(runtime, "a").values.getValue(angle))
+        assertEquals(15f, pose(runtime, "b").values.getValue(angle))
+        assertEquals(mapOf("a" to pose(runtime, "a")), projected)
+        assertNotEquals(before.state, runtime.capture().state)
+    }
+
+    @Test fun fieldSessionSwitchesLinkFieldsAsThePublicCommandAndKeepOtherEditsInOneNode() = runBlocking {
+        val runtime = runtime()
+        val angle = StandardParameters.ANGLE_X
+        posed(runtime, mapOf(angle to 15f), emptySet(), emptySet())
+        val before = runtime.capture(); val nodes = runtime.history().selections.size
+        val public = WorkspaceSettingsIntent.parse(before.document, before.model, changes("meshOnly" to true)).settings
+        assertFalse(public.getValue("generateDeformers").jsonPrimitive.boolean)
+        // The GUI's local copy of the link disagrees with the intent; it also edited an unrelated field.
+        val gui = before.document.copy(settings = JsonObject(before.document.settings + mapOf(
+            "meshOnly" to JsonPrimitive(true), "generateDeformers" to JsonPrimitive(true), "meshEdgeMode" to JsonPrimitive("TRIPLE"))))
+        val result = submitDraft(runtime, gui, listOf(changes("meshOnly" to true)))
+        assertTrue(result.applied)
+        assertEquals(nodes + 1, runtime.history().selections.size)
+        val settings = runtime.capture().document.settings
+        assertTrue(settings.getValue("meshOnly").jsonPrimitive.boolean)
+        assertEquals(public.getValue("generateDeformers"), settings.getValue("generateDeformers"))
+        assertEquals("TRIPLE", settings.getValue("meshEdgeMode").jsonPrimitive.content)
+        assertEquals(default(runtime, angle), pose(runtime, "a").values.getValue(angle))
+        assertEquals(default(runtime, angle), pose(runtime, "b").values.getValue(angle))
+    }
+
+    @Test fun aFieldSessionWithoutSwitchesKeepsTheDocumentOnlyDraft() = runBlocking {
+        val runtime = runtime()
+        val angle = StandardParameters.ANGLE_X
+        posed(runtime, mapOf(angle to 15f), emptySet(), emptySet())
+        val before = runtime.capture()
+        val gui = before.document.copy(settings = JsonObject(before.document.settings + ("meshEdgeMode" to JsonPrimitive("TRIPLE"))))
+        assertTrue(submitDraft(runtime, gui, emptyList()).applied)
+        assertEquals(before.auxiliary, runtime.capture().auxiliary)
+        assertEquals(15f, pose(runtime, "a").values.getValue(angle))
+        val unchanged = runtime.capture()
+        assertFalse(submitDraft(runtime, unchanged.document, emptyList()).applied)
+        assertEquals(unchanged, runtime.capture())
+    }
+
+    @Test fun aRejectedFieldSessionSwitchPublishesNeitherSettingsNorPoses() = runBlocking {
+        val runtime = runtime()
+        posed(runtime, mapOf(StandardParameters.ANGLE_X to 15f), emptySet(), emptySet())
+        val before = runtime.capture(); val history = runtime.history()
+        assertFailsWith<IllegalArgumentException> {
+            submitDraft(runtime, before.document, listOf(changes("motionIdle" to false), buildJsonObject { put("meshSpacing", 0) }))
+        }
+        assertEquals(before, runtime.capture())
+        assertEquals(history, runtime.history())
+    }
 }

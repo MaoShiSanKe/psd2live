@@ -55,6 +55,29 @@ internal class WorkspaceGenerationCommands(private val runtime: WorkspaceRuntime
         return document
     }
 
+    /**
+     * A field session's settings switches replay through [WorkspaceSettingsIntent] in the order they were made, so an
+     * off then on inside one session still releases what the off drove, and the fields they link follow the public
+     * command rather than the GUI's local copy of the link. The rest of the draft then applies as [prepareDraft].
+     */
+    suspend fun prepareEditorDraft(before: WorkspaceDraft, current: RigPreviewModel, draft: WorkspaceDocument,
+                                   settingsIntents: List<JsonObject>): WorkspaceDraft {
+        if (settingsIntents.isEmpty()) return before.copy(document = prepareDraft(before.document, current, draft))
+        var next = before; var model = current
+        for (changes in settingsIntents) {
+            val applied = WorkspaceSettingsIntent.parse(next.document, model, changes).apply(next, model)
+            val document = previews.normalizeMeshEdits(applied.document, model)
+            // A later switch reads the rig its predecessors produced, as members of one public batch do.
+            if (WorkspaceRevisions.of(document) != WorkspaceRevisions.of(next.document)) model = previews.build(document)
+            next = applied.copy(document = document)
+        }
+        // atlasSize is only raised to a minimum, which the remaining settings re-check anyway.
+        val named = settingsIntents.flatMapTo(HashSet()) { it.keys }
+        val linked = next.document.settings.filter { (key, value) -> key !in named && key != "atlasSize" && before.document.settings[key] != value }
+        val rest = draft.copy(settings = JsonObject(draft.settings + linked))
+        return next.copy(document = prepareDraft(next.document, model, rest))
+    }
+
     suspend fun execute(projectId: String, state: String, operation: WorkspaceDocumentOperation, summary: String,
         author: MutationAuthor,
         poses: (Map<String, WorkspacePose>) -> Unit = {},
