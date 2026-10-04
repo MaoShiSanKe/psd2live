@@ -134,12 +134,14 @@
 
 ## Agent
 
-MCP 的 `swing` 工具提供 `put` / `delete` 两个分支：
+MCP 用 `swing_put` 新建或替换摇摆、`swing_delete` 删除摇摆；参数放在 `{"request": {...}}` 中，并带 `project_id`、`state` 和 `request_id`：
 
-- 只要一个方向时，直接在顶层写 `kind`、`segments`、`parameters` 和形状字段（`magnitude`、`lift`、`softness`、`zoom`、`parallel`、`flip`）。
+- `swing_put` 按 `id` 写入，`targets` 为网格或弯曲变形器。只要一个方向时，直接在顶层写 `kind`（`lateral` / `vertical`）、`segments`、`parameters` 和形状字段（`magnitude`、`lift`、`softness`、`zoom`、`parallel`、`flip`）。
 - 组合两个方向时用 `motions: [{kind: "lateral", ...}, {kind: "vertical", ...}]`，每项带自己的字段、参数和 `physics`。
-- 顶层的 `fulcrum` 选支点边，`tilt` 为摇摆矩形绕支点中点的旋转角（度，±75），`offset_along` / `offset_across` 为矩形的平移（按长度 / 宽度计，±1），两个方向共用。
+- 顶层的 `fulcrum` 选支点边，`tilt` 为摇摆矩形绕支点中点的旋转角（度，±75），`offset_along` / `offset_across` 为矩形的平移（按长度 / 宽度计，±1），两个方向共用。`preset`（`hair` / `accessory` / `cloth`）对应面板的自动估计。
 - 省略 `physics` 时，按目标尺寸估算摆锤；`physics_enabled=false` 表示不生成摆锤。
-- `delete` 的 `bake=true` 等同于「烘焙为关键」。
+- `swing_delete` 的 `bake=true` 等同于「烘焙为关键」。
 
-`inspect` 的 `scope=swings` 列出当前所有摇摆。
+画布上的摇摆编辑对应试听会话，提交前不进入文档和历史：`swing_preview` 以 `mode=begin` 和 `targets` 开始，之后用 `update`、`kinds`、`segments`、`preset`、`physics`、`select`、`handle`（与画布手柄相同）、`play`、`cancel` 修改；`swing_preview_get` 读取草稿、手柄位置和播放姿态，`swing_preview_render` 渲染当前姿态，`swing_preview_commit` 提交一次。`swing_preview` 和 `swing_preview_commit` 返回后台任务句柄，用 `job_wait` 取结果。
+
+`workspace_inspect` 的 `scope=swings` 列出当前所有摇摆。

@@ -2,7 +2,7 @@
 
 [Documentation](../../README.md) · [中文](../../zh/spec/DEFORMER_AND_PARAMETER_SPEC.md) · [日本語](../../ja/spec/DEFORMER_AND_PARAMETER_SPEC.md) · [PSD preparation](PSD_LAYER_SPEC.md)
 
-This page describes generated defaults and editing conventions. Actual objects depend on artwork, configuration and edits. Read the hierarchy, parameter panel or MCP inspect output for the current project.
+This page describes generated defaults and editing conventions. Actual objects depend on artwork, configuration and edits. Read the hierarchy, parameter panel or MCP `workspace_inspect` output for the current project.
 
 ## Structure
 

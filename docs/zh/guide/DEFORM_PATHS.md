@@ -25,4 +25,4 @@
 
 主画布拓扑操作会重新绑定路径。过疏网格或互相冲突的约束仍可能导致形变被拒绝。官方 Editor 打开、拖动与重存的完整兼容性验收尚未在本页记录。
 
-Agent 的 `path` 工具见 [MCP 接口](../agent/MCP_AUTHORING.md)。
+Agent 使用 `path_list`、`path_get` 查看路径，`path_put`、`path_delete` 新建、修改或删除路径，`path_preview` 试拖控制点，`path_deform` 把拖动结果写成关键形；`workspace_inspect` 的 `scope=paths` 列出全部路径。字段见 [MCP 接口](../agent/MCP_AUTHORING.md)。
