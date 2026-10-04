@@ -2312,8 +2312,13 @@ class PSD2LiveViewModel : AutoCloseable {
 	private var lastSdkParameterCanvasId: String? = null
 	private var sdkSessionNeedsReload = false
 
+	// Only a mounted canvas renders through Cubism, and its first frame request loads the session. Without one
+	// (an agent or test driving the model) a load would only post its status to the UI thread later, where it
+	// would demote the frames accepted meanwhile and hand the live pose back to the software tick.
+	private val sdkSessionWanted: Boolean get() = canvasFrameUsers.isNotEmpty()
+
 	private fun refreshSdkSession(preview: RigPreviewModel) {
-		if (_state.value.previewLive) {
+		if (_state.value.previewLive && sdkSessionWanted) {
 			sdkSession.load(preview.runtimeBundle, preview.rig.puppet.parameters.map { it.id })
 			sdkSessionNeedsReload = false
 		} else {
@@ -2322,7 +2327,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	private fun ensureSdkSessionLoaded() {
-		if (sdkSessionNeedsReload) {
+		if (sdkSessionNeedsReload && sdkSessionWanted) {
 			val preview = _state.value.previewModel
 			if (preview != null) {
 				sdkSessionNeedsReload = false
