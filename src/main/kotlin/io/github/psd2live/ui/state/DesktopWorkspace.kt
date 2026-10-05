@@ -232,7 +232,8 @@ class DesktopWorkspace(
         val captured = runtime.capture()
         requireExpected(arguments.getValue("state").jsonPrimitive.content, captured)
         val current = viewModel.state.value
-        val result = playbackSessions.configure(captured.projectId, captured.state, current.activeWorkspace.id, arguments)
+        val result = playbackSessions.configure(captured.projectId, captured.state, current.activeWorkspace.id, arguments,
+            initialTracking = current.mouseTrackingEnabled)
         viewModel.applyPlaybackFrame(result)
         result
     }
@@ -241,6 +242,9 @@ class DesktopWorkspace(
         runtime.capture()
         playbackSessions.frame(viewModel.state.value.activeWorkspace.id, dt)
     }
+
+    override fun playbackPointer(pointer: Pair<Float, Float>?) =
+        playbackSessions.pointer(viewModel.state.value.activeWorkspace.id, pointer)
 
     override fun previewPhysics(arguments: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject = synchronized(historyLock) {
         val capture = runtime.capture()
@@ -292,24 +296,9 @@ class DesktopWorkspace(
         result
     }
 
-    /**
-     * An authored change stops playback and restarts the clocks from the new pose. The open motion stays posed at its
-     * playhead, so the canvases and sliders keep showing its curves instead of dropping them after every edit.
-     */
-    private fun resetAuthoredPlayback(projectId: String, state: String, current: PSD2LiveState): kotlinx.serialization.json.JsonObject {
-        val workspaceId = current.activeWorkspace.id
-        val paused = playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject { put("mode", "pause") })
-        playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject { put("mode", "reset") })
-        val tracked = playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject {
-            put("mode", "tracking"); put("enabled", current.mouseTrackingEnabled)
-        })
-        val clip = paused["clip_id"]?.jsonPrimitive?.content ?: return tracked
-        return runCatching {
-            playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject {
-                put("mode", "seek"); put("clip_id", clip); put("time", paused.getValue("time").jsonPrimitive.float)
-            })
-        }.getOrDefault(tracked)
-    }
+    /** An authored change stops playback and restarts the clocks from the new pose; tracking and the open motion stay. */
+    private fun resetAuthoredPlayback(projectId: String, state: String, current: PSD2LiveState): kotlinx.serialization.json.JsonObject =
+        playbackSessions.restart(projectId, state, current.activeWorkspace.id, initialTracking = current.mouseTrackingEnabled)
 
     override fun layerMeshSettings(layerId: String): kotlinx.serialization.json.JsonObject = captureQueries().layerMeshSettings(layerId)
     override suspend fun importPsd(path: String, discardUnsaved: Boolean): WorkspaceMutationResult = editMutex.withLock {

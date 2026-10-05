@@ -96,6 +96,8 @@ class CubismSdkPreviewSession(
 		val pointerX: Float,
 		val pointerY: Float,
 		val animationEnabled: Boolean = true,
+		/** Cubism advances its own motion, drag and physics; false renders [parameterOverrides] as the whole pose. */
+		val nativeClock: Boolean = animationEnabled,
 		val parameterOverrides: Map<ParameterId, Float>,
 		val parameterDefinitions: List<org.umamo.runtime.model.Parameter> = emptyList(),
 		val pointerTrackingEnabled: Boolean = pointerX != 0f || pointerY != 0f,
@@ -332,7 +334,8 @@ class CubismSdkPreviewSession(
             val handle = canvas.handle
             val reusePose = canvas.lastPoseRequest?.let { previous ->
                 previous.animationEnabled == request.animationEnabled &&
-					(!request.animationEnabled || previous.frameTimeNanos == request.frameTimeNanos) &&
+					previous.nativeClock == request.nativeClock &&
+					(!request.nativeClock || previous.frameTimeNanos == request.frameTimeNanos) &&
                     previous.pointerX == request.pointerX && previous.pointerY == request.pointerY &&
                     previous.parameterOverrides == request.parameterOverrides &&
                     previous.pointerTrackingEnabled == request.pointerTrackingEnabled &&
@@ -342,7 +345,7 @@ class CubismSdkPreviewSession(
 			var needsRefresh: Boolean
             if (reusePose) {
                 needsRefresh = false
-            } else if (request.animationEnabled) {
+            } else if (request.nativeClock) {
 				// X runs through Cubism's look updater before physics so hair receives the head
 				// movement. Y is deliberately zero here because Cubism also maps it to AngleZ.
 				native.Live2D_SetDragging(handle, request.pointerX, CUBISM_NATIVE_POINTER_Y)
@@ -358,7 +361,7 @@ class CubismSdkPreviewSession(
 				canvas.lastRenderedFrameTimeNanos = request.frameTimeNanos
 				// A slider changes one value in a full pose map. The native model retains the other
 				// values, so avoid a JNA call and Cubism ID lookup for every unchanged parameter.
-				val previous = canvas.lastPoseRequest?.takeUnless { it.animationEnabled }?.parameterOverrides
+				val previous = canvas.lastPoseRequest?.takeUnless { it.nativeClock }?.parameterOverrides
 				for ((id, value) in request.parameterOverrides) {
 					if (previous == null || previous[id] != value) {
 						native.Live2D_SetParameterValue(handle, id.raw, value)

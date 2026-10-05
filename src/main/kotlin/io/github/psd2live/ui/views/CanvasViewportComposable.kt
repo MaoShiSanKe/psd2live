@@ -1583,8 +1583,8 @@ fun CanvasViewportComposable(
 				physicsAvailable = !canvasState.meshOnly,
 				fps = canvasState.rigEdits.physicsFps,
 				enabled = true,
-				onToggleAnimation = { viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) { it.copy(animationEnabled = !it.animationEnabled) } },
-				onToggleMouseTracking = { viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) { it.copy(mouseTrackingEnabled = !it.mouseTrackingEnabled) } },
+				onToggleAnimation = { viewModel.togglePreviewPlayback() },
+				onToggleMouseTracking = { viewModel.setMouseTrackingEnabled(!canvasState.mouseTrackingEnabled) },
 				onTogglePhysics = { viewModel.setGeneratePhysics(!canvasState.generatePhysics) },
 				onSelectFps = viewModel::setProjectFps,
 			)

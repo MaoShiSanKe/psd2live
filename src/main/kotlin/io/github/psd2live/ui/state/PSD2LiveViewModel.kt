@@ -2182,12 +2182,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		val current = _state.value
 		if (current.previewModel == null) return
 		if (parameterScrub != null) return
-		motionEditor.playing = false
 		if (processActiveMotion != null) {
 			processActiveMotion = null
 			configurePlayback("stop_motion")
 		}
-		configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", false) })
+		stopPlaybackForAuthoring()
+		motionEditor.playing = false
 		// One state change pauses motion; each sample after it only moves the authored pose.
 		val suppressPreviewEffects = current.activeCanvas.mode == CanvasMode.EDIT
 		if (current.animationEnabled || current.previewParameterValues.isNotEmpty() ||
@@ -3607,37 +3607,93 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (clip != null) configurePlayback("seek", kotlinx.serialization.json.buildJsonObject { put("clip_id", clip.id); put("time", t) })
 	}
 
-	private fun configurePlayback(mode: String, fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())) {
-		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
-		val state = currentWorkspaceState() ?: return
-		try { port.controlPlayback(kotlinx.serialization.json.JsonObject(fields + mapOf("state" to kotlinx.serialization.json.JsonPrimitive(state), "mode" to kotlinx.serialization.json.JsonPrimitive(mode)))) }
-		catch (failure: Exception) { updateState { it.copy(statusText = failure.message ?: "Could not change playback") } }
+	/** False when no workspace session took the command; the caller then only has the GUI projection. */
+	private fun configurePlayback(mode: String, fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())): Boolean {
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return false
+		val state = currentWorkspaceState() ?: return false
+		return try {
+			port.controlPlayback(kotlinx.serialization.json.JsonObject(fields + mapOf("state" to kotlinx.serialization.json.JsonPrimitive(state), "mode" to kotlinx.serialization.json.JsonPrimitive(mode))))
+			true
+		} catch (failure: Exception) {
+			updateState { it.copy(statusText = failure.message ?: "Could not change playback") }
+			false
+		}
 	}
 
+	private val playbackFrameLock = Any()
+	/** Counts applied playback commands, so a clock frame read before one cannot switch its result back. */
+	@Volatile private var playbackCommands = 0L
+	/** The session the GUI's play and tracking switches were last handed to: load generation and workspace. */
+	private var playbackSyncKey: String? = null
+
 	/**
-	 * [switches] is false for the motion loop's clock frames. Only a playback command changes the session's
-	 * animation and tracking switches, so a clock frame repeats the last command's; read before a later toggle
-	 * on the canvas, it would land after it and switch it back, dropping the frames the toggle let in.
+	 * The process session owns the play and tracking switches; the canvases and panels only project them.
+	 * A clock frame is discarded when a command landed since it was read, including its pose and playhead.
+	 * Natural motion completion still reaches the buttons when the frame belongs to the current session.
 	 */
-	internal fun applyPlaybackFrame(frame: kotlinx.serialization.json.JsonObject, switches: Boolean = true) {
+	internal fun applyPlaybackFrame(frame: kotlinx.serialization.json.JsonObject, commandsSeen: Long? = null) = synchronized(playbackFrameLock) {
 		val current = _state.value
-		if (frame.getValue("workspace_id").jsonPrimitive.content != current.activeWorkspace.id) return
+		if (frame.getValue("workspace_id").jsonPrimitive.content != current.activeWorkspace.id) return@synchronized
+		if (frame.getValue("project_id").jsonPrimitive.content != current.projectId ||
+			frame.getValue("state").jsonPrimitive.content != currentWorkspaceState()) return@synchronized
+		if (commandsSeen != null && commandsSeen != playbackCommands) return@synchronized
+		if (commandsSeen == null) playbackCommands++
+		playbackSyncKey = "${current.projectOpenGeneration}/${current.activeWorkspace.id}/${frame.getValue("state").jsonPrimitive.content.substringBeforeLast(':')}"
 		frame["clip_id"]?.jsonPrimitive?.content?.let {
 			motionEditor.clipId = it
 			motionEditor.playhead = frame.getValue("time").jsonPrimitive.float
 		}
-		motionEditor.playing = frame.getValue("playing").jsonPrimitive.boolean
+		val playing = frame.getValue("playing").jsonPrimitive.boolean
+		val animation = frame.getValue("animation").jsonPrimitive.boolean
+		val tracking = frame.getValue("tracking").jsonPrimitive.boolean
+		motionEditor.playing = playing
 		processActiveMotion = frame["active_motion"]?.jsonPrimitive?.content
-		processPlaybackActive = frame.getValue("animation").jsonPrimitive.boolean || frame.getValue("playing").jsonPrimitive.boolean ||
-			frame.getValue("tracking").jsonPrimitive.boolean || frame["clip_id"] != null
+		processPlaybackActive = animation || playing || tracking || frame["clip_id"] != null
 		val values = frame.getValue("values").jsonObject.map { (id, value) -> ParameterId(id) to value.jsonPrimitive.float }.toMap()
 		processFrameValues = values
 		val curves = frame["clip_id"]?.let { editingMotionClip(current)?.curves?.mapTo(HashSet()) { ParameterId(it.parameterId) } }
 		setMotionFramePose(if (curves.isNullOrEmpty()) emptyMap() else values.filterKeys { it in curves })
+		val composePhysics = current.previewLive && current.generatePhysics && !current.meshOnly &&
+			current.activeWorkspace.pose?.authoringPose != true
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
-			if (!switches) it.copy(previewParameterValues = values)
-			else it.copy(animationEnabled = frame.getValue("animation").jsonPrimitive.boolean, previewParameterValues = values, mouseTrackingEnabled = frame.getValue("tracking").jsonPrimitive.boolean)
+			// One play switch: the canvas shows playing whether the idle clock or the open motion runs.
+			// Clock poses publish after physics composition, avoiding an intermediate frame at rest.
+			it.copy(animationEnabled = animation || playing,
+				previewParameterValues = if (commandsSeen != null && composePhysics) it.previewParameterValues else parameterScrubPose(current, values),
+				mouseTrackingEnabled = tracking)
 		}
+	}
+
+	/**
+	 * Posing by hand stops the one play switch on the session before the pose shows; a local switch alone would
+	 * be turned back on by the next clock frame. A playing motion pauses at its playhead, the idle stops.
+	 */
+	private fun stopPlaybackForAuthoring() {
+		if (!_state.value.previewPanelState().animationEnabled && !motionEditor.playing) return
+		if (editingMotionClip() != null && motionEditor.playing) configurePlayback("pause")
+		else configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", false) })
+	}
+
+	/** The canvas and animation panel play the open motion, or the generated idle when no motion is open. */
+	fun togglePreviewPlayback() {
+		val playing = _state.value.previewPanelState().animationEnabled
+		if (editingMotionClip() != null) setMotionEditorPlaying(!playing)
+		else setAnimationEnabled(!playing)
+	}
+
+	/**
+	 * Hands the GUI's play and tracking switches to a session that has not seen them: a newly loaded project or
+	 * a switched workspace starts a fresh session, while the switches saved with the workspace still show.
+	 */
+	private fun syncPlaybackSession(current: PSD2LiveState) {
+		val state = currentWorkspaceState() ?: return
+		val key = "${current.projectOpenGeneration}/${current.activeWorkspace.id}/${state.substringBeforeLast(':')}"
+		if (key == playbackSyncKey) return
+		val panel = current.previewPanelState()
+		if (!configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", panel.mouseTrackingEnabled) })) return
+		if (panel.animationEnabled && editingMotionClip(current) == null)
+			configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", true) })
+		playbackSyncKey = key
 	}
 
 	fun setMotionEditorPlaying(playing: Boolean) {
@@ -4617,15 +4673,16 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
+	/** Runs or stops the generated idle on the workspace session; its frame switches every view. */
 	fun setAnimationEnabled(enabled: Boolean) {
-		configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled) })
-		if (enabled) {
-			// The editor's playback poses a paused preview; the running animation takes over.
-			motionEditor.playing = false
-		}
-		val current = _state.value
-		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
-			it.copy(animationEnabled = enabled)
+		if (!configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled) })) {
+			if (workspaceBackend != null && currentWorkspaceState() != null) return
+			// No session yet (no project): only the projection can show the switch.
+			if (enabled) motionEditor.playing = false
+			val current = _state.value
+			updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
+				it.copy(animationEnabled = enabled)
+			}
 		}
 		lastTick = System.nanoTime()
 	    markWorkspaceChanged()
@@ -5121,6 +5178,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 	private fun submitParameterValues(values: Map<ParameterId, Float>, expectedState: String,
 		extras: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()), autoKey: kotlinx.serialization.json.JsonObject? = currentAutoKey()) {
+		if (values.isNotEmpty()) stopPlaybackForAuthoring()
 		submitParameterValues(showPendingPose(values), expectedState, extras, autoKey)
 	}
 
@@ -5232,6 +5290,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	private suspend fun animateParameterValues(targets: Map<ParameterId, Float>, durationMs: Long, state: String) {
 		val initial = _state.value
 		val from = targets.mapValues { (id, _) -> initial.parameterValues[id] ?: targets.getValue(id) }
+		stopPlaybackForAuthoring()
 		val pending = showPendingPose(from)
 		var submitted = false
 		try {
@@ -5447,10 +5506,14 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setMouseTrackingEnabled(enabled: Boolean) {
-		configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled) })
-		val current = _state.value
-		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
-			it.copy(mouseTrackingEnabled = enabled)
+		val pointer = if (enabled && pointerActive) kotlinx.serialization.json.JsonArray(listOf(
+			kotlinx.serialization.json.JsonPrimitive(pointerX), kotlinx.serialization.json.JsonPrimitive(-pointerY))) else null
+		if (!configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", enabled); pointer?.let { put("pointer", it) } })) {
+			if (workspaceBackend != null && currentWorkspaceState() != null) return
+			val current = _state.value
+			updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
+				it.copy(mouseTrackingEnabled = enabled)
+			}
 		}
 		if (!enabled) {
 			pointerActive = false
@@ -5466,7 +5529,13 @@ class PSD2LiveViewModel : AutoCloseable {
 		pointerActive = true
 		pointerX = screenNormX.coerceIn(-1f, 1f)
 		pointerY = screenNormY.coerceIn(-1f, 1f)
-		if (_state.value.mouseTrackingEnabled) configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", true); put("pointer", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(pointerX), kotlinx.serialization.json.JsonPrimitive(-pointerY)))) })
+		sendPlaybackPointer(pointerX to -pointerY)
+	}
+
+	/** Only the coordinates: the next clock frame evaluates them, so a mouse move costs no frame or state update. */
+	private fun sendPlaybackPointer(pointer: Pair<Float, Float>?) {
+		val port = workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort ?: return
+		try { port.playbackPointer(pointer) } catch (_: IllegalArgumentException) { /* A non-finite pointer is not tracked. */ }
 	}
 
 	fun clearPointer(owner: String? = null) {
@@ -5474,7 +5543,7 @@ class PSD2LiveViewModel : AutoCloseable {
         if (owner != null && pointerOwner != owner) return
         pointerOwner = null
 		pointerActive = false
-		if (_state.value.mouseTrackingEnabled) configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", true) })
+		sendPlaybackPointer(null)
 	}
 
 	fun clearErrorMessage() {
@@ -6024,15 +6093,20 @@ class PSD2LiveViewModel : AutoCloseable {
 		val dt = ((now - lastTick) / 1_000_000_000.0).coerceIn(0.001, 0.08).toFloat()
 		lastTick = now
 
-		val current = _state.value
+		var current = _state.value
+		if (current.previewModel != null) syncPlaybackSession(current)
+		current = _state.value
+		// The timeline plays and poses the edit canvases too, with no preview on screen.
+		val commandsSeen = playbackCommands
+		val processFrame = if ((current.previewLive || motionEditor.clipId != null) && current.previewModel != null && processPlaybackActive)
+			(workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort)?.playbackFrame(dt) else null
+		if (processFrame != null) applyPlaybackFrame(processFrame, commandsSeen)
+		if (commandsSeen != playbackCommands) return
+		current = _state.value
 		val inPreview = current.previewLive
 		val isMeshOnly = current.meshOnly
 		val anim = inPreview && current.animationEnabled && !isMeshOnly
 		val tracking = inPreview && current.mouseTrackingEnabled && !isMeshOnly && current.activeWorkspace.pose?.authoringPose != true
-		// The timeline plays and poses the edit canvases too, with no preview on screen.
-		val processFrame = if ((inPreview || motionEditor.clipId != null) && current.previewModel != null && processPlaybackActive)
-			(workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort)?.playbackFrame(dt) else null
-		if (processFrame != null) applyPlaybackFrame(processFrame, switches = false)
 
 		val model = current.previewModel
 		val pausedPhysicsOn = inPreview && !anim && current.generatePhysics && !isMeshOnly &&
@@ -6157,16 +6231,14 @@ class PSD2LiveViewModel : AutoCloseable {
 		frameTimeNanos: Long = System.nanoTime(),
         viewId: String = "",
 	) {
-		val snapshot = _state.value
+		var snapshot = _state.value
 		val keyPrefix = "${snapshot.projectOpenGeneration}/${snapshot.activeWorkspace.id}/"
-		val canvas = if (viewId.startsWith(keyPrefix)) {
+		var canvas = if (viewId.startsWith(keyPrefix)) {
 			snapshot.activeWorkspace.canvases.firstOrNull {
 				it.mode == CanvasMode.PREVIEW && "${it.id}/PREVIEW" == viewId.removePrefix(keyPrefix)
 			}
 		} else null
 		if (viewId.isNotEmpty() && canvas == null) return
-		val presentation = if (canvas == null || canvas.id == snapshot.activeCanvas.id)
-			CanvasPresentation.capture(snapshot) else canvas.presentation
 		if (snapshot.previewModel == null) return
 		// The canvas the panels follow drives the clock, once per frame it asks for.
 		val drivesClock = canvas == null || canvas.id == snapshot.previewControlCanvas().id
@@ -6174,6 +6246,12 @@ class PSD2LiveViewModel : AutoCloseable {
 			lastPumpTickNanos = System.nanoTime()
 			tickMotion()
 		}
+		val latest = _state.value
+		if (latest.projectOpenGeneration != snapshot.projectOpenGeneration || latest.activeWorkspace.id != snapshot.activeWorkspace.id) return
+		snapshot = latest
+		canvas = canvas?.let { previous -> snapshot.activeWorkspace.canvases.firstOrNull { it.id == previous.id && it.mode == CanvasMode.PREVIEW } ?: return }
+		val presentation = if (canvas == null || canvas.id == snapshot.activeCanvas.id)
+			CanvasPresentation.capture(snapshot) else canvas.presentation
 		val inPreview = snapshot.previewLive
 		if (inPreview && sdkSessionNeedsReload) {
 			ensureSdkSessionLoaded()
@@ -6185,7 +6263,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			snapshot, presentation.animationEnabled, parameterScrubPose(snapshot, presentation.parameterValues),
 			presentation.lockedParameters, liveParams,
 		).let { pose ->
-			val framed = if (isAnim || tracking || motionEditor.clipId != null) pose + processFrameValues.filterKeys { it !in presentation.lockedParameters } else pose
+			// Playing, the pose already carries the session frame and its physics; paused, the frame adds tracking.
+			val framed = if (!isAnim && (tracking || motionEditor.clipId != null)) pose + processFrameValues.filterKeys { it !in presentation.lockedParameters } else pose
 			parameterScrubPose(snapshot, if (!isAnim && snapshot.activeWorkspace.pose?.authoringPose != true && pausedPhysics.isNotEmpty()) framed + pausedPhysics else framed)
 		}
 		sdkSession.render(
@@ -6196,11 +6275,12 @@ class PSD2LiveViewModel : AutoCloseable {
 				offsetX = offsetX,
 				offsetY = offsetY,
 				deltaTime = deltaTime,
-				// The shared process clock supplies tracking parameters; the raw pointer still
-				// reaches native hair inertia without evaluating tracking a second time.
-				pointerX = if (tracking) canvasPointers[viewId]?.first ?: 0f else 0f,
-				pointerY = if (tracking) -(canvasPointers[viewId]?.second ?: 0f) else 0f,
+				// The workspace session is the only clock: idle, motions, tracking and physics arrive as the
+				// pose, so Cubism renders it without running its own motion, drag or physics update.
+				pointerX = 0f,
+				pointerY = 0f,
 				animationEnabled = isAnim,
+				nativeClock = false,
 				parameterOverrides = previewValues,
 				parameterDefinitions = snapshot.previewModel?.rig?.puppet?.parameters.orEmpty(),
 				pointerTrackingEnabled = false,
@@ -6296,52 +6376,8 @@ internal fun parameterValuesForPreview(
 		return defaults + parameterValues.filterKeys { it in lockedParameters }
 	}
 
-	val standardIds = StandardParameters.all.map { it.id }.toSet()
-	val overrides = parameterValues.filterKeys { it in lockedParameters || it !in standardIds }.toMutableMap()
-
-	// 1. Idle animation disabled:
-	// Silences Native SDK's hardcoded CubismBreath and Idle motion.
-	// Overrides AngleX/Y/Z, BodyAngleX/Y/Z, Breath, and Mouth to controlled values (neutral 0 unless moving mouse/motion).
-	if (!state.motionBasic || !state.motionIdle) {
-		val idleSuppressedIds = listOf(
-			StandardParameters.ANGLE_X,
-			StandardParameters.ANGLE_Y,
-			StandardParameters.ANGLE_Z,
-			StandardParameters.BODY_X,
-			StandardParameters.BODY_Y,
-			StandardParameters.BODY_Z,
-			StandardParameters.BREATH,
-			StandardParameters.MOUTH_OPEN,
-			StandardParameters.MOUTH_FORM,
-		)
-		for (id in idleSuppressedIds) {
-			if (id !in lockedParameters) {
-				overrides[id] = liveParams[id] ?: 0f
-			}
-		}
-	}
-
-	// 2. Blink motion disabled:
-	// Silences Native SDK eye blinking; keeps eyes fully open (1.0f).
-	if (!state.motionBasic || !state.motionBlink) {
-		if (StandardParameters.EYE_L_OPEN !in lockedParameters) {
-			overrides[StandardParameters.EYE_L_OPEN] = liveParams[StandardParameters.EYE_L_OPEN] ?: 1.0f
-		}
-		if (StandardParameters.EYE_R_OPEN !in lockedParameters) {
-			overrides[StandardParameters.EYE_R_OPEN] = liveParams[StandardParameters.EYE_R_OPEN] ?: 1.0f
-		}
-	}
-
-	// 3. A switched-off preset holds its parameter at rest, unless one of the user's groups drives it.
-	val physicsActive = state.generatePhysics && !state.meshOnly
-	val userDriven = if (physicsActive) state.rigEdits.physicsEdits.filter { it.id !in state.rigEdits.disabledPhysicsIds }
-		.flatMapTo(HashSet()) { it.outputParameters } else emptySet()
-	for ((on, id) in listOf(state.physicsFrontHair to StandardParameters.HAIR_FRONT, state.physicsBackHair to StandardParameters.HAIR_BACK,
-		state.physicsEyeJelly to StandardParameters.EYE_BALL_FORM)) {
-		if ((!physicsActive || !on) && id.raw !in userDriven && id !in lockedParameters) overrides[id] = 0f
-	}
-
-	return overrides
+	// The session frame carries the idle, motion, tracking and physics; locked inspector values stay authoritative.
+	return parameterValues + liveParams.filterKeys { it !in lockedParameters }
 }
 
 internal fun parameterValuesAfterPreviewFrame(

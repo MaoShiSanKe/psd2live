@@ -120,6 +120,50 @@ class WorkspacePoseTimelineCommandsTest {
         assertFalse(sessions.frame("first", 0f).getValue("tracking").jsonPrimitive.boolean)
     }
 
+    @Test fun idleClockProducesACompletePoseAndStopsWithoutChangingTheAuthoredPose() = runBlocking<Unit> {
+        val runtime = fixture(); val root = runtime.capture()
+        val model = root.model.copy(config = root.model.config.copy(meshOnly = false))
+        val capture = runtime.install(root.state, root.projectId, root.document, model, runtime.history(), root.auxiliary, discardUnsaved = true)
+        val sessions = WorkspacePlaybackSessions(runtime)
+        sessions.configure(capture.projectId, capture.state, "first", buildJsonObject { put("mode", "animation"); put("enabled", true) })
+        val frame = sessions.frame("first", 0.5f)
+        assertTrue(frame.getValue("animation").jsonPrimitive.boolean)
+        assertEquals(0.5f, frame.getValue("elapsed").jsonPrimitive.float)
+        assertEquals(model.rig.puppet.parameters.map { it.id.raw }.toSet(), frame.getValue("values").jsonObject.keys)
+        assertNotEquals(0f, frame.getValue("values").jsonObject.getValue(StandardParameters.BREATH.raw).jsonPrimitive.float)
+        sessions.configure(capture.projectId, capture.state, "first", buildJsonObject { put("mode", "animation"); put("enabled", false) })
+        val stopped = sessions.frame("first", 0.5f)
+        assertFalse(stopped.getValue("animation").jsonPrimitive.boolean)
+        assertEquals(0.5f, stopped.getValue("elapsed").jsonPrimitive.float)
+        assertEquals(pose(runtime).values.getValue(StandardParameters.BREATH), stopped.getValue("values").jsonObject.getValue(StandardParameters.BREATH.raw).jsonPrimitive.float)
+        assertEquals(capture, runtime.capture())
+    }
+
+    @Test fun authoredRestartKeepsTrackingAndPlayheadAndReopeningRejectsTheOldPointer() = runBlocking<Unit> {
+        val runtime = fixture(); val capture = runtime.capture(); val sessions = WorkspacePlaybackSessions(runtime)
+        fun control(mode: String, fields: JsonObject = JsonObject(emptyMap())) = sessions.configure(
+            capture.projectId, runtime.capture().state, "first", JsonObject(fields + ("mode" to JsonPrimitive(mode))))
+        control("start", buildJsonObject { put("clip_id", "take"); put("time", 0.5f) })
+        control("tracking", buildJsonObject { put("enabled", true) })
+        sessions.pointer("first", 0.5f to -0.25f)
+        val before = runtime.capture(); val history = runtime.history()
+        val restarted = sessions.restart(before.projectId, before.state, "first")
+        assertFalse(restarted.getValue("playing").jsonPrimitive.boolean)
+        assertFalse(restarted.getValue("animation").jsonPrimitive.boolean)
+        assertTrue(restarted.getValue("tracking").jsonPrimitive.boolean)
+        assertEquals(0.5f, restarted.getValue("time").jsonPrimitive.float)
+        assertEquals("take", restarted.getValue("clip_id").jsonPrimitive.content)
+        assertEquals(15f, restarted.getValue("values").jsonObject.getValue(StandardParameters.ANGLE_X.raw).jsonPrimitive.float)
+        assertEquals(before, runtime.capture()); assertEquals(history, runtime.history())
+        runtime.install(before.state, before.projectId, before.document, before.model, history, before.auxiliary, discardUnsaved = true)
+        sessions.pointer("first", 1f to 1f)
+        val reloaded = sessions.frame("first", 0f)
+        assertFalse(reloaded.getValue("tracking").jsonPrimitive.boolean)
+        assertFalse(reloaded.getValue("pointer_active").jsonPrimitive.boolean)
+        assertNull(reloaded["clip_id"])
+        assertFailsWith<WorkspaceConflict> { sessions.restart(before.projectId, before.state, "first") }
+    }
+
     @Test fun generatedMotionKnobsAndPresetLifecycleArePersistentSharedCandidates() = runBlocking<Unit> {
         val runtime = fixture(); val before = runtime.capture(); val commands = WorkspaceDocumentCommands(runtime)
         fun preset(action: String, values: JsonObject? = null) = WorkspaceDocumentOperation("motion_preset", buildJsonObject {

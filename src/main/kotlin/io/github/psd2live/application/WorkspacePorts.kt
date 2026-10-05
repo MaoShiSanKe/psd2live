@@ -172,6 +172,8 @@ interface WorkspacePreviewPort {
     /** Process playback controls and evaluated frames never advance durable document/pose state. */
     fun controlPlayback(arguments: JsonObject): JsonObject
     fun playbackFrame(dt: Float? = null): JsonObject
+    /** The tracked pointer, normalized with Y up; the next [playbackFrame] evaluates it. */
+    fun playbackPointer(pointer: Pair<Float, Float>?)
     fun previewPhysics(arguments: JsonObject): JsonObject
     /** Frozen GUI pose boundaries exclude animation/physics evaluation frames. */
     fun commitAuthoredPoses(state: String, poses: Map<String, WorkspacePose>)

@@ -37,13 +37,15 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
         }
     }
 
-    @Synchronized fun configure(projectId: String, state: String, workspaceId: String, request: JsonObject): JsonObject {
+    @Synchronized fun configure(projectId: String, state: String, workspaceId: String, request: JsonObject,
+                                initialTracking: Boolean = false): JsonObject {
         val capture = runtime.capture()
         if (capture.state != state) throw WorkspaceConflict(state, capture.state)
         require(capture.projectId == projectId) { "Operation targets another project" }
         require(workspaceId.isNotBlank()) { "Workspace ID must be nonempty" }
         val generation = capture.state.substringBeforeLast(':')
-        val current = sessions[workspaceId]?.takeIf { it.projectId == projectId && it.generation == generation } ?: Session(projectId, generation)
+        val current = sessions[workspaceId]?.takeIf { it.projectId == projectId && it.generation == generation }
+            ?: Session(projectId, generation, tracking = initialTracking)
         val mode = request.getValue("mode").jsonPrimitive.content
         val next = when (mode) {
             "start" -> {
@@ -88,6 +90,37 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
             else -> error("Unknown playback mode: $mode")
         }
         sessions[workspaceId] = next.copy(clockNanos = System.nanoTime())
+        return result(capture, workspaceId, next)
+    }
+
+    /**
+     * Moves the tracked pointer without composing a frame; the next clock frame evaluates it. A pointer
+     * move per mouse event must not pay for a pose sample and a GUI projection each time.
+     */
+    @Synchronized fun pointer(workspaceId: String, pointer: Pair<Float, Float>?) {
+        require(pointer == null || (pointer.first.isFinite() && pointer.second.isFinite() &&
+            pointer.first in -1f..1f && pointer.second in -1f..1f)) { "Pointer must be normalized to -1..1" }
+        val capture = runtime.capture()
+        val generation = capture.state.substringBeforeLast(':')
+        val session = sessions[workspaceId]?.takeIf { it.projectId == capture.projectId && it.generation == generation } ?: return
+        if (session.tracking && session.pointer != pointer) sessions[workspaceId] = session.copy(pointer = pointer)
+    }
+
+    /**
+     * An authored change stops the clocks and restarts them from rest at the new pose. The tracking switch
+     * and pointer stay, and an open motion stays posed at its playhead, so the views keep showing its curves.
+     */
+    @Synchronized fun restart(projectId: String, state: String, workspaceId: String, initialTracking: Boolean = false): JsonObject {
+        val capture = runtime.capture()
+        if (capture.state != state) throw WorkspaceConflict(state, capture.state)
+        require(capture.projectId == projectId) { "Operation targets another project" }
+        val generation = state.substringBeforeLast(':')
+        val current = sessions[workspaceId]?.takeIf { it.projectId == projectId && it.generation == generation }
+            ?: Session(projectId, generation, tracking = initialTracking)
+        val clip = current.clipId?.let { clip(capture, it) }
+        val next = Session(projectId, generation, clipId = current.clipId.takeIf { clip != null }, time = clip?.let { current.time.coerceAtMost(it.duration) } ?: 0f,
+            tracking = current.tracking, pointer = current.pointer)
+        sessions[workspaceId] = next
         return result(capture, workspaceId, next)
     }
 

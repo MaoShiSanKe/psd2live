@@ -21,7 +21,7 @@ class MotionPanelPlaybackTest {
 	private val nod = MotionEditorState.presetClipId("Nod")
 	@TempDir lateinit var temporary: Path
 	private suspend fun settled(vm: PSD2LiveViewModel) = withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
-	private suspend fun fixture(action: suspend (PSD2LiveViewModel) -> Unit) {
+	private suspend fun fixture(action: suspend (PSD2LiveViewModel, DesktopWorkspace) -> Unit) {
 		val path = temporary.resolve("art.png")
 		val image = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
 		for (y in 0..7) for (x in 0..7) image.setRGB(x, y, 0xff778899.toInt())
@@ -36,13 +36,13 @@ class MotionPanelPlaybackTest {
 					}) }
 				})
 				assertNotNull(workspace.currentPuppet()!!.parameters.firstOrNull { it.id.raw == "ParamAngleY" })
-				action(vm)
+				action(vm, workspace)
 			}
 		}
 	}
 
 	@Test fun panelPlayAndEditorPlayShareOnePlayback() = runBlocking<Unit> {
-		fixture { vm ->
+		fixture { vm, _ ->
 			vm.toggleMotionPlayback(nod)
 			assertEquals(nod, vm.motionEditor.clipId)
 			assertTrue(vm.motionEditor.playing)
@@ -59,7 +59,7 @@ class MotionPanelPlaybackTest {
 	}
 
 	@Test fun editingAPresetKeyCreatesItsOverrideInOneStep() = runBlocking<Unit> {
-		fixture { vm ->
+		fixture { vm, _ ->
 			vm.editBuiltinMotion("Nod")
 			vm.setMotionKey("ParamAngleY", 0.3f, -5f)
 			settled(vm)
@@ -75,7 +75,7 @@ class MotionPanelPlaybackTest {
 	}
 
 	@Test fun presetSettingsRetuneTheEditorClipAndDeletionRemovesIt() = runBlocking<Unit> {
-		fixture { vm ->
+		fixture { vm, _ ->
 			vm.editBuiltinMotion("Nod")
 			val before = vm.editingMotionClip()!!
 			vm.setMotionPresetValue("Nod", MotionPresets.AMPLITUDE, 0.5f)
@@ -100,6 +100,51 @@ class MotionPanelPlaybackTest {
 			settled(vm)
 			assertNotNull(vm.presetMotionClip(vm.state.value, "Nod"))
 			assertFalse("Nod" in vm.state.value.rigEdits.motionPresets)
+		}
+	}
+
+	@Test fun canvasPlayPausesAndResumesThePanelsMotionAndProjectsItsEnd() = runBlocking<Unit> {
+		fixture { vm, workspace ->
+			vm.toggleMotionPlayback(nod)
+			assertTrue(vm.state.value.previewPanelState().animationEnabled)
+			vm.togglePreviewPlayback()
+			assertFalse(vm.motionEditor.playing)
+			assertFalse(workspace.playbackFrame(0f).getValue("playing").jsonPrimitive.boolean)
+			vm.togglePreviewPlayback()
+			assertTrue(vm.motionEditor.playing)
+			repeat(4) { vm.applyPlaybackFrame(workspace.playbackFrame(1f)) }
+			assertFalse(vm.motionEditor.playing)
+			assertFalse(vm.state.value.previewPanelState().animationEnabled)
+			assertEquals(vm.editingMotionClip()!!.duration, vm.motionEditor.playhead)
+		}
+	}
+
+	@Test fun delayedClockFrameCannotRestoreAPausedMotionOrItsOldPose() = runBlocking<Unit> {
+		fixture { vm, workspace ->
+			vm.toggleMotionPlayback(nod)
+			val oldFrame = workspace.playbackFrame(0.2f)
+			vm.setMotionPlayhead(0.6f)
+			val before = vm.state.value
+			vm.applyPlaybackFrame(oldFrame, commandsSeen = -1L)
+			assertEquals(before, vm.state.value)
+			assertEquals(0.6f, vm.motionEditor.playhead)
+			assertFalse(vm.motionEditor.playing)
+		}
+	}
+
+	@Test fun pointerMovesWaitForTheClockAndReleaseReturnsToRest() = runBlocking<Unit> {
+		fixture { vm, workspace ->
+			vm.setMouseTrackingEnabled(true)
+			val before = vm.state.value
+			vm.updatePointer(1f, -0.5f)
+			assertEquals(before, vm.state.value)
+			val frame = workspace.playbackFrame(0f)
+			assertEquals(30f, frame.getValue("values").jsonObject.getValue("ParamAngleX").jsonPrimitive.float)
+			assertEquals(15f, frame.getValue("values").jsonObject.getValue("ParamAngleY").jsonPrimitive.float)
+			vm.clearPointer()
+			val released = workspace.playbackFrame(0f)
+			assertFalse(released.getValue("pointer_active").jsonPrimitive.boolean)
+			assertEquals(0f, released.getValue("values").jsonObject.getValue("ParamAngleX").jsonPrimitive.float)
 		}
 	}
 }
