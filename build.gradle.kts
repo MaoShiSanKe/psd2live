@@ -143,6 +143,12 @@ tasks.test {
 	enabled = true
 	useJUnitPlatform()
 	maxHeapSize = "2g"
+	// CI keeps no test reports, so a failure's message and stack must reach the log.
+	testLogging {
+		events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+		exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+		showStackTraces = true
+	}
 }
 
 

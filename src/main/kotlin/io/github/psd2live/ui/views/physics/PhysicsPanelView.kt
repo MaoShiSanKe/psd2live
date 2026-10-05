@@ -223,15 +223,15 @@ private fun NewPhysicsMenu(
 	TreeContextMenu(expanded = open, onDismissRequest = onDismiss) {
 		CompactMenuItem(text = tr("physics.newBlank"), onClick = {
 			onDismiss()
-			viewModel.createPhysicsGroup()?.let(onCreated)
+			viewModel.createPhysicsGroup(onCreated = onCreated)
 		})
 		CompactMenuItem(text = tr("physics.duplicate"), enabled = selected != null, onClick = {
 			onDismiss()
-			selected?.let { viewModel.createPhysicsGroup(it.setting)?.let(onCreated) }
+			selected?.let { viewModel.createPhysicsGroup(it.setting, onCreated) }
 		})
 		CompactMenuItem(text = tr("physics.import"), onClick = {
 			onDismiss()
-			NativeFilePicker.choosePhysicsFile()?.let { path -> viewModel.importPhysics(path)?.let(onCreated) }
+			NativeFilePicker.choosePhysicsFile()?.let { path -> viewModel.importPhysics(path, onCreated) }
 		})
 		CompactMenuDivider()
 		val targets = viewModel.canvasEditor.swingTargets()
@@ -256,7 +256,7 @@ internal fun ColumnScope.PhysicsGroupMenuItems(
 	val swing = if (group.origin == PhysicsOrigin.SWING) PhysicsGenerator.swingOf(group.id, state.rigEdits.swingEdits) else null
 	val index = groups.indexOfFirst { it.id == group.id }
 	if (onRename != null) CompactMenuItem(tr("physics.rename"), { dismiss(); onRename() })
-	CompactMenuItem(tr("physics.duplicate"), { dismiss(); viewModel.createPhysicsGroup(group.setting)?.let(onSelect) })
+	CompactMenuItem(tr("physics.duplicate"), { dismiss(); viewModel.createPhysicsGroup(group.setting, onSelect) })
 	if (swing != null) CompactMenuItem(tr("physics.openSwing"), { dismiss(); viewModel.beginSwing(swing.targets) })
 	CompactMenuDivider()
 	CompactMenuItem(tr("physics.moveUp"), { dismiss(); viewModel.movePhysicsGroup(group.id, -1) }, enabled = index > 0)

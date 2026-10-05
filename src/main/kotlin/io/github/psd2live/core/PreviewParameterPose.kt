@@ -20,11 +20,19 @@ internal fun boundedPreviewPose(values: Map<ParameterId, Float>, parameters: Lis
 /** Tracking owns its axes; an old inspector pose must not be added to the look target. */
 internal fun pointerPreviewPose(
     values: Map<ParameterId, Float>, x: Float, y: Float, parameters: List<Parameter>,
-    tracking: Boolean, locked: Set<ParameterId> = emptySet(),
+    tracking: Boolean, locked: Set<ParameterId> = emptySet(), smooth: PreviewAnimationClock? = null,
 ): Map<ParameterId, Float> {
     if (!tracking) return boundedPreviewPose(values, parameters)
     val pose = values.toMutableMap()
     val byId = parameters.associateBy { it.id }
+    if (smooth != null) {
+        val offsets = mapOf(StandardParameters.ANGLE_X to smooth.followX * 38f,
+            StandardParameters.ANGLE_Y to -smooth.followY * 24f,
+            StandardParameters.BODY_X to smooth.bodyX * 8f, StandardParameters.BODY_Y to -smooth.bodyY * 8f,
+            StandardParameters.EYE_BALL_X to smooth.followX, StandardParameters.EYE_BALL_Y to -smooth.followY)
+        for ((id, offset) in offsets) if (id !in locked) byId[id]?.let { pose[id] = it.default + offset }
+        return boundedPreviewPose(pose, parameters)
+    }
     for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
         val id = ParameterId(binding.parameterId)
         if (id in locked) continue

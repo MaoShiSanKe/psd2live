@@ -48,7 +48,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 
 | 文档 | 内容 |
 | --- | --- |
-| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、26 个公开工具、调用示例、状态与历史 |
+| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、170 个公开工具、调用示例、状态与历史 |
 | [Agent 设计与验收](zh/agent/AGENT_DESIGN.md) | 分工边界、工具设计原则、任务验收步骤 |
 | [UI / MCP 能力对照](zh/agent/UI_MCP_PARITY_ISSUE_13.md) | 每项能力在界面与 MCP 中的入口 |
 | [能力实测](zh/STATUS.md) | 真实任务的实测记录与记录格式 |
@@ -63,7 +63,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 ## 维护约定
 
 1. README 只写定位、上手、能力边界与入口；逐步操作以程序内交互教程为准。
-2. 描述须与源码一致：教程顺序对照 `InteractiveTutorial.kt`，快捷键对照 `ShortcutRegistry.kt`，CLI 对照 `Main.kt`，MCP 工具对照 `AgentAuthoringTools.kt`。界面文案对照 `src/main/resources/i18n/`。
+2. 描述须与源码一致：教程顺序对照 `InteractiveTutorial.kt`，快捷键对照 `ShortcutRegistry.kt`，CLI 对照 `Main.kt`，MCP 工具对照应用层操作注册（`application/Workspace*Operations.kt`、`WorkspaceCommandDefinitions.kt`）与 `AgentOperationTools.kt`。界面文案对照 `src/main/resources/i18n/`。
 3. 区分"已实现""实测通过""设计中"。能解析不等于能编辑，导出成功不等于视觉一致。
 4. 三种语言已有的页面同步结构与事实；没有译文时链接中文，不保留过时副本。
 5. 保持文件路径稳定；修改时一并检查链接、图片与示例命令。截图位于 `docs/imgs/`，使用 WebP。

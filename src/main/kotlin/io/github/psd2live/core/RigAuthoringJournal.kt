@@ -13,15 +13,45 @@ internal object RigAuthoringJournal {
     fun target(text: String): RigTargetRef {
         val pair = text.split(':', limit = 2)
         require(pair.size == 2 && pair[1].isNotBlank()) { "Use the kind:id reference returned by inspect" }
+        if (RigTargetKind.fromString(pair[0]) == RigTargetKind.GLUE) {
+            val meshes = pair[1].split(':', limit = 2)
+            require(meshes.size == 2 && meshes.all { it.isNotBlank() }) { "An authored Glue ID requires model-aware resolution" }
+            return RigTargetRef(RigTargetKind.GLUE, meshes[0], meshes[1])
+        }
         return RigTargetRef(RigTargetKind.fromString(pair[0]), pair[1])
     }
 
-    fun apply(model: PuppetModel, edit: JsonObject): PuppetModel = when (edit.getValue("op").jsonPrimitive.content) {
+    fun target(model: PuppetModel, text: String): RigTargetRef {
+        val pair = text.split(':', limit = 2)
+        require(pair.size == 2 && pair[1].isNotBlank()) { "Use the kind:id reference returned by inspect" }
+        if (RigTargetKind.fromString(pair[0]) != RigTargetKind.GLUE) return target(text)
+        val glue = model.glues.firstOrNull { it.id == pair[1] }
+        if (glue != null) return RigTargetRef(RigTargetKind.GLUE, glue.meshA.raw, glue.meshB.raw, glueId = glue.id)
+        return target(text).also { reference ->
+            require(model.glues.any { it.meshA.raw == reference.id && it.meshB.raw == reference.secondaryId }) { "Glue not found: ${pair[1]}" }
+        }
+    }
+
+    fun apply(model: PuppetModel, edit: JsonObject): PuppetModel {
+        validateGlueBindings(model, edit)
+        return when (edit.getValue("op").jsonPrimitive.content) {
+        RigLayerDeletion.OP -> RigLayerDeletion.replay(model, edit)
+        MeshGenerationBaseline.OP -> MeshGenerationBaseline.replay(model, edit)
+        RigGenerationBaseline.OP -> RigGenerationBaseline.replay(model, edit)
+        RigGenerationScaffold.OP -> RigGenerationScaffold.replay(model, edit)
+        RigGenerationJournal.OP -> RigGenerationJournal.replay(model, edit)
+        RigGenerationFrames.OP -> RigGenerationFrames.replay(model, edit)
+        RigMeshActivation.OP -> RigMeshActivation.replay(model, edit)
+        RigWarpTopology.OP -> RigWarpTopology.replay(model, edit)
+        RigBezierJournal.OP -> RigBezierJournal.replay(model, edit)
         DepthSplit.OP -> DepthSplit.apply(model, edit)
+        SourcePartitionJournal.OP -> SourcePartitionJournal.apply(model, edit)
+        RasterMeshJournal.OP -> RasterMeshJournal.replay(model, edit)
+        RasterMeshCreation.OP -> RasterMeshCreation.replay(model, edit)
         "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> CanvasEdits.apply(model, edit)
         "path_put", "path_delete" -> DeformPathJournal.apply(model, edit)
         VertexGroupJournal.PUT, VertexGroupJournal.DELETE -> VertexGroupJournal.apply(model, edit)
-        "set" -> applyKeyformSet(model, RigKeyformSetEdit(target(edit.text("target")), edit.coordinate("key"),
+        "set" -> applyKeyformSet(model, RigKeyformSetEdit(target(model, edit.text("target")), edit.coordinate("key"),
             edit["geometry"]?.jsonObject?.let { g -> RigKeyformGeometryEdit(
                 controlPoints = g.floats("controlPoints"), positionDeltas = g.floats("positionDeltas"),
                 originX = g.number("originX"), originY = g.number("originY"), angle = g.number("angle"), scale = g.number("scale")) },
@@ -30,15 +60,28 @@ internal object RigAuthoringJournal {
                 multiplyColor = c.floats("multiplyColor"), screenColor = c.floats("screenColor"),
                 glueIntensity = c.number("glueIntensity"), flipX = c["flipX"]?.jsonPrimitive?.boolean,
                 flipY = c["flipY"]?.jsonPrimitive?.boolean) }))
-        "copy" -> applyKeyformCopy(model, RigKeyformCopyEdit(target(edit.text("target")), edit.coordinate("from"),
-            target(edit["destination"]?.jsonPrimitive?.content ?: edit.text("target")), edit.coordinate("key"),
+        "copy" -> applyKeyformCopy(model, RigKeyformCopyEdit(target(model, edit.text("target")), edit.coordinate("from"),
+            target(model, edit["destination"]?.jsonPrimitive?.content ?: edit.text("target")), edit.coordinate("key"),
             edit["channels"]?.jsonArray?.map { it.jsonPrimitive.content }))
-        "delete" -> applyKeyformDelete(model, RigKeyformDeleteEdit(target(edit.text("target")), edit.text("parameter"),
+        "delete" -> applyKeyformDelete(model, RigKeyformDeleteEdit(target(model, edit.text("target")), edit.text("parameter"),
             edit.number("value"), edit["channel"]?.jsonPrimitive?.content))
         "warp" -> RigWarpEdit.fromJson(edit.getValue("warp").jsonObject).applyTo(model)
         "parameter_keys" -> ParameterKeyEdits.apply(model, edit)
         "structure" -> RigStructureEdits.apply(model, edit.getValue("edits").jsonArray.map { it.jsonObject })
         else -> error("Unknown authoring journal operation")
+        }
+    }
+
+    private fun validateGlueBindings(model: PuppetModel, edit: JsonObject) {
+        val op = edit["op"]?.jsonPrimitive?.contentOrNull
+        if (op !in setOf("set", "copy", "delete", "parameter_keys")) return
+        val references = listOfNotNull(edit["target"]?.jsonPrimitive?.contentOrNull, edit["destination"]?.jsonPrimitive?.contentOrNull)
+        if (references.none { target(model, it).kind == RigTargetKind.GLUE }) return
+        val parameters = listOf("key", "from").flatMap { field -> (edit[field] as? JsonObject)?.keys.orEmpty() } +
+            listOfNotNull(edit["parameter"]?.jsonPrimitive?.contentOrNull)
+        require(parameters.none { id -> model.parameters.any { it.id.raw == id && it.kind == ParameterKind.BLEND_SHAPE } }) {
+            "Glue intensity supports ordinary parameter keyforms; blend shape binding is unavailable"
+        }
     }
 
     /** Compile against the preceding edit's evaluated model; validate the whole batch before persisting. */
@@ -51,7 +94,7 @@ internal object RigAuthoringJournal {
             val op = command.text("op")
             val compiled = when (op) {
                 "deform", "seed" -> {
-                    val ref = target(command.text("target"))
+                    val ref = target(current, command.text("target"))
                     val key = command.coordinate("key")
                     require(key.isNotEmpty()) { "Specify the exact destination key" }
                     val kind = command.text("target").substringBefore(':')
@@ -68,7 +111,7 @@ internal object RigAuthoringJournal {
                     }
                 }
                 "path_deform" -> {
-                    val ref = target(command.text("target"))
+                    val ref = target(current, command.text("target"))
                     require(ref.kind == RigTargetKind.ART_MESH) { "Path deform requires an ArtMesh target" }
                     val pathId = command.text("path_id")
                     val key = command.coordinate("key")
@@ -93,7 +136,7 @@ internal object RigAuthoringJournal {
                 "path_put" -> {
                     val rawPoints = command.getValue("points").jsonArray
                     val needsBinding = rawPoints.any { it is JsonArray || (it is JsonObject && "wa" !in it) }
-                    val targetRef = target(command.text("target"))
+                    val targetRef = target(current, command.text("target"))
                     require(targetRef.kind == RigTargetKind.ART_MESH) { "Deform paths require an ArtMesh" }
                     val drawable = current.drawables.singleOrNull { it.id.raw == targetRef.id } ?: error("Mesh not found: ${targetRef.id}")
                     val mesh = requireNotNull(drawable.mesh) { "Drawable has no mesh" }
@@ -130,16 +173,21 @@ internal object RigAuthoringJournal {
                     }
                 }
                 VertexGroupJournal.RULE -> VertexGroupJournal.compileRule(current, command)
-                DepthSplit.OP, "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> command
+                DepthSplit.OP, MeshGenerationBaseline.OP, RigGenerationBaseline.OP, RigGenerationScaffold.OP, RigGenerationJournal.OP, RigGenerationFrames.OP, RigMeshActivation.OP, RigWarpTopology.OP, RigBezierJournal.OP, SourcePartitionJournal.OP, RasterMeshJournal.OP, RasterMeshCreation.OP, "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> command
                 else -> error("Unknown authoring operation: $op")
             }
             // Ask against the model *before* this command is applied: the question is whether the slot
             // already holds what the command writes, and applying first would make every command look
             // like a no-op. Dropping the ineffective ones here is what lets the workspace funnel's
             // change guard fire — see RigCommandDelta.
-            val before = current
-            current = apply(current, compiled)
-            if ((op != "parameter_keys" || current !== before) && !RigCommandDelta.isNoOp(before, compiled)) journal += compiled
+            // A dropped command must not reach the returned model either: replay of the journal never sees
+            // it, and a canvas_geometry edit inside the no-op tolerance still re-derives the mesh's UVs, so
+            // keeping it here would preview pixels the committed rig does not have.
+            val applied = apply(current, compiled)
+            if ((op != "parameter_keys" || applied !== current) && !RigCommandDelta.isNoOp(current, compiled)) {
+                journal += compiled
+                current = applied
+            }
         }
         return current to journal
     }

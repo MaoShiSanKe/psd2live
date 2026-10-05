@@ -1,5 +1,9 @@
 package io.github.psd2live.agent
 
+import io.github.psd2live.ui.state.DesktopWorkspace
+
+import io.github.psd2live.project.MutationAuthor
+
 import io.github.psd2live.core.DepthSplit
 import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
@@ -32,8 +36,8 @@ class DepthSplitWorkflowTest {
         for (y in 2..29) for (x in 2..29) image.setRGB(x, y, 0xff507080.toInt())
         ImageIO.write(image, "png", png.toFile())
         PSD2LiveViewModel().use { vm ->
-            ViewModelAgentWorkspace(vm, temp.resolve("store")).use { workspace ->
-                vm.attachAgentWorkspace(workspace)
+            DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+                vm.attachWorkspace(workspace)
                 val created = workspace.createArtwork(buildJsonObject {
                     put("width", 32); put("height", 32)
                     putJsonArray("layers") {
@@ -56,7 +60,7 @@ class DepthSplitWorkflowTest {
                     vm.confirmDepthSplit(middleIds.single())
                 }
                 withTimeout(15000) {
-                    while (vm.state.value.canvasEditBusy || vm.state.value.previewModel === before) {
+                    while (vm.state.value.workspaceEditBusy || vm.state.value.previewModel === before) {
                         vm.state.value.errorMessage?.let { fail(it) }
                         delay(20)
                     }

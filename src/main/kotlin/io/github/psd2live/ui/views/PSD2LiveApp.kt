@@ -236,7 +236,7 @@ fun FrameWindowScope.PSD2LiveApp(
 							}
 							viewModel.withSavedChanges {
 								viewModel.setInputPath(action.file.absolutePath)
-								viewModel.analyze()
+								viewModel.analyze(discardUnsaved = true)
 							}
 						}
 						is DesktopDropTarget.DroppedAction.SetOutputDir -> {
@@ -283,7 +283,7 @@ fun FrameWindowScope.PSD2LiveApp(
 			if (!isBusy) {
 				val selected = NativeFilePicker.choosePsdFile(window, state.inputPath)
 				if (!selected.isNullOrBlank()) {
-					viewModel.withSavedChanges { viewModel.setInputPath(selected); viewModel.analyze() }
+					viewModel.withSavedChanges { viewModel.setInputPath(selected); viewModel.analyze(discardUnsaved = true) }
 				}
 			}
 		}
@@ -298,7 +298,7 @@ fun FrameWindowScope.PSD2LiveApp(
 		}
         val onReanalyzeAction = {
 			if (hasInput && !isBusy) {
-				viewModel.withSavedChanges { viewModel.analyze() }
+				viewModel.withSavedChanges { viewModel.analyze(discardUnsaved = true) }
 			}
 		}
 

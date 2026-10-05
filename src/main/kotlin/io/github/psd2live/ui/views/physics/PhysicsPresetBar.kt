@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -15,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.PhysicsPresets
 import io.github.psd2live.core.RigPhysicsEdit
+import io.github.psd2live.application.WorkspacePhysicsPresetEntry
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactDropdown
@@ -35,22 +37,35 @@ import io.github.psd2live.ui.theme.LocalToolTypography
 @Composable
 internal fun PhysicsPresetBar(kind: PhysicsPresets.Kind, setting: RigPhysicsEdit, onApply: (PhysicsPresets.Preset) -> Unit) {
 	val colors = LocalToolColors.current
-	val presets = PhysicsPresetStore.all(kind)
-	var chosenName by remember(kind) { mutableStateOf<Pair<Boolean, String>?>(null) }
-	val chosen = presets.firstOrNull { chosenName == (it.builtin to it.name) } ?: presets.first()
+	val library by PhysicsPresetStore.state.collectAsState()
+	val presets = PhysicsPresets.builtins(kind).mapIndexed { index, preset ->
+		WorkspacePhysicsPresetEntry("builtin:${kind.name.lowercase()}:$index", preset)
+	} + library.entries.filter { it.preset.kind == kind }
+	var chosenId by remember(kind) { mutableStateOf<String?>(null) }
+	val chosen = presets.firstOrNull { chosenId == it.id } ?: presets.first()
 	// Naming: null, or whether the typed name saves a new preset (true) or renames the chosen one (false).
 	var naming by remember(kind) { mutableStateOf<Boolean?>(null) }
 	var draft by remember(kind) { mutableStateOf("") }
 	var menu by remember { mutableStateOf(false) }
+	var namingState by remember(kind) { mutableStateOf(library.state) }
+	var namingId by remember(kind) { mutableStateOf(chosen.id) }
+	var namingSetting by remember(kind) { mutableStateOf(setting) }
+	var error by remember(kind) { mutableStateOf<String?>(null) }
+	fun update(action: () -> Unit) {
+		try { action(); error = null }
+		catch (failure: Exception) { error = tr("physics.preset.failed", failure.message ?: failure.javaClass.simpleName) }
+	}
 
 	fun commit() {
 		val name = draft.trim()
-		if (name.isNotEmpty()) {
-			val saved = if (naming == true) PhysicsPresets.capture(kind, name, setting).also(PhysicsPresetStore::save)
-			else PhysicsPresetStore.rename(chosen, name)
-			chosenName = false to saved.name
+		update {
+			if (name.isNotEmpty()) {
+				val saved = if (naming == true) PhysicsPresetStore.save(namingState, PhysicsPresets.capture(kind, name, namingSetting))
+				else PhysicsPresetStore.rename(namingState, namingId, name)
+				chosenId = saved.id
+			}
+			naming = null
 		}
-		naming = null
 	}
 
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -59,25 +74,26 @@ internal fun PhysicsPresetBar(kind: PhysicsPresets.Kind, setting: RigPhysicsEdit
 			CompactTextField(draft, { draft = it }, modifier = Modifier.weight(1f), height = 20.dp, selectAllOnFocus = true,
 				placeholder = tr("physics.preset.namePlaceholder"), onCommit = ::commit, onFocusLost = { if (naming != null) commit() })
 		} else {
-			CompactDropdown(presets, chosen, { chosenName = it.builtin to it.name }, modifier = Modifier.weight(1f), height = 20.dp,
-				itemLabel = { if (it.builtin) "${it.name} · ${tr("physics.preset.builtin")}" else it.name })
-			CompactButton(tr("physics.preset.apply"), { onApply(chosen) }, height = 20.dp)
+			CompactDropdown(presets, chosen, { chosenId = it.id }, modifier = Modifier.weight(1f), height = 20.dp,
+				itemLabel = { if (it.preset.builtin) "${it.preset.name} · ${tr("physics.preset.builtin")}" else it.preset.name })
+			CompactButton(tr("physics.preset.apply"), { onApply(chosen.preset) }, height = 20.dp)
 		}
 		Box {
 			CompactIconButton(onClick = { menu = true }, size = 20.dp, tooltip = tr("physics.more")) {
 				Text("⋯", style = LocalToolTypography.current.body.copy(fontSize = 12.sp), color = colors.textMuted)
 			}
 			TreeContextMenu(expanded = menu, onDismissRequest = { menu = false }) {
-				CompactMenuItem(tr("physics.preset.saveAs"), { menu = false; draft = ""; naming = true })
+				CompactMenuItem(tr("physics.preset.saveAs"), { menu = false; draft = ""; namingState = library.state; namingSetting = setting; naming = true })
 				CompactMenuItem(tr("physics.preset.overwrite"), {
 					menu = false
-					PhysicsPresetStore.save(PhysicsPresets.capture(kind, chosen.name, setting))
-				}, enabled = !chosen.builtin)
-				CompactMenuItem(tr("physics.rename"), { menu = false; draft = chosen.name; naming = false }, enabled = !chosen.builtin)
+					update { PhysicsPresetStore.save(library.state, PhysicsPresets.capture(kind, chosen.preset.name, setting)) }
+				}, enabled = !chosen.preset.builtin)
+				CompactMenuItem(tr("physics.rename"), { menu = false; draft = chosen.preset.name; namingState = library.state; namingId = chosen.id; naming = false }, enabled = !chosen.preset.builtin)
 				CompactMenuDivider()
-				CompactMenuItem(tr("physics.delete"), { menu = false; PhysicsPresetStore.delete(chosen); chosenName = null },
-					enabled = !chosen.builtin, danger = true)
+				CompactMenuItem(tr("physics.delete"), { menu = false; update { PhysicsPresetStore.delete(library.state, chosen.id); chosenId = null } },
+					enabled = !chosen.preset.builtin, danger = true)
 			}
 		}
 	}
+	error?.let { Text(it, color = colors.textMuted, style = LocalToolTypography.current.body) }
 }

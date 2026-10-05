@@ -1,5 +1,9 @@
 package io.github.psd2live.core.sim
 
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.WorkspaceStore
+
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PhysicsCatalog
 import io.github.psd2live.core.PhysicsGenerator
@@ -164,15 +168,15 @@ class ModelPresetsTest {
 
         val temp = Files.createTempDirectory("model-presets")
         try {
-            val document = io.github.psd2live.agent.AgentWorkspaceDocument(
-                io.github.psd2live.agent.WorkspaceSourceArt(30, 20, emptyList(), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(),
+            val document = io.github.psd2live.project.WorkspaceDocument(
+                io.github.psd2live.project.WorkspaceSourceArt(30, 20, emptyList(), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(),
                 applied.overlay, kotlinx.serialization.json.buildJsonObject { put("hairSimulationBack", kotlinx.serialization.json.JsonPrimitive(true)) })
-            val store = io.github.psd2live.agent.AgentWorkspaceStore(temp)
+            val store = io.github.psd2live.project.WorkspaceStore(temp)
             store.persistHistory("presets", io.github.psd2live.history.WorkspaceHistoryTree(document, "revision", "snapshot").state())
             val restored = assertNotNull(store.loadHistory("presets")).head().snapshot
             assertEquals(applied.overlay.simEdits, restored.rigEdits.simEdits)
             assertEquals(applied.overlay.authoringJournal, restored.rigEdits.authoringJournal)
-            assertTrue(io.github.psd2live.project.WorkspaceStateCodec.decode(restored.settings).hairSimulationBack)
+            assertTrue(io.github.psd2live.ui.state.WorkspaceStateCodec.decode(restored.settings).hairSimulationBack)
         } finally {
             temp.toFile().deleteRecursively()
         }

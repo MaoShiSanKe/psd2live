@@ -1,5 +1,7 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.core.CanvasViewport
+
 import androidx.compose.ui.geometry.Offset
 import io.github.psd2live.core.SkeletonBone
 import io.github.psd2live.core.SkeletonPoseSolver

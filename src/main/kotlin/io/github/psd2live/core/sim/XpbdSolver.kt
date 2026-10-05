@@ -28,6 +28,14 @@ import kotlin.math.sqrt
 
 /** Particle state. Positions are world px (y up); [invMass] 0 is kinematic. */
 class SimState(val count: Int) {
+    internal class Snapshot(val arrays: List<FloatArray>, val angle: Float, val lastAngle: Float)
+    private fun arrays() = listOf(x, y, vx, vy, invMass, damping, windFactor, anchorX, anchorY, goalX, goalY,
+        goalOffsetX, goalOffsetY, px, py, lastAnchorX, lastAnchorY, lastGoalX, lastGoalY, stepAnchorX, stepAnchorY, stepGoalX, stepGoalY)
+    internal fun snapshot() = Snapshot(arrays().map { it.copyOf() }, frameAngle, lastFrameAngle)
+    internal fun restore(snapshot: Snapshot) {
+        arrays().zip(snapshot.arrays).forEach { (target, saved) -> saved.copyInto(target) }
+        frameAngle = snapshot.angle; lastFrameAngle = snapshot.lastAngle
+    }
     val x = FloatArray(count)
     val y = FloatArray(count)
     val vx = FloatArray(count)
@@ -235,12 +243,13 @@ class XpbdSolver(
     private fun mobility(i: Int) = if (kinematic(i)) 0f else state.invMass[i]
 
     /** Advances one frame of [dt] seconds. */
-    fun step(dt: Float) {
+    fun step(dt: Float, checkpoint: () -> Unit = {}) {
         require(dt.isFinite() && dt > 0f) { "Frame time must be positive" }
         val s = state
         val substeps = settings.substeps
         val h = dt / substeps
         for (sub in 1..substeps) {
+            checkpoint()
             val t = sub.toFloat() / substeps
             for (i in 0 until n) {
                 s.stepAnchorX[i] = s.lastAnchorX[i] + (s.anchorX[i] - s.lastAnchorX[i]) * t
@@ -256,9 +265,11 @@ class XpbdSolver(
             weldLambda.fill(0f); pinLambda.fill(0f); goalLambda.fill(0f)
             solvePins(h)
             solveDistances(h, reverse)
+            checkpoint()
             solveTriangles(h, reverse)
             solveBends(h, reverse)
             solveWelds(h, reverse)
+            checkpoint()
             solveGoals(h, angle)
             solveLongRange(reverse)
             // Goals and long-range limits pull particles after the edges are done: one more sweep the
@@ -268,6 +279,7 @@ class XpbdSolver(
             updateVelocities(h)
         }
         s.settle()
+        checkpoint()
     }
 
     /** The rest shape this substep: lengths, areas and edge matrices of the goals. */

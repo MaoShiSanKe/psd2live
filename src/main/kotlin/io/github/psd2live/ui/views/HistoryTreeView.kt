@@ -43,7 +43,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.psd2live.agent.AgentHistoryNodeSnapshot
+import io.github.psd2live.project.WorkspaceHistoryNodeSnapshot
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.PaintSession
 import io.github.psd2live.ui.components.CompactButton
@@ -54,7 +54,7 @@ import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconRedo
 import io.github.psd2live.ui.components.IconUndo
-import io.github.psd2live.ui.state.HistoryAnnotation
+import io.github.psd2live.project.HistoryAnnotation
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -76,7 +76,7 @@ private const val MAX_SCALE = 2.5f
 private const val ZOOM_STEP = 1.15f
 
 internal class TreeNodeLayout(
-	val node: AgentHistoryNodeSnapshot,
+	val node: WorkspaceHistoryNodeSnapshot,
 	var x: Float = 0f,
 	var y: Float = 0f,
 	val children: MutableList<TreeNodeLayout> = mutableListOf(),
@@ -145,7 +145,7 @@ fun HistoryTreeView(
 	// ancestors no matter what the annotations say.
 	val operationChain = remember(historySnapshot) {
 		val byId = historySnapshot.nodes.associateBy { it.id }
-		val chain = ArrayDeque<AgentHistoryNodeSnapshot>()
+		val chain = ArrayDeque<WorkspaceHistoryNodeSnapshot>()
 		var cursor: String? = historySnapshot.headNodeId
 		while (cursor != null) {
 			val node = byId[cursor] ?: break
@@ -229,7 +229,7 @@ fun HistoryTreeView(
 				OperationListSidebar(
 					chain = operationChain,
 					annotations = state.historyAnnotations,
-					enabled = !state.canvasEditBusy,
+					enabled = !state.workspaceEditBusy,
 					onCheckout = { viewModel.checkoutHistoryNode(it) },
 					paintSession = viewModel.canvasEditor.paintSession,
 					onJumpToPaintStroke = { viewModel.canvasEditor.jumpToPaintStroke(it) },
@@ -342,7 +342,7 @@ fun HistoryTreeView(
 								isInspectionPanelOpen = true
 							},
 							onDoubleClick = {
-								if (!node.isHead && !state.canvasEditBusy) viewModel.checkoutHistoryNode(node.id)
+								if (!node.isHead && !state.workspaceEditBusy) viewModel.checkoutHistoryNode(node.id)
 							},
 							modifier = Modifier
 								.offset { IntOffset(cardX, cardY) }
@@ -369,7 +369,7 @@ fun HistoryTreeView(
 					NodeInspector(
 						node = selectedNode,
 						annotation = state.historyAnnotations[selectedNode.id] ?: HistoryAnnotation(),
-						canCheckout = !state.canvasEditBusy,
+						canCheckout = !state.workspaceEditBusy,
 						onClose = { isInspectionPanelOpen = false },
 						onApply = { title, note, hidden -> viewModel.editHistoryAnnotation(selectedNode.id, title, note, hidden) },
 						onCheckout = { viewModel.checkoutHistoryNode(selectedNode.id) },
@@ -443,7 +443,7 @@ private fun HistoryToolbar(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HistoryNodeCard(
-	node: AgentHistoryNodeSnapshot,
+	node: WorkspaceHistoryNodeSnapshot,
 	annotation: HistoryAnnotation?,
 	selected: Boolean,
 	dimmed: Boolean,
@@ -570,7 +570,7 @@ private fun HistoryNodeCard(
  * node, its note, who made it and when, and what clicking does.
  */
 @Composable
-private fun NodeTooltip(node: AgentHistoryNodeSnapshot, annotation: HistoryAnnotation?, hint: String?) {
+private fun NodeTooltip(node: WorkspaceHistoryNodeSnapshot, annotation: HistoryAnnotation?, hint: String?) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val customTitle = annotation?.title?.takeIf { it.isNotBlank() }
@@ -724,7 +724,7 @@ private fun PillButton(
  */
 @Composable
 private fun NodeInspector(
-	node: AgentHistoryNodeSnapshot,
+	node: WorkspaceHistoryNodeSnapshot,
 	annotation: HistoryAnnotation,
 	canCheckout: Boolean,
 	onClose: () -> Unit,
@@ -889,7 +889,7 @@ private fun FormRow(label: String, content: @Composable () -> Unit) {
  */
 @Composable
 private fun OperationListSidebar(
-	chain: List<AgentHistoryNodeSnapshot>,
+	chain: List<WorkspaceHistoryNodeSnapshot>,
 	annotations: Map<String, HistoryAnnotation>,
 	enabled: Boolean,
 	onCheckout: (String) -> Unit,
@@ -1217,7 +1217,7 @@ internal data class TreeCalculationResult(
 	val height: Float,
 )
 
-internal fun calculateTreeLayout(nodes: List<AgentHistoryNodeSnapshot>): TreeCalculationResult {
+internal fun calculateTreeLayout(nodes: List<WorkspaceHistoryNodeSnapshot>): TreeCalculationResult {
 	if (nodes.isEmpty()) return TreeCalculationResult(emptyList(), emptyList(), 0f, 0f)
 
 	val layoutNodeMap = nodes.associate { it.id to TreeNodeLayout(it) }
@@ -1308,4 +1308,3 @@ private fun Modifier.clipShape(shape: Shape): Modifier = drawWithContent {
 		this@drawWithContent.drawContent()
 	}
 }
-

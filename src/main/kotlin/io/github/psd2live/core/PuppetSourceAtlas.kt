@@ -18,14 +18,15 @@ import org.umamo.runtime.model.AtlasPlacement as UmamoAtlasPlacement
 internal object PuppetSourceAtlas {
 	const val SOURCE_ID_RAW = "art-0"
 
-	fun tileIdFor(layerId: String): AtlasTileId = AtlasTileId("$SOURCE_ID_RAW/$layerId")
+	fun tileIdFor(layerId: String, sourceIdRaw: String = SOURCE_ID_RAW): AtlasTileId = AtlasTileId("$sourceIdRaw/$layerId")
 
 	fun build(
 		analysis: PipelineAnalysis,
 		atlas: PackedAtlas,
 		sourceName: String = "artwork.psd",
+		sourceIdRaw: String = SOURCE_ID_RAW,
 	): Pair<PuppetAtlas, List<ArtSource>> {
-		val sourceId = ArtSourceId(SOURCE_ID_RAW)
+		val sourceId = ArtSourceId(sourceIdRaw)
 		val layersById = analysis.layers.associateBy { it.source.id.raw }
 		val inventory = ArrayList<ArtSourceLayer>()
 		val tiles = ArrayList<AtlasTile>()
@@ -45,7 +46,7 @@ internal object PuppetSourceAtlas {
 				visible = source.visible,
 			)
 			tiles += AtlasTile(
-				id = tileIdFor(layerId),
+				id = tileIdFor(layerId, sourceIdRaw),
 				name = source.name,
 				width = source.raster.width,
 				height = source.raster.height,
@@ -76,9 +77,9 @@ internal object PuppetSourceAtlas {
 		return puppetAtlas to listOf(artSource)
 	}
 
-	fun rastersByTile(analysis: PipelineAnalysis): Map<AtlasTileId, RasterImage> =
+	fun rastersByTile(analysis: PipelineAnalysis, sourceIdRaw: String = SOURCE_ID_RAW): Map<AtlasTileId, RasterImage> =
 		analysis.layers.associate { layer ->
 			val raster = layer.source.raster
-			tileIdFor(layer.source.id.raw) to RasterImage(raster.width, raster.height, raster.rgba)
+			tileIdFor(layer.source.id.raw, sourceIdRaw) to RasterImage(raster.width, raster.height, raster.rgba)
 		}
 }

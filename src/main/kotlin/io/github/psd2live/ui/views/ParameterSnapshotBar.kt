@@ -60,7 +60,7 @@ import io.github.psd2live.ui.components.IconSnapshot
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
-import io.github.psd2live.ui.state.ParameterSnapshot
+import io.github.psd2live.project.ParameterSnapshot
 import io.github.psd2live.ui.state.ParameterSnapshotPreview
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography

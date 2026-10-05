@@ -12,6 +12,7 @@ import org.umamo.interop.cmo3.cmo3AtlasPages
 import org.umamo.runtime.model.*
 import org.umamo.render.restMeshesToCanvasSpace
 import java.util.Base64
+import kotlinx.serialization.json.jsonPrimitive
 import java.awt.image.BufferedImage
 import java.awt.geom.AffineTransform
 import java.awt.geom.Path2D
@@ -171,7 +172,7 @@ internal object Cmo3ModelImport {
             rootChildren = incoming.rootChildren + old.rootChildren.filter { child ->
                 child !in incomingChildren && !(child is OrgChild.Part && child.id in incomingPartIds)
             },
-            glues = mergeById(old.glues, incoming.glues) { it.meshA to it.meshB },
+            glues = mergeById(old.glues, incoming.glues) { it.id?.let { id -> "id:$id" } ?: "pair:${it.meshA.raw}|${it.meshB.raw}" },
             parameterLinks = old.parameterLinks.filter { it.horizontal !in parameterIds && it.vertical !in parameterIds } + incoming.parameterLinks,
             parameterTree = importedNodes(newTree) + retainedNodes(oldTree),
             deformPaths = mergeById(old.deformPaths, incoming.deformPaths) { it.id },
@@ -180,14 +181,43 @@ internal object Cmo3ModelImport {
     }
 
     fun analysis(source: SourceArt, config: PipelineConfig): PipelineAnalysis {
-        val layers = source.layers.filter { it.id.raw !in config.deletedLayerIds }.map { LayerClassifier.classify(it, config.alphaThreshold) }
+        val layers = source.layers.filter { it.id.raw !in config.deletedLayerIds }.map { CharacterAnalyzer.classify(it, config) }
         val box = Bounds(0f, 0f, source.widthPx.toFloat(), source.heightPx.toFloat())
         val anchors = if (layers.any { it.opaquePixels > 0 }) CharacterAnalyzer.anchorsFor(layers)
             else RigAnchors(box, box, box, box.centerX, box.centerY, box.centerX, box.bottom, box.centerY, box.bottom)
         return PipelineAnalysis(source, layers, anchors, source.warnings, PreviewRenderer.composite(source))
     }
 
-    fun baseRig(source: SourceArt, config: PipelineConfig): Pair<PackedAtlas, BuiltRig> {
+    /** Imported atlas coordinates address image pages, whereas source partitions address canvas art.
+     * Resolve through the immutable import triangle's UVs until that drawable has a canvas art tile. */
+    fun textureCanvas(preview: RigPreviewModel, drawable: Drawable): FloatArray {
+        val mesh = requireNotNull(drawable.mesh)
+        if (preview.config.rigEdits.importedCmo3 == null ||
+            preview.rig.puppet.atlas.tiles.single { it.id == drawable.atlasTileId }.source?.sourceId?.raw == PAINT_SOURCE_ID)
+            return RasterMeshJournal.TextureCoordinates(preview.rig.puppet, drawable).toCanvas(mesh.uvs)
+        val original = decode(requireNotNull(preview.config.rigEdits.importedCmo3)).puppet.drawables.single { it.id == drawable.id }.mesh!!
+        if (mesh.uvs.contentEquals(original.uvs)) return original.positions.copyOf()
+        return FloatArray(mesh.uvs.size).also { canvas ->
+            for (vertex in 0 until mesh.vertexCount) {
+                val bound = DeformPathTools.bind(original.uvs, original.indices, mesh.uvs[vertex * 2], mesh.uvs[vertex * 2 + 1])
+                for (axis in 0..1) canvas[vertex * 2 + axis] = original.positions[bound.a * 2 + axis] * bound.wa +
+                    original.positions[bound.b * 2 + axis] * bound.wb + original.positions[bound.c * 2 + axis] * bound.wc
+            }
+        }
+    }
+
+    const val PAINT_SOURCE_ID = "cmo3-painted-art"
+
+    /** Canvas-space preparation is temporary; unrelated imported texture addresses stay durable. */
+    fun paintingPreview(pipeline: PSD2LivePipeline, source: SourceArt, config: PipelineConfig): RigPreviewModel {
+        val analysis = analysis(source, config)
+        val (atlas, base) = baseRig(source, config, normalizeAllTextures = true)
+        val rig = base.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
+        val bundle = pipeline.buildRuntimeBundle("psd2live-preview", analysis, atlas, rig, config).first
+        return RigPreviewModel(analysis, atlas, rig, config, bundle, base)
+    }
+
+    fun baseRig(source: SourceArt, config: PipelineConfig, normalizeAllTextures: Boolean = false): Pair<PackedAtlas, BuiltRig> {
         val doc = decode(requireNotNull(config.rigEdits.importedCmo3))
         val ids = config.rigEdits.importedLayerIds
         val layers = source.layers.associateBy { it.id.raw }
@@ -199,6 +229,68 @@ internal object Cmo3ModelImport {
         val bounds = puppet.drawables.mapNotNull { d -> d.mesh?.positions?.takeIf { it.isNotEmpty() }?.let { d.id.raw to bounds(it) } }.toMap()
         val rig = BuiltRig(puppet, doc.pages, bounds, ids, source.widthPx / 2f, source.heightPx / 2f,
             source.widthPx / 2f, source.heightPx / 2f, emptyList())
+        config.generationSource?.let { original ->
+            val baseline = original.layers.associateBy { it.id.raw }
+            val migrated = config.rigEdits.authoringJournal.mapNotNullTo(HashSet()) { record ->
+                when (record["op"]?.jsonPrimitive?.content) {
+                    RasterMeshJournal.OP -> record["id"]?.jsonPrimitive?.content?.let(ids::get)
+                    RigMeshActivation.OP -> record["layer_id"]?.jsonPrimitive?.content
+                    else -> null
+                }
+            }
+            val frozenConfig = MeshGenerationBaseline.restore(config)
+            val frozenLayers = MouthLipLayers.prepare(analysis(source, frozenConfig), frozenConfig).layers
+            val live = MouthLipLayers.prepare(analysis(source, config), config)
+            val inventory = live.copy(layers = (frozenLayers + RigGenerationTextures.layers(source, config) + live.layers)
+                .associateBy { it.source.id.raw }.values.toList())
+            val partitionCoverage = RigGenerationSource.partitionCoverage(config.rigEdits)
+            val analysis = inventory.let { input -> input.copy(layers = input.layers.map { layer ->
+                val coverage = baseline[layer.source.id.raw]?.bounds ?: partitionCoverage[layer.source.id.raw]
+                val covered = coverage?.let { RigGenerationSource.padded(layer.source, it) } ?: layer.source
+                layer.copy(source = covered, opaquePixels = layer.opaquePixels.coerceAtLeast(1))
+            }.filter { layer ->
+                val current = layers[layer.source.id.raw] ?: layer.source
+                val old = baseline[current.id.raw]
+                normalizeAllTextures || current.id.raw in migrated || old == null || current.bounds != old.bounds ||
+                    current.raster.width != old.raster.width || current.raster.height != old.raster.height ||
+                    !current.raster.rgba.contentEquals(old.raster.rgba)
+            }) }
+            if (analysis.layers.isEmpty()) return doc.atlas to rig
+            val atlas = AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
+            val packedLayers = analysis.layers.associateBy { it.source.id.raw }
+            val offset = if (normalizeAllTextures) 0 else doc.atlas.pages.size
+            val pages = doc.pages.toMutableMap()
+            for ((drawableId, layerId) in ids) atlas.placementByLayerId[layerId]?.let { pages[drawableId] = it.page + offset }
+            val drawables = puppet.drawables.map { drawable ->
+                val id = ids[drawable.id.raw] ?: return@map drawable
+                val layer = packedLayers[id]?.source ?: return@map drawable
+                val placement = atlas.placementByLayerId.getValue(id)
+                val mesh = drawable.mesh ?: return@map drawable.copy(texturePage = placement.page + offset,
+                    atlasTileId = PuppetSourceAtlas.tileIdFor(id, PAINT_SOURCE_ID))
+                val page = atlas.pages[placement.page].image
+                val uvs = FloatArray(mesh.positions.size)
+                val canvas = mesh.positions
+                for (index in uvs.indices step 2) {
+                    uvs[index] = (placement.x + (canvas[index] - layer.bounds.left) * placement.scale) / page.width
+                    uvs[index + 1] = (placement.y + (canvas[index + 1] - layer.bounds.top) * placement.scale) / page.height
+                }
+                pages[drawable.id.raw] = placement.page + offset
+                drawable.copy(mesh = org.umamo.runtime.model.DrawableMesh(mesh.positions, uvs, mesh.indices),
+                    texturePage = placement.page + offset, atlasTileId = PuppetSourceAtlas.tileIdFor(id, PAINT_SOURCE_ID))
+            }
+            val (paintAtlas, paintSources) = PuppetSourceAtlas.build(analysis, atlas, sourceIdRaw = PAINT_SOURCE_ID)
+            val puppetAtlas = if (normalizeAllTextures) paintAtlas else puppet.atlas.copy(
+                pages = puppet.atlas.pages + paintAtlas.pages,
+                tiles = puppet.atlas.tiles.map { tile ->
+                    if (puppet.atlas.storedUvsAddressPages) tile else tile.copy(placement = null)
+                } + paintAtlas.tiles.map { tile ->
+                    tile.copy(placement = tile.placement?.let { it.copy(pageIndex = it.pageIndex + puppet.atlas.pages.size) })
+                }, storedUvsAddressPages = true)
+            val sources = if (normalizeAllTextures) paintSources else puppet.sources + paintSources
+            val packed = if (normalizeAllTextures) atlas else PackedAtlas(doc.atlas.pages + atlas.pages,
+                atlas.placementByLayerId.mapValues { (_, placement) -> placement.copy(page = placement.page + offset) })
+            return packed to rig.copy(puppet = puppet.copy(drawables = drawables, atlas = puppetAtlas, sources = sources), pageByDrawableId = pages)
+        }
         return doc.atlas to rig
     }
 
@@ -209,7 +301,8 @@ internal object Cmo3ModelImport {
     }
 
     private fun layers(doc: Document, ids: Map<String, String>): List<SourceLayer> = doc.puppet.drawables.mapIndexed { index, d ->
-        val b = d.mesh?.positions?.takeIf { it.isNotEmpty() }?.let(::bounds) ?: Bounds(0f, 0f, 1f, 1f)
+        val canvas = d.mesh?.positions?.takeIf { it.isNotEmpty() }
+        val b = canvas?.let(::bounds) ?: Bounds(0f, 0f, 1f, 1f)
         val left = floor(b.left).toInt()
         val top = floor(b.top).toInt()
         val width = (ceil(b.right).toInt() - left).coerceAtLeast(1)
@@ -224,7 +317,7 @@ internal object Cmo3ModelImport {
                 // Cropping the UV bounding box would also bring neighboring packed art into the layer.
                 for (t in mesh.indices.indices step 3) {
                     val a = mesh.indices[t] * 2; val c = mesh.indices[t + 1] * 2; val e = mesh.indices[t + 2] * 2
-                    val xy = mesh.positions; val uv = mesh.uvs
+                    val xy = requireNotNull(canvas); val uv = mesh.uvs
                     val destination = AffineTransform((xy[c] - xy[a]).toDouble(), (xy[c + 1] - xy[a + 1]).toDouble(),
                         (xy[e] - xy[a]).toDouble(), (xy[e + 1] - xy[a + 1]).toDouble(), (xy[a] - left).toDouble(), (xy[a + 1] - top).toDouble())
                     val texture = AffineTransform(((uv[c] - uv[a]) * page.width).toDouble(), ((uv[c + 1] - uv[a + 1]) * page.height).toDouble(),

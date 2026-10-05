@@ -1,7 +1,7 @@
 package io.github.psd2live.render
 
 import io.github.psd2live.core.RigPreviewModel
-import io.github.psd2live.ui.RigCanvasSupport
+import io.github.psd2live.core.RigCanvasSupport
 import org.umamo.render.eval.DeformedGeometry
 import org.umamo.runtime.model.DrawableId
 

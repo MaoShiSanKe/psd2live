@@ -49,7 +49,7 @@ internal fun ParameterDefinitionDialog(
     val typography = LocalToolTypography.current
     val focusManager = LocalFocusManager.current
     val baseModel = remember { state.previewModel?.rig?.puppet }
-    val expectedState = remember { state.historySnapshot?.headNodeId }
+    val expectedState = remember { viewModel.currentWorkspaceState() }
     var copying by remember { mutableStateOf(false) }
     val creating = parameter == null || copying
     var id by remember { mutableStateOf(parameter?.id?.raw ?: baseModel?.freshParameterId()?.raw.orEmpty()) }

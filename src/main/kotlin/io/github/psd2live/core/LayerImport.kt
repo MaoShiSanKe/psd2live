@@ -1,6 +1,6 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSourceLayer
 import org.umamo.format.FileKind
 import org.umamo.format.FormatRegistry
 import org.umamo.format.art.ChannelMask
@@ -13,6 +13,10 @@ import org.umamo.format.raster.RasterCodec
 import org.umamo.format.raster.RasterImage
 import java.io.File
 import java.util.UUID
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import org.umamo.format.tiff.parseFirstDirectory
+import org.umamo.format.webp.parseVp8lHeader
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -45,13 +49,44 @@ internal object LayerImport {
 	fun transparentRasterFiles(files: List<File>): List<File> =
 		files.filter(::isTransparentRasterFile)
 
-	fun decodeRasterFile(file: File): RasterImage {
-		val bytes = file.readBytes()
+	fun decodeRasterFile(file: File, checkCancelled: () -> Unit = {}): RasterImage {
+		checkCancelled()
+		require(file.isFile && file.length() in 1..MAX_BYTES.toLong()) { "Image must be a readable file of at most 64 MiB" }
+		val bytes = file.inputStream().use { input ->
+			val output = java.io.ByteArrayOutputStream()
+			val buffer = ByteArray(8192)
+			while (true) {
+				checkCancelled()
+				val count = input.read(buffer)
+				if (count < 0) break
+				require(output.size().toLong() + count <= MAX_BYTES) { "Image exceeds 64 MiB" }
+				output.write(buffer, 0, count)
+			}
+			output.toByteArray()
+		}
 		val codec = FormatRegistry.detect(bytes, file.name) as? RasterCodec
 			?: error("Unsupported raster format: ${file.name}")
 		require(codec.kind in TRANSPARENT_KINDS) { "Not a transparent raster: ${file.name}" }
-		return codec.read(bytes)
+		val (width, height) = when (codec.kind) {
+			FileKind.Png -> {
+				require(bytes.size >= 24 && bytes.copyOfRange(12, 16).decodeToString() == "IHDR") { "Invalid PNG header" }
+				ByteBuffer.wrap(bytes).let { it.getInt(16).toLong() to it.getInt(20).toLong() }
+			}
+			FileKind.Bmp -> {
+				require(bytes.size >= 54) { "Invalid BMP header" }
+				ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).let { it.getInt(18).toLong() to kotlin.math.abs(it.getInt(22).toLong()) }
+			}
+			FileKind.WebP -> parseVp8lHeader(bytes).let { it.width.toLong() to it.height.toLong() }
+			FileKind.Tiff -> parseFirstDirectory(bytes).let { it.int(256, -1).toLong() to it.int(257, -1).toLong() }
+			else -> error("Unsupported raster format")
+		}
+		require(width > 0 && height > 0 && width <= MAX_PIXELS && height <= MAX_PIXELS && width * height <= MAX_PIXELS) { "Image exceeds 16 megapixels" }
+		checkCancelled()
+		return codec.read(bytes).also { checkCancelled() }
 	}
+
+	private const val MAX_BYTES = 67_108_864
+	private const val MAX_PIXELS = 16_777_216L
 
 	/**
 	 * Trims fully-transparent margins and places the content on the document canvas,
@@ -64,10 +99,11 @@ internal object LayerImport {
 		name: String,
 		layerId: String = "import:${UUID.randomUUID()}",
 		order: Int = 0,
+		checkCancelled: () -> Unit = {},
 	): WorkspaceSourceLayer {
-		val trimmed = trimTransparent(image)
+		val trimmed = trimTransparent(image, checkCancelled)
 			?: error("Image is fully transparent: $name")
-		val (bounds, raster) = fitToCanvas(trimmed, canvasWidth, canvasHeight)
+		val (bounds, raster) = fitToCanvas(trimmed, canvasWidth, canvasHeight, checkCancelled)
 		return WorkspaceSourceLayer(
 			id = LayerId(layerId),
 			name = name,
@@ -89,13 +125,14 @@ internal object LayerImport {
 
 	fun displayNameOf(file: File): String = file.nameWithoutExtension.ifBlank { file.name }
 
-	private fun trimTransparent(image: RasterImage): RasterImage? {
+	private fun trimTransparent(image: RasterImage, checkCancelled: () -> Unit): RasterImage? {
 		var minX = image.width
 		var minY = image.height
 		var maxX = -1
 		var maxY = -1
 		val rgba = image.rgba
 		for (y in 0 until image.height) {
+			checkCancelled()
 			val row = y * image.width
 			for (x in 0 until image.width) {
 				if ((rgba[(row + x) * 4 + 3].toInt() and 0xFF) == 0) continue
@@ -113,6 +150,7 @@ internal object LayerImport {
 		}
 		val cropped = ByteArray(width * height * 4)
 		for (y in 0 until height) {
+			checkCancelled()
 			val src = ((minY + y) * image.width + minX) * 4
 			val dst = y * width * 4
 			System.arraycopy(rgba, src, cropped, dst, width * 4)
@@ -124,6 +162,7 @@ internal object LayerImport {
 		image: RasterImage,
 		canvasWidth: Int,
 		canvasHeight: Int,
+		checkCancelled: () -> Unit,
 	): Pair<LayerBounds, LayerRaster> {
 		val maxW = canvasWidth.coerceAtLeast(1)
 		val maxH = canvasHeight.coerceAtLeast(1)
@@ -135,18 +174,19 @@ internal object LayerImport {
 		val raster = if (width == image.width && height == image.height) {
 			LayerRaster(width, height, image.rgba)
 		} else {
-			LayerRaster(width, height, scaleRgba(image, width, height))
+			LayerRaster(width, height, scaleRgba(image, width, height, checkCancelled))
 		}
 		return LayerBounds(left, top, width, height) to raster
 	}
 
 	/** Nearest-neighbour scale — fine for UI placement before the artist confirms size. */
-	private fun scaleRgba(image: RasterImage, width: Int, height: Int): ByteArray {
+	fun scaleRgba(image: RasterImage, width: Int, height: Int, checkCancelled: () -> Unit): ByteArray {
 		val out = ByteArray(width * height * 4)
 		for (y in 0 until height) {
-			val srcY = (y * image.height) / height
+			checkCancelled()
+			val srcY = (y.toLong() * image.height / height).toInt()
 			for (x in 0 until width) {
-				val srcX = (x * image.width) / width
+				val srcX = (x.toLong() * image.width / width).toInt()
 				val src = (srcY * image.width + srcX) * 4
 				val dst = (y * width + x) * 4
 				out[dst] = image.rgba[src]

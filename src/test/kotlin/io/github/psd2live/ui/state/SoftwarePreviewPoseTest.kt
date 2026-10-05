@@ -1,8 +1,11 @@
 package io.github.psd2live.ui.state
 
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.core.*
+import io.github.psd2live.application.*
+import io.github.psd2live.project.*
+import kotlinx.serialization.json.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import org.umamo.format.art.*
@@ -18,14 +21,28 @@ class SoftwarePreviewPoseTest {
             PipelineConfig(meshOnly = true, atlasSize = 256))
         val head = StandardParameters.ANGLE_X
         val hair = StandardParameters.HAIR_FRONT
-        val model = base.copy(rig = base.rig.copy(puppet = base.rig.puppet.copy(parameters = listOf(
+        val edits = RigEditOverlay(physicsEdits = listOf(RigPhysicsEdit("Ribbon", "Ribbon",
+            listOf(PhysicsInput(head.raw, 100f, PhysicsSourceType.X)),
+            listOf(PhysicsOutput(hair.raw, 1, 1f)), listOf(PhysicsSegment(8f, 0.9f, 0.9f, 1.2f)))))
+        val model = base.copy(config = base.config.copy(meshOnly = false, generatePhysics = true, rigEdits = edits),
+            rig = base.rig.copy(puppet = base.rig.puppet.copy(parameters = listOf(
             Parameter(head, "Head", -30f, 30f, 0f), Parameter(hair, "Hair", -1f, 1f, 0f)))))
+        val runtime = WorkspaceRuntime<RigPreviewModel>({ WorkspacePreviewBuilder().build(it) })
+        runtime.install(runtime.state.value.state, "project", WorkspaceDocument(WorkspaceSourceArt(8, 8, listOf(layer), emptyList()),
+            emptyMap(), emptySet(), emptyMap(), emptyMap(), edits), model)
+        val playback = WorkspacePlaybackSessions(runtime)
         PSD2LiveViewModel().use { vm ->
-            vm.setStateForTest(vm.state.value.copy(previewModel = model, sdkStatus = "unavailable",
+            vm.setStateForTest(vm.state.value.copy(projectId = "project", previewModel = model, sdkStatus = "unavailable",
                 parameterValues = mapOf(head to 0f, hair to 0f), generatePhysics = true, meshOnly = false,
-                rigEdits = RigEditOverlay(physicsEdits = listOf(RigPhysicsEdit("Ribbon", "Ribbon",
-                    listOf(PhysicsInput(head.raw, 100f, PhysicsSourceType.X)),
-                    listOf(PhysicsOutput(hair.raw, 1, 1f)), listOf(PhysicsSegment(8f, 0.9f, 0.9f, 1.2f)))))))
+                rigEdits = edits))
+            vm.attachWorkspace(object : WorkspaceBackendStub() {
+                override fun snapshot() = WorkspaceReadSession(runtime.read()).snapshot()
+                override fun previewPhysics(arguments: JsonObject) = playback.physics("project", arguments.getValue("state").jsonPrimitive.content,
+                    vm.state.value.activeWorkspace.id, arguments)
+                override fun controlPlayback(arguments: JsonObject) = playback.configure("project", arguments.getValue("state").jsonPrimitive.content,
+                    vm.state.value.activeWorkspace.id, arguments)
+                override fun playbackFrame(dt: Float?) = playback.frame(vm.state.value.activeWorkspace.id, dt)
+            })
             vm.setCanvasMode(vm.state.value.activeCanvas.id, CanvasMode.PREVIEW)
             val key = vm.canvasRenderKey(vm.state.value.activeCanvas.id)
             vm.beginParameterScrub()
@@ -45,7 +62,7 @@ class SoftwarePreviewPoseTest {
                 }
                 assertTrue(kotlin.math.abs(vm.state.value.previewParameterValues[hair] ?: 0f) > 1e-3f)
             } finally {
-                vm.endParameterScrub()
+                vm.cancelParameterScrub()
             }
         }
     }

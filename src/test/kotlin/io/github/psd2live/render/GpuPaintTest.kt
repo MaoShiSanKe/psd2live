@@ -1,11 +1,13 @@
 package io.github.psd2live.render
 
 import io.github.psd2live.core.PSD2LivePipeline
-import io.github.psd2live.ui.CanvasViewport
+import io.github.psd2live.core.CanvasViewport
+import io.github.psd2live.application.WorkspacePaintSession
 import io.github.psd2live.ui.PaintSession
-import io.github.psd2live.ui.RigCanvasSupport
+import io.github.psd2live.ui.PaintShape
+import androidx.compose.ui.graphics.Color
+import io.github.psd2live.core.RigCanvasSupport
 import org.junit.jupiter.api.Assumptions.assumeTrue
-import java.awt.Rectangle
 import java.awt.image.BufferedImage
 import java.nio.file.Path
 import kotlin.test.Test
@@ -17,7 +19,8 @@ import kotlin.test.assertTrue
 class GpuPaintTest {
 	@Test fun gpuPreviewHandsOverOnlyWhatChangedPremultiplied() {
 		val image = BufferedImage(100, 80, BufferedImage.TYPE_INT_ARGB)
-		val session = PaintSession("layer", "layer", image, PaintSession.copyImage(image))
+		val handle = WorkspacePaintSession("paint", "project", "state", "layer", "layer", image) {}
+		val session = PaintSession(handle)
 		session.gpuPreview = true
 		// The first upload of a texture is the whole raster.
 		val full = assertNotNull(session.takeGpuUpload(full = true))
@@ -26,14 +29,14 @@ class GpuPaintTest {
 
 		val tilesBefore = session.previewTiles
 		val version = session.gpuVersion
-		session.edit(Rectangle(10, 20, 4, 3)) { it.setRGB(10, 20, 0x80FF0000.toInt()) }
-		session.edit(Rectangle(30, 5, 2, 2)) { it.setRGB(31, 6, 0xFF00FF00.toInt()) }
+		session.shape(10, 20, 14, 23, PaintShape.RECTANGLE, Color(0x80FF0000), 1f, 1f, true, "red")
+		session.shape(30, 5, 32, 7, PaintShape.RECTANGLE, Color(0xFF00FF00), 1f, 1f, true, "green")
 		session.refreshPreview()
 		assertTrue(session.gpuVersion > version, "a change bumps the version the canvas redraws on")
 		assertTrue(session.previewTiles === tilesBefore, "no preview tiles are painted for a GPU canvas")
 
 		val upload = assertNotNull(session.takeGpuUpload(full = false))
-		assertEquals(listOf(10, 5, 22, 18), listOf(upload.x, upload.y, upload.width, upload.height), "the union of both edits")
+		assertEquals(listOf(8, 3, 27, 23), listOf(upload.x, upload.y, upload.width, upload.height), "the exact union of both shared shape write envelopes")
 		fun rgba(x: Int, y: Int) = (0..3).map { upload.rgba[((y - upload.y) * upload.width + (x - upload.x)) * 4 + it].toInt() and 0xff }
 		assertEquals(listOf(128, 0, 0, 128), rgba(10, 20), "half-transparent red, premultiplied")
 		assertEquals(listOf(0, 255, 0, 255), rgba(31, 6))

@@ -9,6 +9,7 @@ import org.umamo.runtime.model.ParameterId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PhysicsAuthoringTest {
@@ -24,6 +25,25 @@ class PhysicsAuthoringTest {
 			outputs.mapIndexed { k, p -> PhysicsOutput(p, k + 1, 1.5f) }, List(segments) { PhysicsSegment(5f + it, 0.9f, 0.9f, 1.2f) })
 
 	private fun catalog(overlay: RigEditOverlay) = PhysicsCatalog.groups(none, none, overlay, available)
+
+	@Test
+	fun partiallyConfiguredGroupsRemainEditableAndInactiveUntilTheirOutputsAreAssigned() {
+		val template = PhysicsAuthoring.template("Draft", "Draft", available)
+		val draft = PhysicsAuthoring.request(emptyList(), template.toJson(), available).edit!!
+		val rows = catalog(RigEditOverlay(physicsEdits = listOf(draft)))
+		assertEquals(PhysicsIssue.Code.NO_OUTPUT, rows.single().issue?.code)
+		assertFalse(rows.single().active)
+		val ready = PhysicsAuthoring.request(rows, group("Draft", "ParamTail1").toJson(), available).edit!!
+		assertTrue(catalog(RigEditOverlay(physicsEdits = listOf(ready))).single().active)
+		assertFailsWith<IllegalArgumentException> {
+			PhysicsAuthoring.request(rows, group("Draft", "Missing").toJson(), available)
+		}
+		assertFailsWith<IllegalArgumentException> {
+			PhysicsAuthoring.request(rows, group("Draft", "ParamAngleX").toJson(), available)
+		}
+		val empty = PhysicsAuthoring.template("Empty", "Empty", emptySet())
+		assertEquals(empty, PhysicsAuthoring.request(emptyList(), empty.toJson(), available).edit)
+	}
 
 	@Test
 	fun insertingAndMovingPendulumsKeepsOutputsOnTheirPendulum() {

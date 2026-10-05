@@ -1,8 +1,8 @@
 package io.github.psd2live.ui.state
 
 import androidx.compose.ui.geometry.Offset
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PipelineConfig
 import io.github.psd2live.core.RigPreviewModel
@@ -12,10 +12,37 @@ import io.github.psd2live.ui.WeightPaint
 import io.github.psd2live.ui.WeightPaintMode
 import io.github.psd2live.ui.views.CanvasModeChoice
 import io.github.psd2live.ui.views.chooseCanvasMode
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.*
+import org.junit.jupiter.api.io.TempDir
 import org.umamo.format.art.*
+import java.awt.image.BufferedImage
+import java.nio.file.Path
+import javax.imageio.ImageIO
 import kotlin.test.*
 
 class CanvasModeMenuTest {
+    @TempDir lateinit var temporary: Path
+
+    /** Modes that open business sessions run against a committed application document. */
+    private suspend fun workspace(action: suspend (PSD2LiveViewModel, RigPreviewModel) -> Unit) {
+        val png = temporary.resolve("body.png")
+        val image = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
+        for (y in 0 until 8) for (x in 0 until 8) image.setRGB(x, y, 0xff7799bb.toInt())
+        ImageIO.write(image, "png", png.toFile())
+        PSD2LiveViewModel().use { vm ->
+            vm.setStateForTest(vm.state.value.copy(meshOnly = true, atlasSize = 256, generatePhysics = false, exportMoc3 = false))
+            DesktopWorkspace(vm, temporary.resolve("store")).use { backend ->
+                vm.attachWorkspace(backend)
+                backend.createArtwork(buildJsonObject { put("width", 8); put("height", 8); putJsonArray("layers") { add(buildJsonObject {
+                    put("path", png.toString()); put("name", "body"); put("role", "topwear")
+                }) } })
+                action(vm, vm.state.value.previewModel!!)
+            }
+        }
+    }
     @Test fun modeShortcutsCoverEveryChoiceAcrossPresetsWithoutConflicts() {
         for (preset in KeymapPreset.entries) {
             val keymap = Keymap.of(preset)
@@ -63,10 +90,8 @@ class CanvasModeMenuTest {
         }
     }
 
-    @Test fun temporarySelectionKeepsPaintSessionAndDefersIfTargetIsCleared() {
-        PSD2LiveViewModel().use { vm ->
-            val model = preview()
-            vm.setStateForTest(vm.state.value.copy(previewModel = model))
+    @Test fun temporarySelectionKeepsPaintSessionAndDefersIfTargetIsCleared() = runBlocking<Unit> {
+        workspace { vm, model ->
             val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
             editor.selectLayer(model.rig.layerIdByDrawableId.values.first())
             editor.setHierarchyMode(EditHierarchyMode.PAINT)
@@ -178,25 +203,27 @@ class CanvasModeMenuTest {
         }
     }
 
-    @Test fun skeletonModeTakesTheSkeletonAndSwitchesBetweenPoseAndEdit() {
-        PSD2LiveViewModel().use { vm ->
-            val preview = preview()
-            vm.setStateForTest(vm.state.value.copy(previewModel = preview))
+    @Test fun skeletonModeTakesTheSkeletonAndSwitchesBetweenPoseAndEdit() = runBlocking<Unit> {
+        workspace { vm, preview ->
             val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
             val spec = io.github.psd2live.core.SkeletonAutoBuilder.build(preview.analysis, preview.rig)
             assumeBones(spec)
 
             editor.setHierarchyMode(EditHierarchyMode.SKELETON)
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy || editor.hierarchyMode != EditHierarchyMode.SKELETON) delay(10) }
             assertEquals(EditHierarchyMode.SKELETON, editor.hierarchyMode)
             assertTrue(editor.skeletonSelected)
             assertEquals(listOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT), editor.palette())
 
             editor.activateTool(CanvasTool.SKELETON_EDIT)
             assertEquals(CanvasTool.SKELETON_EDIT, editor.tool)
+            // The draft opens on its own rest-pose commit, so it appears once that write settles.
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
             assertNotNull(editor.skeletonDraft)
 
             // Leaving the mode writes the draft back and gives the skeleton up for the mode gone to.
             editor.setHierarchyMode(EditHierarchyMode.SELECT)
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
             assertNull(editor.skeletonDraft)
             assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
             assertNotNull(editor.committedSkeleton)

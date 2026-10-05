@@ -1,10 +1,11 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.WorkspaceSourceLayer
+
+import io.github.psd2live.project.WorkspaceSourceLayer
 import org.umamo.runtime.model.DrawableId
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.AgentWorkspaceDocument
-import io.github.psd2live.agent.AgentWorkspaceStore
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.WorkspaceStore
 import io.github.psd2live.history.WorkspaceHistoryTree
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -226,8 +227,8 @@ class MeshComponentSplitTest {
         }.parentDeformerId)
         // A normal project reopen rebuilds from source/config rather than retaining the preview objects.
         val savedSource = WorkspaceSourceArt(30, 20, listOf(layer) + pieces, emptyList())
-        val store = AgentWorkspaceStore(temp)
-        val document = AgentWorkspaceDocument(savedSource, emptyMap(), config.deletedLayerIds,
+        val store = WorkspaceStore(temp)
+        val document = WorkspaceDocument(savedSource, emptyMap(), config.deletedLayerIds,
             config.layerOverrides, config.parentOverrides, split.config.rigEdits)
         store.persistHistory("mesh-split", WorkspaceHistoryTree(document, "revision", "snapshot").state())
         val restored = assertNotNull(store.loadHistory("mesh-split")).head().snapshot

@@ -2,6 +2,7 @@ package io.github.psd2live.core
 
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.float
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.umamo.edit.Pose
@@ -100,6 +101,7 @@ data class RigTargetRef(
 	val kind: RigTargetKind,
 	val id: String,
 	val secondaryId: String? = null,
+	val glueId: String? = null,
 ) {
 	init {
 		require(id.isNotBlank()) { "Target ID must not be blank" }
@@ -112,7 +114,7 @@ data class RigTargetRef(
 		RigTargetKind.ART_MESH -> KeyformOwner.Drawable(DrawableId(id))
 		RigTargetKind.WARP_DEFORMER, RigTargetKind.ROTATION_DEFORMER -> KeyformOwner.Deformer(DeformerId(id))
 		RigTargetKind.PART -> KeyformOwner.Part(PartId(id))
-		RigTargetKind.GLUE -> KeyformOwner.Glue(DrawableId(id), DrawableId(secondaryId ?: id))
+		RigTargetKind.GLUE -> KeyformOwner.Glue(DrawableId(id), DrawableId(secondaryId ?: id), glueId)
 	}
 }
 
@@ -369,10 +371,61 @@ data class RigEditOverlay(
 	}
 }
 
-internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay): BuiltRig =
-	if (overlay == RigEditOverlay.Empty) this else copy(puppet = overlay.applyTo(puppet))
+internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map<String, Boolean> = emptyMap(),
+                                 drawOrderOverrides: Map<String, Float> = emptyMap()): BuiltRig {
+	if (overlay == RigEditOverlay.Empty) return withDrawOrderOverrides(drawOrderOverrides)
+	var model = overlay.applyTo(puppet)
+	val bounds = sourceBoundsByDrawableId.toMutableMap()
+	val layers = layerIdByDrawableId.toMutableMap()
+	val pages = pageByDrawableId.toMutableMap()
+	for (command in overlay.authoringJournal) {
+		val op = command["op"]?.jsonPrimitive?.contentOrNull
+		if (op == SourcePartitionJournal.OP) {
+			for (piece in SourcePartitionJournal.pieces(command)) {
+				val id = piece.getValue("id").jsonPrimitive.content
+				val drawable = model.drawables.singleOrNull { it.id.raw == id } ?: continue
+				layers[id] = piece.getValue("layer_id").jsonPrimitive.content
+				layerVisibility[layers.getValue(id)]?.let { visible ->
+					model = model.copy(drawables = model.drawables.map { if (it.id.raw == id) it.copy(isVisible = visible) else it })
+				}
+				pages[id] = drawable.texturePage
+				val canvas = piece.getValue("texture_canvas").jsonArray.map { it.jsonPrimitive.float }
+				val xs = canvas.indices.step(2).map { canvas[it] }; val ys = canvas.indices.step(2).map { canvas[it + 1] }
+				bounds[id] = Bounds(xs.min(), ys.min(), xs.max(), ys.max())
+			}
+			continue
+		}
+		if (op != RasterMeshJournal.OP && op != RasterMeshCreation.OP && op != RigMeshActivation.OP) continue
+		val id = command.getValue("id").jsonPrimitive.content
+		if ((op == RasterMeshCreation.OP || op == RigMeshActivation.OP) && model.drawables.any { it.id.raw == id }) {
+			layers[id] = command.getValue("layer_id").jsonPrimitive.content
+			pages[id] = model.drawables.single { it.id.raw == id }.texturePage
+		}
+		val value = command["neutral_bounds"]?.jsonArray ?: continue
+		val numbers = value.map { it.jsonPrimitive.content.toFloat() }
+		require(numbers.size == 4 && numbers.all(Float::isFinite) && numbers[2] >= numbers[0] && numbers[3] >= numbers[1]) {
+			"Invalid rebuilt mesh neutral bounds"
+		}
+		if (model.drawables.any { it.id.raw == id }) bounds[id] = Bounds(numbers[0], numbers[1], numbers[2], numbers[3])
+	}
+	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages)
+        .withDrawOrderOverrides(drawOrderOverrides)
+}
 
 internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit): PuppetModel {
+    val requestedChannel = delete.channel?.takeUnless { it.equals("geometry", ignoreCase = true) }?.let { name ->
+        val canonical = when (name.lowercase()) {
+            "draworder" -> "DRAW_ORDER"
+            "multiplycolor" -> "MULTIPLY_COLOR"
+            "screencolor" -> "SCREEN_COLOR"
+            "glueintensity" -> "GLUE_INTENSITY"
+            "flipx" -> "FLIP_X"
+            "flipy" -> "FLIP_Y"
+            else -> name.uppercase()
+        }
+        FormChannel.entries.firstOrNull { it.name == canonical }
+            ?: throw IllegalArgumentException("Unknown keyform channel: $name")
+    }
 	val paramId = ParameterId(delete.parameterId)
 	val param = model.parameters.firstOrNull { it.id == paramId } ?: return model
 	val owner = delete.target.asKeyformOwner()
@@ -400,9 +453,7 @@ internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit
 
 	val deleteChannels = delete.channel == null || !delete.channel.equals("geometry", ignoreCase = true)
 	if (deleteChannels) {
-		val targetCh = delete.channel?.let { name ->
-			runCatching { FormChannel.valueOf(name.uppercase()) }.getOrNull()
-		}
+        val targetCh = requestedChannel
 		val channelFilter: (FormChannel) -> Boolean = { ch ->
 			targetCh == null || ch == targetCh
 		}
@@ -432,7 +483,7 @@ internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit
 	return current
 }
 
-internal fun applyKeyformSet(model: PuppetModel, set: RigKeyformSetEdit): PuppetModel {
+internal fun applyKeyformSet(model: PuppetModel, set: RigKeyformSetEdit, capturePose: Map<String, Float>? = null): PuppetModel {
 	val blendTargets = model.blendParametersIn(set.coordinate)
 	if (blendTargets.isNotEmpty()) {
 		val owner = set.target.asKeyformOwner()
@@ -446,6 +497,7 @@ internal fun applyKeyformSet(model: PuppetModel, set: RigKeyformSetEdit): Puppet
 				RotationPivotForm(geo.originX, geo.originY, geo.angle, geo.scale ?: 1f)
 			} else null,
 			channels = set.channels,
+			poseCoordinate = capturePose ?: set.coordinate,
 		)
 	}
 	val gridCoordinate = model.gridCoordinateOf(set.coordinate)
@@ -741,7 +793,7 @@ internal fun PuppetModel.withReplacedChannelGrids(owner: KeyformOwner, channelGr
 		is KeyformOwner.Glue ->
 			copy(
 				glues = glues.map { glue ->
-					if (glue.meshA == owner.meshA && glue.meshB == owner.meshB) glue.copy(channelGrids = channelGrids) else glue
+					if (owner.matches(glue)) glue.copy(channelGrids = channelGrids) else glue
 				},
 			)
 	}

@@ -18,8 +18,6 @@ internal enum class WeightPaintMode(val labelKey: String, val symbol: String) {
  * into weights, the same way for both tools.
  */
 internal object WeightPaint {
-    private const val SMOOTH_PASSES = 4
-
     /** [base] with [reach] applied in [mode] at [amount]; [neighbors] is needed only for [WeightPaintMode.SMOOTH]. */
     fun apply(
         base: FloatArray,
@@ -28,37 +26,10 @@ internal object WeightPaint {
         amount: Float,
         neighbors: List<IntArray>? = null,
     ): FloatArray {
-        val a = amount.coerceIn(0f, 1f)
-        val n = reach.size
-        if (mode == WeightPaintMode.SMOOTH) {
-            var current = FloatArray(n) { base.getOrElse(it) { 0f } }
-            if (neighbors == null) return current
-            repeat(SMOOTH_PASSES) {
-                val next = current.copyOf()
-                for (i in 0 until n) {
-                    val r = reach[i]
-                    val adjacent = neighbors.getOrNull(i) ?: continue
-                    if (r <= 0f || adjacent.isEmpty()) continue
-                    var sum = 0f
-                    var count = 0
-                    for (j in adjacent) if (j in 0 until n) { sum += current[j]; count++ }
-                    if (count == 0) continue
-                    next[i] = current[i] + (sum / count - current[i]) * a * r
-                }
-                current = next
-            }
-            return FloatArray(n) { current[it].coerceIn(0f, 1f) }
-        }
-        return FloatArray(n) { i ->
-            val r = reach[i]
-            val w = base.getOrElse(i) { 0f }
-            when {
-                r <= 0f -> w
-                mode == WeightPaintMode.SET -> w + (a - w) * r
-                mode == WeightPaintMode.SUBTRACT -> w - a * r
-                else -> w + a * r
-            }.coerceIn(0f, 1f)
-        }
+        val normalized = FloatArray(reach.size) { base.getOrElse(it) { 0f } }
+        if (mode == WeightPaintMode.SMOOTH && neighbors == null) return normalized
+        return io.github.psd2live.core.CanvasWeightAuthoring.apply(normalized, reach,
+            io.github.psd2live.core.CanvasWeightAuthoring.Mode.valueOf(mode.name), amount.coerceIn(0f, 1f), neighbors)
     }
 
     /**
@@ -66,14 +37,8 @@ internal object WeightPaint {
      * drag. A drag too short to have a direction reaches nothing.
      */
     fun gradient(points: List<Offset>, from: Offset, to: Offset): FloatArray {
-        val axis = to - from
-        val length2 = axis.x * axis.x + axis.y * axis.y
-        if (length2 < 1f) return FloatArray(points.size)
-        return FloatArray(points.size) { i ->
-            val d = points[i] - from
-            val t = (d.x * axis.x + d.y * axis.y) / length2
-            (1f - t).coerceIn(0f, 1f)
-        }
+        fun point(value: Offset) = io.github.psd2live.core.CanvasBrushPoint(value.x, value.y)
+        return io.github.psd2live.core.CanvasWeightAuthoring.gradient(points.map(::point), point(from), point(to))
     }
 
     /** The mode a stroke really runs in: Alt swaps adding and subtracting, and leaves the other two alone. */

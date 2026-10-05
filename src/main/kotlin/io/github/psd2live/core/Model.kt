@@ -236,6 +236,9 @@ data class PipelineConfig(
 	val drawOrderOverrides: Map<String, Float> = emptyMap(),
 	/** Durable Agent/editor changes replayed over every generated base rig and retained on export. */
 	val rigEdits: RigEditOverlay = RigEditOverlay.Empty,
+	/** Optional immutable generation input; textures still come from the current source artwork. */
+	val generationSource: org.umamo.format.art.SourceArt? = null,
+	val meshSource: org.umamo.format.art.SourceArt? = null,
 ) {
 	fun moc3ExportOptions(): org.umamo.interop.moc3.Moc3ExportOptions =
 		org.umamo.interop.moc3.Moc3ExportOptions(

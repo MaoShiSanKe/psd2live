@@ -63,12 +63,14 @@ import io.github.psd2live.ui.tutorial.tutorialTarget
 internal fun BoxScope.CanvasPreviewToolbar(
 	animationEnabled: Boolean,
 	mouseTrackingEnabled: Boolean,
+	smoothMouseTracking: Boolean,
 	physicsEnabled: Boolean,
 	physicsAvailable: Boolean,
 	fps: Int,
 	enabled: Boolean,
 	onToggleAnimation: () -> Unit,
 	onToggleMouseTracking: () -> Unit,
+	onToggleSmoothTracking: () -> Unit,
 	onTogglePhysics: () -> Unit,
 	onSelectFps: (Int) -> Unit,
 	modifier: Modifier = Modifier,
@@ -165,6 +167,12 @@ internal fun BoxScope.CanvasPreviewToolbar(
 					tint = tint,
 				)
 			},
+		)
+		PreviewToolRow(
+			label = tr("preview.tracking.smooth"), isActive = smoothMouseTracking,
+			isToolbarExpanded = isExpanded, textAlpha = textAlpha, textOffset = textOffset,
+			enabled = enabled && mouseTrackingEnabled, onClick = onToggleSmoothTracking,
+			icon = { tint -> IconMouse(active = smoothMouseTracking, modifier = Modifier.size(14.dp), tint = tint) },
 		)
 		val physicsOn = physicsEnabled && physicsAvailable
 		PreviewToolRow(

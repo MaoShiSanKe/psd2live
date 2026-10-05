@@ -1,9 +1,12 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.AgentWorkspaceDocument
-import io.github.psd2live.agent.AgentWorkspaceStore
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.WorkspaceStore
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSettingsCodec
+import io.github.psd2live.ui.state.WorkspaceStateCodec
+import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.history.WorkspaceHistoryTree
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import kotlinx.serialization.json.*
@@ -15,6 +18,9 @@ import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.*
 import java.nio.file.Path
 import kotlin.test.*
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.first
 
 class DepthSplitTest {
     @TempDir lateinit var temp: Path
@@ -122,10 +128,10 @@ class DepthSplitTest {
         val edited = pipeline.rebuildPreview(generated, config)
         val result = split(pipeline, edited)
         val after = result.preview
-        val document = AgentWorkspaceDocument(after.analysis.source, after.config.layerVisibility,
+        val document = WorkspaceDocument(after.analysis.source, after.config.layerVisibility,
             after.config.deletedLayerIds, after.config.layerOverrides, after.config.parentOverrides, after.config.rigEdits)
         val tree = WorkspaceHistoryTree(document, "depth-revision", "depth-snapshot")
-        val store = AgentWorkspaceStore(temp)
+        val store = WorkspaceStore(temp)
         store.persistHistory("depth", tree.state())
         val restored = assertNotNull(store.loadHistory("depth")).head().snapshot
         val reopened = pipeline.buildPreview(restored.source, after.config.copy(rigEdits = restored.rigEdits))
@@ -141,7 +147,7 @@ class DepthSplitTest {
         after.rig.puppet.drawables.forEach { samePositions(expected.worldPositions.getValue(it.id), actual.worldPositions.getValue(it.id)) }
     }
 
-    @Test fun erasingFrontKeepsTextureRectangleRigAndGlueAfterReopen() {
+    @Test fun erasingFrontKeepsTextureRectangleRigAndGlueAfterReopen() = runBlocking {
         val pipeline = PSD2LivePipeline()
         val result = split(pipeline, original(pipeline))
         val split = result.preview
@@ -149,28 +155,35 @@ class DepthSplitTest {
         val originalSource = split.analysis.layers.single { it.source.id.raw == "collar" }.source
         val frontSource = split.analysis.layers.single { it.source.id.raw == result.frontLayerId }.source
         PSD2LiveViewModel().use { vm ->
-            vm.setStateForTest(vm.state.value.copy(analysis = split.analysis, previewModel = split,
-                rigEdits = split.config.rigEdits, parentOverrides = split.config.parentOverrides,
-                layerOverrides = split.config.layerOverrides, drawOrderOverrides = split.config.drawOrderOverrides))
-            val editor = vm.canvasEditor
-            editor.selectLayer(result.frontLayerId)
-            val session = assertNotNull(editor.startPaintSession(result.frontLayerId))
-            editor.clearCurrentLayerPaint()
-            assertTrue(session.isDirty)
-            editor.promptCommitPaintSession()
-            assertFalse(editor.showRebuildMeshDialog, "Depth-copy paint should apply without offering mesh reconstruction")
-            val painted = assertNotNull(vm.state.value.previewModel)
-            val paintedSource = painted.analysis.layers.single { it.source.id.raw == result.frontLayerId }.source
-            assertEquals(frontSource.bounds, paintedSource.bounds)
-            assertTrue(paintedSource.raster.rgba.indices.filter { it % 4 == 3 }.all { paintedSource.raster.rgba[it] == 0.toByte() })
-            assertContentEquals(originalSource.raster.rgba, painted.analysis.layers.single { it.source.id.raw == "collar" }.source.raster.rgba)
-            assertContentEquals(front.mesh!!.positions, mesh(painted, result.frontLayerId).mesh!!.positions)
-            assertEquals(split.rig.puppet.glues.single().pairs.size, painted.rig.puppet.glues.single().pairs.size)
-            val reopened = pipeline.buildPreview(painted.analysis.source, painted.config)
-            val loadedFront = mesh(reopened, result.frontLayerId)
-            assertContentEquals(front.mesh.indices, loadedFront.mesh!!.indices)
-            assertEquals(frontSource.bounds.width, reopened.rig.puppet.atlas.tiles.single { it.id == loadedFront.atlasTileId }.width)
-            assertEquals(split.rig.puppet.glues.single().pairs.size, reopened.rig.puppet.glues.single().pairs.size)
+            vm.setStateForTest(WorkspaceStateCodec.decode(WorkspaceSettingsCodec.encode(split.config),
+                vm.state.value.copy(projectId = "depth-paint", analysis = split.analysis, previewModel = split,
+                    rigEdits = split.config.rigEdits, parentOverrides = split.config.parentOverrides,
+                    layerOverrides = split.config.layerOverrides, drawOrderOverrides = split.config.drawOrderOverrides)))
+            DesktopWorkspace(vm, temp.resolve("paint-store")).use { workspace ->
+                vm.attachWorkspace(workspace)
+                val editor = vm.canvasEditor
+                editor.selectLayer(result.frontLayerId)
+                val session = assertNotNull(editor.startPaintSession(result.frontLayerId))
+                editor.clearCurrentLayerPaint()
+                assertTrue(session.isDirty)
+                editor.promptCommitPaintSession()
+                withTimeout(10000) { vm.state.first { !it.workspaceEditBusy } }
+                assertNull(vm.state.value.errorMessage)
+                assertFalse(editor.showRebuildMeshDialog, "Depth-copy paint should apply without offering mesh reconstruction")
+                val painted = assertNotNull(vm.state.value.previewModel)
+                val paintedSource = painted.analysis.layers.single { it.source.id.raw == result.frontLayerId }.source
+                assertEquals(frontSource.bounds, paintedSource.bounds)
+                assertTrue(paintedSource.raster.rgba.indices.filter { it % 4 == 3 }.all { paintedSource.raster.rgba[it] == 0.toByte() })
+                assertContentEquals(originalSource.raster.rgba, painted.analysis.layers.single { it.source.id.raw == "collar" }.source.raster.rgba)
+                assertContentEquals(front.mesh!!.positions, mesh(painted, result.frontLayerId).mesh!!.positions)
+                assertEquals(split.rig.puppet.glues.single().pairs.size, painted.rig.puppet.glues.single().pairs.size)
+                val reopened = pipeline.buildPreview(painted.analysis.source, painted.config)
+                val loadedFront = mesh(reopened, result.frontLayerId)
+                assertContentEquals(front.mesh.indices, loadedFront.mesh!!.indices)
+                assertEquals(frontSource.bounds.width, reopened.rig.puppet.atlas.tiles.single { it.id == loadedFront.atlasTileId }.width)
+                assertEquals(split.rig.puppet.glues.single().pairs.size, reopened.rig.puppet.glues.single().pairs.size)
+                assertEquals(2, workspace.history().nodes.size)
+            }
         }
     }
 

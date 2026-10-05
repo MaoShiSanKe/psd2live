@@ -44,7 +44,8 @@ class CanvasPerfTool {
 		val savedSoftware = AppSettings.softwareCanvas
 		val viewModel = PSD2LiveViewModel()
 		// As the app starts it: the history workspace is what makes the canvas editable.
-		viewModel.attachAgentWorkspace(io.github.psd2live.agent.ViewModelAgentWorkspace(viewModel))
+		val workspace = io.github.psd2live.ui.state.DesktopWorkspace(viewModel, out.resolve("workspace").toPath())
+		viewModel.attachWorkspace(workspace)
 		val frames = ConcurrentLinkedQueue<Long>()
 		val window = AtomicReference<java.awt.Window?>()
 		Thread {
@@ -249,6 +250,7 @@ class CanvasPerfTool {
 			File(out, "report.txt").writeText(report.toString())
 			println(report)
 			runCatching { SwingUtilities.invokeAndWait { window.get()?.dispose() } }
+			workspace.close()
 			viewModel.close()
 		}
 	}

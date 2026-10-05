@@ -1,5 +1,11 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.core.ComponentPalette
+
+import io.github.psd2live.core.RigCanvasSupport
+
+import io.github.psd2live.core.CanvasViewport
+
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*

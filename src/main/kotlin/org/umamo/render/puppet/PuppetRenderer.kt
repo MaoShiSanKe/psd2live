@@ -296,6 +296,10 @@ class PuppetRenderer(
 	// Effective Parts-panel visibility (own eyeball ∧ every ancestor part's), resolved once per change. Gates
 	// only the drawn list; hidden meshes that are mask sources or glue partners still deform. Render-thread only.
 	private var shownDrawableIds: Set<DrawableId> = model.visibleDrawableIds()
+	// The single-partner shader represents independent pairs. Shared vertices require the
+	// CPU evaluator's ordered weld algebra; upload its final positions once per pose.
+	private var cpuGluePositions: Map<DrawableId, FloatArray> = emptyMap()
+    private var gpuGlueLayoutValid = true
 	private var glueDeformList: List<GpuDrawable> = emptyList()
 	private var gpuById: Map<DrawableId, GpuDrawable> = emptyMap()
 
@@ -660,6 +664,7 @@ class PuppetRenderer(
 	 * context-lifetime objects.
 	 */
 	fun disposeGl() {
+        cpuGluePositions = emptyMap()
 		for (gpuDrawable in gpuById.values) {
 			deleteDrawable(gpuDrawable)
 		}
@@ -716,6 +721,23 @@ class PuppetRenderer(
 			gpuDrawable.blend = posedDrawable.blend
 			gpuDrawable.visible = true
 		}
+		val sequentialGlue = requiresSequentialGlue(currentModel) || !gpuGlueLayoutValid && currentModel.glues.isNotEmpty()
+		if (sequentialGlue) {
+			val evaluated = applyCpuDeform(currentModel, inputs)
+			val participants = currentModel.glues.flatMapTo(HashSet()) { listOf(it.meshA, it.meshB) }
+            cpuGluePositions = evaluated.worldPositions.filterKeys { it in participants }
+			for ((id, positions) in cpuGluePositions) {
+				val resident = gpuById[id] ?: continue
+				// The direct deform shader negates canvas Y, so convert world Y back here.
+				device.updateMeshPositions(resident.mesh, FloatArray(positions.size) { i -> if (i % 2 == 0) positions[i] else -positions[i] })
+			}
+		} else if (cpuGluePositions.isNotEmpty()) {
+			for (id in cpuGluePositions.keys) {
+				val resident = gpuById[id] ?: continue
+				currentModel.drawables.singleOrNull { it.id == id }?.mesh?.let { device.updateMeshPositions(resident.mesh, it.positions) }
+			}
+			cpuGluePositions = emptyMap()
+		}
 		// resolvePose filled glueIntensities (this renderer's own array) in place - no copy needed.
 		currentPlan = resolved.renderPlan
 		currentCompositeStates = inputs.partCompositeStates
@@ -749,6 +771,14 @@ class PuppetRenderer(
 		fun ownWorldBounds(id: DrawableId): PosedAabb? {
 			if (id in ownBoundsById) {
 				return ownBoundsById[id]
+			}
+			cpuGluePositions[id]?.let { points ->
+				if (points.isNotEmpty()) {
+					val bounds = PosedAabb(points.indices.step(2).minOf { points[it] }, points.indices.step(2).minOf { points[it + 1] },
+						points.indices.step(2).maxOf { points[it] }, points.indices.step(2).maxOf { points[it + 1] })
+					ownBoundsById[id] = bounds
+					return bounds
+				}
 			}
 			val gpuDrawable = gpuById[id]
 			val corners = gpuDrawable?.corners
@@ -946,6 +976,7 @@ class PuppetRenderer(
 	 * @param PuppetModel newModel The current model.
 	 */
 	fun updateModel(newModel: PuppetModel) {
+        gpuGlueLayoutValid = gpuGlueLayoutValid && sameGpuGlueLayout(currentModel, newModel)
 		val warpDeformerIds = newModel.deformers.filterIsInstance<Deformer.Warp>().map { it.id }.toSet()
 		val diff = diffModel(currentModel, newModel, gpuById.mapValues { (_, resident) -> resident.vertexCount })
 		val reconciled = LinkedHashMap<DrawableId, GpuDrawable>()
@@ -1084,7 +1115,7 @@ class PuppetRenderer(
 		// Pass 1: capture every glue mesh's deformed positions into the shared store. Only when the pose
 		// changed - a static pose leaves the store (and pass 2's reads of it) unchanged.
 		val activeStore = store
-		if (activeStore != null && glueBufferDirty) {
+		if (activeStore != null && glueBufferDirty && cpuGluePositions.isEmpty()) {
 			val capture = frame.beginDeformCapturePass(capturePipeline!!, activeStore)
 			for (gpuDrawable in glueDeformList) {
 				if (gpuDrawable.corners == null) {
@@ -1664,14 +1695,21 @@ class PuppetRenderer(
 		masked: Boolean,
 		maskCoverage: GpuTexture?,
 	) {
-		pass.setPipeline(pipelineFor(gpuDrawable.isGlueMesh, blendMode, gpuDrawable.culling))
+		pass.setPipeline(pipelineFor(gpuDrawable.isGlueMesh && gpuDrawable.id !in cpuGluePositions, blendMode, gpuDrawable.culling))
 		pass.setCamera(affine, sideTargetCapacityWidth, sideTargetCapacityHeight)
 		fillFragment(fragmentScratch, gpuDrawable, opacity, highlight, isActive, masked)
 		// Reused per draw rather than allocating a bundle per drawable per frame, matching the deform /
 		// fragment scratch. A glue draw does not deform, so it needs no delta / control-point textures.
 		texturesScratch.atlas = gpuDrawable.activeTexture()
 		texturesScratch.maskCoverage = maskCoverage
-		if (gpuDrawable.isGlueMesh) {
+		if (gpuDrawable.id in cpuGluePositions) {
+			texturesScratch.deltaTexture = null
+			texturesScratch.warpControlPoints = null
+			deformScratch.cornerCount = 0
+			deformScratch.blendCount = 0
+			deformScratch.parentType = 0
+			pass.drawPuppetMesh(gpuDrawable.mesh, deformScratch, fragmentScratch, texturesScratch)
+		} else if (gpuDrawable.isGlueMesh) {
 			texturesScratch.deltaTexture = null
 			texturesScratch.warpControlPoints = null
 			pass.drawGlueMesh(gpuDrawable.mesh, store!!, gpuDrawable.glueBaseOffset, glueIntensities, fragmentScratch, texturesScratch)

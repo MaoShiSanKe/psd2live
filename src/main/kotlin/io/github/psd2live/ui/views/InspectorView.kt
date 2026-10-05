@@ -393,6 +393,8 @@ private fun CompactSwitchParamField(
 	placeholder: String = tr("layers.param.placeholder.switch"),
 	height: Dp = 20.dp,
 	enabled: Boolean = true,
+	onEditStart: () -> Unit = {},
+	onEditEnd: () -> Unit = {},
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -403,6 +405,8 @@ private fun CompactSwitchParamField(
 			value = value,
 			onValueChange = onValueChange,
 			placeholder = placeholder,
+			onEditStart = onEditStart,
+			onEditEnd = onEditEnd,
 			height = height,
 			enabled = enabled,
 			trailingIcon = {
@@ -669,6 +673,8 @@ internal fun LayersTableView(
 										)
 									},
 									placeholder = tr("layers.param.placeholder.toggle"),
+									onEditStart = { viewModel.beginEditorField("classification.$layerId.parameter") },
+									onEditEnd = { viewModel.endEditorField("classification.$layerId.parameter") },
 									modifier = Modifier.weight(1.1f).padding(horizontal = 2.dp),
 									height = 20.dp,
 								)
@@ -689,6 +695,8 @@ internal fun LayersTableView(
 										)
 									},
 									existingParams = existingSwitchParams,
+									onEditStart = { viewModel.beginEditorField("classification.$layerId.parameter") },
+									onEditEnd = { viewModel.endEditorField("classification.$layerId.parameter") },
 									modifier = Modifier.weight(1.1f).padding(horizontal = 2.dp),
 									height = 20.dp,
 								)
@@ -736,6 +744,8 @@ internal fun LayersTableView(
 							LayerType.SWITCH -> {
 								CompactTextField(
 									value = currentSwitchId.toString(),
+									onEditStart = { viewModel.beginEditorField("classification.$layerId.switch") },
+									onEditEnd = { viewModel.endEditorField("classification.$layerId.switch") },
 									onValueChange = { input ->
 										val parsed = input.filter { it.isDigit() }.toIntOrNull() ?: 0
 										viewModel.setLayerClassification(

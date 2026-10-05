@@ -20,7 +20,11 @@ import io.github.psd2live.ui.theme.CustomTheme
 import io.github.psd2live.ui.theme.ThemeCatalog
 import io.github.psd2live.ui.theme.ToolColors
 
-import io.github.psd2live.agent.AgentHistorySnapshot
+import io.github.psd2live.core.defaultMeshSettings
+import io.github.psd2live.core.minimumAtlasSize
+import io.github.psd2live.project.WorkspaceHistorySnapshot
+import io.github.psd2live.project.ParameterSnapshot
+import io.github.psd2live.project.HistoryAnnotation
 
 /** Canvas rendering mode; [EDIT] shows rig geometry for editing, [PREVIEW] runs the animation. */
 enum class CanvasMode {
@@ -360,11 +364,13 @@ enum class InspectorTab {
 	PHYSICS,
 }
 
-data class HistoryAnnotation(val title: String = "", val note: String = "", val hidden: Boolean = false)
 
 @Immutable
 data class PSD2LiveState(
     val canvasEditBusy: Boolean = false,
+    val editorDraftBusy: Boolean = false,
+    /** Authored pose changes the panels already show are still waiting for their commits, in order. */
+    val poseCommitBusy: Boolean = false,
 	val projectId: String? = null,
     val projectFile: String? = null,
 	/** Recently opened .psd2live / PSD paths. Application preference, not part of the project. */
@@ -470,7 +476,7 @@ data class PSD2LiveState(
 	val logLines: List<String> = emptyList(),
 	val logEntries: List<AppLogEntry> = emptyList(),
 	val logPanelHeight: Float = 190f,
-	val historySnapshot: AgentHistorySnapshot? = null,
+	val historySnapshot: WorkspaceHistorySnapshot? = null,
 	val selectedHistoryNodeId: String? = null,
 	val lightboxImage: ByteArray? = null,
 	val lightboxTitle: String? = null,
@@ -496,6 +502,8 @@ data class PSD2LiveState(
 	val hoveredLayerId: String? = null,
 	val hoveredDeformerId: String? = null,
 	val layerVisibility: Map<String, Boolean> = emptyMap(),
+	/** The document's own layer visibility. [layerVisibility] is the focused canvas's local filter and never enters it. */
+	val documentLayerVisibility: Map<String, Boolean> = emptyMap(),
 	val deformerVisibility: Map<String, Boolean> = emptyMap(),
 	val layerOverrides: Map<String, LayerClassificationOverride> = emptyMap(),
 	val isolationSnapshot: Map<String, Boolean>? = null,
@@ -508,6 +516,7 @@ data class PSD2LiveState(
 	val parameterSnapshots: List<ParameterSnapshot> = emptyList(),
 	val animationEnabled: Boolean = false,
 	val mouseTrackingEnabled: Boolean = true,
+	val smoothMouseTracking: Boolean = false,
 	val sdkStatus: String? = null,
 	val activeInspectorTab: InspectorTab = InspectorTab.LAYERS,
 	val currentLanguage: AppLanguage = I18n.currentLanguage,
@@ -537,6 +546,9 @@ data class PSD2LiveState(
 	val drawOrderOverrides: Map<String, Float> = emptyMap(),
 	/** Durable parameter/keyform edits replayed after each generated-rig rebuild. */
 	val rigEdits: RigEditOverlay = RigEditOverlay.Empty,
+	val generationSource: org.umamo.format.art.SourceArt? = null,
+	val meshSource: org.umamo.format.art.SourceArt? = null,
+    val placementSource: org.umamo.format.art.SourceArt? = null,
 	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
 	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
@@ -610,9 +622,11 @@ data class PSD2LiveState(
 	fun motionPresetGroupOn(name: String): Boolean =
 		if (io.github.psd2live.core.MotionClips.isSkeletonPreset(name)) motionSkeleton else motionBasic
 
-	fun buildConfig(): PipelineConfig {
-		val hasAnyMotion = (motionBasic && (motionIdle || motionBlink || motionNod || motionShake)) || motionSkeleton ||
-			rigEdits.motionClips.any { it.builtin == null && it.enabled }
+	/** What generation consumes; the same raw-to-effective rule the document applies. */
+	fun buildConfig(): PipelineConfig = io.github.psd2live.project.WorkspaceSettingsPolicy.effective(rawConfig())
+
+	/** The settings as chosen, for a new document's raw settings. */
+	fun rawConfig(): PipelineConfig {
 		return PipelineConfig(
 			atlasSize = atlasSize,
 			textureUpscale = textureUpscale,
@@ -633,21 +647,21 @@ data class PSD2LiveState(
 			bodyStrength = bodyStrength,
 			rigTuning = rigTuning,
 			meshOnly = meshOnly,
-			generateDeformers = !meshOnly,
+			generateDeformers = generateDeformers,
 			featureDisplacementEnabled = featureDisplacementEnabled,
 			mouthOutlineEnabled = mouthOutlineEnabled,
 			mouthShape = mouthShape,
             mouthCurve = mouthCurve,
             mouthColor = mouthColor,
             mouthThickness = mouthThickness,
-			exportMotions = !meshOnly && hasAnyMotion,
+			exportMotions = exportMotions,
 			motionBasic = motionBasic,
 			motionIdle = motionIdle,
 			motionBlink = motionBlink,
 			motionNod = motionNod,
 			motionShake = motionShake,
 			motionSkeleton = motionSkeleton,
-			generatePhysics = generatePhysics && !meshOnly,
+			generatePhysics = generatePhysics,
 			physicsFrontHair = physicsFrontHair,
 			physicsBackHair = physicsBackHair,
 			physicsEyeJelly = physicsEyeJelly,
@@ -665,11 +679,14 @@ data class PSD2LiveState(
 			exportIncludeDisplayInfo = exportIncludeDisplayInfo,
 			exportPixelsPerUnit = exportPixelsPerUnit,
 			layerOverrides = layerOverrides,
-			layerVisibility = emptyMap(), // Canvas visibility must never rewrite the shared model.
+			// Canvas visibility must never rewrite the shared model; only the document's own entries apply.
+			layerVisibility = documentLayerVisibility,
 			deletedLayerIds = deletedLayerIds,
 			parentOverrides = parentOverrides,
 			drawOrderOverrides = drawOrderOverrides,
 			rigEdits = rigEdits,
+			generationSource = generationSource,
+			meshSource = meshSource,
 		)
 	}
 
@@ -680,30 +697,8 @@ data class PSD2LiveState(
 		return drawOrderOverrides[drawableId] ?: defaultOrder
 	}
 
-	fun getDefaultMeshSettings(layerId: String?): MeshSettings {
-		val layer = if (layerId != null) {
-			analysis?.layers?.firstOrNull { it.source.id.raw == layerId }
-		} else null
-		val semanticDensity = when (layer?.semantic?.tag) {
-			SemanticTag.FACE, SemanticTag.FRONT_HAIR, SemanticTag.BACK_HAIR, SemanticTag.TOPWEAR -> 0.65f
-			SemanticTag.IRIDES, SemanticTag.EYELASH, SemanticTag.EYEWHITE, SemanticTag.EYEBROW,
-			SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN, SemanticTag.MOUTH_CLOSE,
-			SemanticTag.TOOTH_T, SemanticTag.TOOTH_B, SemanticTag.TONGUE -> 0.45f
-			else -> 1f
-		}
-		// Face keeps the pre-edgeMode dual envelope; other parts follow the global mode.
-		val edgeMode = if (layer?.semantic?.tag == SemanticTag.FACE) MeshEdgeMode.DOUBLE else meshEdgeMode
-		return MeshSettings(
-			outerMargin = meshOuterMargin,
-			edgeMode = edgeMode,
-			edgeWidth = meshEdgeWidth,
-			maxEdgeDistance = kotlin.math.max(12f, meshMaxEdgeDistance * semanticDensity),
-			interiorDensity = kotlin.math.max(12f, meshInteriorDensity * semanticDensity),
-			fillAlgorithm = meshFillAlgorithm,
-			suppressBoundaryDiagonals = meshSuppressBoundaryDiagonals,
-			fillParameters = meshFillParameters,
-		)
-	}
+	fun getDefaultMeshSettings(layerId: String?): MeshSettings = buildConfig().defaultMeshSettings(
+        analysis?.layers?.firstOrNull { it.source.id.raw == layerId }?.semantic?.tag)
 
 	fun getEffectiveMeshSettings(layerId: String?): MeshSettings {
 		val defaultSettings = getDefaultMeshSettings(layerId)
@@ -711,6 +706,12 @@ data class PSD2LiveState(
 			meshOverrides[layerId]?.let { return it }
 		}
 		return defaultSettings
+	}
+
+	/** Old v1 overrides the hierarchy still shows; a later journal reparent of the same object supersedes its entry. */
+	val hierarchyParentOverrides: Map<String, String?> by lazy {
+		io.github.psd2live.application.WorkspaceHierarchyEdits.displayParentOverrides(
+			parentOverrides, rigEdits.structureEdits, rigEdits.authoringJournal)
 	}
 
 	fun isLayerVisible(layerId: String, defaultVisible: Boolean = true): Boolean {
@@ -738,13 +739,13 @@ data class PSD2LiveState(
 				val deformerById = model.rig.puppet.deformers.associateBy { it.id.raw }
 				fun isHidden(layerId: String): Boolean {
 					val drawId = drawableIdByLayerId[layerId]
-					var parent: String? = drawId?.let { parentOverrides[it] ?: drawableById[it]?.parentDeformerId?.raw }
+					var parent: String? = drawId?.let { hierarchyParentOverrides[it] ?: drawableById[it]?.parentDeformerId?.raw }
 					val visited = mutableSetOf<String>()
 					while (parent != null && visited.add(parent)) {
 						if (parent in hiddenDeformers) {
 							return true
 						}
-						parent = parentOverrides[parent] ?: deformerById[parent]?.parent?.raw
+						parent = hierarchyParentOverrides[parent] ?: deformerById[parent]?.parent?.raw
 					}
 					return false
 				}
@@ -760,17 +761,10 @@ data class PSD2LiveState(
 	val isBusy: Boolean
 		get() = isAnalyzing || isGenerating || isUpscaling
 
-	fun minRequiredAtlasSize(scale: Int = textureUpscale.scale): Int {
-		val effectiveLayers = previewModel?.analysis?.layers ?: analysis?.layers ?: return 1024
-		val valid = effectiveLayers.filter { it.source.raster.width > 0 && it.source.raster.height > 0 && it.opaquePixels > 0 }
-		if (valid.isEmpty()) return 1024
-		val largest = valid.maxOfOrNull {
-			maxOf(it.source.raster.width * scale, it.source.raster.height * scale) + texturePadding * 2
-		} ?: 1024
-		var size = 256
-		while (size < largest && size < 16384) {
-			size = size shl 1
-		}
-		return size.coerceIn(256, 16384)
-	}
+	/** A workspace edit or a queued authored pose is still being committed; a new edit would start from a stale state. */
+	val workspaceEditBusy: Boolean
+		get() = canvasEditBusy || poseCommitBusy
+
+	fun minRequiredAtlasSize(scale: Int = textureUpscale.scale): Int =
+        minimumAtlasSize(previewModel?.analysis ?: analysis, scale, texturePadding)
 }

@@ -214,8 +214,8 @@ internal object RigStructureEdits {
         val allowed = when (action) {
             "rename" -> setOf("name")
             "move" -> setOf("parent_id", "before_id", "before_kind")
-            "create" -> setOf("name", "parent_id", "before_id", "before_kind", "open", "min", "max", "default", "parameter_kind")
-            "update" -> setOf("name", "min", "max", "default")
+            "create" -> setOf("name", "parent_id", "before_id", "before_kind", "open", "min", "max", "default", "parameter_kind", "repeat")
+            "update" -> setOf("name", "min", "max", "default", "parameter_kind", "repeat")
             "delete" -> emptySet()
             "link" -> setOf("partner_id", "linked")
             "open" -> setOf("open")
@@ -252,16 +252,22 @@ internal object RigStructureEdits {
             require(min.isFinite() && max.isFinite() && default.isFinite() && min < max && default in min..max) {
                 "Use a finite range with minimum < maximum and default inside the range"
             }
+            val parameterKind = edit["parameter_kind"]?.jsonPrimitive?.content?.let(ParameterKind::valueOf)
+                ?: existing?.kind ?: ParameterKind.NORMAL
+            val repeat = edit["repeat"]?.jsonPrimitive?.boolean ?: existing?.repeat ?: false
             var next = if (action == "create") {
 				model.withParameterCreated(
 					parameterId,
 					name,
-					edit["parameter_kind"]?.jsonPrimitive?.content?.let(ParameterKind::valueOf) ?: ParameterKind.NORMAL,
+					parameterKind,
 				)
 			} else {
 				model.withParameterRenamed(parameterId, name)
 			}
 			next = next.withParameterRange(parameterId, min, default, max)
+            next = next.copy(parameters = next.parameters.map { parameter ->
+                if (parameter.id == parameterId) parameter.copy(kind = parameterKind, repeat = repeat) else parameter
+            })
 			if (action == "create" && "parent_id" in edit) {
 				val parent = parentId()
 				require(parent == null || next.parameterTree.anyGroup(parent)) { "Parent folder not found: $parent" }

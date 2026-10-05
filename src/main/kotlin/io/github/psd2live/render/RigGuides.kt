@@ -1,8 +1,8 @@
 package io.github.psd2live.render
 
-import io.github.psd2live.ui.CanvasViewport
-import io.github.psd2live.ui.RigCanvasSupport
-import io.github.psd2live.ui.RigInformationOverlay
+import io.github.psd2live.core.CanvasViewport
+import io.github.psd2live.core.RigCanvasSupport
+import io.github.psd2live.core.RigInformationOverlay
 import java.awt.Color
 import java.awt.geom.Area
 import java.awt.geom.PathIterator

@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.core.RigInformationOverlay
+
 import io.github.psd2live.ui.PanShift
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
@@ -93,10 +95,10 @@ import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.ui.CanvasViewport
-import io.github.psd2live.ui.ComponentPalette
-import io.github.psd2live.ui.CubismViewport
-import io.github.psd2live.ui.RigCanvasSupport
+import io.github.psd2live.core.CanvasViewport
+import io.github.psd2live.core.ComponentPalette
+import io.github.psd2live.core.CubismViewport
+import io.github.psd2live.core.RigCanvasSupport
 import io.github.psd2live.ui.CachedSkiaPicture
 import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.visibleCanvasGuideIds
@@ -288,8 +290,11 @@ fun CanvasViewportComposable(
     }
 	val paintSession = if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.PAINT)
 		editor.paintSession else null
+	// The edit canvas follows the same pose the sliders show, frame by frame while a motion plays. A preview canvas
+	// renders its own frames and does not recompose for this.
+	val livePose = if (mode == CanvasMode.EDIT) viewModel.livePose.collectAsState().value else emptyMap()
 	val geometryPose = if (paintSession != null) emptyMap<org.umamo.runtime.model.ParameterId, Float>()
-		else canvasState.parameterValues
+		else viewModel.canvasPose(canvasState, livePose)
 	val editGeometry = remember(previewModel, geometryPose, mode) {
 		if (mode == CanvasMode.EDIT && previewModel != null) RigCanvasSupport.evaluate(previewModel, geometryPose)
 		else null
@@ -372,7 +377,7 @@ fun CanvasViewportComposable(
 	val warpPoints = remember(previewModel?.rig?.puppet, warpPose, warpIds) {
 		runCatching {
 			if (previewModel != null && warpIds.isNotEmpty())
-				io.github.psd2live.ui.RigInformationOverlay.warpPoints(previewModel.rig.puppet, warpPose, warpIds)
+				io.github.psd2live.core.RigInformationOverlay.warpPoints(previewModel.rig.puppet, warpPose, warpIds)
 			else emptyMap()
 		}.getOrDefault(emptyMap())
 	}
@@ -641,12 +646,12 @@ fun CanvasViewportComposable(
 					?: return@onKeyEvent false
                 if (action == ShortcutAction.TEMPORARY_SELECT) {
                     if (event.type == KeyEventType.KeyDown && mode == CanvasMode.EDIT &&
-                        !canvasState.canvasEditBusy && editor.beginTemporarySelection()) temporarySelectKey = event.key
+                        !canvasState.workspaceEditBusy && editor.beginTemporarySelection()) temporarySelectKey = event.key
                     return@onKeyEvent true
                 }
                 if (action == ShortcutAction.QUICK_PREVIEW) {
                     // Toggle on release so holding the key never flips repeatedly through both modes.
-                    if (event.type == KeyEventType.KeyUp && previewModel != null && !canvasState.canvasEditBusy)
+                    if (event.type == KeyEventType.KeyUp && previewModel != null && !canvasState.workspaceEditBusy)
                         editor.toggleQuickPreview()
                     return@onKeyEvent true
                 }
@@ -666,12 +671,12 @@ fun CanvasViewportComposable(
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 CanvasModeChoice.entries.firstOrNull { it.shortcut == action }?.let { choice ->
                     if (previewModel == null) return@onKeyEvent false
-                    if (!editor.busy && !canvasState.canvasEditBusy) editor.chooseCanvasMode(choice)
+                    if (!editor.busy && !canvasState.workspaceEditBusy) editor.chooseCanvasMode(choice)
                     return@onKeyEvent true
                 }
 				if (mode != CanvasMode.EDIT || previewModel == null) return@onKeyEvent false
 				// Consumes rather than falls through while a commit is running.
-				if (editor.busy || canvasState.canvasEditBusy) return@onKeyEvent true
+				if (editor.busy || canvasState.workspaceEditBusy) return@onKeyEvent true
 				return@onKeyEvent when (action) {
 					ShortcutAction.SELECT_ALL -> { editor.selectAll(); true }
 					ShortcutAction.INVERT_SELECTION -> { editor.selectAll(true); true }
@@ -1049,7 +1054,7 @@ fun CanvasViewportComposable(
 					canvasState.effectiveVisibleLayerIds.filter { it in keep }.toSet()
 				}
 				selectedDeformerId != null -> {
-					val desc = descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+					val desc = descendantLayerIds(model, selectedDeformerId, canvasState.hierarchyParentOverrides)
 					canvasState.effectiveVisibleLayerIds.filter { it in desc }.toSet()
 				}
 				else -> canvasState.effectiveVisibleLayerIds
@@ -1060,7 +1065,7 @@ fun CanvasViewportComposable(
                 mode==CanvasMode.EDIT && editor.objectMode && editor.objects.isNotEmpty() -> editor.objects
 				mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.EDIT && editor.objects.size > 1 -> editor.objects
 				selectedLayerId != null -> setOf(selectedLayerId)
-				selectedDeformerId != null -> descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+				selectedDeformerId != null -> descendantLayerIds(model, selectedDeformerId, canvasState.hierarchyParentOverrides)
 				else -> null
 			}
 			val isDimmingActive = dimUnselected && hasActiveSelection
@@ -1072,7 +1077,7 @@ fun CanvasViewportComposable(
 			val hoveredDeformerId = if (allowSelectionChrome) canvasState.hoveredDeformerId else null
 			val hoverTintLayerIds = when {
 				hoveredLayerId != null -> setOf(hoveredLayerId)
-				hoveredDeformerId != null -> descendantLayerIds(model, hoveredDeformerId, canvasState.parentOverrides)
+				hoveredDeformerId != null -> descendantLayerIds(model, hoveredDeformerId, canvasState.hierarchyParentOverrides)
 				else -> null
 			}
 			val hoverTintColor = (hoveredLayerId ?: hoveredDeformerId)?.let { ComponentPalette.strong(it).rgb } ?: 0
@@ -1124,7 +1129,7 @@ fun CanvasViewportComposable(
 						viewOptions, warpIds, rotationIds, warpPoints, targetVisibleLayerIds,
 						canvasState.selectedLayerId, canvasState.selectedDeformerId,
 						canvasState.hoveredLayerId, canvasState.hoveredDeformerId,
-						canvasState.parentOverrides, editor.hierarchyMode, editor.objects,
+						canvasState.hierarchyParentOverrides, editor.hierarchyMode, editor.objects,
 						editor.glueSwapped, editor.drawsTransformBox,
 					)
 					val drawableBounds = RigCanvasSupport.boundsByDrawable(geometry)
@@ -1148,7 +1153,7 @@ fun CanvasViewportComposable(
 					val pathsShown = mode == CanvasMode.EDIT && showDeformPaths && model.rig.puppet.deformPaths.isNotEmpty()
 					val selectedPathIds: Set<String> = if (!pathsShown) emptySet() else {
 						val selectedLayerDescendants = if (selectedDeformerId != null) {
-							descendantLayerIds(model, selectedDeformerId, canvasState.parentOverrides)
+							descendantLayerIds(model, selectedDeformerId, canvasState.hierarchyParentOverrides)
 						} else emptySet()
 						model.rig.puppet.deformPaths.filter { path ->
 							val layerId = model.rig.layerIdByDrawableId[path.drawableId.raw]
@@ -1168,7 +1173,7 @@ fun CanvasViewportComposable(
 						val guides = RigGuides(viewport)
 						val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
 						if (gpuRotationGuides && globalRotationIds.isNotEmpty()) {
-							guides.rotations(io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(model.rig.puppet, guidePose,
+							guides.rotations(io.github.psd2live.core.RigInformationOverlay.rotationNeedles(model.rig.puppet, guidePose,
 								viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected))
 						}
 						if (gpuBoxGuides && showSelectionBounds && !transformBoxOwnsSelection) {
@@ -1185,11 +1190,11 @@ fun CanvasViewportComposable(
 						}
 						if (gpuWarpGuides && warpIds.isNotEmpty()) {
 							val corners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(model.rig.puppet, warpPoints), viewport)
-							guides.warps(io.github.psd2live.ui.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints, warpIds,
+							guides.warps(io.github.psd2live.core.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints, warpIds,
 								selectedDeformerId, hoveredDeformerId, dimUnselected), corners)
 						}
 						if (pathIds.isNotEmpty()) {
-							guides.paths(io.github.psd2live.ui.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
+							guides.paths(io.github.psd2live.core.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
 								pathIds, showWidth = canvasState.pathShowWidth, showHardness = canvasState.pathShowHardness,
 								selectedPathIds = selectedPathIds, hoveredPathIds = hoveredPathIds))
 						}
@@ -1358,7 +1363,7 @@ fun CanvasViewportComposable(
 					// the interactive needle for the edit target when that toggle is on.
 					if (!gpuRotationGuides && globalRotationIds.isNotEmpty()) {
 						painted = true
-						io.github.psd2live.ui.RigInformationOverlay.paintRotations(
+						io.github.psd2live.core.RigInformationOverlay.paintRotations(
 							g, model.rig.puppet,
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
 							viewport, globalRotationIds,
@@ -1411,7 +1416,7 @@ fun CanvasViewportComposable(
 					// exactly what it used to do.
 					if (!gpuWarpGuides && warpIds.isNotEmpty()) {
 						painted = true
-						io.github.psd2live.ui.RigInformationOverlay.paint(
+						io.github.psd2live.core.RigInformationOverlay.paint(
 							g, model.rig.puppet,
 							if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues,
 							viewport, warpIds,
@@ -1429,7 +1434,7 @@ fun CanvasViewportComposable(
 					// selected -- an edit-time guide, never part of the Preview tab's render.
 					if (!gpuReady && pathIds.isNotEmpty()) {
 						painted = true
-						io.github.psd2live.ui.RigInformationOverlay.paintDeformPaths(
+						io.github.psd2live.core.RigInformationOverlay.paintDeformPaths(
 							g = g,
 							model = model.rig.puppet,
 							geometry = geometry,
@@ -1451,7 +1456,7 @@ fun CanvasViewportComposable(
 					val guidePose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
 					val labels = guideLabels.labels(guideKey + listOf(geometry, pathIds)) {
 						buildList {
-							for (layer in io.github.psd2live.ui.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints,
+							for (layer in io.github.psd2live.core.RigInformationOverlay.warpLayers(model.rig.puppet, warpPoints,
 								warpIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
 								if (layer.isDimmed) continue
 								val p = layer.points
@@ -1465,7 +1470,7 @@ fun CanvasViewportComposable(
 									layer.wireColor.rgb, plate = true))
 							}
 							if (informationIndices && pathIds.isNotEmpty()) {
-								for (look in io.github.psd2live.ui.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
+								for (look in io.github.psd2live.core.RigInformationOverlay.deformPathLooks(model.rig.puppet, geometry, viewport,
 										pathIds, selectedPathIds = selectedPathIds, hoveredPathIds = hoveredPathIds)) {
 									if (look.isDimmed && !look.isSelected && !look.isHovered) continue
 									look.screenPoints.forEachIndexed { i, (x, y) ->
@@ -1473,7 +1478,7 @@ fun CanvasViewportComposable(
 									}
 								}
 							}
-							if (informationNames) for (needle in io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(model.rig.puppet,
+							if (informationNames) for (needle in io.github.psd2live.core.RigInformationOverlay.rotationNeedles(model.rig.puppet,
 									guidePose, viewport, globalRotationIds, selectedDeformerId, hoveredDeformerId, dimUnselected)) {
 								if (needle.dimmed) continue
 								add(GuideLabel("${needle.rotation.name} [${needle.rotation.id.raw}]", needle.pivot.x.coerceAtLeast(0f) + 3f,
@@ -1574,12 +1579,14 @@ fun CanvasViewportComposable(
 			CanvasPreviewToolbar(
 				animationEnabled = canvasState.animationEnabled,
 				mouseTrackingEnabled = canvasState.mouseTrackingEnabled,
+				smoothMouseTracking = canvasState.smoothMouseTracking,
 				physicsEnabled = canvasState.generatePhysics,
 				physicsAvailable = !canvasState.meshOnly,
 				fps = canvasState.rigEdits.physicsFps,
 				enabled = true,
-				onToggleAnimation = { viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) { it.copy(animationEnabled = !it.animationEnabled) } },
-				onToggleMouseTracking = { viewModel.updateCanvasPresentation(canvasState.activeWorkspace.id, canvasId, CanvasMode.PREVIEW) { it.copy(mouseTrackingEnabled = !it.mouseTrackingEnabled) } },
+				onToggleAnimation = { viewModel.togglePreviewPlayback() },
+				onToggleMouseTracking = { viewModel.setMouseTrackingEnabled(!canvasState.mouseTrackingEnabled) },
+				onToggleSmoothTracking = { viewModel.setSmoothMouseTracking(!canvasState.smoothMouseTracking) },
 				onTogglePhysics = { viewModel.setGeneratePhysics(!canvasState.generatePhysics) },
 				onSelectFps = viewModel::setProjectFps,
 			)

@@ -115,7 +115,8 @@ object Cmo3Export {
 		val modelSource = target.root as? CModelSource ?: error("CMO3 model root is not a CModelSource")
 		val baseline = Cmo3Import.fromModelSource(modelSource)
 		val diff = diffPuppetModels(baseline, edited)
-		if (diff.isEmpty && baseline.deformPaths == edited.deformPaths) {
+		val glueOrderUnchanged = baseline.glues.map { it.meshA to it.meshB } == edited.glues.map { it.meshA to it.meshB }
+		if (diff.isEmpty && baseline.deformPaths == edited.deformPaths && glueOrderUnchanged) {
 			return ExportReport(ExportFormat.Cmo3, emptyList())
 		}
 		val notices = ArrayList<ExportNotice>()
@@ -374,6 +375,7 @@ object Cmo3Export {
 		lowering.lowerGlues(upgradedDiff.glues)
 		lowering.lowerAtlasTiles(upgradedDiff.atlasTiles)
 		lowering.lowerDocument(upgradedDiff.document)
+		refreshedStructural().preserveGlueEvaluationOrder()
 		Cmo3DeformPaths.write(edited, baseline, Cmo3GraphIndex(modelSource), editor)
 
 		if (anyDeleted) {

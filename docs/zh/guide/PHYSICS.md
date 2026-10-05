@@ -130,15 +130,23 @@
 
 ## MCP
 
-`physics` 工具有六种模式（完整字段见 [MCP 使用与接口](../agent/MCP_AUTHORING.md)）：
+物理组的操作按用途拆成几个工具，参数统一放在 `{"request": {...}}` 中（完整字段见 [MCP 使用与接口](../agent/MCP_AUTHORING.md)，或调用 `workspace_get_operation`）。修改与采样都要带 `project_id`、`state`（来自 `workspace_inspect` 或上一次结果）和唯一的 `request_id`；标为后台任务的工具返回任务句柄，用 `job_wait` / `job_get` 取结果。
 
-- `put`：按 ID 新建或修改，只写给出的字段。已有 ID（包括生成的组）以当前组为基础；`inputs` / `outputs` / `segments` 整体替换列表，`length` / `mobility` / `delay` / `acceleration` 作用于所有节段，`output_scale` 作用于所有输出，`segment_count` 改节段数，`enabled=false` 关闭任意组。
-- `delete`：删除自定义组，或把已修改的生成组恢复成生成值。
-- `simulate`：从静止开始把输入阶跃到给定值、保持 `hold` 秒再放回，返回每个输出在保持期间和松开后的峰值、最终值与稳定时间。
-- `fit`：用响应曲线的标准牵动运行一个组，把每个输出的倍率调到峰值恰好达到参数端点的 `target`%（默认 100），与面板的「按最大值调整倍率」在没有实时记录时相同。
-- `config`：`order` 设置计算顺序（列出的组排在前面），`fps` 设置工程帧率（0 为无限制）。
-- `import`：导入 physics3.json（绝对路径），规则与面板相同，返回导入的组、被关闭的组和缺失参数。
+- `physics_put`（后台任务）：按 `id` 新建或修改，只写给出的字段。已有 ID（包括生成的组）以当前组为基础；`inputs` / `outputs` / `segments` 整体替换列表，`length` / `mobility` / `delay` / `acceleration` 作用于所有节段，`output_scale` 作用于所有输出，`segment_count` 改节段数，`normalization` 设置输入标准化，`enabled=false` 关闭任意组。
+- `physics_delete`（后台任务）：删除自定义组，或把已修改的生成组恢复成生成值；生成的组本身用 `physics_put` 的 `enabled=false` 关闭。
+- `physics_simulate`（只读后台任务）：从静止开始把 `inputs` 中的参数阶跃到给定值、保持 `hold` 秒再放回，返回每个输出在保持期间和松开后的起始值、峰值、最终值与稳定时间，以及按 `samples` 采样的曲线；`ids` 只看指定的组，`duration` 设置总时长。
+- `physics_fit`（后台任务）：把组 `id` 每个输出的倍率调到峰值恰好达到参数端点的 `target`%（默认 100）。不给 `observed_peaks` 时用响应曲线的标准牵动来测，与面板的「按最大值调整倍率」在没有实时记录时相同；给出时按实测值调整，键为输出序号（`"0"`、`"1"`…），值为 `physics_audition` 报告的 `peaks`（1 为参数端点）。
+- `physics_config`（后台任务）：`order` 设置计算顺序（列出的组排在前面），`fps` 设置工程帧率（0 为无限制）。
+- `physics_import`（后台任务）：导入 physics3.json（`path` 为绝对路径），规则与面板相同，返回导入的组、被关闭的组和缺失参数。
 
-`inspect scope=physics` 返回计算 FPS 和按计算顺序排列的全部组，每组带来源、是否生效、被谁替代和无效原因。
+摆锤画布上的牵动对应试听会话，不修改文档、历史和已存姿态：
 
-预置只在面板里使用；MCP 直接写入输入和摆锤的完整数值。
+- `physics_audition`：`mode` 为 `start`（给 `group_id`，可选 `values` 叠加参数值）开始试听并停止本工作区之前的会话；`target` 把根部牵向 `x`、`y`（-1–1，即面板指针）；`release` 松手；`reset` 让摆锤静止；`reset_peaks` 重新记录最大值；`stop` 结束。后几种都带 `session_id`。
+- `physics_audition_step`：按 `dt` 秒（最多 0.1）推进 `steps` 步（1–240），返回摆锤顶点、输出和 `peaks`。
+- `physics_audition_get`：只读取最新一帧，不推进时间。
+
+试听期间修改文档会让会话按新的组继续摆动；重开工程或删除该组后会话变为过期。牵动、松手并推进若干步后，把 `peaks` 原样传给 `physics_fit` 的 `observed_peaks`，即面板上牵动后点「按最大值调整倍率」。
+
+`workspace_inspect` 的 `scope=physics` 返回计算 FPS 和按计算顺序排列的全部组，每组带来源、是否生效、被谁替代和无效原因。
+
+输入与摆锤预置同样可以通过 MCP 使用：`physics_preset_list` 列出内置和自己的预置，`physics_apply_preset` 把其中一项应用到某个组；`physics_preset_put` / `physics_preset_rename` / `physics_preset_delete` 管理自己的预置，需带列表返回的 `library_state`。

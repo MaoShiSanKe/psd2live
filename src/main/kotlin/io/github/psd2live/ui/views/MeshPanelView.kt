@@ -36,7 +36,7 @@ import io.github.psd2live.core.MeshResolution
 import io.github.psd2live.core.MeshSettings
 import io.github.psd2live.core.MeshUnits
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.ui.ComponentPalette
+import io.github.psd2live.core.ComponentPalette
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactDropdown

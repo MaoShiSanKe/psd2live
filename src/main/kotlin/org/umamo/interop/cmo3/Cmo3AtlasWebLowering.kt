@@ -1,5 +1,6 @@
 package org.umamo.interop.cmo3
 
+
 import org.umamo.format.cmo3.Cmo3GraphEditor
 import org.umamo.format.cmo3.Cmo3Model
 import org.umamo.format.cmo3.model.custom.CImageResource

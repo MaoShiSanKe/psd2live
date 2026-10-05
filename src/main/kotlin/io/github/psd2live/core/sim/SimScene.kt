@@ -42,15 +42,19 @@ class SimScene private constructor(
     private var frameRest = FloatArray(0)
 
     val state: SimState get() = solver.state
+    internal class Snapshot(val particles: SimState.Snapshot, val frameRest: FloatArray)
+    internal fun snapshot() = Snapshot(state.snapshot(), frameRest.copyOf())
+    internal fun restore(snapshot: Snapshot) { state.restore(snapshot.particles); frameRest = snapshot.frameRest.copyOf() }
 
     /**
      * Moves the rig to [pose] and advances [dt] seconds. Returns false when a target mesh is hidden at this
      * pose, in which case nothing moves.
      */
-    fun drive(model: PuppetModel, pose: Map<ParameterId, Float>, dt: Float): Boolean {
+    fun drive(model: PuppetModel, pose: Map<ParameterId, Float>, dt: Float, checkpoint: () -> Unit = {}): Boolean {
+        checkpoint()
         val world = evaluator.evaluate(model, pose).worldPositions
         if (!place(world)) return false
-        solver.step(dt)
+        solver.step(dt, checkpoint)
         return true
     }
 
@@ -78,17 +82,25 @@ class SimScene private constructor(
      *
      * Returns the largest distance from rest left after the last pass, in px.
      */
-    fun calibrate(model: PuppetModel, pose: Map<ParameterId, Float> = emptyMap(), passes: Int = 6, frames: Int = 90): Float {
+    fun calibrate(model: PuppetModel, pose: Map<ParameterId, Float> = emptyMap(), passes: Int = 6, frames: Int = 90,
+                  progress: (Float) -> Unit = {}, cancelled: () -> Boolean = { false }): Float {
         val s = state
         s.goalOffsetX.fill(0f); s.goalOffsetY.fill(0f)
         val calm = s.damping.copyOf()
         var residual = 0f
         try {
             for (i in 0 until s.count) s.damping[i] = maxOf(calm[i], 8f)
-            repeat(passes) {
+            repeat(passes) { pass ->
+                if (cancelled()) throw java.util.concurrent.CancellationException("Simulation calibration cancelled")
                 reset(model, pose)
                 val rest = s.positions()
-                repeat(frames) { drive(model, pose, 1f / 60f) }
+                repeat(frames) { frame ->
+                    if (cancelled()) throw java.util.concurrent.CancellationException("Simulation calibration cancelled")
+                    drive(model, pose, 1f / 60f) {
+                        if (cancelled()) throw java.util.concurrent.CancellationException("Simulation calibration cancelled")
+                    }
+                    progress((pass.toLong() * frames + frame + 1).toFloat() / (passes.toLong() * frames).coerceAtLeast(1))
+                }
                 residual = 0f
                 for (i in 0 until s.count) {
                     if (!solver.goalCompliance[i].isFinite()) continue
@@ -220,9 +232,11 @@ class SimScene private constructor(
         private fun centroid(rest: FloatArray, a: List<Int>, b: List<Int>, c: List<Int>, t: Int, axis: Int) =
             (rest[a[t] * 2 + axis] + rest[b[t] * 2 + axis] + rest[c[t] * 2 + axis]) / 3f
 
-        fun build(model: PuppetModel, edit: RigSimEdit, settings: SimSettings = SimSettings()): SimScene {
+        fun build(model: PuppetModel, edit: RigSimEdit, settings: SimSettings = SimSettings(), checkpoint: () -> Unit = {}): SimScene {
+            checkpoint()
             val notes = ArrayList<String>()
             val targets = edit.targets.map { raw ->
+                checkpoint()
                 val drawable = requireNotNull(model.drawables.firstOrNull { it.id.raw == raw }) { "Simulation target not found: $raw" }
                 drawable.id to requireNotNull(drawable.mesh) { "Simulation target has no mesh: $raw" }
             }
@@ -240,7 +254,10 @@ class SimScene private constructor(
             }
             fun perVertex(kind: VertexGroupKind, fallback: Float): FloatArray {
                 val out = FloatArray(total) { fallback }
-                for ((id, offset) in offsets) group(id, kind)?.weights?.forEachIndexed { v, w -> out[offset + v] = w }
+                for ((id, offset) in offsets) group(id, kind)?.weights?.forEachIndexed { v, w ->
+                    if (v % 256 == 0) checkpoint()
+                    out[offset + v] = w
+                }
                 return out
             }
 
@@ -260,11 +277,13 @@ class SimScene private constructor(
             /** Per edge, the triangle on each side (-1 for an outline edge). */
             val edgeLeft = ArrayList<Int>(); val edgeRight = ArrayList<Int>()
             for ((id, mesh) in targets) {
+                checkpoint()
                 val offset = offsets.getValue(id)
                 val positions = world[id] ?: mesh.positions.also { notes += "${id.raw} is hidden at the default pose; using its rest mesh" }
                 positions.copyInto(rest, offset * 2, 0, mesh.vertexCount * 2)
                 val edgeOf = HashMap<Long, Int>()
                 for (t in 0 until mesh.indices.size / 3) {
+                    if (t % 256 == 0) checkpoint()
                     val triangle = ta.size
                     ta += offset + mesh.indices[t * 3]; tb += offset + mesh.indices[t * 3 + 1]; tc += offset + mesh.indices[t * 3 + 2]
                     for (e in 0..2) {
@@ -281,6 +300,7 @@ class SimScene private constructor(
             }
             fun length(i: Int, j: Int) = hypot(rest[i * 2] - rest[j * 2], rest[i * 2 + 1] - rest[j * 2 + 1])
             val triangleArea = FloatArray(ta.size) { t ->
+                if (t % 256 == 0) checkpoint()
                 val a = ta[t]; val b = tb[t]; val c = tc[t]
                 ((rest[b * 2] - rest[a * 2]) * (rest[c * 2 + 1] - rest[a * 2 + 1]) - (rest[c * 2] - rest[a * 2]) * (rest[b * 2 + 1] - rest[a * 2 + 1])) / 2f
             }
@@ -290,6 +310,7 @@ class SimScene private constructor(
             val vertexArea = FloatArray(total)
             for (t in ta.indices) { val third = abs(triangleArea[t]) / 3f; vertexArea[ta[t]] += third; vertexArea[tb[t]] += third; vertexArea[tc[t]] += third }
             for (i in 0 until total) {
+                if (i % 256 == 0) checkpoint()
                 val carried = vertexArea[i].coerceAtLeast(MIN_VERTEX_AREA * REFERENCE_AREA)
                 state.invMass[i] = REFERENCE_AREA / (carried * m.mass * massWeight[i].coerceAtLeast(0.1f))
                 state.damping[i] = m.damping * dampingWeight[i]
@@ -300,12 +321,14 @@ class SimScene private constructor(
             val anchors = arrayOfNulls<Anchor>(total)
             val weldA = ArrayList<Int>(); val weldB = ArrayList<Int>(); val weldWA = ArrayList<Float>(); val weldWB = ArrayList<Float>()
             for (glue in model.glues) {
+                checkpoint()
                 val role = edit.glueRoles[glueKey(glue)] ?: GlueRole.IGNORE
                 if (role == GlueRole.IGNORE) continue
                 val offsetA = offsets[glue.meshA]
                 val offsetB = offsets[glue.meshB]
                 when {
                     role == GlueRole.CONSTRAINT && offsetA != null && offsetB != null -> for (pair in glue.pairs) {
+                        checkpoint()
                         if (pair.indexA >= counts.getValue(glue.meshA) || pair.indexB >= counts.getValue(glue.meshB)) continue
                         weldA += offsetA + pair.indexA; weldB += offsetB + pair.indexB
                         weldWA += pair.weightA; weldWB += pair.weightB
@@ -314,6 +337,7 @@ class SimScene private constructor(
                     role == GlueRole.PIN && (offsetA == null) == (offsetB == null) ->
                         notes += "Glue ${glueKey(glue)} pins only when exactly one side is simulated"
                     else -> for (pair in glue.pairs) {
+                        checkpoint()
                         val simulatedIsA = offsetA != null
                         val own = if (simulatedIsA) pair.indexA else pair.indexB
                         val other = if (simulatedIsA) pair.indexB else pair.indexA
@@ -341,6 +365,7 @@ class SimScene private constructor(
                 val queue = PriorityQueue<Pair<Float, Int>>(compareBy({ it.first }, { it.second }))
                 for (r in roots) { distance[r] = 0f; root[r] = r; queue += 0f to r }
                 while (queue.isNotEmpty()) {
+                    checkpoint()
                     val (d, i) = queue.poll()
                     if (d > distance[i]) continue
                     for (j in neighbours[i]) {
@@ -352,6 +377,7 @@ class SimScene private constructor(
             val lraParticle = ArrayList<Int>(); val lraRoot = ArrayList<Int>(); val lraDistance = ArrayList<Float>()
             if (roots.isNotEmpty() && m.slack < 1f) {
                 for (i in 0 until total) if (root[i] >= 0 && root[i] != i) {
+                    if (i % 256 == 0) checkpoint()
                     lraParticle += i; lraRoot += root[i]; lraDistance += distance[i] * (1f + m.slack)
                 }
             } else if (roots.isEmpty()) {
@@ -361,6 +387,7 @@ class SimScene private constructor(
             // The grain per triangle: the way the path length grows across it, else straight down.
             val grainX = FloatArray(ta.size); val grainY = FloatArray(ta.size) { -1f }
             for (t in ta.indices) {
+                if (t % 256 == 0) checkpoint()
                 val a = ta[t]; val b = tb[t]; val c = tc[t]
                 if (distance[a] == Float.MAX_VALUE || distance[b] == Float.MAX_VALUE || distance[c] == Float.MAX_VALUE) continue
                 val e1x = rest[b * 2] - rest[a * 2]; val e1y = rest[b * 2 + 1] - rest[a * 2 + 1]
@@ -393,6 +420,7 @@ class SimScene private constructor(
             val across = 1f - ANISOTROPY_SOFTENING * m.anisotropy
             val edgeAlong = FloatArray(edgeA.size)
             for (e in edgeA.indices) {
+                if (e % 256 == 0) checkpoint()
                 val a = edgeA[e]; val b = edgeB[e]
                 val stiffness = (stiffnessWeight[a] + stiffnessWeight[b]) / 2f
                 val u = along(e)
@@ -410,6 +438,7 @@ class SimScene private constructor(
                 bc += bendCompliance(m.bend * stiffness, apart) * (1f + GRAIN_FOLD * m.anisotropy * u)
             }
             val area = FloatArray(ta.size) { t ->
+                if (t % 256 == 0) checkpoint()
                 val stiffness = (stiffnessWeight[ta[t]] + stiffnessWeight[tb[t]] + stiffnessWeight[tc[t]]) / 3f
                 areaCompliance(m.area * stiffness, abs(triangleArea[t]))
             }
@@ -429,6 +458,7 @@ class SimScene private constructor(
                 goalCompliance = goal,
                 settings = settings,
             )
+            checkpoint()
             return SimScene(edit, solver, offsets, counts, anchors, notes, edgeAlong)
         }
     }

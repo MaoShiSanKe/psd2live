@@ -3,9 +3,9 @@ package io.github.psd2live.render
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.StandardParameters
-import io.github.psd2live.ui.CanvasViewport
-import io.github.psd2live.ui.ComponentPalette
-import io.github.psd2live.ui.RigCanvasSupport
+import io.github.psd2live.core.CanvasViewport
+import io.github.psd2live.core.ComponentPalette
+import io.github.psd2live.core.RigCanvasSupport
 import io.github.psd2live.ui.SkiaRigPainter
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
@@ -159,20 +159,20 @@ class GlCanvasParityTest {
 		val warpIds = puppet.deformers.filterIsInstance<org.umamo.runtime.model.Deformer.Warp>().map { it.id.raw }.toSet()
 		val rotationIds = puppet.deformers.filterIsInstance<org.umamo.runtime.model.Deformer.Rotation>().map { it.id.raw }.toSet()
 		val selected = warpIds.first()
-		val points = io.github.psd2live.ui.RigInformationOverlay.warpPoints(puppet, emptyMap(), warpIds)
+		val points = io.github.psd2live.core.RigInformationOverlay.warpPoints(puppet, emptyMap(), warpIds)
 		val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
 		image.createGraphics().apply {
 			setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
-			io.github.psd2live.ui.RigInformationOverlay.paintRotations(this, puppet, emptyMap(), viewport, rotationIds,
+			io.github.psd2live.core.RigInformationOverlay.paintRotations(this, puppet, emptyMap(), viewport, rotationIds,
 				labels = false, selectedDeformerId = selected, dimUnselected = true)
-			io.github.psd2live.ui.RigInformationOverlay.paint(this, puppet, emptyMap(), viewport, warpIds, labels = false,
+			io.github.psd2live.core.RigInformationOverlay.paint(this, puppet, emptyMap(), viewport, warpIds, labels = false,
 				selectedDeformerId = selected, dimUnselected = true, pointsById = points)
 			dispose()
 		}
 		val guides = RigGuides(viewport)
-		guides.rotations(io.github.psd2live.ui.RigInformationOverlay.rotationNeedles(puppet, emptyMap(), viewport, rotationIds, selected, null, true))
-		guides.warps(io.github.psd2live.ui.RigInformationOverlay.warpLayers(puppet, points, warpIds, selected, null, true),
-			io.github.psd2live.ui.RigCanvasSupport.deformerCorners(io.github.psd2live.ui.RigCanvasSupport.deformerOutlines(puppet, points), viewport))
+		guides.rotations(io.github.psd2live.core.RigInformationOverlay.rotationNeedles(puppet, emptyMap(), viewport, rotationIds, selected, null, true))
+		guides.warps(io.github.psd2live.core.RigInformationOverlay.warpLayers(puppet, points, warpIds, selected, null, true),
+			io.github.psd2live.core.RigCanvasSupport.deformerCorners(io.github.psd2live.core.RigCanvasSupport.deformerOutlines(puppet, points), viewport))
 		val scene = CanvasScene(width, height, viewport, model, RigCanvasSupport.evaluate(model), emptyList(), OverlayScene(guides.items))
 		val gpu = requireNotNull(renderer!!.let { r -> host!!.submit { r.render("guides", scene) }.get() }.readPixels())
 		fun javaPainted(x: Int, y: Int) = x in 0 until width && y in 0 until height && (image.getRGB(x, y) ushr 24) > 40
@@ -209,12 +209,12 @@ class GlCanvasParityTest {
 		val geometry = RigCanvasSupport.evaluate(model)
 		val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
 		image.createGraphics().apply {
-			io.github.psd2live.ui.RigInformationOverlay.paintDeformPaths(this, puppet, geometry, viewport, setOf("p"),
+			io.github.psd2live.core.RigInformationOverlay.paintDeformPaths(this, puppet, geometry, viewport, setOf("p"),
 				showHardness = true, selectedPathIds = setOf("p"))
 			dispose()
 		}
 		val guides = RigGuides(viewport)
-		guides.paths(io.github.psd2live.ui.RigInformationOverlay.deformPathLooks(puppet, geometry, viewport, setOf("p"),
+		guides.paths(io.github.psd2live.core.RigInformationOverlay.deformPathLooks(puppet, geometry, viewport, setOf("p"),
 			showHardness = true, selectedPathIds = setOf("p")))
 		val scene = CanvasScene(width, height, viewport, model, geometry, emptyList(), OverlayScene(guides.items))
 		val gpu = requireNotNull(renderer!!.let { r -> host!!.submit { r.render("paths", scene) }.get() }.readPixels())

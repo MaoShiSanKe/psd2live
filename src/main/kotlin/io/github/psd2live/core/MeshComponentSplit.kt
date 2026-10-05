@@ -1,6 +1,6 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceSourceLayer
 import org.umamo.format.art.LayerBounds
 import org.umamo.format.art.LayerId
 import org.umamo.format.art.LayerRaster
@@ -18,6 +18,8 @@ internal object MeshComponentSplit {
         val components: List<Component>,
         private val ownerByPixel: IntArray,
         private val source: SourceLayer,
+        private val checkpoint: () -> Unit = {},
+        val ownerByVertex: IntArray = IntArray(0),
     ) {
         /** Small transparent thumbnails, prepared with the split plan so the dialog stays responsive. */
         val previewImages: List<BufferedImage> = buildPreviewImages()
@@ -26,6 +28,7 @@ internal object MeshComponentSplit {
             val raster = source.raster
             val boxes = Array(components.size) { intArrayOf(raster.width, raster.height, -1, -1) }
             for (pixel in ownerByPixel.indices) {
+                if (pixel % 1024 == 0) checkpoint()
                 if ((raster.rgba[pixel * 4 + 3].toInt() and 0xff) == 0) continue
                 val box = boxes[ownerByPixel[pixel]]
                 val x = pixel % raster.width
@@ -45,6 +48,7 @@ internal object MeshComponentSplit {
                 BufferedImage(previewWidth, previewHeight, BufferedImage.TYPE_INT_ARGB)
             }
             for (pixel in ownerByPixel.indices) {
+                if (pixel % 1024 == 0) checkpoint()
                 val component = ownerByPixel[pixel]
                 val box = boxes[component]
                 val offset = pixel * 4
@@ -64,12 +68,14 @@ internal object MeshComponentSplit {
             return images
         }
 
-        fun pieces(names: List<String>): List<WorkspaceSourceLayer> {
+        fun pieces(names: List<String>, ids: List<String>? = null, checkpoint: () -> Unit = this.checkpoint): List<WorkspaceSourceLayer> {
             require(names.size == components.size && names.all { it.isNotBlank() })
+            require(ids == null || ids.size == names.size && ids.distinct().size == ids.size && ids.all { it.isNotBlank() })
             val raster = source.raster
             val base = WorkspaceSourceLayer.copyOf(source, source.order) as WorkspaceSourceLayer
             val boxes = Array(components.size) { intArrayOf(raster.width, raster.height, -1, -1) }
             for (pixel in ownerByPixel.indices) {
+                if (pixel % 1024 == 0) checkpoint()
                 if ((raster.rgba[pixel * 4 + 3].toInt() and 0xff) == 0) continue
                 val box = boxes[ownerByPixel[pixel]]
                 val x = pixel % raster.width
@@ -88,12 +94,13 @@ internal object MeshComponentSplit {
                 val height = if (crop) box[3] - top + 1 else raster.height
                 val rgba = ByteArray(width * height * 4)
                 for (y in top until top + height) for (x in left until left + width) {
+                    if (x == left) checkpoint()
                     val pixel = y * raster.width + x
                     if (ownerByPixel[pixel] != index) continue
                     raster.rgba.copyInto(rgba, ((y - top) * width + x - left) * 4, pixel * 4, pixel * 4 + 4)
                 }
                 base.copy(
-                    id = LayerId("split:${UUID.randomUUID()}"),
+                    id = LayerId(ids?.get(index) ?: "split:${UUID.randomUUID()}"),
                     name = names[index].trim(),
                     bounds = if (crop) LayerBounds(source.bounds.left + left, source.bounds.top + top, width, height) else source.bounds,
                     raster = LayerRaster(width, height, rgba),
@@ -105,7 +112,19 @@ internal object MeshComponentSplit {
         }
     }
 
-    fun detect(mesh: DrawableMesh, source: SourceLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int): Plan? {
+    fun detect(mesh: DrawableMesh, source: SourceLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int,
+               checkpoint: () -> Unit = {}): Plan? {
+        val scale = placement.scale.toFloat().coerceAtLeast(1f)
+        val local = FloatArray(mesh.uvs.size) { i ->
+            (mesh.uvs[i] * (if (i % 2 == 0) pageWidth else pageHeight) -
+                (if (i % 2 == 0) placement.x else placement.y)) / scale
+        }
+        return detect(mesh, source, local, checkpoint)
+    }
+
+    /** Actual source-raster coordinates also cover padded, rotated and scaled texture tiles. */
+    fun detect(mesh: DrawableMesh, source: SourceLayer, local: FloatArray, checkpoint: () -> Unit = {}): Plan? {
+        checkpoint()
         val width = source.raster.width
         val height = source.raster.height
         if (width <= 0 || height <= 0 || mesh.indices.size < 6 || mesh.uvs.size != mesh.positions.size) return null
@@ -124,6 +143,7 @@ internal object MeshComponentSplit {
         fun union(a: Int, b: Int) { parent[find(a)] = find(b) }
         val used = BooleanArray(mesh.vertexCount)
         for (i in mesh.indices.indices step 3) {
+            if (i % 1023 == 0) checkpoint()
             val a = mesh.indices[i]
             val b = mesh.indices[i + 1]
             val c = mesh.indices[i + 2]
@@ -133,9 +153,9 @@ internal object MeshComponentSplit {
         }
         val groups = (used.indices).filter { used[it] }.groupBy(::find).values
         if (groups.size < 2) return null
-        val scale = placement.scale.toFloat().coerceAtLeast(1f)
-        fun localX(v: Int) = (mesh.uvs[v * 2] * pageWidth - placement.x) / scale
-        fun localY(v: Int) = (mesh.uvs[v * 2 + 1] * pageHeight - placement.y) / scale
+        require(local.size == mesh.positions.size && local.all(Float::isFinite))
+        fun localX(v: Int) = local[v * 2]
+        fun localY(v: Int) = local[v * 2 + 1]
         val sorted = groups.sortedWith(compareBy<List<Int>> { group -> group.map(::localY).average() }
             .thenBy { group -> group.map(::localX).average() })
         val components = sorted.map { group ->
@@ -144,19 +164,29 @@ internal object MeshComponentSplit {
         fun finish(owners: IntArray): Plan? {
             val occupied = BooleanArray(sorted.size)
             for (pixel in owners.indices) {
+                if (pixel % 1024 == 0) checkpoint()
                 if ((source.raster.rgba[pixel * 4 + 3].toInt() and 0xff) != 0) occupied[owners[pixel]] = true
             }
             val retained = components.indices.filter { occupied[it] }
             if (retained.size < 2) return null
-            if (retained.size == components.size) return Plan(components, owners, source)
             val remap = IntArray(components.size) { old ->
                 retained.indexOf(old).takeIf { it >= 0 } ?: 0
             }
+            val vertexOwners = IntArray(mesh.vertexCount) { -1 }
+            sorted.forEachIndexed { index, vertices -> vertices.forEach { vertexOwners[it] = remap[index] } }
+            for (vertex in vertexOwners.indices) if (vertexOwners[vertex] < 0) {
+                checkpoint()
+                vertexOwners[vertex] = retained.indices.minBy { index ->
+                    val center = components[retained[index]]
+                    val dx = localX(vertex) - center.centerX; val dy = localY(vertex) - center.centerY
+                    dx * dx + dy * dy
+                }
+            }
             for (pixel in owners.indices) owners[pixel] = remap[owners[pixel]]
-            return Plan(retained.map(components::get), owners, source)
+            return Plan(retained.map(components::get), owners, source, checkpoint, vertexOwners)
         }
 
-        axisSeparatedOwners(sorted, width, height, ::localX, ::localY)?.let { return finish(it) }
+        axisSeparatedOwners(sorted, width, height, ::localX, ::localY, checkpoint)?.let { return finish(it) }
 
         // The mesh triangles, rather than their vertices, establish ownership of the art.
         // A vertex Voronoi flood through transparent space can reach another island first.
@@ -167,6 +197,7 @@ internal object MeshComponentSplit {
         fun edge(ax: Float, ay: Float, bx: Float, by: Float, px: Float, py: Float): Float =
             (bx - ax) * (py - ay) - (by - ay) * (px - ax)
         for (triangle in mesh.indices.indices step 3) {
+            checkpoint()
             val a = mesh.indices[triangle]
             val b = mesh.indices[triangle + 1]
             val c = mesh.indices[triangle + 2]
@@ -181,6 +212,7 @@ internal object MeshComponentSplit {
             val top = kotlin.math.floor(minOf(ay, by, cy).toDouble()).toInt().coerceIn(0, height - 1)
             val bottom = kotlin.math.ceil(maxOf(ay, by, cy).toDouble()).toInt().coerceIn(0, height - 1)
             for (y in top..bottom) for (x in left..right) {
+                if (x == left) checkpoint()
                 val pixel = y * width + x
                 if ((alpha[pixel].toInt() and 0xff) < 8) continue
                 val px = x + 0.5f; val py = y + 0.5f
@@ -204,7 +236,7 @@ internal object MeshComponentSplit {
                 if (vertexOwners[pixel] == -1) vertexOwners[pixel] = component
             }
         }
-        floodOwners(vertexOwners, width, height)
+        floodOwners(vertexOwners, width, height, checkpoint)
         val hasTriangleSeed = BooleanArray(sorted.size)
         for (owner in owners) if (owner >= 0) hasTriangleSeed[owner] = true
         for (pixel in owners.indices) {
@@ -214,7 +246,7 @@ internal object MeshComponentSplit {
                 hasTriangleSeed[component] = true
             }
         }
-        floodOwners(owners, width, height)
+        floodOwners(owners, width, height, checkpoint)
         for (pixel in owners.indices) if (owners[pixel] == -1) owners[pixel] = vertexOwners[pixel]
         return finish(owners)
     }
@@ -223,6 +255,7 @@ internal object MeshComponentSplit {
     private fun axisSeparatedOwners(
         groups: List<List<Int>>, width: Int, height: Int,
         localX: (Int) -> Float, localY: (Int) -> Float,
+        checkpoint: () -> Unit,
     ): IntArray? {
         for (horizontal in listOf(true, false)) {
             val spans = groups.mapIndexed { index, vertices ->
@@ -233,6 +266,7 @@ internal object MeshComponentSplit {
             // The visible contour can extend one raster cell beyond its sampled mesh edge.
             val separators = spans.zipWithNext().map { (left, right) -> (left.third + right.second) * 0.5f + 1f }
             val owners = IntArray(width * height) { pixel ->
+                if (pixel % 1024 == 0) checkpoint()
                 val coordinate = if (horizontal) (pixel % width) + 0.5f else (pixel / width) + 0.5f
                 spans[separators.indexOfFirst { coordinate < it }.let { if (it < 0) spans.lastIndex else it }].first
             }
@@ -242,12 +276,13 @@ internal object MeshComponentSplit {
     }
 
     /** Fill unassigned cells from the complete seed footprints in Chebyshev distance order. */
-    private fun floodOwners(owners: IntArray, width: Int, height: Int) {
+    private fun floodOwners(owners: IntArray, width: Int, height: Int, checkpoint: () -> Unit) {
         val queue = IntArray(width * height)
         var tail = 0
         for (pixel in owners.indices) if (owners[pixel] >= 0) queue[tail++] = pixel
         var head = 0
         while (head < tail) {
+            if (head % 1024 == 0) checkpoint()
             val pixel = queue[head++]
             val x = pixel % width
             val y = pixel / width

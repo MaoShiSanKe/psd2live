@@ -20,6 +20,12 @@ class PhysicsDrag {
 	private var userTime = 0f
 	private var lastTime = 0f
 
+    /** An audition advances a private candidate so cancellation cannot move the visible drag. */
+    internal fun copy(): PhysicsDrag = PhysicsDrag().also {
+        it.x = x; it.y = y; it.targetX = targetX; it.targetY = targetY
+        it.vx = vx; it.vy = vy; it.userTime = userTime; it.lastTime = lastTime
+    }
+
 	fun target(x: Float, y: Float) {
 		targetX = x.coerceIn(-1f, 1f)
 		targetY = y.coerceIn(-1f, 1f)

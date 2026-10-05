@@ -1,5 +1,9 @@
 package io.github.psd2live.agent
 
+import io.github.psd2live.ui.state.DesktopWorkspace
+
+import io.github.psd2live.project.MutationAuthor
+
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
@@ -19,19 +23,19 @@ class SkeletonMotionWorkspaceTest {
         for (y in 3..28) for (x in 7..24) image.setRGB(x, y, 0xff995588.toInt())
         ImageIO.write(image, "png", png.toFile())
         PSD2LiveViewModel().use { viewModel ->
-            ViewModelAgentWorkspace(viewModel, temp.resolve("store")).use { workspace ->
-                viewModel.attachAgentWorkspace(workspace)
+            DesktopWorkspace(viewModel, temp.resolve("store")).use { workspace ->
+                viewModel.attachWorkspace(workspace)
                 val created = workspace.createArtwork(buildJsonObject {
                     put("width", 32); put("height", 32)
                     putJsonArray("layers") { add(buildJsonObject {
                         put("path", png.toString()); put("name", "body"); put("role", "topwear")
                     }) }
                 })
-                val armature = workspace.editSkeleton(created.historyNodeId, buildJsonObject { put("mode", "auto") })
+                val armature = workspace.editSkeleton(created.state!!, buildJsonObject { put("mode", "auto") })
                 assertTrue(armature.applied)
                 assertTrue(workspace.skeletonSpec()!!.enabled)
                 assertTrue(workspace.skeletonSpec()!!.bones.isNotEmpty())
-                val motion = workspace.editMotion(armature.historyNodeId, buildJsonObject {
+                val motion = workspace.editMotion(armature.state!!, buildJsonObject {
                     put("mode", "put")
                     put("clip", buildJsonObject {
                         put("id", "turn"); put("name", "TurnCustom"); put("duration", 2)
@@ -47,7 +51,7 @@ class SkeletonMotionWorkspaceTest {
                 })
                 assertTrue(motion.applied)
                 assertEquals("turn", workspace.motionClips().single().id)
-                val files = workspace.exportModel(motion.historyNodeId, temp.resolve("export").toString())
+                val files = workspace.exportModel(motion.state!!, temp.resolve("export").toString())
                     .getValue("files").jsonArray.map { Path.of(it.jsonObject.getValue("path").jsonPrimitive.content) }
                 assertTrue(files.any { it.fileName.toString().contains("turn", ignoreCase = true) && it.fileName.toString().endsWith("motion3.json") })
                 assertTrue(files.all(Files::isRegularFile))

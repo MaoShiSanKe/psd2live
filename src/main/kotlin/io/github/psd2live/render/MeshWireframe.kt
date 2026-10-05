@@ -1,7 +1,7 @@
 package io.github.psd2live.render
 
 import io.github.psd2live.core.RigPreviewModel
-import io.github.psd2live.ui.ComponentPalette
+import io.github.psd2live.core.ComponentPalette
 import org.umamo.render.eval.DeformedGeometry
 import org.umamo.runtime.model.Drawable
 import java.util.WeakHashMap

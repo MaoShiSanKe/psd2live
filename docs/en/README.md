@@ -23,7 +23,7 @@ PSD2Live recognizes parts from layer names and generates meshes, a deformer hier
 | Artwork and variants | Transparent image placement, toggle and exclusive variants, layer painting and edge cleanup, optional 2× / 4× texture upscaling |
 | Animation | Timeline, keyframe and curve editing with live preview; preset crouch, wave, cheer and other motions when a skeleton is available |
 | Projects | Single-file `.psd2live` projects, branching history, tabs, six workspace presets (Edit, Mesh, Rigging, Animation, Preview, Physics), light and dark themes, Photoshop / Blender / Cubism keymaps |
-| Agents | Authenticated local MCP server with 26 public tools for observation, shapes, artwork, parameters, skeletons, motions, physics, simulation, export and history |
+| Agents | Authenticated local MCP server with 170 public tools (discovered page by page through `workspace_list_operations`) for observation, shapes, artwork, parameters, skeletons, motions, physics, simulation, export and history |
 
 <table>
 <tr>
@@ -91,7 +91,7 @@ The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBIS
 
 1. Keep PSD2Live running and open **Tools → MCP → MCP Connection & Setup…**.
 2. Copy the configuration for your host. Hosts with Streamable HTTP connect directly; Stdio-only hosts use [`mcp_proxy.py`](../../mcp_proxy.py) in the repository root.
-3. Have the agent call `inspect` first. Every write goes into the same history as UI edits and can be undone in the app.
+3. Have the agent call `workspace_inspect` first. Every write goes into the same history as UI edits and can be undone in the app.
 
 The [MCP reference](../zh/agent/MCP_AUTHORING.md) (Chinese) lists requests and examples. The MCP server does not generate images; new artwork requires image generation in the host. A callable tool does not make a complex modeling task reliable; [recorded evaluations](../zh/STATUS.md) keep both successes and failures.
 

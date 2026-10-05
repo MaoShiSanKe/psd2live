@@ -822,7 +822,9 @@ object RigBuilder {
 			)
 			builtDeformPaths.addAll(parts.mouthPaths)
 			val override = config.layerOverrides[layer.source.id.raw]
-			val channelGrids = if (config.meshOnly) ChannelGrids.Empty else buildChannels(layer, override, switchParamKeys, config.rigTuning)
+			val classification = override?.type ?: layer.semantic.type
+			val channelGrids = if (config.meshOnly && classification == LayerType.PRESET) ChannelGrids.Empty
+				else buildChannels(layer, override, switchParamKeys, config.rigTuning)
 			val drawable = Drawable(
 				id = id,
 				name = layer.source.name,
@@ -1994,7 +1996,7 @@ object RigBuilder {
 		return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
 	}
 
-	private fun meshSettings(layer: ClassifiedLayer, config: PipelineConfig): Pair<MeshSettings, Float> {
+	internal fun meshSettings(layer: ClassifiedLayer, config: PipelineConfig): Pair<MeshSettings, Float> {
 		val semanticDensity = when (layer.semantic.tag) {
 			SemanticTag.FACE, SemanticTag.FRONT_HAIR, SemanticTag.BACK_HAIR, SemanticTag.TOPWEAR -> 0.65f
 			SemanticTag.IRIDES, SemanticTag.EYELASH, SemanticTag.EYEWHITE, SemanticTag.EYEBROW,

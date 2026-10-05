@@ -1,7 +1,11 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.core.RigInformationOverlay
+
+import io.github.psd2live.core.CanvasViewport
+
 import io.github.psd2live.core.DeformPathJournal
-import io.github.psd2live.agent.AgentPathTools
+import io.github.psd2live.application.WorkspacePathEdits
 import kotlinx.serialization.json.*
 import org.umamo.format.cmo3.Cmo3
 import org.umamo.format.cmo3.model.custom.CModelSource
@@ -29,10 +33,10 @@ class DeformPathRadiusTest {
             put("points", JsonArray(listOf(JsonArray(listOf(JsonPrimitive(0.2f), JsonPrimitive(0.2f))),
                 JsonArray(listOf(JsonPrimitive(0.7f), JsonPrimitive(0.2f))))))
         }
-        val defaults = AgentPathTools.createPutCommand(model, arguments).second
+        val defaults = WorkspacePathEdits.createPutCommand(model, arguments).second
         assertEquals(50f, defaults.getValue("width").jsonPrimitive.float)
         assertEquals(50f, defaults.getValue("hardness").jsonPrimitive.float)
-        val explicit = AgentPathTools.createPutCommand(model, JsonObject(arguments + mapOf(
+        val explicit = WorkspacePathEdits.createPutCommand(model, JsonObject(arguments + mapOf(
             "width" to JsonPrimitive(37.25f), "hardness" to JsonPrimitive(63.5f)))).second
         val replayed = DeformPathJournal.apply(model, explicit)
         val path = replayed.deformPaths.last()

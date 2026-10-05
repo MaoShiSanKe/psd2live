@@ -25,7 +25,7 @@ internal object ProjectArchive {
         }
         return hash.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
     }
-    fun write(directory: Path, target: Path, projectId: String) {
+    fun write(directory: Path, target: Path, projectId: String, beforeReplace: () -> Unit = {}) {
         val files = Files.walk(directory).use { paths -> paths.filter(Files::isRegularFile).sorted().toList() }
         writeJson(directory.resolve("manifest.json"), buildJsonObject {
             put("format", "PSD2Live"); put("version", 1); put("projectId", projectId)
@@ -48,6 +48,7 @@ internal object ProjectArchive {
             // Verify the actual completed archive before replacing the previous saved project.
             val verification = extract(temporary)
             deleteTemporaryDirectory(verification)
+            beforeReplace()
             Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         } finally { Files.deleteIfExists(temporary) }
     }

@@ -2,10 +2,10 @@ package io.github.psd2live.core
 
 import org.umamo.edit.withParametersSyncedFromTree
 
-import io.github.psd2live.agent.AgentWorkspaceDocument
-import io.github.psd2live.agent.AgentWorkspaceStore
-import io.github.psd2live.agent.ViewModelAgentWorkspace
-import io.github.psd2live.agent.MutationAuthor
+import io.github.psd2live.application.*
+import io.github.psd2live.project.*
+import kotlinx.serialization.json.*
+import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -73,6 +73,87 @@ class Cmo3ModelImportTest {
         assertEquals(listOf("shared"), reopened.drawables.map { it.id.raw })
     }
 
+    @Test fun importedMeshPaintingChangesPixelsAndSurvivesHistoryArchiveAndCmo3Readback() = runBlocking<Unit> {
+        val before = preview(bytes(model("paint", "other")))
+        val initial = WorkspaceDocument(before.analysis.source, emptyMap(), emptySet(), emptyMap(), emptyMap(),
+            before.config.rigEdits, WorkspaceSettingsCodec.encode(before.config))
+        val builder = WorkspacePreviewBuilder()
+        val runtime = WorkspaceRuntime<RigPreviewModel>({ builder.build(it) })
+        runtime.install(runtime.state.value.state, "imported-paint", initial, before)
+        val root = runtime.capture()
+        val result = WorkspaceDocumentCommands(runtime).execute(root.projectId, root.state, "Paint imported mesh", listOf(
+            WorkspaceDocumentOperation("source_paint_pencil", buildJsonObject {
+                put("layer_id", "paint"); put("radius", 3)
+                put("points", buildJsonArray { add(buildJsonArray { add(4); add(4) }) })
+                put("color", buildJsonArray { add(20); add(90); add(220); add(255) })
+            })), MutationAuthor.AGENT)
+        assertTrue(result.applied)
+        assertFalse(initial.config().generateDeformers)
+        assertFalse(result.capture.model.config.generateDeformers)
+        assertEquals(before.config.rigEdits.authoringJournal, result.capture.document.rigEdits.authoringJournal)
+        assertEquals(listOf(20, 90, 220, 255), result.capture.document.sampleSourceColor("paint", 4, 4))
+        for (drawable in before.rig.puppet.drawables) {
+            val after = result.capture.model.rig.puppet.drawables.single { it.id == drawable.id }
+            assertContentEquals(drawable.mesh!!.positions, after.mesh!!.positions)
+            assertContentEquals(drawable.mesh.indices, after.mesh.indices)
+        }
+        val store = WorkspaceStore(temp.resolve("paint-store"))
+        val repository = ProjectRepository()
+        repository.save(ProjectSaveCapture(root.projectId, runtime.history(), JsonObject(emptyMap()), null, store), temp.resolve("imported.psd2live"))
+        val reopened = repository.open(temp.resolve("imported.psd2live")).use { opened ->
+            assertEquals(result.capture.revision, WorkspaceRevisions.of(opened.history.head().snapshot))
+            builder.build(opened.history.head().snapshot)
+        }
+        val export = PSD2LivePipeline().run(result.capture.document.source, "paint", temp.resolve("paint-export"), result.capture.document.config())
+        val imported = preview(Files.readAllBytes(export.exportedFiles.single { it.path.toString().endsWith(".cmo3") }.path))
+        val frame = WorkspaceViewFrame.CanvasRect(Bounds(0f, 0f, 32f, 32f))
+        fun render(model: RigPreviewModel, layers: Set<String> = setOf("paint")) = WorkspaceViewRenderer.modelComposite(model, "paint-revision",
+            emptyMap(), layers, emptySet(), frame, WorkspaceViewBackground.TRANSPARENT, WorkspaceViewOutputSpec(512)).png
+        val painted = render(result.capture.model)
+        val raster = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(painted))
+        assertEquals(0xff145adc.toInt(), raster.getRGB(4 * 16, 4 * 16), "The preview must sample the newly painted source pixels")
+        assertContentEquals(painted, render(reopened))
+        assertContentEquals(painted, render(imported))
+        assertContentEquals(render(before, setOf("other")), render(result.capture.model, setOf("other")), "Painting must preserve unrelated imported pixels")
+        val directory = Path.of("build/shared-raster-visual").toAbsolutePath()
+        Files.createDirectories(directory)
+        Files.write(directory.resolve("imported-before-reopen.png"), painted)
+        Files.write(directory.resolve("imported-after-reopen.png"), render(reopened))
+        val commands = WorkspaceDocumentCommands(runtime)
+        val keyed = commands.execute(root.projectId, result.capture.state, "Imported form", listOf(
+            WorkspaceDocumentOperation("keyform_apply", buildJsonObject { putJsonArray("changes") { add(buildJsonObject {
+                put("op", "set"); put("target", "mesh:paint"); putJsonObject("key") { put("ParamCustom", 1) }
+                putJsonObject("geometry") { put("positionDeltas", JsonArray(List(6) { JsonPrimitive(0.1f) })) }
+                putJsonObject("channels") { put("opacity", 0.6) }
+            }) } })
+        ), MutationAuthor.USER)
+        val rebuilt = commands.execute(root.projectId, keyed.capture.state, "Rebuild imported paint", listOf(
+            WorkspaceDocumentOperation("source_paint_shape", buildJsonObject {
+                put("layer_id", "paint"); put("rebuild_mesh", true); put("shape", "rectangle"); put("filled", true)
+                put("from", buildJsonArray { add(2); add(2) }); put("to", buildJsonArray { add(20); add(20) })
+                put("color", buildJsonArray { add(30); add(150); add(90); add(255) })
+            })), MutationAuthor.USER)
+        assertNotEquals(3, rebuilt.capture.model.rig.puppet.drawables.single { it.id.raw == "paint" }.mesh!!.vertexCount)
+        val restored = builder.build(rebuilt.capture.document)
+        val rebuiltExport = PSD2LivePipeline().run(rebuilt.capture.document.source, "rebuilt", temp.resolve("rebuilt-export"), rebuilt.capture.document.config())
+        val rebuiltImport = preview(Files.readAllBytes(rebuiltExport.exportedFiles.single { it.path.toString().endsWith(".cmo3") }.path))
+        val evaluator = org.umamo.render.eval.CpuDeformationEvaluator()
+        for (axis in listOf(-1f, 0f, 1f)) {
+            val pose = mapOf(ParameterId("ParamCustom") to axis)
+            val expected = evaluator.evaluate(rebuilt.capture.model.rig.puppet, pose)
+            for (model in listOf(restored.rig.puppet, rebuiltImport.rig.puppet)) {
+                val actual = evaluator.evaluate(model, pose)
+                expected.worldPositions.forEach { (id, points) ->
+                    val saved = actual.worldPositions.getValue(id)
+                    assertEquals(points.size, saved.size)
+                    points.indices.forEach { assertEquals(points[it], saved[it], 0.001f) }
+                    assertEquals(expected.opacity.getValue(id), actual.opacity.getValue(id), 0.00001f)
+                }
+            }
+        }
+        assertContentEquals(render(before, setOf("other")), render(rebuilt.capture.model, setOf("other")))
+    }
+
     @Test fun replacementPreservesAbsentObjectsAndUsesIncomingParametersMeshesAndTextures() {
         val old = preview(bytes(model("old", "shared")))
         val incoming = model("shared", "added").copy(parameters = listOf(Parameter(ParameterId("ParamNew"), "New", 0f, 1f, 0f)))
@@ -105,9 +186,9 @@ class Cmo3ModelImportTest {
         val imported = preview(bytes(model, physics = listOf(rule)))
         assertEquals(listOf(rule), imported.config.rigEdits.physicsEdits)
         assertEquals(30, imported.config.rigEdits.physicsFps)
-        val document = AgentWorkspaceDocument(imported.analysis.source, emptyMap(), emptySet(), emptyMap(), emptyMap(), imported.config.rigEdits)
+        val document = WorkspaceDocument(imported.analysis.source, emptyMap(), emptySet(), emptyMap(), emptyMap(), imported.config.rigEdits)
         val history = WorkspaceHistoryTree(document, "revision", "hash")
-        val store = AgentWorkspaceStore(temp)
+        val store = WorkspaceStore(temp)
         store.persistHistory("project", history.state())
         val restored = store.loadHistory("project")!!.head().snapshot
         assertEquals(document.rigEdits, restored.rigEdits)
@@ -147,8 +228,8 @@ class Cmo3ModelImportTest {
             while (!predicate()) delay(20)
         }
         PSD2LiveViewModel().use { vm ->
-            ViewModelAgentWorkspace(vm, temp.resolve("workspace")).use { workspace ->
-                vm.attachAgentWorkspace(workspace)
+            DesktopWorkspace(vm, temp.resolve("workspace")).use { workspace ->
+                vm.attachWorkspace(workspace)
                 vm.importCmo3(input, Cmo3ImportMode.NEW)
                 waitFor { vm.state.value.previewModel != null && !vm.state.value.isAnalyzing }
                 assertNull(vm.state.value.errorMessage)
@@ -169,8 +250,8 @@ class Cmo3ModelImportTest {
             }
         }
         PSD2LiveViewModel().use { vm ->
-            ViewModelAgentWorkspace(vm, temp.resolve("reopened-workspace")).use { workspace ->
-                vm.attachAgentWorkspace(workspace)
+            DesktopWorkspace(vm, temp.resolve("reopened-workspace")).use { workspace ->
+                vm.attachWorkspace(workspace)
                 vm.openProject(archive)
                 waitFor { vm.state.value.previewModel != null }
                 assertNull(vm.state.value.errorMessage)

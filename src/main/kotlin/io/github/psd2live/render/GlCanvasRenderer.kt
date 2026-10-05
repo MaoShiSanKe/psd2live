@@ -1,6 +1,6 @@
 package io.github.psd2live.render
 
-import io.github.psd2live.ui.CanvasViewport
+import io.github.psd2live.core.CanvasViewport
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType

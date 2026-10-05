@@ -1,5 +1,9 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.core.RigCanvasSupport
+
+import io.github.psd2live.core.CanvasViewport
+
 import io.github.psd2live.ui.utils.toSkiaImage
 import io.github.psd2live.core.PackedAtlas
 import io.github.psd2live.core.RigPreviewModel
