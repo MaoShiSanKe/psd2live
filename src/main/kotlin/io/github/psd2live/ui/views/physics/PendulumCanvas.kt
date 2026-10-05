@@ -167,7 +167,8 @@ internal fun PendulumEditor(
 	val previewState = state.previewPanelState()
 	val staticValues = previewState.parameterValues
 	val inputs by rememberUpdatedState {
-		val live = if (previewState.activeWorkspace.pose?.authoringPose == true) emptyMap() else viewModel.livePose.value
+		// The frame and open motion the sliders show; authoring clears the frame part, never the motion's curves.
+		val live = viewModel.livePose.value
 		// The audition applies the drag itself and takes only values within a known parameter's range.
 		(staticValues + live).mapKeys { it.key.raw }.mapNotNull { (id, value) ->
 			ranges[id]?.takeIf { value.isFinite() }?.let { id to value.coerceIn(minOf(it.min, it.max), maxOf(it.min, it.max)) }

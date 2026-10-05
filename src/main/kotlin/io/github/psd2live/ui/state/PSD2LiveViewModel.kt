@@ -300,11 +300,12 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     /**
-     * The pose canvas edits are resolved at. Playback, swing and stale panel values can name parameters the model no
-     * longer has or sit past a range, and the shared geometry commands reject both, so the pose is kept to the model.
+     * The pose the edit canvases show and resolve edits at: the one the sliders show ([shownPose]) plus a swing draft.
+     * Playback, swing and stale panel values can name parameters the model no longer has or sit past a range, and the
+     * shared geometry commands reject both, so the pose is kept to the model.
      */
-    internal fun canvasPose(current: PSD2LiveState): Map<ParameterId, Float> {
-        val pose = parameterScrubPose(current, if (processPlaybackActive) processFrameValues else current.parameterValues) + swingPreviewValues
+    internal fun canvasPose(current: PSD2LiveState, live: Map<ParameterId, Float> = livePose.value): Map<ParameterId, Float> {
+        val pose = shownPose(current, live) + swingPreviewValues
         val parameters = current.previewModel?.rig?.puppet?.parameters ?: return pose
         val known = parameters.mapTo(HashSet()) { it.id }
         return io.github.psd2live.core.boundedPreviewPose(pose.filterKeys { it in known }, parameters)
@@ -5321,8 +5322,15 @@ class PSD2LiveViewModel : AutoCloseable {
                 updateState { it.copy(projectDirty = true, projectEditVersion = it.projectEditVersion + 1) }
             return@synchronized
         }
-        if (current.parameterValues == shown && current.lockedParameters == pose.locked &&
-            !current.animationEnabled && !motionEditor.playing && !persistedChange) return@synchronized
+        val alreadyShown = current.parameterValues == shown && current.lockedParameters == pose.locked
+        if (alreadyShown && !current.animationEnabled && !motionEditor.playing && !persistedChange) return@synchronized
+        if (alreadyShown && commit != null) {
+            // The GUI's own change landed exactly as the views already show it: a running swing keeps going
+            // instead of restarting from rest when the commit arrives.
+            if (persistedChange && current.analysis != null)
+                updateState { it.copy(projectDirty = true, projectEditVersion = it.projectEditVersion + 1) }
+            return@synchronized
+        }
         resetMotionDynamics()
         motionEditor.playing = false
         updateState {
@@ -5915,6 +5923,17 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * instead of the frame before. Readers lay it over the document's values.
 	 */
 	val livePose: StateFlow<Map<ParameterId, Float>> = _livePose.asStateFlow()
+
+	/**
+	 * What every view shows for the active workspace: the authored pose (with changes still committing), the
+	 * evaluated frame and open motion over it ([livePose]), and the slider being dragged on top — the same order the
+	 * parameter sliders read it in.
+	 */
+	internal fun shownPose(current: PSD2LiveState, live: Map<ParameterId, Float> = livePose.value): Map<ParameterId, Float> {
+		val scrub = parameterScrub?.takeIf { it.generation == current.projectOpenGeneration && it.workspaceId == current.activeWorkspace.id }
+		val base = if (live.isEmpty()) current.parameterValues else current.parameterValues + live
+		return if (scrub == null || scrub.overrides.isEmpty()) base else base + scrub.overrides
+	}
 
 	/** Compose-readable live value for [id]; reading it only invalidates when that entry changes. */
 	fun livePoseOf(id: ParameterId): Float? = _livePoseSnapshot[id]

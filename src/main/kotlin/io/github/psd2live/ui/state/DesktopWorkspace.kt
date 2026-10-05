@@ -292,11 +292,23 @@ class DesktopWorkspace(
         result
     }
 
+    /**
+     * An authored change stops playback and restarts the clocks from the new pose. The open motion stays posed at its
+     * playhead, so the canvases and sliders keep showing its curves instead of dropping them after every edit.
+     */
     private fun resetAuthoredPlayback(projectId: String, state: String, current: PSD2LiveState): kotlinx.serialization.json.JsonObject {
-        playbackSessions.configure(projectId, state, current.activeWorkspace.id, kotlinx.serialization.json.buildJsonObject { put("mode", "reset") })
-        return playbackSessions.configure(projectId, state, current.activeWorkspace.id, kotlinx.serialization.json.buildJsonObject {
+        val workspaceId = current.activeWorkspace.id
+        val paused = playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject { put("mode", "pause") })
+        playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject { put("mode", "reset") })
+        val tracked = playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject {
             put("mode", "tracking"); put("enabled", current.mouseTrackingEnabled)
         })
+        val clip = paused["clip_id"]?.jsonPrimitive?.content ?: return tracked
+        return runCatching {
+            playbackSessions.configure(projectId, state, workspaceId, kotlinx.serialization.json.buildJsonObject {
+                put("mode", "seek"); put("clip_id", clip); put("time", paused.getValue("time").jsonPrimitive.float)
+            })
+        }.getOrDefault(tracked)
     }
 
     override fun layerMeshSettings(layerId: String): kotlinx.serialization.json.JsonObject = captureQueries().layerMeshSettings(layerId)

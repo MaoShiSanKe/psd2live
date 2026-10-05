@@ -148,6 +148,13 @@ class WorkspacePoseTest {
             withTimeout(5000) { while ((vm.livePose.value[parameter] ?: -1f) < -0.5f) kotlinx.coroutines.delay(10) }
             assertEquals(vm.livePose.value[parameter], vm.canvasPose(vm.state.value)[parameter])
             vm.setMotionEditorPlaying(false)
+            // Moving another slider commits the authored pose; the open motion stays posed at its playhead.
+            vm.setMotionPlayhead(0.75f)
+            vm.setParameterValue(ParameterId("untracked"), 4f)
+            settled(vm)
+            assertEquals(0.5f, vm.livePose.value[parameter])
+            assertEquals(0.5f, vm.canvasPose(vm.state.value)[parameter])
+            assertEquals(4f, vm.canvasPose(vm.state.value)[ParameterId("untracked")])
             vm.closeMotionEditorClip()
             assertNull(vm.livePose.value[parameter])
             withTimeout(5000) { while (vm.canvasPose(vm.state.value)[parameter] != 0f) kotlinx.coroutines.delay(10) }

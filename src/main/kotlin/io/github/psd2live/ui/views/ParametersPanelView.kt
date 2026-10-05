@@ -414,8 +414,8 @@ internal fun ParametersListView(
 	val allParameters = puppet?.parameters.orEmpty()
 	val physicsGroups = viewModel.physicsGroups(state)
 	val physicsOutputs = physicsGroups.flatMapTo(HashSet()) { it.setting.outputParameters }
-	val physicsLive = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW &&
-		state.previewLive && state.activeWorkspace.pose?.authoringPose != true && state.generatePhysics && !state.meshOnly
+	// Physics drives these sliders whenever a preview runs it, whichever canvas has focus.
+	val physicsLive = state.previewLive && state.activeWorkspace.pose?.authoringPose != true && state.generatePhysics && !state.meshOnly
 	val physicsControlled = if (physicsLive) physicsGroups.filter { it.active }
 		.flatMapTo(HashSet()) { it.setting.outputParameters }
 		.minus(state.lockedParameters.map { it.raw }) else emptySet()

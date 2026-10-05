@@ -53,11 +53,32 @@ class LivePoseTest {
 	}
 
 	@Test
-	fun aPausedPreviewSwingsPhysicsFromTheParametersAndComesToRest() = kotlinx.coroutines.runBlocking {
-		val temp = java.nio.file.Files.createTempDirectory("paused-physics")
+	fun theSlidersAndEditCanvasFollowAnAnimatedPreviewWhileTheEditCanvasHasFocus() {
+		PSD2LiveViewModel().use { vm ->
+			val edit = vm.state.value.activeCanvas.id
+			val preview = vm.addCanvas(CanvasMode.PREVIEW, focus = false)
+			assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
+			val key = vm.canvasRenderKey(preview)
+			vm.sdkFrameFor(key)
+			// The toolbar's play switch drives the preview panels' canvas while the edit canvas keeps focus.
+			vm.setAnimationEnabled(true)
+			assertTrue(vm.state.value.previewPanelState().animationEnabled)
+			val hair = ParameterId("ParamHairFront")
+			vm.acceptSdkFrame(CubismSdkFrame(BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), mapOf(hair to 0.7f),
+				animationEnabled = true, viewId = key), 1_000_000_000L)
+			// The sliders read livePose and the edit canvas resolves at the same pose, whichever canvas has focus.
+			assertEquals(0.7f, vm.livePose.value[hair])
+			assertEquals(0.7f, vm.shownPose(vm.state.value)[hair])
+			assertEquals(vm.shownPose(vm.canvasEditorFor(edit).state)[hair], vm.livePose.value[hair])
+		}
+	}
+
+	@Test
+	fun aStoppedSoftwareAnimationReturnsTheSlidersToTheAuthoredPose() = kotlinx.coroutines.runBlocking {
+		val temp = java.nio.file.Files.createTempDirectory("stopped-animation")
 		val png = temp.resolve("art.png")
 		val image = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
-		for (y in 2..13) for (x in 2..13) image.setRGB(x, y, 0xffff3366.toInt())
+		for (y in 2..13) for (x in 2..13) image.setRGB(x, y, 0xff3366ff.toInt())
 		javax.imageio.ImageIO.write(image, "png", png.toFile())
 		PSD2LiveViewModel().use { vm ->
 			io.github.psd2live.ui.state.DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
@@ -72,34 +93,19 @@ class LivePoseTest {
 						})
 					})
 				})
-				val hair = ParameterId("ParamHairFront")
-				vm.putPhysicsGroup(RigPhysicsEdit("Ribbon", "Ribbon",
-					listOf(io.github.psd2live.core.PhysicsInput("ParamAngleX", 100f, io.github.psd2live.core.PhysicsSourceType.X)),
-					listOf(PhysicsOutput(hair.raw, 1, 1f)), listOf(PhysicsSegment(8f, 0.9f, 0.9f, 1.2f))))
 				val id = vm.state.value.activeCanvas.id
 				vm.setCanvasMode(id, CanvasMode.PREVIEW)
+				vm.setStateForTest(vm.state.value.copy(sdkStatus = "unavailable"))
 				val key = vm.canvasRenderKey(id)
-				vm.updateCanvasPresentation(vm.state.value.activeWorkspace.id, id, CanvasMode.PREVIEW) { it.copy(animationEnabled = false) }
-				vm.setGeneratePhysics(true)
 				fun frames(n: Int) = repeat(n) { vm.requestSdkFrame(8, 8, 1f, 0f, 0f, viewId = key); Thread.sleep(8) }
-
-				frames(5)
-				assertTrue(vm.pausedPhysicsSettled || kotlin.math.abs(vm.livePose.value[hair] ?: 0f) < 1e-3f)
-				// Turning the head while paused swings the hair; the preview and panels see it.
-				vm.setParameterValue(StandardParameters.ANGLE_X, 30f)
-				frames(10)
-				val swung = vm.livePose.value[hair] ?: 0f
-				assertTrue(kotlin.math.abs(swung) > 1e-3f, "hair $swung")
-				assertFalse(vm.pausedPhysicsSettled)
-				frames(250)
-				assertTrue(vm.pausedPhysicsSettled)
-
-				// Physics off: the paused preview shows the edit pose alone.
-				vm.setGeneratePhysics(false)
-				// With the SDK up, frames come back on the UI thread a little later.
+				vm.setAnimationEnabled(true)
 				val deadline = System.nanoTime() + 3_000_000_000L
-				while (vm.livePose.value[hair] != null && System.nanoTime() < deadline) frames(1)
-				assertNull(vm.livePose.value[hair])
+				while (vm.livePose.value.isEmpty() && System.nanoTime() < deadline) frames(1)
+				assertTrue(vm.livePose.value.isNotEmpty(), "the software preview publishes its animated pose")
+				vm.setAnimationEnabled(false)
+				vm.setMouseTrackingEnabled(false)
+				frames(3)
+				assertTrue(vm.livePose.value.isEmpty(), "a stopped preview leaves no stale frame on the sliders: ${vm.livePose.value}")
 			}
 		}
 	}

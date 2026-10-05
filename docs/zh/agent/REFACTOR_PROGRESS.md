@@ -116,6 +116,15 @@ PR CI 在 `046a725` 上对同一源码运行 `gradlew test`，Ubuntu 与 Windows
 
 回归：`WorkspacePoseTest` 改写拖动用例（采样立即进入作者姿态与编辑画布、松手前不提交），新增取消拖动还原、无预览画布时播放头与播放驱动滑条和编辑画布、关闭动作后恢复。本机 Linux / JDK 21 全量：213 个类、1053 项，0 失败、19 跳过。
 
+随后按同类问题排查并修复（`0a83d43` 之后）：
+
+- 编辑画布不再读运行时播放帧（`processFrameValues` 只在时钟取帧时刷新，会滞后于作者姿态），而与滑条读同一个 `shownPose`：作者姿态（含待提交值）、`livePose`、正在拖动的值；编辑画布订阅 `livePose`，动画与时间线逐帧重绘。
+- 参数面板的“物理驱动”标记与物理面板摆锤输入不再依赖聚焦的画布或作者模式下丢掉时间线曲线值。
+- GUI 自己的修改落地时若界面已显示同一姿态，不再重置物理与指针动态，摆动不会在松手后从静止重新开始。
+- 每次作者姿态提交后重置播放会话时，保留打开的动作及其播放头（暂停），曲线值不再在改动任一滑条后从画布与滑条上消失。
+
+测试审查：按“断言不变/无断言/旧接口”检查测试，仅 `WorkspacePoseTest` 的旧拖动用例与本 PR 的 `WorkspacePreviewPortTest` 一处断言固定了错误行为，已改写；无断言的 4 项均调用带断言的辅助函数，`tools/` 下的开发工具默认跳过。删除依赖真实时间、按睡眠帧数等待摆锤静止的 `LivePoseTest.aPausedPreviewSwingsPhysicsFromTheParametersAndComesToRest`。新增：聚焦编辑画布时滑条与编辑画布跟随预览动画、软件预览停止动画后滑条回到作者姿态、动作打开时改其他滑条后曲线值仍保留。本机 Linux / JDK 21 全量：213 个类、1054 项，0 失败、19 跳过。
+
 文档核对（`a3fc546` 之后）：用测试导出的注册表核对全部文档中的工具名，170 项均出现在 MCP_AUTHORING（补上 `warp_get_controls`）；改正 `revision.list` → `history_list`、`model_preset` → `model_apply_preset`、规格中的 `inspect` → `workspace_inspect`，并按当前代码更新 AGENT_DESIGN 与 UI/MCP 对照中关于 GUI 姿态提交和迁移状态的描述。
 
 ### 此前通用阶段的历史证据

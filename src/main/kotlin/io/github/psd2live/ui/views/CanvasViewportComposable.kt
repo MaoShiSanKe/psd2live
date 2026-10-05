@@ -290,8 +290,11 @@ fun CanvasViewportComposable(
     }
 	val paintSession = if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.PAINT)
 		editor.paintSession else null
+	// The edit canvas follows the same pose the sliders show, frame by frame while a motion plays. A preview canvas
+	// renders its own frames and does not recompose for this.
+	val livePose = if (mode == CanvasMode.EDIT) viewModel.livePose.collectAsState().value else emptyMap()
 	val geometryPose = if (paintSession != null) emptyMap<org.umamo.runtime.model.ParameterId, Float>()
-		else viewModel.canvasPose(canvasState)
+		else viewModel.canvasPose(canvasState, livePose)
 	val editGeometry = remember(previewModel, geometryPose, mode) {
 		if (mode == CanvasMode.EDIT && previewModel != null) RigCanvasSupport.evaluate(previewModel, geometryPose)
 		else null
