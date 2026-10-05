@@ -76,8 +76,13 @@ class MotionSheetTool {
 		var maxThighDrift = 0f
 		for (shin in skeleton.bones.filter { it.role == BoneRole.SHIN }) {
 			val thigh = skeleton.bones.single { it.id == shin.parentId }
-			val angles = listOf(shin.minAngle * 0.8f, shin.minAngle * 0.4f, 0f, shin.maxAngle * 0.4f, shin.maxAngle * 0.8f)
+			val angles = listOf(shin.minAngle, shin.minAngle * 0.5f, 0f, shin.maxAngle * 0.5f, shin.maxAngle)
 			sheet(angles.map { "shin %.1f".format(it) to renderer.render(mapOf(shin.parameterId to it), rect) }, File(out, "${sample.name}-${shin.id}-legs.png"))
+			val radius = minOf(thigh.length, shin.length) * 0.28f
+			val knee = Bounds(shin.headX - radius, shin.headY - radius, shin.headX + radius, shin.headY + radius)
+			sheet(listOf(0f, 60f, 90f, 120f, -120f).map { angle ->
+				"knee %.0f".format(angle) to renderer.render(mapOf(shin.parameterId to angle), knee)
+			}, File(out, "${sample.name}-${shin.id}-knee.png"))
 			for (step in 0..24) {
 				val angle = shin.minAngle + (shin.maxAngle - shin.minAngle) * step / 24f
 				val posed = evaluator.evaluate(preview.rig.puppet, mapOf(org.umamo.runtime.model.ParameterId(shin.parameterId) to angle)).worldPositions
@@ -86,6 +91,15 @@ class MotionSheetTool {
 					val mesh = restCanvas.drawables.single { it.id == id }.mesh ?: continue
 					val before = rest.getValue(id)
 					val after = posed.getValue(id)
+					fun area(points: FloatArray, a: Int, b: Int, c: Int) =
+						(points[b * 2] - points[a * 2]) * (points[c * 2 + 1] - points[a * 2 + 1]) -
+						(points[b * 2 + 1] - points[a * 2 + 1]) * (points[c * 2] - points[a * 2])
+					for (i in mesh.indices.indices step 3) {
+						val a = mesh.indices[i]; val b = mesh.indices[i + 1]; val c = mesh.indices[i + 2]
+						val initial = area(before, a, b, c)
+						if (abs(initial) < 0.01f) continue
+						kotlin.test.assertTrue(initial * area(after, a, b, c) > 0f, "$raw triangle ${i / 3} flipped when shin=$angle")
+					}
 					for (vertex in 0 until mesh.vertexCount) {
 						val y = mesh.positions[vertex * 2 + 1]
 						if (y < thigh.headY + thigh.length * 0.1f || y > shin.headY - minOf(thigh.length, shin.length) * 0.5f) continue

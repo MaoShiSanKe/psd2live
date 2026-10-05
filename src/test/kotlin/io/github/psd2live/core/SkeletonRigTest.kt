@@ -503,11 +503,13 @@ class SkeletonRigTest {
 		val a = 20f
 		val b = -30f
 		val posed = canvas(baked, mapOf("ParamArmLA" to a, "ParamArmLB" to b)).getValue(sleeve.id)
+		val fore = spec.bones.single { it.id == "fore" }
+		val elbowBandStart = fore.headY - SkeletonWeights.blendHalfWidth(fore, spec.bones.single { it.id == "upper" }.length).toFloat()
 		var checked = 0
 		for (v in 0 until restPoints.size / 2) {
 			val y = restPoints[v * 2 + 1]
 			val p = when {
-				y < 215f -> rotate(restPoints[v * 2], y, 100f, 100f, a)
+				y < elbowBandStart -> rotate(restPoints[v * 2], y, 100f, 100f, a)
 				y > 300f -> rotate(restPoints[v * 2], y, 100f, 250f, b).let { rotate(it.first, it.second, 100f, 100f, a) }
 				else -> continue
 			}
@@ -534,13 +536,18 @@ class SkeletonRigTest {
 		val baked = SkeletonRig.apply(model(arm), arm("arm"), frame)
 		val mesh = baked.drawables.single { it.id == arm.id }.mesh!!
 		val restPoints = canvas(baked).getValue(arm.id)
-		for (angle in listOf(-60f, -35f, 40f, 27f)) {
+		val sections = (0 until restPoints.size / 2).groupBy { kotlin.math.round(restPoints[it * 2 + 1] * 100f).toInt() }
+		for (angle in (-150..150 step 5).map(Int::toFloat) + 27f) {
 			val posed = canvas(baked, mapOf("ParamArmLB" to angle)).getValue(arm.id)
-			// Every vertex keeps its distance to the elbow, the joint turning about it.
-			for (v in 0 until restPoints.size / 2) {
-				val before = hypot(restPoints[v * 2] - 100f, restPoints[v * 2 + 1] - 250f)
-				val after = hypot(posed[v * 2] - 100f, posed[v * 2 + 1] - 250f)
-				assertTrue(abs(after - before) <= before * 0.01f + 0.3f, "vertex $v at $angle°: $before -> $after")
+			// MHR's tracked elbow sections widen up to 1.271 at 90 degrees (axial=0.5).
+			// Allow that measured pose bulge; rigid-width ARAP alone is not an anatomy target.
+			for (section in sections.values) {
+				val a = section.minBy { restPoints[it * 2] }
+				val b = section.maxBy { restPoints[it * 2] }
+				val before = restPoints[b * 2] - restPoints[a * 2]
+				if (before < 35f) continue
+				val after = hypot(posed[b * 2] - posed[a * 2], posed[b * 2 + 1] - posed[a * 2 + 1])
+				assertTrue(after in before * 0.7f..before * 1.3f, "section at ${restPoints[a * 2 + 1]}, $angle°: $before -> $after")
 			}
 			assertNoFlips(mesh.indices, restPoints, posed, "elbow $angle°")
 		}

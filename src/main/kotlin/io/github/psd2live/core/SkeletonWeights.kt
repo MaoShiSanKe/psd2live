@@ -23,8 +23,8 @@ internal class SkinBone(
 }
 
 /**
- * How one vertex follows its limb: rigidly with bone [from], turned toward [from]'s child [to] by
- * [weight] of the angle between the two. [from] == [to] (weight 0) is a vertex that is rigid to one bone.
+ * How one vertex follows its limb: rigidly with bone [from], or blended with its child [to] by
+ * [weight]. [from] == [to] (weight 0) is a vertex that is rigid to one bone.
  */
 internal class VertexSkin(val from: Int, val to: Int, val weight: Float) {
 	val rigid: Boolean get() = from == to || weight <= 0f
@@ -37,10 +37,9 @@ internal class VertexSkin(val from: Int, val to: Int, val weight: Float) {
  * there. The blend runs across a band centered on the joint whose axis is the bisector of the two bones,
  * so the band is symmetric however far the limb is bent at rest.
  *
- * The blend is by angle, not by position: a vertex [weight] of the way into the band turns about the joint
- * by that fraction of the child's angle. Linear blend skinning averages the two rigid positions instead,
- * which pulls the inside of a bent elbow toward the joint and pinches it; turning about the joint keeps
- * every vertex at its distance from it, so the limb keeps its width through the bend.
+ * The rig uses normalized linear blend skinning for bone transforms and an ARAP correction for
+ * the mixed joint regions. Vertices outside those regions are exact rigid handles; the correction
+ * can therefore improve a tight bend without pulling on the entire upper arm or thigh.
  */
 internal object SkeletonWeights {
 	/** Default half width of a joint band, as a fraction of the shorter of the two bones meeting there. */

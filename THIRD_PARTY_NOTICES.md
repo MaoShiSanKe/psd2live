@@ -19,6 +19,15 @@ PSD2Live independently implements concepts inspired by See-Through semantic orga
 
 The built-in local Agent bridge uses the official Model Context Protocol Kotlin SDK, maintained by the Model Context Protocol project in collaboration with JetBrains. New SDK contributions are licensed under Apache-2.0 and existing portions under MIT. The HTTP transport is provided by Ktor under the Apache-2.0 license.
 
+## MHR joint reference cages
+
+`src/main/resources/skinning/mhr-joints.tsv` contains modified, sampled sagittal surface cages
+derived from Meta's [MHR v1.0.1 model assets](https://github.com/facebookresearch/MHR/releases/tag/v1.0.1).
+The model and its assets are licensed under Apache-2.0; the asset license is reproduced in
+`licenses/MHR.txt`. The original model is not distributed with PSD2Live.
+`tools/research/extract_mhr_joint_templates.py` records the sampling procedure. These small
+pose references guide local knee and elbow deformation; they do not constitute a biomechanical model.
+
 ## Live2D Cubism
 
 `Live2D`, `Cubism`, `.cmo3`, `.moc3`, and associated schema identifiers are trademarks or registered trademarks of Live2D Inc., used herein solely for format specification and interoperability purposes. This project is not affiliated with, endorsed by, or sponsored by Live2D Inc., and strictly complies with the Live2D Proprietary Software License: **it does not embed, include, or redistribute official proprietary Live2D Cubism SDK binaries, headers, or shader sources**.

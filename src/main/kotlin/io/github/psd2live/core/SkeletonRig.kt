@@ -1086,6 +1086,8 @@ internal object SkeletonRig {
 		if (canvas.size != mesh.positions.size) return base
 		val skinBones = skinBones(tree, parentOf)
 		val skins = SkeletonManualWeights.weights(canvas, mesh.indices, tree, parentOf, manual)
+		val arap = SkeletonArap(canvas, mesh.indices, BooleanArray(skins.size) { !skins[it].rigid })
+		val jointTemplates = SkeletonJointTemplates(canvas, mesh.indices, skins, skinBones, tree.map { it.role })
 		val deformerOf = tree.map { DeformerId(it.deformerId) }
 
 		// Bones whose angle changes where a vertex sits relative to home.
@@ -1104,30 +1106,63 @@ internal object SkeletonRig {
 			restBase[i + 1] = local[1]
 		}
 
+		val bindFrom = skins.mapIndexed { vertex, skin -> inverse(rest.getValue(deformerOf[skin.from]), canvas[vertex * 2], canvas[vertex * 2 + 1]) }
+		val bindTo = skins.mapIndexed { vertex, skin -> inverse(rest.getValue(deformerOf[skin.to]), canvas[vertex * 2], canvas[vertex * 2 + 1]) }
 		val restAngle = FloatArray(tree.size) { angleOf(rest.getValue(deformerOf[it])) }
-		fun deltasAt(values: Map<ParameterId, Float>): FloatArray {
+		fun computeDeltas(values: Map<ParameterId, Float>): FloatArray {
 			val posed = if (values.isEmpty()) rest else worlds(base, values, relevant)
 			val homeWorld = posed.getValue(homeId)
 			val out = FloatArray(canvas.size)
 			val scratch = FloatArray(2)
+			val other = FloatArray(2)
+			val target = FloatArray(canvas.size)
+			val seed = FloatArray(canvas.size)
+			val angles = FloatArray(tree.size) { angleOf(posed.getValue(deformerOf[it])) - restAngle[it] }
 			for ((vertex, skin) in skins.withIndex()) {
-				var x = canvas[vertex * 2].toDouble()
-				var y = canvas[vertex * 2 + 1].toDouble()
+				val from = bindFrom[vertex]
+				posed.getValue(deformerOf[skin.from]).apply(from[0], from[1], scratch, 0)
 				if (!skin.rigid) {
-					val relative = (angleOf(posed.getValue(deformerOf[skin.to])) - restAngle[skin.to]) -
-						(angleOf(posed.getValue(deformerOf[skin.from])) - restAngle[skin.from])
-					val pivot = skinBones[skin.to]
-					val turned = SkeletonIk.rotate(x, y, pivot.headX, pivot.headY, SkeletonIk.wrap(relative.toDouble()) * skin.weight)
-					x = turned[0]
-					y = turned[1]
+					val to = bindTo[vertex]
+					posed.getValue(deformerOf[skin.to]).apply(to[0], to[1], other, 0)
+					for (axis in 0..1) scratch[axis] += (other[axis] - scratch[axis]) * skin.weight
 				}
-				val local = inverse(rest.getValue(deformerOf[skin.from]), x.toFloat(), y.toFloat())
-				posed.getValue(deformerOf[skin.from]).apply(local[0], local[1], scratch, 0)
-				val inHome = inverse(homeWorld, scratch[0], scratch[1])
+				target[vertex * 2] = scratch[0]; target[vertex * 2 + 1] = scratch[1]
+				// The previous angular field is only an initial guess for ARAP, avoiding the
+				// collapsed LBS starting state at a tight bend. It no longer defines the final skin.
+				if (skin.rigid) { seed[vertex * 2] = scratch[0]; seed[vertex * 2 + 1] = scratch[1] } else {
+					val joint = skinBones[skin.to]
+					val p = SkeletonIk.rotate(canvas[vertex * 2].toDouble(), canvas[vertex * 2 + 1].toDouble(), joint.headX, joint.headY,
+						SkeletonIk.wrap((angles[skin.to] - angles[skin.from]).toDouble()) * skin.weight)
+					val local = inverse(rest.getValue(deformerOf[skin.from]), p[0].toFloat(), p[1].toFloat())
+					posed.getValue(deformerOf[skin.from]).apply(local[0], local[1], seed, vertex * 2)
+				}
+			}
+			// Carry cage residuals with the full parent affine transform, including stance
+			// foreshortening. Rotation alone would detach the correction from scaled limbs.
+			val carry = deformerOf.map { id ->
+				val points = FloatArray(6)
+				for ((i, point) in listOf(0f to 0f, 1f to 0f, 0f to 1f).withIndex()) {
+					val local = inverse(rest.getValue(id), point.first, point.second)
+					posed.getValue(id).apply(local[0], local[1], points, i * 2)
+				}
+				doubleArrayOf((points[2] - points[0]).toDouble(), (points[4] - points[0]).toDouble(),
+					(points[3] - points[1]).toDouble(), (points[5] - points[1]).toDouble())
+			}
+			val (guide, guideWeights) = jointTemplates.guide(seed, angles, carry)
+			val corrected = arap.solve(target, seed, guide, guideWeights)
+			for (vertex in skins.indices) {
+				val inHome = inverse(homeWorld, corrected[vertex * 2], corrected[vertex * 2 + 1])
 				out[vertex * 2] = inHome[0] - restBase[vertex * 2]
 				out[vertex * 2 + 1] = inHome[1] - restBase[vertex * 2 + 1]
 			}
 			return out
+		}
+		// Fitting, grid baking and pose shapes often request the same sample. Cache the solve;
+		// return a copy because additive pose shapes subtract their reference in place.
+		val samples = HashMap<Map<ParameterId, Float>, FloatArray>()
+		fun deltasAt(values: Map<ParameterId, Float>): FloatArray {
+			val key = values.filterValues { it != 0f }
+			return samples.getOrPut(key) { computeDeltas(key) }.copyOf()
 		}
 
 		// Each bone keyed as sparsely as its arcs allow; the blend-shape bones add, the rest multiply.
