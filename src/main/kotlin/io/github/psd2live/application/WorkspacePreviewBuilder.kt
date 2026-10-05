@@ -4,6 +4,10 @@ import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.ProgressListener
 import io.github.psd2live.core.RigGenerationMigration
+import io.github.psd2live.core.VertexGroupJournal
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import org.umamo.render.restMeshesToCanvasSpace
 import io.github.psd2live.project.WorkspaceDocument
 import io.github.psd2live.project.config
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +35,28 @@ internal class WorkspacePreviewBuilder {
             val decoded = document.config()
             val config = if ("drawOrderOverrides" in document.settings) decoded
                 else decoded.copy(drawOrderOverrides = current.config.drawOrderOverrides)
+            if (current.config.rigEdits.skeleton != config.rigEdits.skeleton &&
+                (current.rig.puppet.vertexGroups.isNotEmpty() || config.rigEdits.authoringJournal.any {
+                    it["op"]?.jsonPrimitive?.contentOrNull in setOf(VertexGroupJournal.PUT, VertexGroupJournal.DELETE)
+                })) {
+                // Skeleton refinement changes generated vertex indices before the journal replays.
+                // Replay topology first, then carry the final painted groups onto the rebuilt mesh.
+                val journal = config.rigEdits.authoringJournal.filterNot {
+                    it["op"]?.jsonPrimitive?.contentOrNull in setOf(VertexGroupJournal.PUT, VertexGroupJournal.DELETE)
+                }
+                val overlay = config.rigEdits.copy(authoringJournal = journal)
+                val rebuilt = pipeline.buildPreview(document.source, config.copy(rigEdits = overlay), progress)
+                // Bone binding can change a mesh's parent space. Resample in a common neutral canvas
+                // space so the weights stay on the artwork instead of moving with that local frame.
+                val previous = restMeshesToCanvasSpace(current.rig.puppet)
+                val replacement = restMeshesToCanvasSpace(rebuilt.rig.puppet)
+                val groups = previous.vertexGroups.map { group ->
+                    val oldMesh = requireNotNull(previous.drawables.single { it.id == group.drawableId }.mesh)
+                    val newMesh = requireNotNull(replacement.drawables.single { it.id == group.drawableId }.mesh)
+                    VertexGroupJournal.resample(group, oldMesh, newMesh)
+                }
+                return@runInterruptible document.copy(rigEdits = overlay.copy(authoringJournal = journal + groups.map(VertexGroupJournal::encode)))
+            }
             if (RigGenerationMigration.changed(current, config)) {
                 val prepared = RigGenerationMigration.prepare(pipeline, current, config, document.source, progress)
                 document.copy(rigEdits = prepared.rigEdits, generationSource = prepared.generationSource, meshSource = prepared.meshSource)

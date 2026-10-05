@@ -102,6 +102,17 @@ class MotionSynthTest {
 		}
 	}
 
+	@Test fun weightShiftTransfersWithoutAReverseKickAndHoldsItsSupport() {
+		val tracks = SkeletonMotions.weightShift(figure())
+		val weight = tracks.single { it.parameterId == SkeletonPoses.weight.id.raw }
+		for (step in 0..120) {
+			val time = SkeletonMotions.WEIGHT_SHIFT_DURATION * step / 120f
+			assertTrue(MotionCurveMath.value(weight, time) in -0.0001f..0.8501f, "no reverse kick or overshoot at $time")
+		}
+		for (time in listOf(1.1f, 1.4f, 1.8f)) assertEquals(0.85f, MotionCurveMath.value(weight, time), 0.001f)
+		assertSparseAndAtRest(tracks, "weight transfer")
+	}
+
 	@Test fun shyBringsTheHandsTogetherAndCheerThrowsThemUp() {
 		val spec = figure()
 		val anatomy = SkeletonAnatomy.of(spec)!!

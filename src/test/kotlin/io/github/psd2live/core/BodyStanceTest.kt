@@ -39,6 +39,56 @@ class BodyStanceTest {
 
 	private val stance = BodyStance.of(spec(), character)
 
+	@Test fun weightTransferFitsTheFootSpacingAndKeepsTheHipAndFootAttachments() {
+		for (halfWidth in listOf(10f, 40f, 80f)) {
+			val skeleton = spec().let { original -> original.copy(bones = original.bones.map { bone ->
+				if (bone.role !in setOf(BoneRole.THIGH, BoneRole.SHIN, BoneRole.FOOT)) bone else {
+					val x = 200f + if (bone.side == Side.LEFT) halfWidth else -halfWidth
+					bone.copy(headX = x, tailX = x)
+				}
+			}) }
+			val standing = BodyStance.of(skeleton, character)
+			for (key in SkeletonPoses.weight.keys) {
+				val solved = standing.Solved(standing.weightPose(key))
+				val center = solved.pelvis.apply(standing.hipX, standing.hipY)
+				assertTrue(abs(center[0] - standing.hipX) <= halfWidth * 0.61, "hips stay inside the supporting foot")
+				if (halfWidth <= 40f) assertEquals(halfWidth * 0.6 * key, center[0] - standing.hipX, 0.01)
+				assertTrue(abs(center[0] - standing.hipX) <= standing.legLength * 0.056)
+				for (leg in standing.legs) {
+					val hip = solved.legPoint(leg.hipX, leg.hipY)
+					val expected = solved.pelvis.apply(leg.hipX, leg.hipY)
+					assertEquals(expected[0], hip[0], 1e-6)
+					assertEquals(expected[1], hip[1], 1e-6)
+					val foot = solved.legPoint(leg.ankleX, leg.floorY)
+					assertEquals(leg.ankleX, foot[0], 1e-6)
+					assertEquals(leg.floorY, foot[1], 1e-6)
+				}
+			}
+		}
+	}
+
+	@Test fun idleKeepsTheThighRootsAttachedToThePelvis() {
+		val preview = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val auto = SkeletonAutoBuilder.build(preview.analysis, preview.rig)
+		val unskinned = auto.copy(bones = auto.bones.map { bone ->
+			if (bone.role in setOf(BoneRole.THIGH, BoneRole.SHIN, BoneRole.FOOT)) bone.copy(drawableIds = emptyList()) else bone
+		})
+		for (skeleton in listOf(auto, unskinned)) {
+			val rig = PSD2LivePipeline().buildPreview(preview.analysis, preview.config.copy(rigEdits = preview.config.rigEdits.copy(skeleton = skeleton))).rig.puppet
+			val tracks = SkeletonMotions.idle(skeleton)
+			val rest = SkeletonPoseSolver.posed(rig, skeleton, emptyMap()).filter { it.bone.role == BoneRole.THIGH }
+			assertEquals(2, rest.size)
+			val spacing = hypot(rest[0].headX - rest[1].headX, rest[0].headY - rest[1].headY)
+			for (step in 0..120) {
+				val time = SkeletonMotions.IDLE_DURATION * step / 120f
+				val values = tracks.associate { ParameterId(it.parameterId) to MotionCurveMath.value(it, time) }
+				val posed = SkeletonPoseSolver.posed(rig, skeleton, values).filter { it.bone.role == BoneRole.THIGH }
+				assertEquals(2, posed.size)
+				assertEquals(spacing, hypot(posed[0].headX - posed[1].headX, posed[0].headY - posed[1].headY), 0.05f, "thigh root spacing at $time")
+			}
+		}
+	}
+
 	@Test fun theFeetStayOnTheFloorWhateverTheBodyDoes() {
 		assertTrue(stance.standing)
 		for (x in listOf(-10f, 0f, 10f)) for (y in listOf(-10f, 0f, 10f)) {

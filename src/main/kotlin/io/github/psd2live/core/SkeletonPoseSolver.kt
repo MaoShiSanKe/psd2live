@@ -21,8 +21,9 @@ internal object SkeletonPoseSolver {
 	/** The leg solve of each baked model, which takes a few dozen deformer evaluations to rebuild. */
 	private val legSolves = java.util.WeakHashMap<PuppetModel, Map<String, SkeletonRig.LegJointPose>>()
 
-	private fun legJoints(model: PuppetModel, legs: List<SkeletonRig.Leg>): Map<String, SkeletonRig.LegJointPose> =
-		synchronized(legSolves) { legSolves.getOrPut(model) { SkeletonRig.solveLegPoses(model, legs) } }
+	private fun legJoints(model: PuppetModel, legs: List<SkeletonRig.Leg>, spec: SkeletonSpec): Map<String, SkeletonRig.LegJointPose> =
+		synchronized(legSolves) { legSolves.getOrPut(model) { SkeletonRig.solveLegPoses(model, legs,
+			BodyStance.of(spec, Bounds(0f, 0f, model.canvasWidth.coerceAtLeast(1f), model.canvasHeight.coerceAtLeast(1f)))) } }
 
 	/** Most bones an IK drag moves: the grabbed bone and its two parents, like a Spine two/three-bone constraint. */
 	const val IK_CHAIN = 3
@@ -55,7 +56,7 @@ internal object SkeletonPoseSolver {
 		// The IK turn the leg poses add to a shin or foot relative to its parent, weighed as the bake
 		// weighed it into the mesh.
 		val legValue = { pose: SkeletonPose -> values[pose.id] ?: 0f }
-		val joints = if (legs.isEmpty() || SkeletonPoses.legPoses.all { legValue(it) == 0f }) emptyMap() else legJoints(model, legs)
+		val joints = if (legs.isEmpty() || SkeletonPoses.legPoses.all { legValue(it) == 0f }) emptyMap() else legJoints(model, legs, spec)
 		fun poseTurn(bone: SkeletonBone): Double = joints[bone.id]?.turnAt(legValue)?.toDouble() ?: 0.0
 		for (bone in bones) {
 			val id = SkeletonRig.deformerOf(model, bone)
@@ -70,9 +71,10 @@ internal object SkeletonPoseSolver {
 				}
 				parent != null -> {
 					val turn = param(bone) + poseTurn(bone)
+					val scale = joints[bone.id]?.scaleAt(legValue)?.toDouble() ?: 1.0
 					val hx = bone.headX.toDouble()
 					val hy = bone.headY.toDouble();
-					{ x, y -> SkeletonIk.rotate(x, y, hx, hy, turn).let { parent(it[0], it[1]) } }
+					{ x, y -> SkeletonIk.rotate(hx + (x - hx) * scale, hy + (y - hy) * scale, hx, hy, turn).let { parent(it[0], it[1]) } }
 				}
 				else -> {
 					val turn = param(bone).toDouble()

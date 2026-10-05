@@ -596,6 +596,56 @@ class SkeletonRigTest {
 			leg("l", Side.RIGHT, 210f, -25f) + leg("r", Side.LEFT, 290f, 25f))
 	}
 
+	@Test fun shinRotationKeepsTheUpperThighFixedUnderANormalizedStanceWarp() {
+		// A stocking starts below the hip, so its knee is the first covered joint and its home.
+		val left = strip("leg_l", 210f, 270f, 490f, 15f, 5f)
+		val right = strip("leg_r", 290f, 270f, 490f, 15f, 5f)
+		val spec = legs()
+		val baked = SkeletonRig.apply(model(left, right), spec, frame)
+		val neutral = canvas(baked)
+		for (side in listOf("l", "r")) {
+			val shin = spec.bones.single { it.id == "shin_$side" }
+			val id = DrawableId("leg_$side")
+			assertEquals(DeformerId(shin.deformerId + "Stance"), baked.drawables.single { it.id == id }.parentDeformerId)
+			val before = neutral.getValue(id)
+			for (step in 0..24) {
+				val angle = shin.minAngle + (shin.maxAngle - shin.minAngle) * step / 24f
+				val after = canvas(baked, mapOf(shin.parameterId to angle)).getValue(id)
+				var checked = 0
+				for (v in 0 until before.size / 2) {
+					val y = before[v * 2 + 1]
+					val expected = when {
+						y <= 300f -> before[v * 2] to y // above the knee's blend band
+						y in 390f..400f -> rotate(before[v * 2], y, if (side == "l") 210f else 290f, 350f, angle)
+						else -> continue
+					}
+					assertEquals(expected.first, after[v * 2], 1f, "$side limb x at y=$y, angle=$angle")
+					assertEquals(expected.second, after[v * 2 + 1], 1f, "$side limb y at y=$y, angle=$angle")
+					checked++
+				}
+				assertTrue(checked > 0)
+			}
+		}
+	}
+
+	@Test fun weightTransferBendsForwardInsteadOfSpreadingTheKneesSideways() {
+		val left = strip("leg_l", 210f, 245f, 490f, 15f, 5f)
+		val right = strip("leg_r", 290f, 245f, 490f, 15f, 5f)
+		val skeleton = legs()
+		val baked = SkeletonRig.apply(model(left, right), skeleton, frame)
+		for (key in listOf(-1f, -0.5f, 0.5f, 1f)) {
+			val posed = io.github.psd2live.ui.SkeletonPoseTool.posed(baked, skeleton, mapOf(SkeletonPoses.weight.id to key))
+			for (side in listOf("l", "r")) {
+				val thigh = posed.single { it.bone.id == "thigh_$side" }
+				val shin = posed.single { it.bone.id == "shin_$side" }
+				assertTrue(shin.headX in minOf(thigh.headX, shin.tailX) - 3f..maxOf(thigh.headX, shin.tailX) + 3f,
+					"knee stays between hip and ankle: $side at $key, hip ${thigh.headX}, knee ${shin.headX}, ankle ${shin.tailX}")
+				assertEquals(if (side == "l") 210f else 290f, shin.tailX, 1f)
+				assertEquals(450f, shin.tailY, 1f)
+			}
+		}
+	}
+
 	@Test fun crouchAndWeightShiftKeepTheFeetPlanted() {
 		val left = strip("leg_l", 210f, 245f, 490f, 15f, 5f)
 		val right = strip("leg_r", 290f, 245f, 490f, 15f, 5f)
@@ -617,7 +667,9 @@ class SkeletonRigTest {
 		val restL = canvas(baked).getValue(left.id)
 		// One pose at a time is solved exactly; both at once add their shapes, which holds only while one is slight.
 		for ((values, tolerance) in listOf(1f to 0f, 0.6f to 0f, 0.37f to 0f, 0f to 1f, 0f to -1f, 0f to -0.45f).map { it to 1f } +
-			listOf(0.12f to 0.3f).map { it to 1f }) {
+			// Two independent poses add their mesh shapes but compose rotation and foreshortening;
+			// this deliberately mixed pose has a small residual that no single-pose bake can cancel.
+			listOf(0.12f to 0.3f).map { it to 2f }) {
 			val (c, w) = values
 			val params = mapOf(crouch.raw to c, weight.raw to w)
 			val posed = canvas(baked, params).getValue(left.id)

@@ -1240,7 +1240,7 @@ object RigBuilder {
 		fun canvasOf(u: Float, v: Float) = (frame.left + u * frame.width).toDouble() to (frame.top + v * frame.height).toDouble()
 		val legs = if (!stance.standing) emptyList() else {
 			val legsFrame = stance.legsFrame!!
-			val legRows = (legsFrame.height / (stance.legLength * LEG_ROW_SPACING)).toInt().coerceIn(10, 20)
+			val legRows = stance.legWarpRows
 			// The legs shorten and lengthen with the proportions too, the body coming down with them.
 			val legsGrid = grid(bodyAxes + axis(StandardParameters.PROPORTION, -10f, 0f, 10f)) { values ->
 				val solved = stance.Solved(stance.bodyPose(values[0], values[1]))
@@ -2908,9 +2908,8 @@ object RigBuilder {
 	private const val LEAN_COLUMNS = 8
 	private const val LEAN_ROWS = 12
 
-	/** Columns of the legs warp, a few per leg, and its row spacing in leg lengths so the knee bends across rows. */
+	/** Columns of the legs warp, a few per leg. */
 	private const val LEG_COLUMNS = 8
-	private const val LEG_ROW_SPACING = 0.06
 
 	private fun Deformer.withParent(newParent: DeformerId?): Deformer = when (this) {
 		is Deformer.Warp -> copy(parent = newParent)

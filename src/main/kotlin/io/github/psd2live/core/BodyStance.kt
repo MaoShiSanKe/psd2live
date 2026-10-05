@@ -134,6 +134,24 @@ internal class BodyStance private constructor(
 
 	val standing: Boolean get() = legs.isNotEmpty()
 
+	/** Rows of the legs lattice, with enough samples to bend across the knee bands. */
+	val legWarpRows: Int = legsFrame?.let { (it.height / (legLength * LEG_ROW_SPACING)).toInt().coerceIn(10, 20) } ?: 10
+
+	// Keep the entire lattice cell containing either hip rigid. Otherwise interpolating toward a
+	// bent thigh moves its root away from the pelvis, even though the solved joint itself is fixed.
+	private val hipAttachmentY: Double = (legs.maxOfOrNull { it.hipY } ?: hipY) +
+		(legsFrame?.height?.toDouble() ?: 0.0) / legWarpRows
+
+	/** Weight over the supporting foot, measured from the drawn stance rather than the leg length. */
+	fun weightPose(value: Float): Pose {
+		val k = value.coerceIn(-1f, 1f).toDouble()
+		if (k == 0.0 || legs.isEmpty()) return Pose()
+		val foot = if (k > 0.0) legs.maxOf { it.ankleX } else legs.minOf { it.ankleX }
+		// A narrow stance needs a smaller transfer; never push the pelvis past its supporting foot.
+		val shift = ((foot - hipX) * 0.6 / legLength).coerceIn(-0.055, 0.055) * abs(k)
+		return Pose(shift = shift, tilt = -HIP_TILT * k, kneeIn = 8.0 * abs(k))
+	}
+
 	/** The stance Body X and Body Y hold at [bodyX], [bodyY] (each -10..10). */
 	fun bodyPose(bodyX: Float, bodyY: Float): Pose {
 		if (!standing) return Pose()
@@ -191,6 +209,15 @@ internal class BodyStance private constructor(
 		/** Where canvas point ([x], [y]) of the legs warp goes: each leg's bones blended along it, the legs across. */
 		fun legPoint(x: Double, y: Double): DoubleArray {
 			if (legs.isEmpty()) return doubleArrayOf(x, y)
+			val blend = smooth((y - hipAttachmentY) / (HIP_BAND * legLength))
+			if (blend >= 1.0) return blendedLegPoint(x, y)
+			val hip = pelvis.apply(x, y)
+			if (blend <= 0.0) return hip
+			val leg = blendedLegPoint(x, y)
+			return doubleArrayOf(hip[0] + (leg[0] - hip[0]) * blend, hip[1] + (leg[1] - hip[1]) * blend)
+		}
+
+		private fun blendedLegPoint(x: Double, y: Double): DoubleArray {
 			if (legs.size == 1) return onLeg(0, x, y)
 			val (left, right) = if (legs[0].hipX <= legs[1].hipX) 0 to 1 else 1 to 0
 			val xl = lineX(legs[left], y)
@@ -599,7 +626,7 @@ internal class BodyStance private constructor(
 		val leanWarpId = DeformerId("DeformBodyLean")
 
 		/** The pelvis's tilt up over the standing leg in the weight pose, degrees. */
-		const val HIP_TILT = 3.0
+		const val HIP_TILT = 1.5
 
 		/** The turning torso's half width over its half width at the chest, and the neck's depth over it. */
 		private const val YAW_RADIUS = 1.1
@@ -629,6 +656,7 @@ internal class BodyStance private constructor(
 
 		/** Bands where the pelvis hands over to the thigh, the thigh to the shin and the shin to the foot, in leg lengths. */
 		private const val HIP_BAND = 0.05
+		private const val LEG_ROW_SPACING = 0.06
 		private const val KNEE_BAND = 0.07
 		private const val ANKLE_BAND = 0.025
 

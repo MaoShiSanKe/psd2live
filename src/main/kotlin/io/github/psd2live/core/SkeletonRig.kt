@@ -797,7 +797,8 @@ internal object SkeletonRig {
 					deformer.copy(blendShapes = deformer.blendShapes.filterNot { b -> table.keys.any { it.id == b.parameterId } } +
 						table.map { (pose, angles) ->
 							poseBinding(pose) { ki ->
-								RotationForm(reference.originX, reference.originY, reference.angle + angles[ki], reference.scale, false, false,
+								RotationForm(reference.originX, reference.originY, reference.angle + angles[ki],
+									reference.scale * (joints[bone.id]?.scales?.get(pose)?.get(ki) ?: 1f), false, false,
 									deformer.opacity, deformer.multiplyColor, deformer.screenColor)
 							}
 						})
@@ -869,7 +870,7 @@ internal object SkeletonRig {
 			})
 		}
 		val solved = HashMap<Pair<SkeletonPose, Float>, BodyStance.Solved>()
-		fun solve(pose: SkeletonPose, key: Float) = solved.getOrPut(pose to key) { stance.Solved(stancePose(pose, key)) }
+		fun solve(pose: SkeletonPose, key: Float) = solved.getOrPut(pose to key) { stance.Solved(stancePose(pose, key, stance)) }
 		val model = base.copy(deformers = base.deformers.map { deformer ->
 			when {
 				deformer !is Deformer.Warp -> deformer
@@ -878,17 +879,17 @@ internal object SkeletonRig {
 				else -> deformer
 			}
 		})
-		return model to solveLegPoses(model, legs)
+		return model to solveLegPoses(model, legs, stance)
 	}
 
 	/** Hips lowered at a full crouch, in leg lengths. */
 	private const val CROUCH_DROP = 0.1
 
 	/** The stance of a leg pose at [key]: how far the hips move and how the knees give. */
-	internal fun stancePose(pose: SkeletonPose, key: Float): BodyStance.Pose {
+	internal fun stancePose(pose: SkeletonPose, key: Float, stance: BodyStance): BodyStance.Pose {
 		val k = key.toDouble()
 		return when (pose) {
-			SkeletonPoses.weight -> BodyStance.Pose(shift = 0.045 * k, tilt = -BodyStance.HIP_TILT * k)
+			SkeletonPoses.weight -> stance.weightPose(key)
 			// Knees that meet in the middle need less drop than a crouch to read.
 			SkeletonPoses.kneesIn -> BodyStance.Pose(drop = 0.05 * k, kneeIn = 40.0 * k)
 			SkeletonPoses.hop -> BodyStance.Pose(lift = 0.18 * k)
@@ -901,10 +902,13 @@ internal object SkeletonRig {
 	 * One leg joint under the leg poses: its turn relative to its parent, in world degrees, at every key
 	 * of each of [SkeletonPoses.legPoses], each solved with the others at rest.
 	 */
-	internal class LegJointPose(val turns: Map<SkeletonPose, FloatArray>) {
+	internal class LegJointPose(val turns: Map<SkeletonPose, FloatArray>, val scales: Map<SkeletonPose, FloatArray> = emptyMap()) {
 		/** The turn at the pose values [value], weighed between keys the way the evaluator weighs blend shapes. */
 		fun turnAt(value: (SkeletonPose) -> Float): Float =
 			turns.entries.sumOf { (pose, keys) -> at(pose, keys, value(pose)).toDouble() }.toFloat()
+
+		fun scaleAt(value: (SkeletonPose) -> Float): Float =
+			scales.entries.fold(1f) { scale, (pose, keys) -> scale * at(pose, keys, value(pose)) }
 
 		private fun at(pose: SkeletonPose, turns: FloatArray, value: Float): Float =
 			SkeletonPoses.bracket(pose, value).sumOf { (key, t) -> (turns[pose.keys.indexOfFirst { it == key }] * t).toDouble() }.toFloat()
@@ -916,20 +920,45 @@ internal object SkeletonRig {
 	 * from are the ones the runtime will use. A thigh's turn is only right before the thighs carry their
 	 * own pose shapes; the joints below it read the same either way.
 	 */
-	internal fun solveLegPoses(model: PuppetModel, legs: List<Leg>): Map<String, LegJointPose> {
+	internal fun solveLegPoses(model: PuppetModel, legs: List<Leg>, stance: BodyStance? = null): Map<String, LegJointPose> {
 		if (legs.isEmpty()) return emptyMap()
 		val centerX = legCenter(legs)
 		val rest = worlds(model, emptyMap())
+		val weightScales = legs.flatMap { listOfNotNull(it.thigh.id, it.shin.id, it.foot?.id) }
+			.associateWith { FloatArray(SkeletonPoses.weight.keys.size) { 1f } }
 		fun turns(pose: SkeletonPose): List<Map<String, Float>> = pose.keys.map { key ->
 			if (key == 0f || pose.airborne) return@map emptyMap()
 			val posed = worlds(model, mapOf(pose.id to key))
 			buildMap {
 				for (leg in legs) {
 					val thighId = DeformerId(leg.thigh.deformerId)
-					val thigh = posed[thighId] ?: continue
+					val thigh = posed[thighId] as? RotationWorld ?: continue
 					val hip = FloatArray(2).also { thigh.apply(0f, 0f, it, 0) }
 					val inherited = SkeletonIk.wrap((angleOf(thigh) - angleOf(rest.getValue(thighId))).toDouble())
-					val (thighTurn, shinTurn) = legTurns(leg, hip[0].toDouble(), hip[1].toDouble(), centerX, pose == SkeletonPoses.kneesIn)
+					val (thighTurn, shinTurn) = if (pose == SkeletonPoses.weight) {
+						// Weight transfer bends toward the viewer, not sideways. Read the projected
+						// joints from the stance warp and foreshorten each segment to reach them.
+						val restWarp = rest[BodyStance.legsWarpId]
+						val posedWarp = posed[BodyStance.legsWarpId]
+						val fallback = stance?.Solved(stance.weightPose(key))
+						fun project(x: Float, y: Float): DoubleArray {
+							if (restWarp == null || posedWarp == null) return fallback?.legPoint(x.toDouble(), y.toDouble()) ?: doubleArrayOf(x.toDouble(), y.toDouble())
+							val local = inverse(restWarp, x, y)
+							val point = FloatArray(2).also { posedWarp.apply(local[0], local[1], it, 0) }
+							return doubleArrayOf(point[0].toDouble(), point[1].toDouble())
+						}
+						val knee = project(leg.shin.headX, leg.shin.headY)
+						val ankle = project(leg.ankleX.toFloat(), leg.ankleY.toFloat())
+						val thighScale = (hypot(knee[0] - hip[0], knee[1] - hip[1]) / leg.thigh.length).toFloat()
+						val shinScale = (hypot(ankle[0] - knee[0], ankle[1] - knee[1]) / leg.shin.length).toFloat()
+						val inheritedScale = scaleOf(thigh) / scaleOf(rest.getValue(thighId) as RotationWorld)
+						val index = pose.keys.indexOfFirst { it == key }
+						weightScales.getValue(leg.thigh.id)[index] = thighScale / inheritedScale
+						weightScales.getValue(leg.shin.id)[index] = shinScale / thighScale
+						leg.foot?.let { weightScales.getValue(it.id)[index] = 1f / shinScale }
+						SkeletonIk.wrap(SkeletonIk.heading(knee[0] - hip[0], knee[1] - hip[1]) - restHeading(leg.thigh)) to
+							SkeletonIk.wrap(SkeletonIk.heading(ankle[0] - knee[0], ankle[1] - knee[1]) - restHeading(leg.shin))
+					} else legTurns(leg, hip[0].toDouble(), hip[1].toDouble(), centerX, pose == SkeletonPoses.kneesIn)
 					put(leg.thigh.id, SkeletonIk.wrap(thighTurn - inherited).toFloat())
 					put(leg.shin.id, SkeletonIk.wrap(shinTurn - thighTurn).toFloat())
 					leg.foot?.let { put(it.id, (-shinTurn).toFloat()) }
@@ -938,7 +967,7 @@ internal object SkeletonRig {
 		}
 		val solved = SkeletonPoses.legPoses.associateWith { turns(it) }
 		return legs.flatMap { listOfNotNull(it.thigh.id, it.shin.id, it.foot?.id) }.associateWith { id ->
-			LegJointPose(solved.mapValues { (_, keys) -> FloatArray(keys.size) { keys[it][id] ?: 0f } })
+			LegJointPose(solved.mapValues { (_, keys) -> FloatArray(keys.size) { keys[it][id] ?: 0f } }, mapOf(SkeletonPoses.weight to weightScales.getValue(id)))
 		}
 	}
 
@@ -1108,7 +1137,15 @@ internal object SkeletonRig {
 			val range = ranges[id]
 			ranges[id] = if (range == null) bone.minAngle to bone.maxAngle else minOf(range.first, bone.minAngle) to maxOf(range.second, bone.maxAngle)
 		}
-		val sides = ranges.mapValues { (id, range) -> fittedSides(range, sampling) { deltasAt(mapOf(id to it)) } }
+		// Stance warps use normalized coordinates, while rotation homes use pixels. Measure the
+		// interpolation error in canvas pixels in both cases; a tolerance in normalized space would
+		// accept almost any inverse rotation arc and shrink the proximal limb between its keys.
+		val sides = ranges.mapValues { (id, range) -> fittedSides(range, sampling) { value ->
+			val deltas = deltasAt(mapOf(id to value))
+			FloatArray(deltas.size).also { points ->
+				for (i in deltas.indices step 2) homeRest.apply(restBase[i] + deltas[i], restBase[i + 1] + deltas[i + 1], points, i)
+			}
+		} }
 		val axes = gridAxes(sides.filterKeys { it !in blend }, ranges, sampling)
 		val blendAxes = sides.filterKeys { it in blend }.map { (id, side) -> KeyformAxis(id, keysOf(ranges.getValue(id), side.first, side.second)) }
 

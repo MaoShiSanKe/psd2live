@@ -23,6 +23,60 @@ class WorkspaceSkeletonDraftSessionsTest {
         PreviewSessions.read(runtime.capture().model.rig.puppet.parameters, runtime.capture().auxiliary, workspace)
     private val move = SkeletonDraftIntent.Transform(setOf("arm_upper_l"), dx = 6f, dy = -4f, descendants = true)
 
+    @Test fun skeletonChangesResampleVertexGroupsAndReplayFromHistory() = runBlocking<Unit> {
+        val runtime = fixture()
+        val commands = WorkspaceDocumentCommands(runtime)
+        val start = runtime.capture()
+        val points = start.model.rig.puppet.drawables.single { it.id.raw == "ArtMeshHandwearL" }.mesh!!.positions
+        val top = points.filterIndexed { index, _ -> index % 2 == 1 }.min()
+        val bottom = points.filterIndexed { index, _ -> index % 2 == 1 }.max()
+        val weighted = commands.execute(start.projectId, start.state, "Paint pins", listOf(
+            WorkspaceDocumentOperation("vertex_group_update", buildJsonObject {
+                put("target", "mesh:ArtMeshHandwearL"); put("name", "root"); put("kind", "pin")
+                put("rule", "gradient"); putJsonArray("from") { add(0); add(top) }
+                putJsonArray("to") { add(0); add(bottom) }
+            })), MutationAuthor.USER).capture
+        val spec = requireNotNull(weighted.document.rigEdits.skeleton)
+        val edited = SkeletonDraftEdits.apply(spec, weighted.model, SkeletonDraftIntent.Subdivide("arm_fore_l", 3)).spec
+        val committed = commands.execute(weighted.projectId, weighted.state, "Edit skeleton", listOf(
+            WorkspaceDocumentOperation("skeleton_put", buildJsonObject { put("spec", edited.toJson()) })), MutationAuthor.USER)
+        val after = committed.capture
+        val group = after.model.rig.puppet.vertexGroups.single()
+        val mesh = after.model.rig.puppet.drawables.single { it.id == group.drawableId }.mesh!!
+        assertEquals(mesh.vertexCount, group.weights.size)
+        assertNotEquals(weighted.model.rig.puppet.vertexGroups.single().weights.size, group.weights.size)
+        assertTrue(group.weights.max() - group.weights.min() > 0.5f, "painted gradient survives")
+        val oldCanvas = org.umamo.render.restMeshesToCanvasSpace(weighted.model.rig.puppet)
+        val newCanvas = org.umamo.render.restMeshesToCanvasSpace(after.model.rig.puppet)
+        val expected = VertexGroupJournal.resample(oldCanvas.vertexGroups.single(),
+            oldCanvas.drawables.single { it.id == group.drawableId }.mesh!!,
+            newCanvas.drawables.single { it.id == group.drawableId }.mesh!!)
+        for (vertex in group.weights.indices) assertEquals(expected.weights[vertex], group.weights[vertex], 0.0001f)
+        assertEquals(after.model.rig.puppet.vertexGroups, builder.build(after.document).rig.puppet.vertexGroups)
+        val undone = runtime.checkout(after.projectId, after.state, weighted.historyHead)
+        assertEquals(weighted.model.rig.puppet.vertexGroups, undone.model.rig.puppet.vertexGroups)
+        val redone = runtime.checkout(after.projectId, undone.state, after.historyHead)
+        assertEquals(after.model.rig.puppet.vertexGroups, redone.model.rig.puppet.vertexGroups)
+    }
+
+    @Test fun deletedVertexGroupsStayDeletedWhenSkeletonTopologyChanges() = runBlocking<Unit> {
+        val runtime = fixture()
+        val commands = WorkspaceDocumentCommands(runtime)
+        val start = runtime.capture()
+        val deleted = commands.execute(start.projectId, start.state, "Paint then delete pins", listOf(
+            WorkspaceDocumentOperation("vertex_group_update", buildJsonObject {
+                put("target", "mesh:ArtMeshHandwearL"); put("name", "root"); put("kind", "pin"); put("rule", "fill")
+            }), WorkspaceDocumentOperation("vertex_group_update", buildJsonObject {
+                put("target", "mesh:ArtMeshHandwearL"); put("name", "root"); put("delete", true)
+            })), MutationAuthor.USER).capture
+        val spec = requireNotNull(deleted.document.rigEdits.skeleton)
+        val edited = SkeletonDraftEdits.apply(spec, deleted.model, SkeletonDraftIntent.Subdivide("arm_fore_l", 3)).spec
+        val after = commands.execute(deleted.projectId, deleted.state, "Edit skeleton", listOf(
+            WorkspaceDocumentOperation("skeleton_put", buildJsonObject { put("spec", edited.toJson()) })), MutationAuthor.USER).capture
+        assertTrue(after.model.rig.puppet.vertexGroups.isEmpty())
+        assertTrue(builder.build(after.document).rig.puppet.vertexGroups.isEmpty())
+    }
+
     @Test fun openingCommitsItsOwnRestPoseAndTheDraftCommitsOnThatLineage() = runBlocking<Unit> {
         val runtime = fixture(); val sessions = WorkspaceSkeletonDraftSessions(runtime)
         val preReset = posed(runtime)

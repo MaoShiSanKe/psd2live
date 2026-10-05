@@ -39,7 +39,10 @@ internal object SkeletonPoses {
 	val crouch = SkeletonPose(ParameterId("ParamSkelCrouch"), "skeleton.param.crouch", 0f, 1f,
 		floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f), legs = true)
 	val weight = SkeletonPose(ParameterId("ParamSkelWeight"), "skeleton.param.weight", -1f, 1f,
-		floatArrayOf(-1f, -0.5f, 0f, 0.5f, 1f), legs = true)
+		// A nearly straight leg starts bending quickly near rest. Resolve that region more finely
+		// so interpolated rotation/mesh corrections keep long-legged figures on their soles too.
+		floatArrayOf(-1f, -0.875f, -0.75f, -0.625f, -0.5f, -0.375f, -0.25f, -0.125f, -0.0625f, -0.03125f,
+			0f, 0.03125f, 0.0625f, 0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f, 1f), legs = true)
 	val tailSwing = SkeletonPose(ParameterId("ParamSkelTailSwing"), "skeleton.param.tailSwing", -1f, 1f, floatArrayOf(-1f, 0f, 1f))
 	val armSway = SkeletonPose(ParameterId("ParamSkelArmSway"), "skeleton.param.armSway", -1f, 1f, floatArrayOf(-1f, 0f, 1f), rig = false)
 	val wingFlap = SkeletonPose(ParameterId("ParamSkelWingFlap"), "skeleton.param.wingFlap", -1f, 1f, floatArrayOf(-1f, 0f, 1f))
@@ -73,10 +76,10 @@ internal object SkeletonPoses {
 	private val rigRoles = setOf(BoneRole.UPPER_BODY, BoneRole.LOWER_BODY, BoneRole.TAIL, BoneRole.WING)
 
 	/** World degrees the upper body leans back against the hips' tilt at full weight shift. */
-	private const val UPPER_BODY_COUNTER = 1.5f
+	private const val UPPER_BODY_COUNTER = 0.75f
 
 	/** Degrees the weight pose swings the upper arms at full weight shift, the hands away from the hips. */
-	const val WEIGHT_ARM_TURN = 5f
+	const val WEIGHT_ARM_TURN = 2f
 
 	/**
 	 * The poses [spec] can play: the leg poses when it has legs, skinned or standing in the legs warp, every other pose when it turns

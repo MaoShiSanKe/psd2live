@@ -28,6 +28,87 @@ import kotlin.test.Test
  * - [idle]: twelve seconds of the idle into motion-frames/<sample>-idle/.
  */
 class MotionSheetTool {
+	/** The saved armature's weight transfer and shin rotations, including the project's mesh bindings. */
+	@Test fun weight() = kotlinx.coroutines.runBlocking {
+		requireTools()
+		val sample = Sample.fromEnvironment()
+		val preview = if (sample.path.toString().endsWith(".psd2live", true)) {
+			io.github.psd2live.project.ProjectRepository().open(sample.path).use { opened ->
+				val document = opened.history.head().snapshot
+				val builder = io.github.psd2live.application.WorkspacePreviewBuilder()
+				val saved = builder.build(document)
+				if (saved.config.rigEdits.skeleton?.enabled == true) saved else {
+					val skeleton = SkeletonAutoBuilder.build(saved.analysis, saved.rig)
+					println("Saved project has no enabled skeleton; testing an auto skeleton on its artwork")
+					val candidate = document.copy(rigEdits = document.rigEdits.copy(skeleton = skeleton))
+					builder.build(builder.normalizeMeshEdits(candidate, saved))
+				}
+			}
+		} else build(sample).skeletal
+		val skeleton = requireNotNull(preview.config.rigEdits.skeleton)
+		val renderer = Renderer(preview, 520)
+		val character = preview.analysis.anchors.character
+		val thighs = skeleton.bones.filter { it.role == BoneRole.THIGH }
+		val rect = Bounds(character.left, thighs.minOf { it.headY } - character.height * 0.06f,
+			character.right, character.bottom + character.height * 0.01f)
+		val values = listOf(-1f, -0.5f, 0f, 0.5f, 1f)
+		val evaluator = org.umamo.render.eval.CpuDeformationEvaluator()
+		val rest = evaluator.evaluate(preview.rig.puppet, emptyMap()).worldPositions
+		val footLayers = preview.analysis.layers.filter { it.semantic.tag == SemanticTag.FOOTWEAR }.mapTo(HashSet()) { it.source.id.raw }
+		val feet = preview.rig.layerIdByDrawableId.filterValues { it in footLayers }.keys
+		for (step in 0..40) {
+			val key = -1f + step / 20f
+			val posed = evaluator.evaluate(preview.rig.puppet, mapOf(org.umamo.runtime.model.ParameterId("ParamSkelWeight") to key)).worldPositions
+			for (raw in feet) {
+				val id = org.umamo.runtime.model.DrawableId(raw)
+				val before = rest.getValue(id)
+				val after = posed.getValue(id)
+				val floor = before.filterIndexed { index, _ -> index % 2 == 1 }.min()
+				for (vertex in 0 until before.size / 2) if (before[vertex * 2 + 1] <= floor + 2f) {
+					kotlin.test.assertEquals(before[vertex * 2], after[vertex * 2], 1f, "$raw sole x at $key")
+					kotlin.test.assertEquals(before[vertex * 2 + 1], after[vertex * 2 + 1], 1f, "$raw sole y at $key")
+				}
+			}
+		}
+		val out = output("motion-sheet")
+		val restCanvas = org.umamo.render.restMeshesToCanvasSpace(preview.rig.puppet)
+		var checked = 0
+		var maxThighDrift = 0f
+		for (shin in skeleton.bones.filter { it.role == BoneRole.SHIN }) {
+			val thigh = skeleton.bones.single { it.id == shin.parentId }
+			val angles = listOf(shin.minAngle * 0.8f, shin.minAngle * 0.4f, 0f, shin.maxAngle * 0.4f, shin.maxAngle * 0.8f)
+			sheet(angles.map { "shin %.1f".format(it) to renderer.render(mapOf(shin.parameterId to it), rect) }, File(out, "${sample.name}-${shin.id}-legs.png"))
+			for (step in 0..24) {
+				val angle = shin.minAngle + (shin.maxAngle - shin.minAngle) * step / 24f
+				val posed = evaluator.evaluate(preview.rig.puppet, mapOf(org.umamo.runtime.model.ParameterId(shin.parameterId) to angle)).worldPositions
+				for (raw in thigh.drawableIds) {
+					val id = org.umamo.runtime.model.DrawableId(raw)
+					val mesh = restCanvas.drawables.single { it.id == id }.mesh ?: continue
+					val before = rest.getValue(id)
+					val after = posed.getValue(id)
+					for (vertex in 0 until mesh.vertexCount) {
+						val y = mesh.positions[vertex * 2 + 1]
+						if (y < thigh.headY + thigh.length * 0.1f || y > shin.headY - minOf(thigh.length, shin.length) * 0.5f) continue
+						checked++
+						maxThighDrift = maxOf(maxThighDrift, kotlin.math.hypot(after[vertex * 2] - before[vertex * 2], after[vertex * 2 + 1] - before[vertex * 2 + 1]))
+						kotlin.test.assertEquals(before[vertex * 2], after[vertex * 2], 1f, "$raw upper thigh x when shin=$angle")
+						kotlin.test.assertEquals(before[vertex * 2 + 1], after[vertex * 2 + 1], 1f, "$raw upper thigh y when shin=$angle")
+					}
+				}
+			}
+		}
+		kotlin.test.assertTrue(checked > 0, "checked rigid upper-thigh vertices")
+		println("Shin rotation: $checked upper-thigh vertices checked; maximum drift $maxThighDrift px")
+		sheet(values.map { "weight $it" to renderer.render(mapOf("ParamSkelWeight" to it)) }, File(out, "${sample.name}-weight-keys.png"))
+		sheet(values.map { "weight $it" to renderer.render(mapOf("ParamSkelWeight" to it), rect) }, File(out, "${sample.name}-weight-legs.png"))
+		val tracks = SkeletonMotions.weightShift(skeleton)
+		val times = (0..9).map { SkeletonMotions.WEIGHT_SHIFT_DURATION * it / 9f }
+		sheet(times.map { time -> "%.2fs".format(time) to renderer.render(tracks.associate {
+			it.parameterId to MotionCurveMath.value(it, time)
+		}) }, File(out, "${sample.name}-WeightShift.png"))
+		for (thigh in thighs) println("${thigh.id}: hip ${thigh.headX},${thigh.headY} knee ${thigh.tailX},${thigh.tailY}")
+	}
+
 	@Test fun motions() {
 		requireTools()
 		val sample = Sample.fromEnvironment()

@@ -342,14 +342,17 @@ internal object MotionSynth {
 		follow(StandardParameters.ANGLE_X.raw, hips, 0.26f, 4f * scale)
 	}
 
-	/** Onto one foot and back: a small push the other way first, the hips settling over the foot, the body and the arms following. */
+	/** Onto one foot, held steadily, then back: the chest and arms follow without a preparatory kick or bounce. */
 	fun weightShift(spec: SkeletonSpec?): List<MotionCurve> {
 		val anatomy = SkeletonAnatomy.of(spec) ?: return emptyList()
 		val t = Timeline(WEIGHT_SHIFT_DURATION)
-		val hips = listOf(0.12f to -0.08f, 0.85f to 1f, 1.05f to 0.93f, 2f to 0.95f, 2.7f to 0f)
+		val hips = listOf(0.2f to 0f, 1f to 0.85f, 1.9f to 0.85f, 2.8f to 0f)
 		t.follow(SkeletonPoses.weight.id.raw, hips, 0f, 1f)
-		t.bodyOver(hips, 0.8f)
-		t.trailArms(movingArms(spec!!, anatomy), hips, 2.5f, 0.18f)
+		t.follow(StandardParameters.BODY_X.raw, hips, 0.1f, 0.8f)
+		t.follow(StandardParameters.BODY_Z.raw, hips, 0.15f, -0.5f)
+		t.follow(StandardParameters.ANGLE_Z.raw, hips, 0.22f, 1.2f)
+		t.follow(StandardParameters.ANGLE_X.raw, hips, 0.25f, 1.5f)
+		t.trailArms(movingArms(spec!!, anatomy), hips, 1f, 0.18f)
 		return t.curves()
 	}
 

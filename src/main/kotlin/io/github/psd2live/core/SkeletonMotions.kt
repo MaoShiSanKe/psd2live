@@ -179,7 +179,13 @@ object SkeletonMotions {
 			own?.keys?.forEach { raw += it.time }
 			for ((pose, curve) in moving) {
 				for (key in curve.keys) raw += key.time
-				for (level in pose.keys) raw += MotionCurveMath.crossings(curve, level)
+				for ((index, level) in pose.keys.withIndex()) {
+					// A denser hip/leg bake need not add animation keys to arms whose gesture is
+					// still linear through that pose key. Only a change in gain splits the cubic.
+					if (index > 0 && index < pose.keys.lastIndex &&
+						gain(pose, (pose.keys[index - 1] + level) / 2f) == gain(pose, (level + pose.keys[index + 1]) / 2f)) continue
+					raw += MotionCurveMath.crossings(curve, level)
+				}
 			}
 			if (raw.isEmpty()) return@mapNotNull null
 			val times = ArrayList<Float>()
