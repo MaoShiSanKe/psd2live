@@ -552,6 +552,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
         buildJsonObject {
             put("state", requireNotNull(result.state)); put("history_node_id", result.historyNodeId); put("project_id", requireNotNull(result.projectId)); put("id", writtenId)
             if (!result.applied) put("applied", false)
+            result.geometryDiagnostics?.let { put("geometry_diagnostics", it) }
             if (mode == "glue") {
                 put("mesh_a", command.getValue("mesh_a").jsonPrimitive.content)
                 put("mesh_b", command.getValue("mesh_b").jsonPrimitive.content)
@@ -635,6 +636,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
                             put("target", input.text("target"))
                             put("key", input.getValue("key"))
                             if (res.affectedObjectIds.isNotEmpty()) put("changed", JsonArray(res.affectedObjectIds.map(::JsonPrimitive)))
+                            res.geometryDiagnostics?.let { put("geometry_diagnostics", it) }
                         }
                     }
                     else -> error("Unknown path mode: $mode")
@@ -796,6 +798,7 @@ internal fun WorkspaceMutationResult.compact() = buildJsonObject {
     // response keeps the common payload small.
     if (!applied) put("applied", false)
     if (affectedObjectIds.isNotEmpty()) put("changed", JsonArray(affectedObjectIds.map(::JsonPrimitive)))
+    geometryDiagnostics?.let { put("geometry_diagnostics", it) }
 }
 private fun string() = buildJsonObject { put("type", "string") }
 private fun number() = buildJsonObject { put("type", "number") }

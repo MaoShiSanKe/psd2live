@@ -21,6 +21,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `workspace_list_operations` | 可选 `domain`、`kind`、`offset`、`limit` | 分页发现工具、业务类型和执行元数据 |
 | `workspace_get_operation` | `id` | 读取单项 schema、字段说明与执行元数据 |
 | `workspace_apply_edits` | `state`、`edits`（1–128 项），可选 `summary` | 后台有序编辑同一候选文档，全部成功后提交一个历史节点；返回任务句柄，成员支持情况见 `batchable` |
+| `workspace_preview_edits` | `state`、`edits`（1–128 项），共用请求上下文 | 后台试运行几何作者编辑，返回候选 revision 与诊断；不发布文档、姿态、历史或资源 |
 | `workspace_inspect` | `request` 内 `scope` / `target` | scope 为 `project/settings/preview/objects/layers/parameters/physics/swings/paths/simulations/vertex_groups`；图层摘要包含有效网格配置 |
 | `layer_classify` | `request` 内 `state`、`layer_id` 及分类字段 | 后台更新既有源图层的类型、部件、侧别、参数关联和切换 ID；省略的字段保持捕获时的原值 |
 | `layer_mesh_update` | `request` 内 `state`、`layer_id`、`changes` 或 `reset` | 后台逐图层覆盖或重置自适应网格参数；用 `workspace_inspect scope=layers` 读取当前值 |
@@ -147,6 +148,20 @@ CMO3 导入共用独立应用层导入器，GUI 入口确认后携带可信用�
 ## 原子文档编辑
 
 `workspace_apply_edits` 共用外层的 `request_id`、`project_id` 和 `state`。`edits` 中每项为 `{"operation":"...","request":{...}}`，内部 request 只填写该单项工具的业务字段，不重复上下文字段。成员使用单项工具发布的同一业务 schema；未知字段和不支持的成员在候选编辑之前被拒绝。
+
+### 几何检查与试运行
+
+`rig_deform`、`keyform_apply`、`rig_edit_structure`、`object_edit_appearance`、`canvas_warp/rotation/glue/topology`、`canvas_deform_stroke` 和 `path_deform` 的几何作者日志，在应用层完整重建后、正式 CAS 前接受几何检查；对应 GUI journal 与 MCP 使用同一规则。批量只检查最终候选，允许前项临时退化、后项修复。其他文档操作不因这项规则自动扩大检查范围。
+
+`workspace_preview_edits` 使用与正式提交相同的有序候选准备、重建和检查，但不调用投影或 CAS，不改变 state、历史、未保存标志、姿态或资源。它是只读后台任务，仍要求 `request_id/project_id/state`，通过 `job_wait/job_get.result` 获取 `dry_run:true`、输入 `revision`、`candidate_revision`、`would_change`、`would_commit`、新建对象的 `changed` 句柄和 `diagnostics`。创建 Warp、Rotation 或 Glue 时须提供显式 `id`，之后在同一 state 上向 `workspace_apply_edits` 提交相同 edits；候选 revision 才可重复比较。试运行不预留对象 ID，也不授权绕过后续的状态冲突检查。几何以外的成员不接受试运行，支持范围以该操作的 schema 为准。
+
+检查覆盖受影响对象的父级局部几何，包含普通关键点、混合形关键点与权重限制点的组合。非有限坐标、非法拓扑及新增零面积退化会阻止提交，返回 `geometry_unsafe` 和结构化 `diagnostics.violations`。新增局部翻面及面积不足参考三角形 1% 的局部塌缩保存在 `diagnostics.warnings`，默认不阻断：现有作者流程允许有意折叠，不能把翻面数直接当成制作失败。已有翻面、退化和塌缩单独计数，不阻止未新增缺陷的编辑。整张表面的可逆仿射镜像与压缩允许通过，零面积变换仍拒绝。拓扑变更无法沿用旧三角形身份时，使用新网格的参考几何。每对象最多检查 16384 个混合坐标组合；超出预算明确拒绝，不以部分采样冒充检查通过。
+
+诊断只覆盖这些采样点，不证明关键点之间的插值、父级组合变形、Glue、遮罩、像素覆盖、物理或视觉美观。试运行结果属于输入版本；工程后来被编辑或重开时，结果不会变成新版本的依据。
+
+正式几何作者提交也可返回 `geometry_diagnostics`，包含同样的阻断项和 warnings；几何检查没有涉及对象时省略该字段。无需以修改回滚来表达翻面警告。
+
+零面积判定包含浮点误差：三角形有向面积绝对值不足 `1e-12`，或其面积比例不超过参考形的 `1e-6`，视为数值退化；不会因顶点重合留下极小负面积而只报告翻面警告。
 
 GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提交；画布 journal、内部 typed 编辑和字段完成队列也进入同一候选/重建/CAS 边界。GUI 摆动会话、字段编辑、模拟修改和离线烘焙保留开始时的状态，避免把旧结果提交到重开或已变更的工程；GUI 作者由可信适配器指定为 `user`。其余业务准备和状态所有权还在迁移。
 

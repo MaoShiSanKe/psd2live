@@ -54,7 +54,10 @@ internal fun interface WorkspaceDraftEdit<M> {
     suspend fun apply(draft: WorkspaceDraft, model: M): WorkspaceDraft
 }
 
-internal data class WorkspaceCommit<M>(val capture: WorkspaceCapture<M>, val applied: Boolean)
+internal data class WorkspaceCommit<M>(val capture: WorkspaceCapture<M>, val applied: Boolean, val geometryDiagnostics: JsonObject? = null)
+
+/** A rebuilt private candidate; preparation has no history, projection or persistence effects. */
+internal data class WorkspacePreparedDraft<M>(val before: WorkspaceCapture<M>, val draft: WorkspaceDraft, val model: M)
 
 /**
  * Authoritative document/model/history owner, usable without Compose or MCP.
@@ -164,6 +167,17 @@ internal class WorkspaceRuntime<M>(
         beforeCommit: (WorkspaceCapture<M>, WorkspaceDraft, M) -> Unit = { _, _, _ -> },
     ): WorkspaceCommit<M> {
         require(summary.isNotBlank()) { "History summary must not be blank" }
+        val prepared = prepareDraft(projectId, expectedState, edits, editFailure)
+        val changed = prepared.draft.auxiliary.takeIf { it != prepared.before.auxiliary }
+        return commitPrepared(projectId, expectedState, summary, author, prepared.draft.document, prepared.model, taskId, auxiliary = changed) { capture, next, committed ->
+            beforeCommit(capture, WorkspaceDraft(next, changed ?: capture.auxiliary), committed)
+        }
+    }
+
+    suspend fun prepareDraft(
+        projectId: String, expectedState: String, edits: List<WorkspaceDraftEdit<M>>,
+        editFailure: (Int, Exception) -> Exception = { _, failure -> failure },
+    ): WorkspacePreparedDraft<M> {
         require(edits.size in 1..128) { "Use 1..128 edits" }
         val before = synchronized(lock) {
             checkState(expectedState)
@@ -189,10 +203,7 @@ internal class WorkspaceRuntime<M>(
             catch (failure: Exception) { throw editFailure(index, failure) }
         }
         currentCoroutineContext().ensureActive()
-        val changed = auxiliary.takeIf { it != before.auxiliary }
-        return commitPrepared(projectId, expectedState, summary, author, document, model, taskId, auxiliary = changed) { capture, next, committed ->
-            beforeCommit(capture, WorkspaceDraft(next, changed ?: capture.auxiliary), committed)
-        }
+        return WorkspacePreparedDraft(before, WorkspaceDraft(document, auxiliary), model)
     }
 
     /** The desktop adapter may prepare a model with incremental algorithms before entering this CAS. */

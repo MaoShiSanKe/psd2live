@@ -1,5 +1,7 @@
 package io.github.psd2live.project
 
+import kotlinx.serialization.json.JsonObject
+
 
 import io.github.psd2live.core.Bounds
 
@@ -138,6 +140,7 @@ data class WorkspaceMutationResult(
 	val applied: Boolean = true,
     val state: String? = null,
     val projectId: String? = null,
+    val geometryDiagnostics: JsonObject? = null,
 )
 
 data class WorkspaceCreateParameterRequest(

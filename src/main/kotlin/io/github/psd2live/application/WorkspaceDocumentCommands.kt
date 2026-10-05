@@ -1,15 +1,17 @@
 package io.github.psd2live.application
 
 import io.github.psd2live.core.RigPreviewModel
+import io.github.psd2live.core.GeometrySafetyEvaluator
+import io.github.psd2live.core.GeometrySafetyRejectedException
+import io.github.psd2live.core.GeometrySafetyReport
 import io.github.psd2live.project.MutationAuthor
 import io.github.psd2live.project.WorkspaceDocument
 import io.github.psd2live.project.WorkspaceMutationResult
+import io.github.psd2live.project.WorkspaceRevisions
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.*
 import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.PuppetModel
 
@@ -35,7 +37,51 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
         val context = currentCoroutineContext()
         val batch = context[WorkspaceBatchJobExecution]
         require(batch == null || batch.edits == edits) { "A nested document command cannot replace the active batch" }
-        val result = runtime.executeDraft(projectId, state, summary, author,
+        val prepared = prepare(projectId, state, edits, resources)
+        val geometry = checkGeometry(prepared)
+        if (!geometry.safe) throw GeometrySafetyRejectedException(geometry)
+        val diagnostics = geometry.takeIf { it.affectedTargets.isNotEmpty() }?.toJson()
+        val result = runtime.commitPrepared(projectId, state, summary, author, prepared.draft.document, prepared.model,
+            taskId = taskId, auxiliary = prepared.draft.auxiliary.takeIf { it != prepared.before.auxiliary },
+            beforeCommit = { captured, document, model ->
+                batch?.committing()
+                beforeCommit(captured, document, model)
+                changedPoses(captured, prepared.draft, model).takeIf { it.isNotEmpty() }?.let(poses)
+            }).copy(geometryDiagnostics = diagnostics)
+        // No suspension between the authoritative CAS and retaining its complete public result.
+        batch?.committed(mutationResult(before, result, summary, edits))
+        return result
+    }
+
+    /** Same preparation and gate as commit, without projection, CAS, history or resource publication. */
+    suspend fun preview(projectId: String, state: String, edits: List<WorkspaceDocumentOperation>): JsonObject {
+        require(edits.all { it.operation in WorkspaceGeometrySafety.operations }) { "Preview supports geometry authoring operations only" }
+        require(edits.filter { it.operation in setOf("canvas_warp", "canvas_rotation", "canvas_glue") }
+            .all { !it.request["id"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() }) { "Preview creation requires an explicit id; reuse it when committing" }
+        val prepared = prepare(projectId, state, edits, null)
+        val report = checkGeometry(prepared)
+        val before = prepared.before
+        val revision = WorkspaceRevisions.of(prepared.draft.document)
+        val wouldChange = revision != before.revision
+        return buildJsonObject {
+            put("project_id", JsonPrimitive(before.projectId))
+            put("state", JsonPrimitive(before.state))
+            put("history_node_id", JsonPrimitive(before.historyHead))
+            put("revision", JsonPrimitive(before.revision))
+            put("candidate_revision", JsonPrimitive(revision))
+            put("dry_run", JsonPrimitive(true))
+            put("would_change", JsonPrimitive(wouldChange))
+            put("would_commit", JsonPrimitive(wouldChange && report.safe))
+            put("changed", JsonArray(createdObjectIds(before.model.rig.puppet, prepared.model.rig.puppet).map(::JsonPrimitive)))
+            put("diagnostics", report.toJson())
+        }
+    }
+
+    private suspend fun prepare(projectId: String, state: String, edits: List<WorkspaceDocumentOperation>,
+                                resources: WorkspaceAssetWorkflow?): WorkspacePreparedDraft<RigPreviewModel> {
+        val context = currentCoroutineContext()
+        val batch = context[WorkspaceBatchJobExecution]
+        val prepared = runtime.prepareDraft(projectId, state,
             edits.mapIndexed { index, operation -> WorkspaceDraftEdit { draft, model ->
                 batch?.preparing(index)
                 if (operation.operation == "settings_update") {
@@ -55,21 +101,23 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
                 }, resources) }
                 draft.copy(document = previews.normalizeMeshEdits(candidate, model))
             } },
-            taskId = taskId, editFailure = { index, failure -> WorkspaceBatchEditException(index, edits[index].operation, failure) },
-            beforeCommit = { captured, draft, model ->
-                batch?.committing()
-                WorkspaceAssetLayerEdits.validate(captured.document, draft.document, model)
-                validateRegisteredNeutral(model, edits.filter { it.operation == "layer_set_bounds" }.mapTo(HashSet()) { it.request.getValue("layer_id").jsonPrimitive.content })
-                beforeCommit(captured, draft.document, model)
-                changedPoses(captured, draft, model).takeIf { it.isNotEmpty() }?.let(poses)
-            })
-        // No suspension between the authoritative CAS and retaining its complete public result.
-        batch?.committed(mutationResult(before, result, summary, edits))
-        return result
+            editFailure = { index, failure -> WorkspaceBatchEditException(index, edits[index].operation, failure) })
+        runInterruptible(Dispatchers.Default) {
+            WorkspaceAssetLayerEdits.validate(prepared.before.document, prepared.draft.document, prepared.model)
+            validateRegisteredNeutral(prepared.model, edits.filter { it.operation == "layer_set_bounds" }.mapTo(HashSet()) { it.request.getValue("layer_id").jsonPrimitive.content })
+        }
+        return prepared
     }
 
+    private suspend fun checkGeometry(prepared: WorkspacePreparedDraft<RigPreviewModel>): GeometrySafetyReport =
+        runInterruptible(Dispatchers.Default) {
+            if (WorkspaceGeometrySafety.changed(prepared.before.document, prepared.draft.document))
+                GeometrySafetyEvaluator.evaluate(prepared.before.model.rig.puppet, prepared.model.rig.puppet, blockFoldovers = false)
+            else GeometrySafetyReport.noGeometryChange()
+        }
+
     /** Materialized GUI gestures and public authoring operations use this same isolated journal draft. */
-    suspend fun executeJournal(projectId: String, state: String, summary: String, edits: kotlinx.serialization.json.JsonArray,
+    suspend fun executeJournal(projectId: String, state: String, summary: String, edits: JsonArray,
                                author: MutationAuthor,
                                beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceCommit<RigPreviewModel> =
         executeCandidate(projectId, state, summary, author,
@@ -80,15 +128,20 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
                                  taskId: String? = null,
                                  mutation: (WorkspaceDocument, RigPreviewModel) -> WorkspaceDocument,
                                  beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceCommit<RigPreviewModel> {
-        return runtime.execute(projectId, state, summary, author, listOf(WorkspaceDocumentEdit { document, model ->
-            val candidate = runInterruptible(Dispatchers.Default) { mutation(document, model) }
-            previews.normalizeMeshEdits(candidate, model)
-        }), taskId = taskId, beforeCommit = beforeCommit)
+        val prepared = runtime.prepareDraft(projectId, state, listOf(WorkspaceDraftEdit { draft, model ->
+            val candidate = runInterruptible(Dispatchers.Default) { mutation(draft.document, model) }
+            draft.copy(document = previews.normalizeMeshEdits(candidate, model))
+        }))
+        val geometry = checkGeometry(prepared)
+        if (!geometry.safe) throw GeometrySafetyRejectedException(geometry)
+        val diagnostics = geometry.takeIf { it.affectedTargets.isNotEmpty() }?.toJson()
+        return runtime.commitPrepared(projectId, state, summary, author, prepared.draft.document, prepared.model,
+            taskId = taskId, beforeCommit = beforeCommit).copy(geometryDiagnostics = diagnostics)
     }
 
     /** Settings commands that may release authored poses; other generation inputs keep [executeCandidate]. */
     suspend fun executeSettings(projectId: String, state: String, summary: String, author: MutationAuthor,
-                                changes: kotlinx.serialization.json.JsonObject,
+                                changes: JsonObject,
                                 poses: (Map<String, WorkspacePose>) -> Unit = {},
                                 beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceCommit<RigPreviewModel> =
         runtime.executeDraft(projectId, state, summary, author, listOf(WorkspaceDraftEdit { draft, model ->
@@ -120,7 +173,8 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
                 .plus(before.document.source.layers.map { it.id.raw }.filterNot { id -> result.capture.document.source.layers.any { it.id.raw == id } }
                     .map { "layer:$it" }).distinct()
             return WorkspaceMutationResult(result.capture.historyHead, result.capture.revision, emptyList(), summary,
-                affectedObjectIds = changed, applied = result.applied, state = result.capture.state, projectId = result.capture.projectId)
+                affectedObjectIds = changed, applied = result.applied, state = result.capture.state, projectId = result.capture.projectId,
+                geometryDiagnostics = result.geometryDiagnostics)
         }
 
         /** Stable handles include generated IDs even when a request omitted an optional ID. */

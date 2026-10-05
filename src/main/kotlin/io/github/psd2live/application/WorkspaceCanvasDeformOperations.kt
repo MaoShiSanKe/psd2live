@@ -47,7 +47,7 @@ internal fun registerCanvasDeformOperations(registry: WorkspaceOperationRegistry
     val business = WorkspaceCanvasDeformSchemas.request
     val schema = JsonObject(business + mapOf("properties" to JsonObject(business.getValue("properties").jsonObject + ("state" to s.handle())),
         "required" to JsonArray(listOf(JsonPrimitive("state"), JsonPrimitive("stroke")))))
-    val output = s.obj(s.identity + mapOf("applied" to s.constant(false), "changed" to s.array(s.handle(), 1, Int.MAX_VALUE)), s.identity.keys)
+    val output = s.obj(WorkspaceAuthoringResultSchemas.compactFields, s.identity.keys)
     registry.register(WorkspaceOperationDefinition("canvas_deform_stroke",
         "Brush, smooth or inflate current meshes or one Warp using the same captured canvas gesture as the UI. Samples and radius are canvas pixels (X right, Y down) at pose. The first sample captures geometry and tip coverage; brush displacement is measured from that press, while smooth and inflate accumulate per segment. connected_only starts from the component under the pointer across the full mesh set. Omit vertices to affect all, or supply current vertex indices. Glue partners follow touched welded vertices. edit shifts rest geometry and preserves the image; deform writes the exact key at pose and retains other keyforms and channels. Include all bound axes in key, and at most one active blend shape. Warp preserve_children applies the UI Ctrl behavior. The complete stroke is one atomic document candidate and one history node.",
         schema, WorkspaceOperationKind.DOCUMENT, batchable = true, resultSchema = output)) { request, context ->

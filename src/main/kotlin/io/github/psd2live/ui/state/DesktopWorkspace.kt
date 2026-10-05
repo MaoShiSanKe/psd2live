@@ -137,6 +137,11 @@ class DesktopWorkspace(
 	private val viewModel: PSD2LiveViewModel,
     private val storeRoot: Path = WorkspaceStore.defaultRoot(),
 ) : WorkspaceBackend, AutoCloseable {
+    override suspend fun previewDocumentEdits(state: String, edits: List<WorkspaceDocumentOperation>): JsonObject {
+        val before = captureForMutation()
+        if (state != before.state) throw WorkspaceConflict(state, before.state)
+        return documentCommands.preview(before.projectId, before.state, edits)
+    }
     override suspend fun applyDocumentEdits(state: String, summary: String, edits: List<WorkspaceDocumentOperation>,
                                             author: MutationAuthor): WorkspaceMutationResult = editMutex.withLock {
         require(edits.size in 1..128) { "Use 1..128 edits" }
@@ -1046,7 +1051,8 @@ class DesktopWorkspace(
         }
         val ids = if (!result.applied) emptyList() else edits.mapNotNull { it.jsonObject["target"]?.jsonPrimitive?.content }.distinct()
         WorkspaceMutationResult(result.capture.historyHead, result.capture.revision, emptyList(), summary,
-            affectedObjectIds = ids, applied = result.applied, state = result.capture.state, projectId = result.capture.projectId)
+            affectedObjectIds = ids, applied = result.applied, state = result.capture.state, projectId = result.capture.projectId,
+            geometryDiagnostics = result.geometryDiagnostics)
     }
 
     override suspend fun createArtwork(arguments: kotlinx.serialization.json.JsonObject): WorkspaceMutationResult = editMutex.withLock {
@@ -1638,7 +1644,8 @@ class DesktopWorkspace(
         WorkspaceMutationResult(result.capture.historyHead, result.capture.revision, emptyList(), summary,
             affectedObjectIds = if (result.applied) (listOf(affectedObjectId) +
                 WorkspaceDocumentCommands.createdObjectIds(before.model.rig.puppet, result.capture.model.rig.puppet)).distinct() else emptyList(),
-            applied = result.applied, state = result.capture.state, projectId = result.capture.projectId)
+            applied = result.applied, state = result.capture.state, projectId = result.capture.projectId,
+            geometryDiagnostics = result.geometryDiagnostics)
     }
 
     override suspend fun checkoutHistory(nodeId: String, author: MutationAuthor): WorkspaceMutationResult = editMutex.withLock {

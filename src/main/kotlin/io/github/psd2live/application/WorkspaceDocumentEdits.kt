@@ -12,6 +12,7 @@ data class WorkspaceDocumentOperation(val operation: String, val request: JsonOb
 interface WorkspaceDocumentPort {
     suspend fun applyDocumentEdits(state: String, summary: String, edits: List<WorkspaceDocumentOperation>,
                                   author: MutationAuthor): WorkspaceMutationResult
+    suspend fun previewDocumentEdits(state: String, edits: List<WorkspaceDocumentOperation>): JsonObject
 }
 
 internal object WorkspaceDocumentEdits {
