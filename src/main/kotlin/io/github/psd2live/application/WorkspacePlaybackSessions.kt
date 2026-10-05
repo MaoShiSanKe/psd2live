@@ -152,7 +152,7 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
                 else session.copy(motionTime = time)
         }
         session = session.copy(animationClock = session.animationClock.advance(delta, session.animation, capture.model.config, null),
-            trackingClock = session.trackingClock.advance(delta, false, capture.model.config,
+            trackingClock = session.trackingClock.advanceTracking(delta,
                 session.pointer.takeIf { session.tracking && session.smoothTracking }))
         sessions[workspaceId] = session.copy(clockNanos = now)
         return result(capture, workspaceId, session)

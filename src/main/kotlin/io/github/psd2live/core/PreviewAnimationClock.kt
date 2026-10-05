@@ -2,6 +2,7 @@ package io.github.psd2live.core
 
 import org.umamo.runtime.model.ParameterId
 import kotlin.math.PI
+import kotlin.math.exp
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -24,6 +25,23 @@ internal data class PreviewAnimationClock(val elapsed: Double = 0.0, val followX
             if (abs(by - fy) < 0.001f) by = fy
         }
         return PreviewAnimationClock(elapsed, fx, fy, bx, by)
+    }
+
+    /** Exact cascaded exponential response: fast head, softer body, independent of frame subdivision. */
+    fun advanceTracking(dt: Float, pointer: Pair<Float, Float>?): PreviewAnimationClock {
+        if (dt == 0f) return this
+        val headRate = 18.0
+        val bodyRate = 10.0
+        val headDecay = exp(-headRate * dt)
+        val bodyDecay = exp(-bodyRate * dt)
+        fun head(value: Float, target: Float) = (target + (value - target) * headDecay).toFloat()
+        fun body(value: Float, previousHead: Float, target: Float) =
+            (target + (value - target) * bodyDecay +
+                bodyRate * (previousHead - target) * (bodyDecay - headDecay) / (headRate - bodyRate)).toFloat()
+        val x = pointer?.first ?: 0f
+        val y = pointer?.second?.let { -it } ?: 0f
+        return copy(followX = head(followX, x), followY = head(followY, y),
+            bodyX = body(bodyX, followX, x), bodyY = body(bodyY, followY, y))
     }
 
     fun sample(model: RigPreviewModel, animate: Boolean, tracking: Boolean, motion: Map<ParameterId, Float>): Map<ParameterId, Float> {
