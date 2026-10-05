@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "io.github.psd2live"
-version = "1.5.1"
+version = "2.0.4"
 
 // Cubism proprietary binaries under src/main/resources/cubism/ are opt-in only.
 // Default jars/distributions must NOT embed them. Enable with:
@@ -56,8 +56,11 @@ dependencies {
 	implementation(platform("org.lwjgl:lwjgl-bom:3.4.2"))
 	implementation("org.lwjgl:lwjgl")
 	implementation("org.lwjgl:lwjgl-opengl")
+	// The editing canvas renders on its own hidden-window GL context (io.github.psd2live.render).
+	implementation("org.lwjgl:lwjgl-glfw")
 	runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
 	runtimeOnly("org.lwjgl:lwjgl-opengl::$lwjglNatives")
+	runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
 	implementation("io.modelcontextprotocol:kotlin-sdk-server:0.15.0")
 	implementation("io.ktor:ktor-server-cio")
 	implementation("io.ktor:ktor-server-auth")
@@ -140,6 +143,12 @@ tasks.test {
 	enabled = true
 	useJUnitPlatform()
 	maxHeapSize = "2g"
+	// CI keeps no test reports, so a failure's message and stack must reach the log.
+	testLogging {
+		events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+		exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+		showStackTraces = true
+	}
 }
 
 
@@ -170,7 +179,8 @@ compose.desktop {
 			// ModelDownloader uses java.net.http.HttpClient. Compose's automatic
 			// runtime module scan can miss this API because it is only loaded when
 			// the optional texture-upscale workflow is opened.
-			modules("java.net.http")
+			// LWJGL (the canvas GPU renderer) reaches native memory through sun.misc.Unsafe.
+			modules("java.net.http", "jdk.unsupported")
 			// Compose only packages formats supported on the build host; Deb is for Linux.
 			targetFormats(
 				org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe,
@@ -178,7 +188,7 @@ compose.desktop {
 				org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
 			)
 			packageName = "PSD2Live"
-			packageVersion = "1.5.1"
+			packageVersion = "2.0.4"
 			description = "PSD2Live - Automated Live2D Rigging Pipeline"
 			copyright = "© 2026 PSD2Live. Licensed under GPL-3.0."
 			vendor = "PSD2Live"

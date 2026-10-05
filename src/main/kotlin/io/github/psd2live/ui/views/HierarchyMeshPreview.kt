@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,7 +51,7 @@ internal fun HierarchyMeshPreview(
         val right = (placement?.let { it.x + it.width } ?: ceil(mesh.uvs.filterIndexed { i, _ -> i % 2 == 0 }.max() * page.image.width).toInt()).coerceIn(left, page.image.width)
         val bottom = (placement?.let { it.y + it.height } ?: ceil(mesh.uvs.filterIndexed { i, _ -> i % 2 == 1 }.max() * page.image.height).toInt()).coerceIn(top, page.image.height)
         if (right == left || bottom == top) null
-        else page.image.getSubimage(left, top, right - left, bottom - top).toComposeImageBitmap()
+        else page.image.getSubimage(left, top, right - left, bottom - top).toImageBitmapFast()
     } ?: return
     val colors = LocalToolColors.current
     val density = LocalDensity.current

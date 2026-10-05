@@ -4,6 +4,8 @@ import com.sun.jna.Library
 import com.sun.jna.Memory
 import com.sun.jna.Native
 import com.sun.jna.Pointer
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -20,6 +22,8 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /** A frame evaluated and rendered by the official Cubism 5-r.5 runtime. */
 data class CubismSdkFrame(
@@ -92,7 +96,12 @@ class CubismSdkPreviewSession(
 		val pointerX: Float,
 		val pointerY: Float,
 		val animationEnabled: Boolean = true,
+		/** Cubism advances its own motion, drag and physics; false renders [parameterOverrides] as the whole pose. */
+		val nativeClock: Boolean = animationEnabled,
 		val parameterOverrides: Map<ParameterId, Float>,
+		val parameterDefinitions: List<org.umamo.runtime.model.Parameter> = emptyList(),
+		val pointerTrackingEnabled: Boolean = pointerX != 0f || pointerY != 0f,
+		val lockedParameters: Set<ParameterId> = emptySet(),
 		val frameTimeNanos: Long = System.nanoTime(),
         val viewId: String = "",
 	)
@@ -216,44 +225,71 @@ class CubismSdkPreviewSession(
 
     /** Evaluate a disposable exported model on this session's native thread; the live model is untouched. */
     fun sampleMotion(bundle: CubismRuntimeBundle, parameters: List<ParameterId>, group: String,
-                     frames: Int, fps: Int): java.util.concurrent.CompletableFuture<List<Map<ParameterId, Float>>> {
+                     frames: Int, fps: Int, progress: (Float) -> Unit = {}, cancelled: () -> Boolean = { false }): java.util.concurrent.CompletableFuture<List<Map<ParameterId, Float>>> {
         require(frames in 1..1201 && fps in 15..120)
         val result = java.util.concurrent.CompletableFuture<List<Map<ParameterId, Float>>>()
         if (closed) { result.completeExceptionally(IllegalStateException("Cubism session closed")); return result }
         val queued = onNativeThread {
             try {
-                check(!closed) { "Cubism session closed" }
+                fun checkpoint() {
+                    if (closed || result.isCancelled || cancelled()) throw java.util.concurrent.CancellationException("Motion sampling cancelled")
+                }
+                checkpoint(); progress(0f)
                 val native = api ?: CubismNativeRuntime.load().also {
                     require(it.Live2D_InitOffscreen() != 0) { nativeError(it, "Cubism runtime initialization failed") }
                     api = it
                 }
-                val handle = native.Live2D_CreateModel(materialize(bundle).toString())
-                    ?: error(nativeError(native, "Cubism rejected the observation model"))
+                checkpoint()
+                val directory = Files.createTempDirectory("psd2live-motion-sample-")
+                val samples = ArrayList<Map<ParameterId, Float>>(frames)
                 try {
-                    require(native.Live2D_StartMotion(handle, group, 0, 3) != 0) { "Observation motion could not start" }
-                    val samples = ArrayList<Map<ParameterId, Float>>(frames)
-                    repeat(frames) { index ->
-                        native.Live2D_Update(handle, if (index == 0) 0f else 1f / fps)
-                        samples += parameters.associateWith { native.Live2D_GetParameterValue(handle, it.raw) }
-                    }
-                    result.complete(samples)
-                } finally { native.Live2D_DestroyModel(handle) }
+                    val manifest = materialize(bundle, directory, cleanupOnExit = false)
+                    checkpoint()
+                    val handle = native.Live2D_CreateModel(manifest.toString())
+                        ?: error(nativeError(native, "Cubism rejected the observation model"))
+                    try {
+                        checkpoint()
+                        require(native.Live2D_StartMotion(handle, group, 0, 3) != 0) { "Observation motion could not start" }
+                        repeat(frames) { index ->
+                            checkpoint()
+                            native.Live2D_Update(handle, if (index == 0) 0f else 1f / fps)
+                            samples += parameters.associateWith { native.Live2D_GetParameterValue(handle, it.raw) }
+                            progress((index + 1).toFloat() / frames)
+                        }
+                        checkpoint()
+                    } finally { native.Live2D_DestroyModel(handle) }
+                } finally {
+                    Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+                }
+                checkpoint(); result.complete(samples)
             } catch (failure: Throwable) { result.completeExceptionally(failure) }
         }
         if (!queued) result.completeExceptionally(IllegalStateException("Cubism session closed"))
         return result
     }
 
-	private fun materialize(bundle: CubismRuntimeBundle): Path {
-		val directory = Files.createTempDirectory("psd2live-preview-model-")
+    /** Coroutine cancellation cancels the queued future and stops the native loop at its next frame. */
+    suspend fun sampleMotionAwait(bundle: CubismRuntimeBundle, parameters: List<ParameterId>, group: String,
+                                 frames: Int, fps: Int, progress: (Float) -> Unit, cancelled: () -> Boolean): List<Map<ParameterId, Float>> =
+        withTimeout(45_000) {
+            suspendCancellableCoroutine { continuation ->
+                val future = sampleMotion(bundle, parameters, group, frames, fps, progress, cancelled)
+                continuation.invokeOnCancellation { future.cancel(false) }
+                future.whenComplete { samples, failure ->
+                    if (failure == null) continuation.resume(samples) else continuation.resumeWithException(failure)
+                }
+            }
+        }
+
+	private fun materialize(bundle: CubismRuntimeBundle, directory: Path = Files.createTempDirectory("psd2live-preview-model-"), cleanupOnExit: Boolean = true): Path {
 		for (asset in bundle.assets) {
 			val target = directory.resolve(asset.path.replace('/', java.io.File.separatorChar)).normalize()
 			require(target.startsWith(directory)) { "Invalid Cubism model asset path: ${asset.path}" }
 			Files.createDirectories(target.parent)
 			Files.write(target, asset.bytes)
-			target.toFile().deleteOnExit()
+			if (cleanupOnExit) target.toFile().deleteOnExit()
 		}
-		directory.toFile().deleteOnExit()
+		if (cleanupOnExit) directory.toFile().deleteOnExit()
 		return directory.resolve(bundle.manifestPath.replace('/', java.io.File.separatorChar)).toAbsolutePath().normalize()
 	}
 
@@ -298,14 +334,18 @@ class CubismSdkPreviewSession(
             val handle = canvas.handle
             val reusePose = canvas.lastPoseRequest?.let { previous ->
                 previous.animationEnabled == request.animationEnabled &&
-					(!request.animationEnabled || previous.frameTimeNanos == request.frameTimeNanos) &&
+					previous.nativeClock == request.nativeClock &&
+					(!request.nativeClock || previous.frameTimeNanos == request.frameTimeNanos) &&
                     previous.pointerX == request.pointerX && previous.pointerY == request.pointerY &&
-                    previous.parameterOverrides == request.parameterOverrides
+                    previous.parameterOverrides == request.parameterOverrides &&
+                    previous.pointerTrackingEnabled == request.pointerTrackingEnabled &&
+                    previous.lockedParameters == request.lockedParameters &&
+                    previous.parameterDefinitions == request.parameterDefinitions
             } == true
-			val needsRefresh: Boolean
+			var needsRefresh: Boolean
             if (reusePose) {
                 needsRefresh = false
-            } else if (request.animationEnabled) {
+            } else if (request.nativeClock) {
 				// X runs through Cubism's look updater before physics so hair receives the head
 				// movement. Y is deliberately zero here because Cubism also maps it to AngleZ.
 				native.Live2D_SetDragging(handle, request.pointerX, CUBISM_NATIVE_POINTER_Y)
@@ -321,7 +361,7 @@ class CubismSdkPreviewSession(
 				canvas.lastRenderedFrameTimeNanos = request.frameTimeNanos
 				// A slider changes one value in a full pose map. The native model retains the other
 				// values, so avoid a JNA call and Cubism ID lookup for every unchanged parameter.
-				val previous = canvas.lastPoseRequest?.takeUnless { it.animationEnabled }?.parameterOverrides
+				val previous = canvas.lastPoseRequest?.takeUnless { it.nativeClock }?.parameterOverrides
 				for ((id, value) in request.parameterOverrides) {
 					if (previous == null || previous[id] != value) {
 						native.Live2D_SetParameterValue(handle, id.raw, value)
@@ -329,14 +369,23 @@ class CubismSdkPreviewSession(
 				}
 				// Paused previews cannot advance Cubism's smoothed drag manager. Apply the static
 				// look offsets directly so mouse tracking remains useful while inspecting a pose.
-				applyPausedPointerTracking(
-					native,
-					handle,
-					request.pointerX,
-					request.pointerY,
-					request.parameterOverrides,
-				)
+				val tracked = pointerPreviewPose(request.parameterOverrides, request.pointerX, request.pointerY,
+					request.parameterDefinitions, request.pointerTrackingEnabled, request.lockedParameters)
+				for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
+					val id = ParameterId(binding.parameterId)
+					tracked[id]?.let { native.Live2D_SetParameterValue(handle, id.raw, it) }
+				}
 				needsRefresh = true
+			}
+			// Native motion/physics and look updates can add after the SDK's setters clamp.
+			// Bound the final pose before geometry evaluation, using this model's edited ranges.
+			if (!reusePose && request.parameterDefinitions.isNotEmpty()) {
+				val pose = copyParameterValues(native, handle)
+				val bounded = boundedPreviewPose(pose, request.parameterDefinitions)
+				if (bounded !== pose) {
+					for ((id, value) in bounded) if (value != pose[id]) native.Live2D_SetParameterValue(handle, id.raw, value)
+					needsRefresh = true
+				}
 			}
 			if (needsRefresh) native.Live2D_RefreshModel(handle)
             if (!reusePose) canvas.lastPoseRequest = request
@@ -395,21 +444,6 @@ class CubismSdkPreviewSession(
 			if (amount == 0f) continue
 			val current = native.Live2D_GetParameterValue(handle, binding.parameterId)
 			native.Live2D_SetParameterValue(handle, binding.parameterId, current + amount)
-		}
-	}
-
-	/** Mouse look intentionally excludes ParamAngleZ; roll remains owned by motion/breath. */
-	private fun applyPausedPointerTracking(
-		native: Api,
-		handle: Pointer,
-		x: Float,
-		y: Float,
-		baseValues: Map<ParameterId, Float>,
-	) {
-		for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
-			val amount = x * binding.xScale + y * binding.yScale
-			val base = baseValues[ParameterId(binding.parameterId)] ?: 0f
-			native.Live2D_SetParameterValue(handle, binding.parameterId, base + amount)
 		}
 	}
 

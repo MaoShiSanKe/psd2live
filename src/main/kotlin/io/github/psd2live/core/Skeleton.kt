@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * Anatomical role of a bone.
@@ -79,6 +80,12 @@ data class SkeletonBone(
 	 * parent bone into this one; null sizes it from the bone lengths.
 	 */
 	val blendWidth: Float? = null,
+	/** Null preserves the inferred connection of legacy projects; false explicitly separates coincident joints. */
+	val connected: Boolean? = null,
+	/** Duplicated semantic bones keep their role but drive an independent parameter. */
+	val parameterOverride: String? = null,
+	val mirrorId: String? = null,
+	val ik: SkeletonIkSettings = SkeletonIkSettings(),
 ) {
 	init {
 		require(id.isNotBlank() && id.none(Char::isISOControl)) { "Bone ID must not be blank" }
@@ -102,6 +109,7 @@ data class SkeletonBone(
 	/** The parameter that drives this joint. Standard Cubism IDs where one exists. */
 	val parameterId: String
 		get() {
+			parameterOverride?.let { return it }
 			val s = when (side) {
 				Side.LEFT -> "L"
 				Side.RIGHT -> "R"
@@ -138,6 +146,10 @@ data class SkeletonBone(
 		put("minAngle", minAngle)
 		put("maxAngle", maxAngle)
 		blendWidth?.let { put("blendWidth", it) }
+		connected?.let { put("connected", it) }
+		parameterOverride?.let { put("parameterOverride", it) }
+		mirrorId?.let { put("mirror", it) }
+		put("ik", ik.toJson())
 	}
 
 	companion object {
@@ -171,6 +183,10 @@ data class SkeletonBone(
 				minAngle = o["minAngle"]?.jsonPrimitive?.floatOrNull ?: role.minAngle,
 				maxAngle = o["maxAngle"]?.jsonPrimitive?.floatOrNull ?: role.maxAngle,
 				blendWidth = o["blendWidth"]?.jsonPrimitive?.floatOrNull,
+				connected = o["connected"]?.jsonPrimitive?.booleanOrNull,
+				parameterOverride = o["parameterOverride"]?.jsonPrimitive?.contentOrNull,
+				mirrorId = o["mirror"]?.jsonPrimitive?.contentOrNull,
+				ik = o["ik"]?.jsonObject?.let(SkeletonIkSettings::fromJson) ?: SkeletonIkSettings(),
 			)
 		}
 	}
@@ -215,10 +231,18 @@ data class SkeletonSpec(
 	val enabled: Boolean = true,
 	val bones: List<SkeletonBone> = emptyList(),
 	val sampling: SkeletonSampling = SkeletonSampling(),
+	val symmetryAxisX: Float? = null,
+	val savedPoses: Map<String, Map<String, Float>> = emptyMap(),
+	val ikTargets: Map<String, SkeletonIkTarget> = emptyMap(),
+	val manualWeights: Map<String, SkeletonWeightMap> = emptyMap(),
 ) {
 	init {
+		require(symmetryAxisX == null || symmetryAxisX.isFinite())
+		require(savedPoses.all { (name, values) -> name.isNotBlank() && name.none(Char::isISOControl) &&
+			values.all { (id, value) -> id.isNotBlank() && value.isFinite() } })
 		require(bones.map { it.id }.distinct().size == bones.size) { "Duplicate bone IDs" }
 		val ids = bones.map { it.id }.toSet()
+		require(ikTargets.keys.all { it in ids }) { "IK target bone not found" }
 		require(bones.all { it.parentId == null || it.parentId in ids }) { "Bone parent not found" }
 		val byId = bones.associateBy { it.id }
 		for (bone in bones) {
@@ -234,6 +258,94 @@ data class SkeletonSpec(
 	fun bone(id: String): SkeletonBone? = bones.firstOrNull { it.id == id }
 
 	fun children(id: String?): List<SkeletonBone> = bones.filter { it.parentId == id }
+
+	fun descendants(id: String): Set<String> {
+		val result = linkedSetOf<String>()
+		fun visit(parent: String) { for (child in children(parent)) { result += child.id; visit(child.id) } }
+		visit(id)
+		return result
+	}
+
+	fun isConnected(id: String): Boolean {
+		val child = bone(id) ?: return false
+		val parent = child.parentId?.let(::bone) ?: return false
+		return child.connected != false && kotlin.math.hypot(child.headX - parent.tailX, child.headY - parent.tailY) < 0.5f
+	}
+
+	fun withBoneRenamed(id: String, name: String): SkeletonSpec {
+		require(name.isNotBlank() && name.none(Char::isISOControl)) { "Bone name must not be blank or contain control characters" }
+		val bone = bone(id) ?: return this
+		return withBone(bone.copy(name = name.trim()))
+	}
+
+	fun withSavedPose(name: String, values: Map<String, Float>): SkeletonSpec {
+		require(name.isNotBlank() && name.none(Char::isISOControl))
+		return copy(savedPoses = savedPoses + (name.trim() to values.toMap()))
+	}
+
+	fun withoutSavedPose(name: String): SkeletonSpec = copy(savedPoses = savedPoses - name)
+
+	fun withIkTarget(id: String, target: SkeletonIkTarget?): SkeletonSpec {
+		require(bone(id) != null)
+		return copy(ikTargets = if (target == null) ikTargets - id else ikTargets + (id to target))
+	}
+
+	/** Reparents without changing rest geometry, or translates the whole subtree to connect at the new tip. */
+	fun withBoneParent(id: String, parentId: String?, connect: Boolean = false): SkeletonSpec {
+		val child = bone(id) ?: return this
+		require(parentId != id && parentId !in descendants(id)) { "Bone hierarchy would contain a cycle" }
+		val parent = parentId?.let { requireNotNull(bone(it)) { "Bone parent not found: $it" } }
+		val dx = if (connect && parent != null) parent.tailX - child.headX else 0f
+		val dy = if (connect && parent != null) parent.tailY - child.headY else 0f
+		val subtree = descendants(id) + id
+		return copy(bones = bones.map { b ->
+			val moved = if (b.id in subtree) b.copy(headX = b.headX + dx, headY = b.headY + dy, tailX = b.tailX + dx, tailY = b.tailY + dy) else b
+			if (b.id == id) moved.copy(parentId = parentId, connected = connect && parent != null) else moved
+		})
+	}
+
+	/** Selected bones transform as a unit; external connected endpoints follow without transforming twice. */
+	fun withBonesTransformed(ids: Set<String>, dx: Float = 0f, dy: Float = 0f, degrees: Float = 0f,
+		scale: Float = 1f, includeDescendants: Boolean = false): SkeletonSpec {
+		require(listOf(dx, dy, degrees, scale).all(Float::isFinite) && scale > 0f)
+		val selected = (ids + if (includeDescendants) ids.flatMap(::descendants) else emptyList()).intersect(bones.map { it.id }.toSet())
+		if (selected.isEmpty()) return this
+		val group = bones.filter { it.id in selected }
+		val cx = group.sumOf { (it.headX + it.tailX).toDouble() }.toFloat() / (group.size * 2)
+		val cy = group.sumOf { (it.headY + it.tailY).toDouble() }.toFloat() / (group.size * 2)
+		val angle = Math.toRadians(degrees.toDouble())
+		val c = kotlin.math.cos(angle).toFloat(); val s = kotlin.math.sin(angle).toFloat()
+		fun point(x: Float, y: Float): Pair<Float, Float> =
+			(cx + ((x - cx) * c - (y - cy) * s) * scale + dx) to
+			(cy + ((x - cx) * s + (y - cy) * c) * scale + dy)
+		val heads = mutableMapOf<String, Pair<Float, Float>>()
+		val tails = mutableMapOf<String, Pair<Float, Float>>()
+		for (b in group) { heads[b.id] = point(b.headX, b.headY); tails[b.id] = point(b.tailX, b.tailY) }
+		for (child in bones.filter { isConnected(it.id) }) {
+			val parent = child.parentId!!
+			if (child.id in selected && parent !in selected) tails[parent] = heads.getValue(child.id)
+		}
+		for (child in bones.filter { isConnected(it.id) }) tails[child.parentId]?.let { heads[child.id] = it }
+		return copy(bones = bones.map { b -> b.copy(headX = heads[b.id]?.first ?: b.headX, headY = heads[b.id]?.second ?: b.headY,
+			tailX = tails[b.id]?.first ?: b.tailX, tailY = tails[b.id]?.second ?: b.tailY) })
+	}
+
+	/** Segment/rectangle intersection, including bones which cross the box with both endpoints outside. */
+	fun bonesInBox(x1: Float, y1: Float, x2: Float, y2: Float): Set<String> {
+		val left = minOf(x1, x2); val right = maxOf(x1, x2)
+		val top = minOf(y1, y2); val bottom = maxOf(y1, y2)
+		return bones.filter { b ->
+			val dx = b.tailX - b.headX; val dy = b.tailY - b.headY
+			var from = 0f; var to = 1f
+			fun clip(p: Float, q: Float): Boolean {
+				if (p == 0f) return q >= 0f
+				val r = q / p
+				if (p < 0f) from = maxOf(from, r) else to = minOf(to, r)
+				return from <= to
+			}
+			clip(-dx, b.headX - left) && clip(dx, right - b.headX) && clip(-dy, b.headY - top) && clip(dy, bottom - b.headY)
+		}.mapTo(linkedSetOf()) { it.id }
+	}
 
 	/** Parents before children. */
 	fun topological(): List<SkeletonBone> {
@@ -255,14 +367,14 @@ data class SkeletonSpec(
 		fun near(ax: Float, ay: Float) = kotlin.math.hypot(ax - oldX, ay - oldY) < 0.5f
 		val linked = mutableSetOf(bone.id to end)
 		if (end == BoneEnd.HEAD) {
-			bone.parentId?.let { p -> bone(p)?.takeIf { near(it.tailX, it.tailY) }?.let { linked += it.id to BoneEnd.TAIL } }
+			if (isConnected(bone.id)) bone.parentId?.let { linked += it to BoneEnd.TAIL }
 		}
-		val jointOwner = if (end == BoneEnd.TAIL) bone.id else bone.parentId
+		val jointOwner = if (end == BoneEnd.TAIL) bone.id else bone.parentId?.takeIf { isConnected(bone.id) }
 		for (child in bones.filter { it.parentId == jointOwner && it.id != bone.id }) {
-			if (near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
+			if (isConnected(child.id) && near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
 		}
 		if (end == BoneEnd.TAIL) {
-			for (child in children(bone.id)) if (near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
+			for (child in children(bone.id)) if (isConnected(child.id) && near(child.headX, child.headY)) linked += child.id to BoneEnd.HEAD
 		}
 		return copy(bones = bones.map { b ->
 			var next = b
@@ -275,7 +387,13 @@ data class SkeletonSpec(
 	/** Rebinds [drawableId] to [boneId] alone, or unbinds it when [boneId] is null. */
 	fun withDrawableBound(drawableId: String, boneId: String?): SkeletonSpec {
 		require(boneId == null || bone(boneId) != null) { "Bone not found: $boneId" }
-		return copy(bones = bones.map { b ->
+		fun skinRoot(id: String?): String? {
+			val start = id?.let(::bone) ?: return null
+			return generateSequence(start) { b -> b.parentId?.let(::bone)?.takeUnless { it.role.body || it.role.anchor } }.last().id
+		}
+		val previous = bones.firstOrNull { drawableId in it.drawableIds }?.id
+		val retained = if (skinRoot(previous) == skinRoot(boneId) && boneId != null) manualWeights else manualWeights - drawableId
+		return copy(manualWeights = retained, bones = bones.map { b ->
 		when {
 			b.id == boneId -> if (drawableId in b.drawableIds) b else b.copy(drawableIds = b.drawableIds + drawableId)
 			drawableId in b.drawableIds -> b.copy(drawableIds = b.drawableIds - drawableId)
@@ -284,19 +402,49 @@ data class SkeletonSpec(
 		})
 	}
 
+	fun withDrawablesBound(drawableIds: Set<String>, boneId: String?): SkeletonSpec {
+		require(boneId == null || bone(boneId) != null) { "Bone not found: $boneId" }
+		return drawableIds.fold(this) { next, id -> next.withDrawableBound(id, boneId) }
+	}
+
+	fun withManualWeights(drawableId: String, weights: SkeletonWeightMap?): SkeletonSpec =
+		copy(manualWeights = if (weights == null) manualWeights - drawableId else manualWeights + (drawableId to weights))
+
 	fun withBone(bone: SkeletonBone): SkeletonSpec {
 		val index = bones.indexOfFirst { it.id == bone.id }
 		return copy(bones = if (index < 0) bones + bone else bones.toMutableList().also { it[index] = bone })
 	}
 
+	/** Creates an unbound custom bone; a parent makes its head connect to that parent's tail. */
+	fun withCustomBone(headX: Float, headY: Float, tailX: Float, tailY: Float, parentId: String? = null): SkeletonSpec {
+		require(listOf(headX, headY, tailX, tailY).all(Float::isFinite)) { "Bone coordinates must be finite" }
+		val parent = parentId?.let { requireNotNull(bone(it)) { "Bone parent not found: $it" } }
+		val x = parent?.tailX ?: headX
+		val y = parent?.tailY ?: headY
+		if (kotlin.math.hypot(tailX - x, tailY - y) < 0.001f) return this
+		val id = generateSequence(1) { it + 1 }.map { "custom_$it" }.first { bone(it) == null }
+		return withBone(SkeletonBone(id, SkeletonNames.bone(BoneRole.CUSTOM, Side.NONE), parentId, BoneRole.CUSTOM,
+			headX = x, headY = y, tailX = tailX, tailY = tailY, connected = parentId != null))
+	}
+
 	/** Removes a bone and re-parents its children to the removed bone's parent. */
 	fun withoutBone(boneId: String): SkeletonSpec {
 		val bone = bone(boneId) ?: return this
-		return copy(bones = bones.filter { it.id != boneId }.map { if (it.parentId == boneId) it.copy(parentId = bone.parentId) else it })
+		return copy(ikTargets = ikTargets - boneId, manualWeights = manualWeights.mapValues { it.value.remapBones(mapOf(boneId to bone.parentId)) },
+			bones = bones.filter { it.id != boneId }.map {
+			val next = if (it.parentId == boneId) it.copy(parentId = bone.parentId, connected = false) else it
+			if (next.mirrorId == boneId) next.copy(mirrorId = null) else next
+		})
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 4)
+		put("version", 9)
+		putJsonObject("manualWeights") { manualWeights.forEach { (id, map) -> put(id, map.toJson()) } }
+		putJsonObject("ikTargets") { ikTargets.forEach { (id, target) -> put(id, target.toJson()) } }
+		symmetryAxisX?.let { put("symmetryAxisX", it) }
+		putJsonObject("savedPoses") { savedPoses.forEach { (name, values) ->
+			putJsonObject(name) { values.forEach { (id, value) -> put(id, value) } }
+		} }
 		put("enabled", enabled)
 		put("sampling", sampling.toJson())
 		putJsonArray("bones") { bones.forEach { add(it.toJson()) } }
@@ -311,6 +459,10 @@ data class SkeletonSpec(
 				enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
 				bones = raw.map(SkeletonBone::fromJson),
 				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(),
+				symmetryAxisX = o["symmetryAxisX"]?.jsonPrimitive?.floatOrNull,
+				savedPoses = o["savedPoses"]?.jsonObject?.mapValues { (_, values) -> values.jsonObject.mapValues { it.value.jsonPrimitive.float } }.orEmpty(),
+				ikTargets = o["ikTargets"]?.jsonObject?.mapValues { SkeletonIkTarget.fromJson(it.value.jsonObject) }.orEmpty(),
+				manualWeights = o["manualWeights"]?.jsonObject?.mapValues { SkeletonWeightMap.fromJson(it.value.jsonObject) }.orEmpty(),
 			)
 			return migrateAnchors(spec, raw.associate { it.getValue("id").jsonPrimitive.content to it.getValue("role").jsonPrimitive.content })
 		}

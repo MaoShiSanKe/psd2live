@@ -28,9 +28,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.LinearProgressIndicator
-import androidx.compose.material.ProgressIndicatorDefaults
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
@@ -57,6 +57,7 @@ import androidx.compose.ui.window.WindowState
 import io.github.psd2live.i18n.AppLanguage
 import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.state.LogLevel
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.CanvasStatusTone
 import io.github.psd2live.agent.AgentMcpConnectionInfo
@@ -136,6 +137,9 @@ fun FrameWindowScope.PSD2LiveApp(
 	},
 ) {
 	val state by viewModel.uiState
+	val baking by viewModel.simulationBaking.collectAsState()
+	val download by viewModel.modelDownloadState.collectAsState()
+	val task = io.github.psd2live.ui.state.taskProgress(state, baking, download)
 	var helpDialogTab by remember { mutableStateOf<HelpTab?>(null) }
 	var showAgentDialog by remember { mutableStateOf(false) }
 	var tutorial by remember { mutableStateOf(InteractiveTutorialState()) }
@@ -143,7 +147,7 @@ fun FrameWindowScope.PSD2LiveApp(
 
 	fun startInteractiveTutorial(id: TutorialId = TutorialId.BASIC, path: TutorialPath = TutorialPath.defaultFor(id)) {
 		helpDialogTab = null
-		tutorial = InteractiveTutorialState().start(id, path)
+		tutorial = InteractiveTutorialState().start(id, path, hasModel = state.previewModel != null)
 	}
 
 	fun stopInteractiveTutorial() {
@@ -159,7 +163,7 @@ fun FrameWindowScope.PSD2LiveApp(
 	}
 
 	fun continueNextTutorial() {
-		tutorial = tutorial.continueNextTutorial()
+		tutorial = tutorial.continueNextTutorial(hasModel = state.previewModel != null)
 	}
 
 	fun openTutorialCatalog() {
@@ -176,6 +180,23 @@ fun FrameWindowScope.PSD2LiveApp(
 	val currentLanguage = state.currentLanguage
 
 	var isDraggingOver by remember { mutableStateOf(false) }
+
+	// Which renderers draw this window and the editing canvas: a window composited in software makes every
+	// panel and animation slow on its own, so the log says so instead of leaving it to be guessed.
+	LaunchedEffect(window) {
+		val api = window?.let { runCatching { it.renderApi.name }.getOrNull() } ?: return@LaunchedEffect
+		viewModel.addLog(tr("log.renderer.window", api), level = if (api == "SOFTWARE") LogLevel.WARNING else LogLevel.INFO, tag = "Render")
+	}
+	val canvasRenderer by io.github.psd2live.render.CanvasRenderService.status.collectAsState()
+	LaunchedEffect(canvasRenderer) {
+		when (val status = canvasRenderer) {
+			is io.github.psd2live.render.CanvasRenderService.Status.Ready ->
+				viewModel.addLog(tr("log.renderer.canvasGpu", status.description), tag = "Render")
+			is io.github.psd2live.render.CanvasRenderService.Status.Unavailable ->
+				viewModel.addLog(tr("log.renderer.canvasSoftware", status.reason), level = LogLevel.WARNING, tag = "Render")
+			io.github.psd2live.render.CanvasRenderService.Status.Starting -> Unit
+		}
+	}
 
 	// Window Drop Target for PSD Drag & Drop and Project Files
 	LaunchedEffect(window) {
@@ -215,7 +236,7 @@ fun FrameWindowScope.PSD2LiveApp(
 							}
 							viewModel.withSavedChanges {
 								viewModel.setInputPath(action.file.absolutePath)
-								viewModel.analyze()
+								viewModel.analyze(discardUnsaved = true)
 							}
 						}
 						is DesktopDropTarget.DroppedAction.SetOutputDir -> {
@@ -262,7 +283,7 @@ fun FrameWindowScope.PSD2LiveApp(
 			if (!isBusy) {
 				val selected = NativeFilePicker.choosePsdFile(window, state.inputPath)
 				if (!selected.isNullOrBlank()) {
-					viewModel.withSavedChanges { viewModel.setInputPath(selected); viewModel.analyze() }
+					viewModel.withSavedChanges { viewModel.setInputPath(selected); viewModel.analyze(discardUnsaved = true) }
 				}
 			}
 		}
@@ -277,7 +298,7 @@ fun FrameWindowScope.PSD2LiveApp(
 		}
         val onReanalyzeAction = {
 			if (hasInput && !isBusy) {
-				viewModel.withSavedChanges { viewModel.analyze() }
+				viewModel.withSavedChanges { viewModel.analyze(discardUnsaved = true) }
 			}
 		}
 
@@ -302,6 +323,11 @@ fun FrameWindowScope.PSD2LiveApp(
 			state.errorMessage != null ||
 			isDraggingOver ||
 			tutorial.active
+
+		// The start screen that follows an import, like a mesh split offer, is a modal inside the workspace;
+		// the tour steps aside until it is answered so neither covers the other.
+		val tutorialPaused = viewModel.pendingMeshSplit != null || viewModel.pendingStartScreen != null
+		val tutorialShown = tutorial.active && !tutorialPaused
 
 		// Tutorial step side-effects and auto-advance
 		LaunchedEffect(
@@ -328,7 +354,9 @@ fun FrameWindowScope.PSD2LiveApp(
 			}
 			if (step.expandModelSettings) {
 				viewModel.setInspectorCollapsed(false)
-				viewModel.setModelSettingsExpanded(true)
+			}
+			if (step.expandSimulationPresets && !state.simulationPresetsExpanded) {
+				viewModel.setSimulationPresetsExpanded(true)
 			}
 			// Don't force a mode that needs a target until the user finishes selecting.
 			if (step.prerequisiteMet(state)) {
@@ -346,13 +374,14 @@ fun FrameWindowScope.PSD2LiveApp(
 			}
 		}
 
+		Box(Modifier.fillMaxSize()) {
 		CompositionLocalProvider(LocalTutorialTargets provides tutorialTargets) {
 		Box(
 			modifier = Modifier
 				.fillMaxSize()
 				.border(BorderStroke(1.dp, colors.border))
 				.onPreviewKeyEvent { event ->
-					if (tutorial.active && event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+					if (tutorialShown && event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
 						stopInteractiveTutorial()
 						return@onPreviewKeyEvent true
 					}
@@ -388,6 +417,7 @@ fun FrameWindowScope.PSD2LiveApp(
 					if (tutorial.active) {
 						return@onPreviewKeyEvent when (action) {
 							ShortcutAction.OPEN_PSD -> { onOpenPsdAction(); true }
+							ShortcutAction.OPEN_PROJECT -> { onOpenProjectAction(); true }
 							ShortcutAction.OPEN_HELP -> { stopInteractiveTutorial(); true }
 							else -> true // consume other app shortcuts during the tour
 						}
@@ -478,6 +508,16 @@ fun FrameWindowScope.PSD2LiveApp(
 						sidebarToggles = sidebarToggles,
 						onToggleSidebar = viewModel::toggleSidebar,
 						onOpenPsd = onOpenPsdAction,
+						onReplaceCmo3 = {
+                            NativeFilePicker.chooseCmo3File(window, state.inputPath)?.let {
+                                viewModel.importCmo3(Path.of(it), io.github.psd2live.core.Cmo3ImportMode.REPLACE)
+                            }
+                        },
+                        onNewCmo3 = {
+                            NativeFilePicker.chooseCmo3File(window, state.inputPath)?.let {
+                                viewModel.withSavedChanges { viewModel.importCmo3(Path.of(it), io.github.psd2live.core.Cmo3ImportMode.NEW) }
+                            }
+                        },
                         onOpenProject = onOpenProjectAction,
                         onSaveProject = { viewModel.requestProjectSave() },
                         onSaveProjectAs = { viewModel.requestProjectSave(true) },
@@ -497,7 +537,7 @@ fun FrameWindowScope.PSD2LiveApp(
 						onShowSettings = { viewModel.openSettingsDialog() },
 						onShowAgentConnection = { showAgentDialog = true },
 						onShowTextureUpscale = { viewModel.openTextureUpscaleDialog() },
-						onBatchMeshSplit = { viewModel.requestBatchMeshSplit() },
+						onStartScreen = { viewModel.requestStartScreen() },
 						onShowHistory = { viewModel.showHistoryModule() },
 						onNewEditTab = { viewModel.addWorkspace() },
 						onNewPreviewTab = { viewModel.addCanvas(CanvasMode.PREVIEW) },
@@ -508,12 +548,12 @@ fun FrameWindowScope.PSD2LiveApp(
 						onShowAbout = { helpDialogTab = HelpTab.ABOUT },
 						onShowHelp = { tab -> helpDialogTab = tab },
 						onOpenTutorialCatalog = { openTutorialCatalog() },
-						tutorialMenuForce = if (tutorial.active) tutorial.step.forcesMenu else null,
-						tutorialHighlightTarget = if (tutorial.active) {
+						tutorialMenuForce = if (tutorialShown) tutorial.step.forcesMenu else null,
+						tutorialHighlightTarget = if (tutorialShown) {
 							tutorial.step.effectiveTargetId(state)
 						} else null,
-						tutorialId = if (tutorial.active) tutorial.tutorialId else null,
-						tutorialStep = if (tutorial.active) tutorial.step else null,
+						tutorialId = if (tutorialShown) tutorial.tutorialId else null,
+						tutorialStep = if (tutorialShown) tutorial.step else null,
 						tutorialStepIndex = tutorial.stepIndex,
 						tutorialReviewing = tutorial.reviewing,
 						tutorialIsFirstStep = tutorial.isFirstStep,
@@ -546,7 +586,11 @@ fun FrameWindowScope.PSD2LiveApp(
 						onOpenPsd = onOpenPsdAction,
 					)
 					// Selection / tool hint bar ("已选 N 个对象 / M 个控制点 · …")
-					StatusBar(state, viewModel, Modifier.tutorialTarget(TutorialTargetId.STATUS_BAR))
+					if (task == null) {
+						StatusBar(state, viewModel, Modifier.tutorialTarget(TutorialTargetId.STATUS_BAR))
+					} else {
+						Spacer(Modifier.fillMaxWidth().height(24.dp).tutorialTarget(TutorialTargetId.STATUS_BAR))
+					}
 				}
 			}
 
@@ -563,7 +607,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				)
 			}
 
-			if (tutorial.active && !tutorial.step.coachBesideMenu) {
+			if (tutorialShown && !tutorial.step.coachBesideMenu) {
 				// Menu steps render their overlay inside the menu popup.
 				val step = tutorial.step
 				val prereqOk = step.prerequisiteMet(state)
@@ -630,8 +674,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				config = state.textureUpscale,
 				isBusy = isBusy,
 				isUpscaling = state.isUpscaling,
-				progress = state.progress,
-				statusText = state.statusText,
+				onDownloadStateChange = viewModel::reportModelDownload,
 				onDismiss = { viewModel.closeTextureUpscaleDialog() },
 				onApply = viewModel::setTextureUpscale,
 			)
@@ -725,6 +768,12 @@ fun FrameWindowScope.PSD2LiveApp(
 				}
 			}
 		}
+		// Keep the shared task indicator visible above dialog scrims.
+		if (task != null) {
+			StatusBar(state, viewModel, Modifier.align(Alignment.BottomCenter).background(colors.windowBackground), task)
+		}
+
+		} // Dialogs and shared status bar
 	}
 }
 
@@ -733,17 +782,18 @@ private fun StatusBar(
 	state: PSD2LiveState,
 	viewModel: PSD2LiveViewModel,
 	modifier: Modifier = Modifier,
+	task: io.github.psd2live.ui.state.TaskProgress? = null,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val editor = viewModel.canvasEditor
 	// Read editor snapshot fields so tool/selection changes recompose this bar.
-	val editorMessage = if (!state.isBusy && state.activeCanvas.mode == CanvasMode.EDIT) {
+	val editorMessage = if (task == null && state.activeCanvas.mode == CanvasMode.EDIT) {
 		editor.statusBarMessage(state.selectedLayerId, state.selectedDeformerId)
 	} else {
 		null
 	}
-	val statusText = editorMessage?.text ?: state.statusText.ifBlank { tr("status.ready") }
+	val statusText = task?.text ?: editorMessage?.text ?: state.statusText.ifBlank { tr("status.ready") }
 	val statusColor = when (editorMessage?.tone) {
 		CanvasStatusTone.ERROR -> colors.error
 		CanvasStatusTone.WARNING -> colors.warning
@@ -767,20 +817,20 @@ private fun StatusBar(
 			modifier = Modifier.weight(1f),
 		)
 
-		if (state.isBusy) {
+		if (task != null) {
 			Spacer(Modifier.width(12.dp))
 			Row(
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.spacedBy(6.dp),
 			) {
-				if (!state.isIndeterminateProgress) {
+				if (task.fraction != null) {
 					Text(
-						text = "%3d%%".format((state.progress * 100).toInt()),
+						text = "%3d%%".format((task.fraction * 100).toInt()),
 						style = typography.monoSmall.copy(fontSize = 10.sp),
 						color = colors.accent,
 					)
 					LinearProgressIndicator(
-						progress = state.progress,
+						progress = task.fraction,
 						modifier = Modifier.width(140.dp).height(5.dp),
 						color = colors.accent,
 						backgroundColor = colors.controlBackground,
@@ -791,6 +841,11 @@ private fun StatusBar(
 						color = colors.accent,
 						backgroundColor = colors.controlBackground,
 					)
+				}
+				if (task.canCancelBake) {
+					CompactIconButton(onClick = viewModel::cancelSimulationBake, tooltip = tr("sim.cancelBake"), size = 18.dp) {
+						IconClose(modifier = Modifier.size(9.dp), tint = colors.textPrimary)
+					}
 				}
 			}
 		}

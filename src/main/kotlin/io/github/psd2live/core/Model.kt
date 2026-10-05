@@ -101,6 +101,17 @@ data class RigAnchors(
 enum class MeshFillAlgorithm { GRADED_POISSON, ADAPTIVE_QUADTREE, SIMPLE_TRIANGLES, TRIANGLE_FRACTAL, CONTOUR_PAVING }
 enum class MeshEdgeMode { SINGLE, DOUBLE, TRIPLE }
 
+/** What the lengths in [MeshSettings] are measured in. */
+enum class MeshUnits {
+	/** Source pixels, as projects saved before mesh units: detail and cost grow with the document's resolution. */
+	PIXELS,
+	/**
+	 * Pixels of a document [MeshResolution.REFERENCE_SIDE] long: the same settings give the same mesh at any
+	 * resolution, and larger documents are meshed from a reduced raster.
+	 */
+	DOCUMENT,
+}
+
 /**
  * [edgeRatio]: first interior spacing over the contour spacing, so the fill never repeats the contour row.
  * [gradation]: spacing growth per pixel of depth, up to the interior density.
@@ -159,9 +170,13 @@ data class PipelineConfig(
 	val meshSuppressBoundaryDiagonals: Boolean = false,
 	val meshFillParameters: MeshFillParameters = MeshFillParameters(),
 	val meshOverrides: Map<String, MeshSettings> = emptyMap(),
+	/** The unit of every mesh length above and of [meshOverrides]. */
+	val meshUnits: MeshUnits = MeshUnits.DOCUMENT,
 	val alphaThreshold: Int = 8,
 	val headTurnStrength: Float = 1f,
 	val bodyStrength: Float = 1f,
+	/** How far the body parameters move the body at their full values (see [RigTuning]). */
+	val rigTuning: RigTuning = RigTuning(),
 	val meshOnly: Boolean = false,
 	val generateDeformers: Boolean = true,
 	val featureDisplacementEnabled: Boolean = false,
@@ -171,16 +186,24 @@ data class PipelineConfig(
     val mouthColor: Int? = null,
     val mouthThickness: Float = 1.5f,
 	val exportMotions: Boolean = true,
+	/** The basic motions (idle, blink, nod, shake) as a group: off, the model has none of them. */
+	val motionBasic: Boolean = true,
 	val motionIdle: Boolean = true,
 	val motionBlink: Boolean = true,
 	val motionNod: Boolean = true,
 	val motionShake: Boolean = true,
-	/** Skeleton one-shots (tail swing, crouch, weight shift), exported when the skeleton can play them. */
+	/**
+	 * The skeleton presets as a group: off, the model has none of them. On, each is exported when the skeleton
+	 * can play it and it is not switched off ([MotionPresetSettings.disabled]).
+	 */
 	val motionSkeleton: Boolean = true,
 	val generatePhysics: Boolean = true,
 	val physicsFrontHair: Boolean = true,
 	val physicsBackHair: Boolean = true,
 	val physicsEyeJelly: Boolean = true,
+	/** The hair model preset simulates this hair: the legacy sway warp, parameter and pendulum are not built. */
+	val hairSimulationFront: Boolean = false,
+	val hairSimulationBack: Boolean = false,
 	val exportCmo3: Boolean = true,
 	val exportMoc3: Boolean = true,
 	val exportJson: Boolean = true,
@@ -213,6 +236,9 @@ data class PipelineConfig(
 	val drawOrderOverrides: Map<String, Float> = emptyMap(),
 	/** Durable Agent/editor changes replayed over every generated base rig and retained on export. */
 	val rigEdits: RigEditOverlay = RigEditOverlay.Empty,
+	/** Optional immutable generation input; textures still come from the current source artwork. */
+	val generationSource: org.umamo.format.art.SourceArt? = null,
+	val meshSource: org.umamo.format.art.SourceArt? = null,
 ) {
 	fun moc3ExportOptions(): org.umamo.interop.moc3.Moc3ExportOptions =
 		org.umamo.interop.moc3.Moc3ExportOptions(

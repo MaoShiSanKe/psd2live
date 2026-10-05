@@ -84,22 +84,17 @@ import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CreatePlacementKind
 import io.github.psd2live.ui.CreateRelation
-import io.github.psd2live.ui.ComponentPalette
-import io.github.psd2live.ui.components.CompactIconButton
+import io.github.psd2live.core.ComponentPalette
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuHeader
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
-import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
 import io.github.psd2live.ui.components.IconCollapseBranch
 import io.github.psd2live.ui.components.IconDeformPath
 import io.github.psd2live.ui.components.IconDrawOrder
-import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconExpandBranch
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconMoveToRoot
@@ -107,7 +102,6 @@ import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconRotationDeformer
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.IconSelectionBounds
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.components.IconWarpDeformer
@@ -584,7 +578,7 @@ private fun HierarchyTreeList(
 
 	val deformers = model.rig.puppet.deformers
 	val drawables = model.rig.puppet.drawables
-	val parentOverrides = state.parentOverrides
+	val parentOverrides = state.hierarchyParentOverrides
 
 	val (deformerChildrenMap, drawableChildrenMap) = remember(deformers, drawables, parentOverrides) {
 		buildHierarchyChildrenMaps(deformers, drawables, parentOverrides)
@@ -663,64 +657,19 @@ private fun HierarchyTreeList(
 	}
 
 	Column(modifier = Modifier.fillMaxSize()) {
-		// Search & Expand/Collapse toolbar
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.height(26.dp)
-				.background(colors.panelElevated)
-				.border(BorderStroke(1.dp, colors.divider))
-				.padding(horizontal = 6.dp, vertical = 2.dp)
-				.tutorialTarget(TutorialTargetId.HIERARCHY_TOOLBAR),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(4.dp),
+		// Search, the canvas the tree belongs to, expand and collapse.
+		PanelToolbar(
+			modifier = Modifier.tutorialTarget(TutorialTargetId.HIERARCHY_TOOLBAR),
+			search = PanelSearch(searchQuery, viewModel::setHierarchySearch, tr("canvas.hierarchy.search")),
 		) {
+			Spacer(Modifier.weight(1f))
 			if (state.activeWorkspace.canvases.size > 1) {
-				Text(
-					text = viewModel.canvasTitle(state.activeCanvas),
-					color = colors.textMuted,
-					fontSize = 10.sp,
-					maxLines = 1,
-					overflow = TextOverflow.Ellipsis,
-					modifier = Modifier.widthIn(max = 108.dp),
-				)
+				PanelToolbarText(viewModel.canvasTitle(state.activeCanvas), modifier = Modifier.widthIn(max = 108.dp))
 			}
-			CompactTextField(
-				value = searchQuery,
-				onValueChange = { viewModel.setHierarchySearch(it) },
-				placeholder = tr("canvas.hierarchy.search"),
-				modifier = Modifier.weight(1f),
-				height = 20.dp,
-				leadingIcon = { IconSearch(modifier = Modifier.size(10.dp), tint = colors.textMuted) },
-				trailingIcon = if (searchQuery.isNotEmpty()) {
-					{
-						Box(
-							modifier = Modifier
-								.size(14.dp)
-								.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-								.clickable { viewModel.setHierarchySearch("") },
-							contentAlignment = Alignment.Center,
-						) {
-							IconClose(modifier = Modifier.size(8.dp), tint = colors.textMuted)
-						}
-					}
-				} else null,
+			PanelExpandCollapseButtons(
+				onExpandAll = { deformers.forEach { expandedMap[it.id.raw] = true } },
+				onCollapseAll = { deformers.forEach { expandedMap[it.id.raw] = false } },
 			)
-
-			CompactIconButton(
-				onClick = { deformers.forEach { expandedMap[it.id.raw] = true } },
-				size = 20.dp,
-				tooltip = tr("canvas.hierarchy.expandAll"),
-			) {
-				IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-			}
-			CompactIconButton(
-				onClick = { deformers.forEach { expandedMap[it.id.raw] = false } },
-				size = 20.dp,
-				tooltip = tr("canvas.hierarchy.collapseAll"),
-			) {
-				IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-			}
 		}
 
 		// Tree Body with Container Hit-Testing & Overlay and Draw Order Ruler
@@ -738,7 +687,7 @@ private fun HierarchyTreeList(
 				.onGloballyPositioned { containerCoordinates = it }
 				.onPointerEvent(PointerEventType.Move) { event ->
 					val pos = event.changes.firstOrNull()?.position ?: return@onPointerEvent
-					treeDragState.onMove(pos, itemBoundsMap.values, deformers, state.parentOverrides)
+					treeDragState.onMove(pos, itemBoundsMap.values, deformers, state.hierarchyParentOverrides)
 				}
 				.onPointerEvent(PointerEventType.Release) { event ->
 					if (event.button == PointerButton.Primary && treeDragState.isPressed) {
@@ -846,7 +795,7 @@ private fun HierarchyTreeList(
 					}
 				}
 
-				val selectedAncestorDeformerIds = remember(model, state.selectedLayerId, state.selectedDeformerId, state.parentOverrides) {
+				val selectedAncestorDeformerIds = remember(model, state.selectedLayerId, state.selectedDeformerId, state.hierarchyParentOverrides) {
 					val ancestors = mutableSetOf<String>()
 					val deformerById = model.rig.puppet.deformers.associateBy { it.id.raw }
 					fun collectAncestors(startParent: String?) {
@@ -854,23 +803,23 @@ private fun HierarchyTreeList(
 						val seen = mutableSetOf<String>()
 						while (parent != null && seen.add(parent)) {
 							ancestors.add(parent)
-							parent = state.parentOverrides[parent] ?: deformerById[parent]?.parent?.raw
+							parent = state.hierarchyParentOverrides[parent] ?: deformerById[parent]?.parent?.raw
 						}
 					}
 					state.selectedLayerId?.let { layerId ->
 						val drawableId = model.rig.layerIdByDrawableId.entries.firstOrNull { it.value == layerId }?.key
 						val drawable = drawableId?.let { id -> model.rig.puppet.drawables.firstOrNull { it.id.raw == id } }
-						collectAncestors(drawable?.let { state.parentOverrides[it.id.raw] ?: it.parentDeformerId?.raw })
+						collectAncestors(drawable?.let { state.hierarchyParentOverrides[it.id.raw] ?: it.parentDeformerId?.raw })
 					}
 					state.selectedDeformerId?.let { deformerId ->
 						val deformer = deformerById[deformerId]
-						collectAncestors(state.parentOverrides[deformerId] ?: deformer?.parent?.raw)
+						collectAncestors(state.hierarchyParentOverrides[deformerId] ?: deformer?.parent?.raw)
 					}
 					ancestors
 				}
 
 				val selectedDescendantLabelByAncestor = remember(
-					model, state.selectedLayerId, state.selectedDeformerId, state.parentOverrides, selectedAncestorDeformerIds,
+					model, state.selectedLayerId, state.selectedDeformerId, state.hierarchyParentOverrides, selectedAncestorDeformerIds,
 				) {
 					if (selectedAncestorDeformerIds.isEmpty()) emptyMap()
 					else {
@@ -1146,7 +1095,7 @@ private fun DeformerTreeItem(
 				selectId = segmentId,
 				name = chain.displayName,
 				isDeformer = true,
-				currentParentId = effectiveParent(headId, headDeformer.parent?.raw, state.parentOverrides),
+				currentParentId = effectiveParent(headId, headDeformer.parent?.raw, state.hierarchyParentOverrides),
 				top = topLeft.y,
 				bottom = topLeft.y + coords.size.height,
 			),
@@ -1188,7 +1137,7 @@ private fun DeformerTreeItem(
 							selectId = fallbackSelectId,
 							name = chain.displayName,
 							isDeformer = true,
-							currentParentId = effectiveParent(headId, headDeformer.parent?.raw, state.parentOverrides),
+							currentParentId = effectiveParent(headId, headDeformer.parent?.raw, state.hierarchyParentOverrides),
 							top = topLeft.y,
 							bottom = topLeft.y + coords.size.height,
 						)
@@ -1717,7 +1666,7 @@ private fun DrawableTreeItem(
 							selectId = itemId,
 							name = drawable.name,
 							isDeformer = false,
-							currentParentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.parentOverrides),
+							currentParentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.hierarchyParentOverrides),
 							top = topLeft.y,
 							bottom = topLeft.y + coords.size.height,
 						)
@@ -1779,7 +1728,7 @@ private fun DrawableTreeItem(
 					if (event.button == PointerButton.Secondary) {
 						val clickPos = event.changes.firstOrNull()?.position ?: Offset.Zero
 						menuClickOffset = clickPos
-						if (layerId != null && state.selectedLayerId != layerId) {
+						if (layerId != null && !isLayerSelected) {
 							viewModel.selectLayer(layerId)
 						}
 						treeDragState.clear()
@@ -1797,7 +1746,7 @@ private fun DrawableTreeItem(
 								selectId = itemId,
 								name = drawable.name,
 								isDeformer = false,
-								currentParentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.parentOverrides),
+								currentParentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.hierarchyParentOverrides),
 								top = containerPos.y - localPos.y,
 								bottom = containerPos.y - localPos.y + coords.size.height,
 							)
@@ -1970,7 +1919,7 @@ private fun DrawableTreeItem(
 					text = tr("canvas.hierarchy.importLayer"),
 					onClick = {
 						showMenu = false
-						val parentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.parentOverrides)
+						val parentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.hierarchyParentOverrides)
 						val parentLabel = parentId
 							?.let { id -> model.rig.puppet.deformers.firstOrNull { it.id.raw == id }?.name }
 							?: tr("canvas.hierarchy.root")
@@ -1984,6 +1933,13 @@ private fun DrawableTreeItem(
 				CompactMenuDivider()
 
 				CompactMenuSection(tr("canvas.hierarchy.menuSettings"))
+                CompactMenuItem(
+                    text = if (viewModel.depthSplitMiddleIds(drawable.id.raw).isNotEmpty())
+                        tr("editor.depthSplit.quick", drawable.name) else tr("editor.depthSplit.menu"),
+                    enabled = drawable.mesh != null && !state.isBusy && !state.workspaceEditBusy,
+                    onClick = { showMenu = false; viewModel.requestDepthSplit(drawable.id.raw) },
+                    icon = { IconDrawOrder(tint = colors.textMuted, modifier = Modifier.size(13.dp)) },
+                )
 				val effectiveOrder = state.getEffectiveDrawOrder(drawable.id.raw, layerId, drawable.drawOrder)
 				val isOverridden = state.drawOrderOverrides.containsKey(layerId) || state.drawOrderOverrides.containsKey(drawable.id.raw)
 				CompactMenuItem(

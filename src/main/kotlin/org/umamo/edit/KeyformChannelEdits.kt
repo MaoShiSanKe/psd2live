@@ -92,7 +92,7 @@ private fun PuppetModel.staticValueOf(owner: KeyformOwner, channel: FormChannel)
 			}
 
 		is KeyformOwner.Glue ->
-			glues.firstOrNull { it.meshA == owner.meshA && it.meshB == owner.meshB }?.let { glue ->
+			glues.firstOrNull { owner.matches(it) }?.let { glue ->
 				if (channel == FormChannel.GLUE_INTENSITY) ChannelValue.Scalar(glue.intensity) else null
 			}
 	}
@@ -131,7 +131,7 @@ private fun PuppetModel.withChannelGrids(owner: KeyformOwner, channelGrids: Chan
 			copy(
 				glues =
 					glues.map { glue ->
-						if (glue.meshA == owner.meshA && glue.meshB == owner.meshB) {
+						if (owner.matches(glue)) {
 							glue.copy(channelGrids = channelGrids)
 						} else {
 							glue

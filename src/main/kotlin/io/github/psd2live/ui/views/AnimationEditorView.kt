@@ -105,6 +105,7 @@ import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.MotionEditorView
 import io.github.psd2live.ui.state.MotionKeyRef
+import io.github.psd2live.ui.state.MotionEditorState
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -126,8 +127,8 @@ internal fun motionCurveColor(index: Int): Color = CURVE_COLORS[index.mod(CURVE_
 
 internal fun builtinMotionTitle(name: String): String = tr("export.motion.${name.replaceFirstChar(Char::lowercase)}")
 
-/** One choice in the editor's motion picker: a generated motion or a user clip. */
-private data class MotionChoice(val builtin: String?, val clipId: String?, val label: String)
+/** One choice in the editor's motion picker: a generated motion or a user clip, by the id the editor opens. */
+private data class MotionChoice(val clipId: String?, val label: String)
 
 /**
  * The animation editor: a timeline of the clip the animation panel opened, one track per parameter, edited
@@ -182,149 +183,149 @@ private fun EditorToolbar(state: PSD2LiveState, viewModel: PSD2LiveViewModel, cl
 	val editor = viewModel.motionEditor
 	val clips = state.rigEdits.motionClips
 	val skeleton = state.rigEdits.skeleton
-	val choices = remember(clips, skeleton) {
+	val presets = state.rigEdits.motionPresets
+	val basic = state.motionBasic
+	val skeletonPresets = state.motionSkeleton
+	val choices = remember(clips, skeleton, presets, basic, skeletonPresets) {
 		val builtins = MotionClips.BUILTIN_NAMES.filter { name ->
-			MotionClips.overrideOf(clips, name) != null || MotionClips.builtinTracks(name, skeleton).isNotEmpty()
+			presets[name]?.deleted != true && (if (MotionClips.isSkeletonPreset(name)) skeletonPresets else basic) &&
+				(MotionClips.overrideOf(clips, name) != null || MotionClips.builtinTracks(name, skeleton).isNotEmpty())
 		}.map { name ->
-			val override = MotionClips.overrideOf(clips, name)
-			MotionChoice(name, override?.id, builtinMotionTitle(name) + if (override != null) " •" else "")
+			val edited = MotionClips.overrideOf(clips, name) != null
+			MotionChoice(MotionEditorState.presetClipId(name), builtinMotionTitle(name) + if (edited) " •" else "")
 		}
-		val custom = clips.filter { it.builtin == null }.map { MotionChoice(null, it.id, it.name) }
-		listOf(MotionChoice(null, null, tr("animation.editor.pick"))) + builtins + custom
+		val custom = clips.filter { it.builtin == null }.map { MotionChoice(it.id, it.name) }
+		listOf(MotionChoice(null, tr("animation.editor.pick"))) + builtins + custom
 	}
-	val selected = choices.firstOrNull { clip != null && it.clipId == clip.id } ?: choices.first()
+	val selected = choices.firstOrNull { clip != null && it.clipId == editor.clipId } ?: choices.first()
 
-	Row(
-		Modifier.fillMaxWidth().height(30.dp).background(colors.panelElevated)
-			.border(BorderStroke(0.5.dp, colors.divider))
-			.horizontalScroll(rememberScrollState())
-			.padding(horizontal = 6.dp),
-		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.spacedBy(4.dp),
-	) {
-		CompactDropdown(
-			items = choices,
-			selectedItem = selected,
-			onItemSelected = { choice ->
-				when {
-					choice.clipId != null -> viewModel.openMotionInEditor(choice.clipId)
-					choice.builtin != null -> viewModel.editBuiltinMotion(choice.builtin)
-				}
-			},
-			itemLabel = { it.label },
-			itemEnabled = { it.builtin != null || it.clipId != null },
-			modifier = Modifier.width(150.dp),
-			height = 22.dp,
-		)
-		CompactIconButton(onClick = { viewModel.createMotionClip() }, tooltip = tr("animation.new"), size = 22.dp) {
-			IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-		}
-		PanelToolbarSeparator()
-		val enabled = clip != null
-		CompactIconButton(
-			onClick = { viewModel.stopMotionEditorPlayback() },
-			enabled = enabled,
-			tooltip = tr("animation.editor.toStart"),
-			size = 22.dp,
-		) { IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary) }
-		CompactIconButton(
-			onClick = { viewModel.setMotionEditorPlaying(!editor.playing) },
-			enabled = enabled,
-			tooltip = tr(if (editor.playing) "animation.pause" else "animation.play"),
-			size = 22.dp,
+	// Too many controls to fold away: a narrow editor scrolls its toolbar sideways.
+	PanelToolbar {
+		Row(
+			Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(3.dp),
 		) {
-			if (editor.playing) IconPause(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-			else IconPlay(modifier = Modifier.size(11.dp), tint = colors.accent)
+			CompactDropdown(
+				items = choices,
+				selectedItem = selected,
+				onItemSelected = { choice -> choice.clipId?.let { viewModel.openMotionInEditor(it) } },
+				itemLabel = { it.label },
+				itemEnabled = { it.clipId != null },
+				modifier = Modifier.width(150.dp),
+				height = 22.dp,
+			)
+			CompactIconButton(onClick = { viewModel.createMotionClip() }, tooltip = tr("animation.new"), size = 22.dp) {
+				IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+			}
+			PanelToolbarSeparator()
+			val enabled = clip != null
+			CompactIconButton(
+				onClick = { viewModel.stopMotionEditorPlayback() },
+				enabled = enabled,
+				tooltip = tr("animation.editor.toStart"),
+				size = 22.dp,
+			) { IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary) }
+			CompactIconButton(
+				onClick = { viewModel.setMotionEditorPlaying(!editor.playing) },
+				enabled = enabled,
+				tooltip = tr(if (editor.playing) "animation.pause" else "animation.play"),
+				size = 22.dp,
+			) {
+				if (editor.playing) IconPause(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
+				else IconPlay(modifier = Modifier.size(11.dp), tint = colors.accent)
+			}
+			if (clip == null) return@Row
+			CompactNumberSpinner(
+				value = editor.playhead.toDouble(),
+				onValueChange = { viewModel.setMotionPlayhead(it.toFloat()) },
+				min = 0.0,
+				max = clip.duration.toDouble(),
+				step = 1.0 / clip.fps,
+				decimals = 2,
+				unit = "s",
+				height = 22.dp,
+				modifier = Modifier.width(72.dp),
+			)
+			Text("/", color = colors.textMuted, style = typography.caption)
+			ToolbarLabel(tr("animation.duration"))
+			CompactNumberSpinner(
+				value = clip.duration.toDouble(),
+				onValueChange = { value -> viewModel.updateMotionClipProperties(clip.id) { it.copy(duration = value.toFloat().coerceIn(0.1f, 600f)) } },
+				min = 0.1,
+				max = 600.0,
+				step = 0.1,
+				decimals = 2,
+				unit = "s",
+				height = 22.dp,
+				modifier = Modifier.width(72.dp),
+				onEditStart = { viewModel.beginEditorField(MOTION_CLIP_FIELD) },
+				onEditEnd = { viewModel.endEditorField(MOTION_CLIP_FIELD) },
+			)
+			ToolbarLabel("FPS")
+			CompactNumberSpinner(
+				value = clip.fps.toDouble(),
+				onValueChange = { value -> viewModel.updateMotionClipProperties(clip.id) { it.copy(fps = value.toFloat().coerceIn(1f, 120f)) } },
+				min = 1.0,
+				max = 120.0,
+				step = 1.0,
+				height = 22.dp,
+				modifier = Modifier.width(52.dp),
+				onEditStart = { viewModel.beginEditorField(MOTION_CLIP_FIELD) },
+				onEditEnd = { viewModel.endEditorField(MOTION_CLIP_FIELD) },
+			)
+			CompactToggleChip(
+				text = tr("animation.loop"),
+				selected = clip.loop,
+				onToggle = { viewModel.updateMotionClipProperties(clip.id) { it.copy(loop = !it.loop) } },
+				height = 22.dp,
+			)
+			CompactToggleChip(
+				text = tr("animation.editor.snap"),
+				selected = editor.snapToFrames,
+				onToggle = { editor.snapToFrames = !editor.snapToFrames },
+				height = 22.dp,
+			)
+			CompactToggleChip(
+				text = tr("animation.editor.autoKey"),
+				selected = editor.autoKey,
+				onToggle = { viewModel.toggleMotionAutoKey() },
+				leadingIcon = {
+					IconAutoKey(
+						modifier = Modifier.size(11.dp),
+						active = editor.autoKey,
+						tint = if (editor.autoKey) Color(0xFFE05252) else colors.textMuted,
+					)
+				},
+				showCheckWhenSelected = false,
+				tooltip = tr("animation.editor.autoKeyTooltip"),
+				height = 22.dp,
+			)
+			PanelToolbarSeparator()
+			AddTrackButton(viewModel, clip, state)
+			InsertSavedSkeletonPoseMenu(viewModel, state)
+			CompactButton(
+				text = tr("animation.editor.keyPose"),
+				onClick = { viewModel.keyCurrentPose() },
+				enabled = clip.curves.isNotEmpty(),
+				height = 22.dp,
+			)
+			PanelToolbarSeparator()
+			CompactToggleChip(
+				text = tr("animation.editor.dopesheet"),
+				selected = editor.view == MotionEditorView.DOPESHEET,
+				onToggle = { editor.view = MotionEditorView.DOPESHEET },
+				showCheckWhenSelected = false,
+				height = 22.dp,
+			)
+			CompactToggleChip(
+				text = tr("animation.editor.curves"),
+				selected = editor.view == MotionEditorView.CURVES,
+				onToggle = { editor.view = MotionEditorView.CURVES },
+				showCheckWhenSelected = false,
+				height = 22.dp,
+			)
 		}
-		if (clip == null) return@Row
-		CompactNumberSpinner(
-			value = editor.playhead.toDouble(),
-			onValueChange = { viewModel.setMotionPlayhead(it.toFloat()) },
-			min = 0.0,
-			max = clip.duration.toDouble(),
-			step = 1.0 / clip.fps,
-			decimals = 2,
-			unit = "s",
-			height = 22.dp,
-			modifier = Modifier.width(72.dp),
-		)
-		Text("/", color = colors.textMuted, style = typography.caption)
-		ToolbarLabel(tr("animation.duration"))
-		CompactNumberSpinner(
-			value = clip.duration.toDouble(),
-			onValueChange = { value -> viewModel.updateMotionClipProperties(clip.id) { it.copy(duration = value.toFloat().coerceIn(0.1f, 600f)) } },
-			min = 0.1,
-			max = 600.0,
-			step = 0.1,
-			decimals = 2,
-			unit = "s",
-			height = 22.dp,
-			modifier = Modifier.width(72.dp),
-			onEditStart = { viewModel.beginEditorField(MOTION_CLIP_FIELD) },
-			onEditEnd = { viewModel.endEditorField(MOTION_CLIP_FIELD) },
-		)
-		ToolbarLabel("FPS")
-		CompactNumberSpinner(
-			value = clip.fps.toDouble(),
-			onValueChange = { value -> viewModel.updateMotionClipProperties(clip.id) { it.copy(fps = value.toFloat().coerceIn(1f, 120f)) } },
-			min = 1.0,
-			max = 120.0,
-			step = 1.0,
-			height = 22.dp,
-			modifier = Modifier.width(52.dp),
-			onEditStart = { viewModel.beginEditorField(MOTION_CLIP_FIELD) },
-			onEditEnd = { viewModel.endEditorField(MOTION_CLIP_FIELD) },
-		)
-		CompactToggleChip(
-			text = tr("animation.loop"),
-			selected = clip.loop,
-			onToggle = { viewModel.updateMotionClipProperties(clip.id) { it.copy(loop = !it.loop) } },
-			height = 22.dp,
-		)
-		CompactToggleChip(
-			text = tr("animation.editor.snap"),
-			selected = editor.snapToFrames,
-			onToggle = { editor.snapToFrames = !editor.snapToFrames },
-			height = 22.dp,
-		)
-		CompactToggleChip(
-			text = tr("animation.editor.autoKey"),
-			selected = editor.autoKey,
-			onToggle = { viewModel.toggleMotionAutoKey() },
-			leadingIcon = {
-				IconAutoKey(
-					modifier = Modifier.size(11.dp),
-					active = editor.autoKey,
-					tint = if (editor.autoKey) Color(0xFFE05252) else colors.textMuted,
-				)
-			},
-			showCheckWhenSelected = false,
-			tooltip = tr("animation.editor.autoKeyTooltip"),
-			height = 22.dp,
-		)
-		PanelToolbarSeparator()
-		AddTrackButton(viewModel, clip, state)
-		CompactButton(
-			text = tr("animation.editor.keyPose"),
-			onClick = { viewModel.keyCurrentPose() },
-			enabled = clip.curves.isNotEmpty(),
-			height = 22.dp,
-		)
-		PanelToolbarSeparator()
-		CompactToggleChip(
-			text = tr("animation.editor.dopesheet"),
-			selected = editor.view == MotionEditorView.DOPESHEET,
-			onToggle = { editor.view = MotionEditorView.DOPESHEET },
-			showCheckWhenSelected = false,
-			height = 22.dp,
-		)
-		CompactToggleChip(
-			text = tr("animation.editor.curves"),
-			selected = editor.view == MotionEditorView.CURVES,
-			onToggle = { editor.view = MotionEditorView.CURVES },
-			showCheckWhenSelected = false,
-			height = 22.dp,
-		)
 	}
 }
 

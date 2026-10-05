@@ -1,8 +1,17 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.core.RigInformationOverlay
+
+import io.github.psd2live.core.RigCanvasSupport
+
+import io.github.psd2live.core.CanvasViewport
+
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import io.github.psd2live.application.CanvasDraftScope
+import io.github.psd2live.application.CanvasDraftSubmit
+import io.github.psd2live.application.WorkspaceCanvasInputDraft
 import io.github.psd2live.core.*
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.*
@@ -10,12 +19,7 @@ import kotlinx.serialization.json.*
 import org.umamo.edit.MeshElement
 import org.umamo.edit.MeshTopology
 import org.umamo.edit.MeshRefinementOps
-import org.umamo.edit.withDrawablesDeleted
-import org.umamo.format.art.LayerRaster
-import org.umamo.format.art.LayerBounds
 import org.umamo.format.art.SourceLayer
-import io.github.psd2live.agent.WorkspaceSourceLayer
-import io.github.psd2live.agent.WorkspaceSourceArt
 import org.umamo.render.eval.*
 import org.umamo.runtime.model.*
 import java.awt.image.BufferedImage
@@ -31,6 +35,10 @@ enum class EditHierarchyMode {
     DEFORM,
     /** 编辑: change structure - topology, splitting and deformer creation. */
     EDIT,
+    /** 模拟: simulation weight groups and cloth / hair setup on the selected meshes. */
+    SIMULATE,
+    /** 骨骼: pose the armature or reshape it. The skeleton is the target for as long as the mode lasts. */
+    SKELETON,
     /** 绘画: raster repainting of one layer slice. */
     PAINT,
 }
@@ -81,6 +89,8 @@ internal fun modeLabel(mode: EditHierarchyMode): String = tr(
         EditHierarchyMode.SELECT -> "editor.mode.select"
         EditHierarchyMode.DEFORM -> "editor.mode.deform"
         EditHierarchyMode.EDIT -> "editor.mode.edit"
+        EditHierarchyMode.SIMULATE -> "editor.mode.simulate"
+        EditHierarchyMode.SKELETON -> "editor.mode.skeleton"
         EditHierarchyMode.PAINT -> "editor.mode.paint"
     }
 )
@@ -103,6 +113,10 @@ internal enum class CanvasTool(val action: ShortcutAction) {
     SUBDIVIDE(ShortcutAction.TOOL_SUBDIVIDE),
     /** The knife: click anchors along a cut, connect them, commit with Enter. */
     KNIFE(ShortcutAction.TOOL_KNIFE),
+    /** Paints a simulation vertex group (pin, stiffness, goal...) on the edited meshes. */
+    WEIGHT_PAINT(ShortcutAction.TOOL_WEIGHT_PAINT),
+    /** Drags a linear gradient into the same vertex group the weight brush paints. */
+    WEIGHT_GRADIENT(ShortcutAction.TOOL_WEIGHT_GRADIENT),
     // Painting mode tools (L1)
     PAINT_BRUSH(ShortcutAction.TOOL_PAINT_BRUSH),
     PAINT_PENCIL(ShortcutAction.TOOL_PAINT_PENCIL),
@@ -116,6 +130,18 @@ internal enum class CanvasTool(val action: ShortcutAction) {
 internal enum class SelectionStyle { BOX, LASSO }
 
 internal enum class GlueSubTool { BRUSH, WEIGHT, REMERGE }
+
+internal enum class SkeletonEditSubTool(val labelKey: String, val hintKey: String) {
+    EDIT("skeleton.tool.edit", "skeleton.edit.hint"),
+    NEW_BONE("skeleton.tool.new", "skeleton.tool.new.hint"),
+    EXTRUDE("skeleton.tool.extrude", "skeleton.tool.extrude.hint"),
+    BIND("skeleton.tool.bind", "skeleton.tool.bind.hint"),
+    WEIGHTS("skeleton.tool.weights", "skeleton.tool.weights.hint"),
+}
+
+internal enum class SkeletonPoseSubTool(val labelKey: String) {
+    AUTO("skeleton.pose.auto"), FK("skeleton.pose.fk"), IK("skeleton.pose.ik"),
+}
 
 internal enum class GlueWeightMode { BALANCE, A, B }
 
@@ -242,6 +268,7 @@ internal data class CreatePlacement(
      * (the whole drop batch, while only [anchorId] is being adjusted).
      */
     val cancelLayerIds: List<String> = emptyList(),
+    val imagePlacement: io.github.psd2live.application.WorkspaceImagePlacement? = null,
 )
 
 internal val PAINT_TOOLS = setOf(
@@ -274,6 +301,7 @@ internal val TOOLBAR_TOOL_ORDER = listOf(
     CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE,
     CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT,
     CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE,
+    CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT,
     CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER,
     CanvasTool.PAINT_BUCKET, CanvasTool.PAINT_EYEDROPPER,
     CanvasTool.PAINT_SHAPE,
@@ -287,18 +315,10 @@ internal val TOOLBAR_DIVIDERS = listOf(CanvasTool.BRUSH_SELECT, CanvasTool.SKELE
  * context menu or shortcuts (C / R / P).
  *
  * Object mode is the one without the vertex tools. Deform mode edits points without changing topology.
- * Edit mode handles mesh topology (subdivide / knife). Paint mode replaces layer pixels.
- *
- * With the skeleton as the target, Deform mode poses it and Edit mode reshapes it, and each offers only
- * that one tool: none of the point tools has anything to act on.
+ * Edit mode handles mesh topology (subdivide / knife). Simulate paints the simulation's vertex groups,
+ * Skeleton poses or reshapes the armature, and Paint replaces layer pixels.
  */
-internal fun toolbarGroups(mode: EditHierarchyMode, skeleton: Boolean = false): List<List<CanvasTool>> = when {
-    skeleton && mode == EditHierarchyMode.DEFORM -> listOf(listOf(CanvasTool.SKELETON_POSE))
-    skeleton && mode == EditHierarchyMode.EDIT -> listOf(listOf(CanvasTool.SKELETON_EDIT))
-    else -> drawableToolbarGroups(mode)
-}
-
-private fun drawableToolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = when (mode) {
+internal fun toolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = when (mode) {
     EditHierarchyMode.SELECT -> listOf(
         listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT),
     )
@@ -311,12 +331,33 @@ private fun drawableToolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool
         listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE),
         listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE),
     )
+    EditHierarchyMode.SIMULATE -> listOf(
+        listOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT),
+    )
+    EditHierarchyMode.SKELETON -> listOf(
+        listOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT),
+    )
     EditHierarchyMode.PAINT -> listOf(
         listOf(CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER),
         listOf(CanvasTool.PAINT_BUCKET, CanvasTool.PAINT_EYEDROPPER),
         listOf(CanvasTool.PAINT_SHAPE),
     )
 }
+
+/** The simulation weight tools: both write the mesh's vertex group of the kind picked in the toolbar. */
+internal val WEIGHT_TOOLS = setOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT)
+
+/**
+ * The kinds the weight tools paint, in the order a simulation is usually set up. Wind moves nothing the
+ * editor bakes or previews, so it is not offered.
+ */
+internal val PAINTED_GROUP_KINDS = listOf(
+    VertexGroupKind.PIN, VertexGroupKind.STIFFNESS, VertexGroupKind.GOAL,
+    VertexGroupKind.MASS, VertexGroupKind.DAMPING,
+)
+
+/** The two tools of Skeleton mode. */
+internal val SKELETON_TOOLS = setOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT)
 
 /**
  * The target kinds a point selection may be framed in.
@@ -349,45 +390,6 @@ internal data class HierarchyPick(
     val deformerId: String? = null,
 )
 
-/**
- * One layer's slice of the packed atlas, with the source bounds it was cropped from.
- *
- * A mesh's texture coordinates address the slice, not the canvas, so repacking has to translate them
- * through canvas pixels: `uv -> canvas -> uv`. That round trip is what keeps a drawable on the same
- * pixels after its layer was re-cropped, which is why the atlas convention lives in one place.
- */
-internal class AtlasSlice(
-    val placement: io.github.psd2live.core.AtlasPlacement,
-    val pageWidth: Int,
-    val pageHeight: Int,
-    /** The layer's source bounds in canvas pixels when this slice was packed. */
-    val sourceBounds: Bounds,
-) {
-    private val scale get() = placement.scale.coerceAtLeast(1)
-
-    fun canvasX(uv: Float): Float = sourceBounds.left + (uv * pageWidth - placement.x) / scale
-    fun canvasY(uv: Float): Float = sourceBounds.top + (uv * pageHeight - placement.y) / scale
-    fun uvX(canvasX: Float): Float = (placement.x + (canvasX - sourceBounds.left) * scale) / pageWidth
-    fun uvY(canvasY: Float): Float = (placement.y + (canvasY - sourceBounds.top) * scale) / pageHeight
-}
-
-/**
- * The painted layer's box in canvas pixels, as the float box the rig math works in. The two are
- * easy to confuse: a [Bounds] holds edges, a [LayerBounds] holds a width and a height.
- */
-private fun LayerBounds.toBounds(): Bounds =
-	Bounds(left.toFloat(), top.toFloat(), (left + width).toFloat(), (top + height).toFloat())
-
-/** Re-addresses a mesh's texture coordinates from one slice of the atlas to another. */
-private fun remapUvs(mesh: DrawableMesh, from: AtlasSlice, to: AtlasSlice): FloatArray {
-    val uvs = FloatArray(mesh.uvs.size)
-    for (index in mesh.uvs.indices step 2) {
-        uvs[index] = to.uvX(from.canvasX(mesh.uvs[index]))
-        uvs[index + 1] = to.uvY(from.canvasY(mesh.uvs[index + 1]))
-    }
-    return uvs
-}
-
 /** One gesture owns its pose, parent mapping and history HEAD until release. */
 /** The faces a topology op created, and which drawable they belong to. See [CanvasEditor.topologyFills]. */
 internal data class TopologyFill(val drawableId: String, val triangles: Set<Int>)
@@ -404,17 +406,45 @@ internal class CanvasEditor(
     private val canvasId: String = viewModel.state.value.activeCanvas.id,
 ) {
 	/**
-	 * The skeleton is a target of its own, like a drawable or a deformer: Object mode picks it, Deform mode
-	 * poses it and Edit mode reshapes it. It is kept on this canvas rather than in the document selection
-	 * because the armature is one per project; picking a layer or deformer anywhere drops it.
+	 * The skeleton is a target of its own, like a drawable or a deformer: Object mode picks it and Skeleton
+	 * mode poses or reshapes it. It is kept on this canvas rather than in the document selection because
+	 * the armature is one per project; picking a layer or deformer anywhere drops it.
 	 */
 	var skeletonSelected by mutableStateOf(false)
 		private set
 
-	/** Edit mode's working copy of the armature. Leaving Edit mode writes it back as one history entry. */
+	/** The Skeleton Edit tool's working copy of the armature. Leaving the tool writes it back as one history entry. */
 	var skeletonDraft by mutableStateOf<io.github.psd2live.core.SkeletonSpec?>(null)
 		private set
-	var selectedBoneId by mutableStateOf<String?>(null)
+	/** The application session [skeletonDraft] mirrors; every draft change and the commit go through it. */
+	private var skeletonSession: io.github.psd2live.application.WorkspaceSkeletonDraft? = null
+	private var skeletonDraftOpening = false
+	var selectedBoneIds by mutableStateOf<Set<String>>(emptySet())
+		private set
+	private var selectedBoneIdState by mutableStateOf<String?>(null)
+	var selectedBoneId: String?
+		get() = selectedBoneIdState
+		private set(value) { selectedBoneIdState = value; selectedBoneIds = setOfNotNull(value) }
+	var skeletonEditSubTool by mutableStateOf(SkeletonEditSubTool.EDIT)
+	var skeletonPoseSubTool by mutableStateOf(SkeletonPoseSubTool.AUTO)
+	var transformBoneDescendants by mutableStateOf(false)
+	var editBonesSymmetrically by mutableStateOf(false)
+	var transferCopiedBoneBindings by mutableStateOf(false)
+	var pendingSkeletonDrawableIds by mutableStateOf<Set<String>>(emptySet())
+		private set
+	var skeletonWeightDrawableId by mutableStateOf<String?>(null)
+		private set
+	var skeletonWeightSourceId by mutableStateOf<String?>(null)
+	var skeletonWeightBrushMode by mutableStateOf(io.github.psd2live.core.SkeletonWeightBrushMode.ADD)
+	var skeletonWeightRadius by mutableStateOf(40f)
+	var skeletonWeightStrength by mutableStateOf(0.2f)
+	var skeletonWeightReplaceValue by mutableStateOf(1f)
+	var skeletonWeightInfluences by mutableStateOf(2)
+	var skeletonWeightCutoff by mutableStateOf(0.001f)
+	var skeletonWeightTransferMode by mutableStateOf(io.github.psd2live.core.SkeletonWeightTransferMode.INTERPOLATE)
+	var skeletonWeightTransferTolerance by mutableStateOf(10f)
+	var mirrorSkeletonWeights by mutableStateOf(false)
+	var skeletonWeightBoneMapping by mutableStateOf<Map<String, String>>(emptyMap())
 		private set
 
 	/** The authored armature, enabled or not, once it has bones. */
@@ -424,7 +454,13 @@ internal class CanvasEditor(
 
 	/** Makes the skeleton the target, dropping any layer or deformer selection, and keeps the current mode if it still applies. */
 	fun selectSkeleton(boneId: String? = null) {
-		val spec = committedSkeleton ?: return
+		if (!takeSkeleton(boneId)) return
+		settleModeOnTarget()
+	}
+
+	/** The target half of [selectSkeleton], without re-fitting the mode: entering Skeleton mode does that itself. */
+	private fun takeSkeleton(boneId: String? = null): Boolean {
+		val spec = committedSkeleton ?: return false
 		if (!skeletonSelected) {
 			skeletonSelected = true
 			objects = emptySet()
@@ -435,7 +471,7 @@ internal class CanvasEditor(
 		}
 		selectedBoneId = (skeletonDraft ?: spec).let { s -> boneId?.takeIf { s.bone(it) != null } ?: selectedBoneId?.takeIf { s.bone(it) != null }
 			?: s.bones.firstOrNull { !it.role.anchor }?.id }
-		settleModeOnTarget()
+		return true
 	}
 
 	/** Drops the skeleton target; an open edit is kept, not thrown away. */
@@ -446,110 +482,284 @@ internal class CanvasEditor(
 		settleModeOnTarget()
 	}
 
-	/** Selects the skeleton and enters Edit mode on it, proposing one from the layers' tags the first time. */
+	/** Enters Skeleton mode on the Edit tool, proposing an armature from the layers' tags the first time. */
 	fun beginSkeletonEdit() {
 		if (busy) return
 		if (placement != null) cancelPlacement()
-		if (committedSkeleton == null) {
-			val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return
-			viewModel.setSkeleton(spec.copy(enabled = true))
-		}
-		if (viewBeforeSkeletonEdit == null) {
-			viewBeforeSkeletonEdit = state.activeTabView
-		}
-		if (modeBeforeSkeletonEdit == null) {
-			modeBeforeSkeletonEdit = hierarchyMode.takeIf { it != EditHierarchyMode.EDIT } ?: EditHierarchyMode.SELECT
-		}
-		selectSkeleton()
-		setHierarchyMode(EditHierarchyMode.EDIT)
+		ensureSkeleton { enterSkeletonMode(CanvasTool.SKELETON_EDIT) }
 	}
 
-	/** Selects the skeleton and enters Deform mode on it, where the pose tool turns its bones. */
+	/** Enters Skeleton mode on the Pose tool, which turns the bones of an enabled armature. */
 	fun beginSkeletonPose() {
 		if (busy) return
-		selectSkeleton()
-		// Without a skeleton there is nothing to pose, and Deform mode would fall on the selected drawable.
-		if (!skeletonSelected || committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
-		setHierarchyMode(EditHierarchyMode.DEFORM)
-		if (state.showWarp || state.showRotation || state.showMesh) {
-			viewModel.updateEditViewOptions(canvasId, workspaceId) {
-				it.copy(showWarp = false, showRotation = false, showMesh = false)
-			}
+		skeletonEntrySerial++
+		if (committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
+		enterSkeletonMode(CanvasTool.SKELETON_POSE)
+	}
+
+	/** Proposes an armature from the layers' tags when the project has none yet. */
+	private var skeletonEntrySerial = 0L
+
+	private fun ensureSkeleton(onReady: () -> Unit) {
+		val serial = ++skeletonEntrySerial
+		if (committedSkeleton != null) { onReady(); return }
+		val started = viewModel.uiState.value
+		val expected = viewModel.currentWorkspaceState() ?: return
+		val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return
+		if (spec.bones.isEmpty()) return
+		viewModel.setSkeleton(spec.copy(enabled = true), expected) { failure ->
+			val current = viewModel.uiState.value
+			if (serial != skeletonEntrySerial || current.projectId != started.projectId ||
+				current.projectOpenGeneration != started.projectOpenGeneration || current.activeWorkspace.id != workspaceId ||
+				current.workspaces.none { it.id == workspaceId && it.canvases.any { canvas -> canvas.id == canvasId } }) return@setSkeleton
+			if (failure != null) error = failure
+			else if (committedSkeleton != null) onReady()
 		}
 	}
 
-	/** Edit mode's display toggles from before the skeleton edit, put back when it closes. */
-	private var viewBeforeSkeletonEdit: TabViewOptions? = null
-	private var modeBeforeSkeletonEdit: EditHierarchyMode? = null
+	private fun enterSkeletonMode(next: CanvasTool) {
+		if (hierarchyMode != EditHierarchyMode.SKELETON) {
+			modeBeforeSkeleton = hierarchyMode
+			enterMode(EditHierarchyMode.SKELETON)
+		}
+		if (hierarchyMode == EditHierarchyMode.SKELETON) switchSkeletonTool(next)
+	}
 
 	/**
-	 * Bones are placed on the rest pose, so the parameters go back to their defaults. The display drops
-	 * the deformer guides and mesh wires and keeps only the bones' color tint over the art.
+	 * Moves between the two Skeleton tools. The Edit tool works on a draft of the armature on the rest pose;
+	 * going back to Pose writes the draft back, the way leaving the mode does.
+	 */
+	private fun switchSkeletonTool(next: CanvasTool) {
+		error = null
+		if (next == CanvasTool.SKELETON_POSE) {
+			if (committedSkeleton?.enabled != true) { error = tr("skeleton.pose.none"); return }
+			commitSkeletonDraft()
+			tool = next
+		} else {
+			tool = CanvasTool.SKELETON_EDIT
+			if (skeletonDraft == null) openSkeletonDraft()
+		}
+		clearHover()
+	}
+
+	/** The mode Skeleton mode was entered from, where cancelling an edit of a disabled armature returns. */
+	private var modeBeforeSkeleton: EditHierarchyMode? = null
+
+	/**
+	 * Bones are placed on the rest pose. The application session resets it as its own commit and the draft builds
+	 * on that state, so a pose or document change made meanwhile makes the final commit conflict.
 	 */
 	private fun openSkeletonDraft() {
-		val spec = committedSkeleton ?: return
-		skeletonDraft = spec
-		if (selectedBoneId == null || spec.bone(selectedBoneId!!) == null) selectedBoneId = spec.bones.firstOrNull { !it.role.anchor }?.id
-		viewModel.resetAllParameters()
-		val before = viewModel.updateEditViewOptions(canvasId, workspaceId) {
-			it.copy(showMesh = false, showWarp = false, showRotation = false, warpShowIndices = false)
-		}
-		if (viewBeforeSkeletonEdit == null) {
-			viewBeforeSkeletonEdit = before
+		if (committedSkeleton == null || skeletonDraftOpening) return
+		skeletonDraftOpening = true
+		pendingSkeletonDrawableIds = emptySet()
+		val started = viewModel.uiState.value
+		viewModel.openSkeletonDraft done@{ opened, failure ->
+			skeletonDraftOpening = false
+			val current = viewModel.uiState.value
+			val wanted = skeletonDraft == null && tool == CanvasTool.SKELETON_EDIT && hierarchyMode == EditHierarchyMode.SKELETON &&
+				current.projectId == started.projectId && current.projectOpenGeneration == started.projectOpenGeneration &&
+				current.activeWorkspace.id == workspaceId
+			if (opened == null) { if (wanted && failure != null) error = failure; return@done }
+			if (!wanted) { runCatching { viewModel.skeletonDraftPort?.cancelSkeletonDraft(opened.id) }; return@done }
+			skeletonSession = opened
+			skeletonDraft = opened.draft
+			if (selectedBoneId == null || opened.draft.bone(selectedBoneId!!) == null) selectedBoneId = opened.draft.bones.firstOrNull { !it.role.anchor }?.id
 		}
 	}
 
-	/** Ends the edit, handing Edit mode back the display it had before. */
-	private fun closeSkeletonDraft(restoreView: Boolean = true) {
+	/** Applies [intents] to the session's draft, all or none; the editor's draft is only ever the session's result. */
+	private fun editSkeletonDraft(vararg intents: SkeletonDraftIntent): io.github.psd2live.application.WorkspaceSkeletonDraft? {
+		val session = skeletonSession ?: return null
+		val port = viewModel.skeletonDraftPort ?: return null
+		return try {
+			port.editSkeletonDraft(session.id, session.state, session.sessionState, intents.toList()).also {
+				skeletonSession = it
+				skeletonDraft = it.draft
+			}
+		} catch (failure: Exception) {
+			error = failure.message
+			null
+		}
+	}
+
+	/** Writes the draft back on the session's own lineage; an untouched draft is simply closed. */
+	fun commitSkeletonDraft() {
+		val session = skeletonSession
 		skeletonDraft = null
-		if (restoreView) {
-			viewBeforeSkeletonEdit?.let { before -> viewModel.updateEditViewOptions(canvasId, workspaceId) { before } }
-			viewBeforeSkeletonEdit = null
-		}
+		skeletonSession = null
+		if (session == null) return
+		if (session.revision == 0L) runCatching { viewModel.skeletonDraftPort?.cancelSkeletonDraft(session.id) }
+		else viewModel.commitSkeletonDraft(session)
 	}
 
-	/** Writes the draft back when it changed. Keeps whether the skeleton is enabled. */
-	fun commitSkeletonDraft(restoreView: Boolean = true) {
-		val draft = skeletonDraft ?: return
-		closeSkeletonDraft(restoreView)
-		val committed = state.rigEdits.skeleton
-		val next = draft.copy(enabled = committed?.enabled ?: true)
-		if (next != committed) viewModel.setSkeleton(next)
-	}
-
-	/** Leaves Edit mode on the skeleton, keeping the edit. */
+	/** Ends the edit, keeping it: on to posing when the armature is enabled, else back where the mode was entered from. */
 	fun finishSkeletonEdit() {
-		if (skeletonDraft == null) return
-		setHierarchyMode(skeletonExitMode())
+		val enabled = skeletonDraft?.enabled ?: return
+		commitSkeletonDraft()
+		leaveSkeletonEdit(enabled)
 	}
 
-	/** Leaves Edit mode on the skeleton and throws the edit away. The skeleton stays selected. */
+	/** Ends the edit and throws it away. */
 	fun cancelSkeletonEdit() {
 		if (skeletonDraft == null) return
-		val targetMode = modeBeforeSkeletonEdit ?: EditHierarchyMode.SELECT
-		modeBeforeSkeletonEdit = null
+		skeletonSession?.let { session -> runCatching { viewModel.skeletonDraftPort?.cancelSkeletonDraft(session.id) } }
 		skeletonDraft = null
-		setHierarchyMode(targetMode)
+		skeletonSession = null
+		leaveSkeletonEdit(committedSkeleton?.enabled == true)
 	}
 
-	/** Where leaving skeleton Edit mode lands: posing when there is an enabled skeleton to pose. */
-	private fun skeletonExitMode(): EditHierarchyMode {
-		val mode = if (committedSkeleton?.enabled == true) EditHierarchyMode.DEFORM else (modeBeforeSkeletonEdit ?: EditHierarchyMode.SELECT)
-		modeBeforeSkeletonEdit = null
-		return mode
+	private fun leaveSkeletonEdit(enabled: Boolean) {
+		// The commit may still be landing, so the draft's own flag decides rather than the committed armature.
+		if (enabled) { error = null; tool = CanvasTool.SKELETON_POSE; clearHover() }
+		else setHierarchyMode(modeBeforeSkeleton?.takeIf { it != EditHierarchyMode.SKELETON } ?: EditHierarchyMode.SELECT)
 	}
 
-	/** Turns the skeleton off or back on. The bones are kept either way, so turning it back on loses nothing. */
+	/**
+	 * Turns the skeleton off or back on. The bones are kept either way, so turning it back on loses nothing. While
+	 * the Edit tool is open the flag belongs to its draft, which commits it with the rest of the edit.
+	 */
 	fun setSkeletonEnabled(enabled: Boolean) {
-		skeletonDraft?.let { skeletonDraft = it.copy(enabled = enabled) }
+		if (skeletonSession != null) { editSkeletonDraft(SkeletonDraftIntent.Enabled(enabled)); return }
 		val committed = committedSkeleton ?: return
 		if (committed.enabled != enabled) viewModel.setSkeleton(committed.copy(enabled = enabled))
 	}
 
-	fun selectBone(id: String?) { selectedBoneId = id }
+	fun selectBone(id: String?, additive: Boolean = false) {
+		if (!additive || id == null) { selectedBoneId = id; return }
+		val next = if (id in selectedBoneIds) selectedBoneIds - id else selectedBoneIds + id
+		selectedBoneId = id.takeIf { it in next } ?: next.lastOrNull()
+		selectedBoneIds = next
+	}
+
+	fun selectBones(ids: Set<String>, additive: Boolean = false) {
+		val valid = ids.filterTo(linkedSetOf()) { skeletonDraft?.bone(it) != null }
+		val next = if (additive) selectedBoneIds + valid else valid
+		selectedBoneId = next.lastOrNull()
+		selectedBoneIds = next
+	}
+
+	fun transformSelectedBones(dx: Float = 0f, dy: Float = 0f, degrees: Float = 0f, scale: Float = 1f) {
+		if (skeletonDraft == null) return
+		editSkeletonDraft(SkeletonDraftIntent.Transform(selectedBoneIds, dx, dy, degrees, scale, transformBoneDescendants, editBonesSymmetrically))
+	}
+
+	fun restoreSkeletonDraft(spec: io.github.psd2live.core.SkeletonSpec) { if (skeletonDraft != null) editSkeletonDraft(SkeletonDraftIntent.Restore(spec)) }
+
+	fun selectSkeletonBindingDrawables(ids: Set<String>, additive: Boolean = false) {
+		pendingSkeletonDrawableIds = if (additive) pendingSkeletonDrawableIds + ids else ids
+	}
+
+	fun toggleSkeletonBindingDrawable(id: String) {
+		pendingSkeletonDrawableIds = if (id in pendingSkeletonDrawableIds) pendingSkeletonDrawableIds - id else pendingSkeletonDrawableIds + id
+	}
+
+	fun applySkeletonBindingBatch(unbind: Boolean = false) {
+		if (skeletonDraft == null) return
+		val bone = if (unbind) null else selectedBoneId ?: return
+		val valid = model.drawables.map { it.id.raw }.toSet()
+		editSkeletonDraft(SkeletonDraftIntent.Bind(pendingSkeletonDrawableIds.intersect(valid), bone))
+		pendingSkeletonDrawableIds = emptySet()
+	}
+
+	fun selectSkeletonWeightDrawable(id: String?) {
+		skeletonWeightDrawableId = id
+		skeletonWeightBoneMapping = emptyMap()
+	}
+
+	fun activeSkeletonWeights(): io.github.psd2live.core.SkeletonWeightMap? = skeletonDraft?.let { spec ->
+		skeletonWeightDrawableId?.let { io.github.psd2live.core.SkeletonManualWeights.capture(spec, model, it) }
+	}
+
+	fun prepareSkeletonWeightStroke(): Boolean {
+		val spec = skeletonDraft ?: return false
+		val id = skeletonWeightDrawableId ?: return false
+		val bone = selectedBoneId ?: return false
+		if (bone !in io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, id)) return false
+		// A stroke starts from the mesh's current weights, resampled once.
+		return editSkeletonDraft(SkeletonDraftIntent.PaintWeights(id, bone, emptyList(), skeletonWeightRadius, skeletonWeightStrength,
+			skeletonWeightBrushMode, skeletonWeightReplaceValue, capture = true)) != null
+	}
+
+	fun paintSkeletonWeights(pos: Offset, viewport: CanvasViewport) {
+		val spec = skeletonDraft ?: return
+		val id = skeletonWeightDrawableId ?: return
+		val bone = selectedBoneId ?: return
+		if (bone !in io.github.psd2live.core.SkeletonManualWeights.treeIds(spec, id) || spec.manualWeights[id] == null) return
+		editSkeletonDraft(SkeletonDraftIntent.PaintWeights(id, bone, listOf(viewport.canvasX(pos.x) to viewport.canvasY(pos.y)),
+			skeletonWeightRadius, skeletonWeightStrength, skeletonWeightBrushMode, skeletonWeightReplaceValue, capture = false))
+	}
+
+	fun cleanupSkeletonWeights() {
+		if (skeletonDraft == null || activeSkeletonWeights() == null) return
+		editSkeletonDraft(SkeletonDraftIntent.CleanupWeights(skeletonWeightDrawableId ?: return, skeletonWeightInfluences, skeletonWeightCutoff))
+	}
+
+	fun resetSkeletonWeights() { skeletonWeightDrawableId?.let { id -> if (skeletonDraft != null) editSkeletonDraft(SkeletonDraftIntent.ClearWeights(id)) } }
+
+	fun setSkeletonWeightBoneMapping(source: String, target: String) { skeletonWeightBoneMapping = skeletonWeightBoneMapping + (source to target) }
+
+	fun effectiveSkeletonWeightBoneMapping(): Map<String, String> {
+		val spec = skeletonDraft ?: return emptyMap()
+		return SkeletonDraftEdits.weightMapping(spec, skeletonWeightSourceId ?: return emptyMap(), skeletonWeightDrawableId ?: return emptyMap(),
+			skeletonWeightBoneMapping, mirrorSkeletonWeights)
+	}
+
+	private fun skeletonWeightTransfer(): SkeletonDraftIntent.TransferWeights? = SkeletonDraftIntent.TransferWeights(
+		skeletonWeightSourceId ?: return null, skeletonWeightDrawableId ?: return null, skeletonWeightTransferMode,
+		skeletonWeightTransferTolerance, mirrorSkeletonWeights, skeletonWeightBoneMapping)
+
+	/** What the transfer would write, computed by the session on its own model, as the apply will be. */
+	fun skeletonWeightTransferPreview(): io.github.psd2live.core.SkeletonManualWeights.Transfer? {
+		val session = skeletonSession ?: return null
+		val transfer = skeletonWeightTransfer() ?: return null
+		return runCatching { viewModel.skeletonDraftPort?.previewSkeletonWeightTransfer(session.id, transfer)?.second }.getOrNull()
+	}
+
+	fun applySkeletonWeightTransfer() {
+		if (skeletonDraft == null) return
+		editSkeletonDraft(skeletonWeightTransfer() ?: return)
+	}
+
+	fun setBoneSymmetryAxis(x: Float) { if (x.isFinite() && skeletonDraft != null) editSkeletonDraft(SkeletonDraftIntent.SymmetryAxis(x)) }
+
+	/** Match opposite-side layers only when their semantic/name match identifies one drawable. */
+	fun boneMirrorDrawables(): Map<String, String> = state.previewModel?.let(SkeletonDraftEdits::mirrorDrawables).orEmpty()
+
+	fun duplicateSelectedBones(mirror: Boolean = false) {
+		if (skeletonDraft == null || selectedBoneIds.isEmpty()) return
+		val result = editSkeletonDraft(SkeletonDraftIntent.Duplicate(selectedBoneIds, transformBoneDescendants, transferCopiedBoneBindings,
+			mirror, tr(if (mirror) "skeleton.structure.mirrorSuffix" else "skeleton.structure.copySuffix"))) ?: return
+		selectBones(result.selected.orEmpty())
+	}
+
+	fun subdivideSelectedBone(segments: Int) {
+		if (skeletonDraft == null) return
+		val result = editSkeletonDraft(SkeletonDraftIntent.Subdivide(selectedBoneId ?: return, segments)) ?: return
+		selectBones(result.selected.orEmpty())
+	}
+
+	fun dissolveSelectedBone() {
+		val draft = skeletonDraft ?: return
+		val id = selectedBoneId ?: return
+		if (!io.github.psd2live.core.SkeletonAuthoring.canDissolve(draft, id)) return
+		val result = editSkeletonDraft(SkeletonDraftIntent.Dissolve(id)) ?: return
+		selectBones(result.selected.orEmpty())
+	}
+
+	fun renameBone(id: String, name: String) {
+		if (name.isBlank() || name.any(Char::isISOControl) || skeletonDraft?.bone(id) == null) return
+		editSkeletonDraft(SkeletonDraftIntent.Rename(id, name))
+	}
+
+	fun setSelectedBoneParent(parentId: String?, connect: Boolean = false) {
+		if (skeletonDraft == null) return
+		editSkeletonDraft(SkeletonDraftIntent.Parent(selectedBoneId ?: return, parentId, connect))
+	}
 
 	fun moveBoneJoint(id: String, end: io.github.psd2live.core.BoneEnd, x: Float, y: Float) {
-		skeletonDraft = skeletonDraft?.withJointMoved(id, end, x, y)
+		if (skeletonDraft?.bone(id) == null) return
+		editSkeletonDraft(SkeletonDraftIntent.MoveJoint(id, end, x, y, editBonesSymmetrically)) ?: return
 		selectedBoneId = id
 	}
 
@@ -557,60 +767,88 @@ internal class CanvasEditor(
 	fun setBoneBlendWidth(width: Float?) {
 		val draft = skeletonDraft ?: return
 		val bone = draft.bone(selectedBoneId ?: return) ?: return
-		skeletonDraft = draft.withBone(bone.copy(blendWidth = width?.coerceAtLeast(0f)))
+		editSkeletonDraft(SkeletonDraftIntent.BlendWidth(bone.id, width))
 	}
 
 	/** The selected bone's joint limits in parameter degrees; each is kept on its own side of rest. */
 	fun setBoneLimits(min: Float, max: Float) {
 		val draft = skeletonDraft ?: return
 		val bone = draft.bone(selectedBoneId ?: return) ?: return
-		skeletonDraft = draft.withBone(bone.copy(minAngle = min.coerceIn(-180f, 0f), maxAngle = max.coerceIn(0f, 180f)))
+		editSkeletonDraft(SkeletonDraftIntent.Limits(bone.id, min, max))
 	}
 
 	/** The skeleton the rig was built with, which is what the pose tool drives. */
 	val bakedSkeleton: io.github.psd2live.core.SkeletonSpec?
-		get() = state.previewModel?.config?.rigEdits?.skeleton?.takeIf { it.enabled }
+		get() = (ikTargetPoseDraft ?: state.previewModel?.config?.rigEdits?.skeleton)?.takeIf { it.enabled }
 
 	/** Bone under the pointer while the pose tool is armed, and the bone being dragged. */
 	var poseHover by mutableStateOf<BoneHit?>(null)
 	var poseDrag by mutableStateOf<BoneHit?>(null)
+	private var draggingIkTargetId: String? = null
+	private var ikTargetDragOrigin: io.github.psd2live.core.SkeletonSpec? = null
+	private var ikTargetDragValues: Map<ParameterId, Float>? = null
+	private var ikTargetPoseDraft: io.github.psd2live.core.SkeletonSpec? = null
 
 	/** Whether the pose tool shades each skinned mesh by the bones it follows. */
 	var showSkeletonWeights by mutableStateOf(false)
 
 	private var posedCache: Triple<PuppetModel, Map<ParameterId, Float>, List<PosedBone>>? = null
+	private var posedCacheSpec: io.github.psd2live.core.SkeletonSpec? = null
 
 	/** The bones where the current pose holds them, cached per model and pose: hover asks on every move. */
 	fun posedBones(): List<PosedBone> {
 		val puppet = model
-		val values = state.parameterValues
-		posedCache?.let { (m, v, bones) -> if (m === puppet && v == values) return bones }
-		return SkeletonPoseTool.posed(puppet, bakedSkeleton, values).also { posedCache = Triple(puppet, values, it) }
+		val values = viewModel.parameterScrubPose(state, state.parameterValues)
+		posedCache?.let { (m, v, bones) -> if (m === puppet && v == values && posedCacheSpec === bakedSkeleton) return bones }
+		return SkeletonPoseTool.posed(puppet, bakedSkeleton, values).also { posedCache = Triple(puppet, values, it); posedCacheSpec = bakedSkeleton }
 	}
 
 	fun beginPose(pos: Offset, viewport: CanvasViewport): Boolean {
+		val targets = bakedSkeleton?.ikTargets.orEmpty()
+		val target = targets.entries.firstOrNull { (_, t) -> t.enabled &&
+			(Offset(viewport.x(t.x).toFloat(), (viewport.offsetY + t.y * viewport.scale).toFloat()) - pos).getDistance() <= 10f }
+		if (target != null) {
+			draggingIkTargetId = target.key; ikTargetDragOrigin = committedSkeleton
+			ikTargetDragValues = state.parameterValues
+			poseDrag = BoneHit(target.key, true); selectedBoneId = target.key
+			viewModel.beginParameterScrub(); return true
+		}
 		poseDrag = SkeletonPoseTool.hit(posedBones(), pos, viewport)
-		if (poseDrag != null) viewModel.beginEditorGesture()
+		poseDrag?.let { selectedBoneId = it.boneId }
+		if (poseDrag != null) viewModel.beginParameterScrub()
 		return poseDrag != null
 	}
 
 	fun dragPose(pos: Offset, viewport: CanvasViewport, ik: Boolean) {
+		draggingIkTargetId?.let { id ->
+			val next = (ikTargetDragOrigin ?: return).withIkTarget(id, io.github.psd2live.core.SkeletonIkTarget(viewport.canvasX(pos.x), viewport.canvasY(pos.y)))
+			ikTargetPoseDraft = next
+			viewModel.setParameterValues(io.github.psd2live.core.SkeletonPoseSolver.solveTargets(model, next, viewModel.parameterScrubPose(state, state.parameterValues)))
+			return
+		}
 		val hit = poseDrag ?: return
 		val spec = bakedSkeleton ?: return
-		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), state.parameterValues, ik)
+		val effectiveIk = skeletonPoseSubTool == SkeletonPoseSubTool.IK ||
+			(skeletonPoseSubTool == SkeletonPoseSubTool.AUTO && (hit.tip || ik))
+		viewModel.poseGestureTarget(hit.boneId, viewport.canvasX(pos.x), viewport.canvasY(pos.y), effectiveIk)
+		val values = SkeletonPoseTool.drag(spec, posedBones(), hit, viewport.canvasX(pos.x), viewport.canvasY(pos.y), viewModel.parameterScrubPose(state, state.parameterValues),
+			ik = ik, mode = skeletonPoseSubTool)
 		if (values.isNotEmpty()) viewModel.setParameterValues(values)
 	}
 
 	fun endPose() {
 		if (poseDrag != null) {
 			poseDrag = null
-			viewModel.endEditorGesture()
+			val targetId = draggingIkTargetId
+			val target = targetId?.let { (ikTargetPoseDraft ?: ikTargetDragOrigin)?.ikTargets?.get(it) }
+			draggingIkTargetId = null; ikTargetDragOrigin = null; ikTargetDragValues = null; ikTargetPoseDraft = null
+			if (targetId != null) viewModel.endIkTargetScrub(targetId, target) else viewModel.endParameterScrub()
 		}
 	}
 
 	/** The pose tool is armed and has a baked skeleton to drive. */
 	fun posing(): Boolean = tool == CanvasTool.SKELETON_POSE && skeletonSelected &&
-		hierarchyMode == EditHierarchyMode.DEFORM && bakedSkeleton != null
+		hierarchyMode == EditHierarchyMode.SKELETON && bakedSkeleton != null
 
 	fun hoverPose(pos: Offset, viewport: CanvasViewport) {
 		poseHover = SkeletonPoseTool.hit(posedBones(), pos, viewport)
@@ -625,46 +863,77 @@ internal class CanvasEditor(
 		viewModel.setParameterValues(SkeletonPoseTool.rest(bakedSkeleton))
 	}
 
+	fun saveSkeletonPose(name: String) {
+		if (name.isBlank() || name.any(Char::isISOControl)) return
+		val spec = committedSkeleton ?: return
+		val values = model.parameters.associate { p -> p.id.raw to (state.parameterValues[p.id] ?: p.default).coerceIn(p.min, p.max) }
+		viewModel.setSkeletonPoseMetadata(spec.withSavedPose(name, values))
+	}
+
+	fun applySavedSkeletonPose(name: String) {
+		val saved = committedSkeleton?.savedPoses?.get(name) ?: return
+		viewModel.setParameterValues(model.parameters.mapNotNull { p -> saved[p.id.raw]?.let { p.id to it.coerceIn(p.min, p.max) } }.toMap())
+	}
+
+	fun deleteSavedSkeletonPose(name: String) {
+		val spec = committedSkeleton ?: return
+		viewModel.setSkeletonPoseMetadata(spec.withoutSavedPose(name))
+	}
+
+	fun setSelectedBoneIk(settings: io.github.psd2live.core.SkeletonIkSettings) {
+		val spec = skeletonDraft ?: committedSkeleton ?: return
+		val bone = spec.bone(selectedBoneId ?: return) ?: return
+		if (skeletonDraft != null) editSkeletonDraft(SkeletonDraftIntent.Ik(bone.id, settings)) else {
+			viewModel.editBoneIk(bone.id, settings)
+		}
+	}
+
+	fun pinSelectedBone() {
+		val posed = posedBones().firstOrNull { it.bone.id == selectedBoneId } ?: return
+		updateIkTarget(posed.bone.id, io.github.psd2live.core.SkeletonIkTarget(posed.tailX, posed.tailY))
+	}
+
+	fun updateIkTarget(id: String, target: io.github.psd2live.core.SkeletonIkTarget?) {
+		if (committedSkeleton == null) return
+		viewModel.editIkTarget(id, target)
+	}
+
 	fun bindDrawableToSelectedBone(drawableId: String) {
-		val draft = skeletonDraft ?: return
-		skeletonDraft = draft.withDrawableBound(drawableId, selectedBoneId)
+		if (skeletonDraft == null) return
+		editSkeletonDraft(SkeletonDraftIntent.Bind(setOf(drawableId), selectedBoneId))
 	}
 
 	fun unbindSkeletonDrawable(drawableId: String) {
-		skeletonDraft = skeletonDraft?.withDrawableBound(drawableId, null)
+		if (skeletonDraft == null) return
+		editSkeletonDraft(SkeletonDraftIntent.Bind(setOf(drawableId), null))
 	}
 
 	fun addBone() {
 		val draft = skeletonDraft ?: return
 		val parent = draft.bone(selectedBoneId ?: return) ?: return
-		val id = generateSequence(1) { it + 1 }.map { "custom_$it" }.first { draft.bone(it) == null }
-		val bone = io.github.psd2live.core.SkeletonBone(id, io.github.psd2live.core.SkeletonNames.bone(io.github.psd2live.core.BoneRole.CUSTOM,
-			io.github.psd2live.core.Side.NONE), parent.id, io.github.psd2live.core.BoneRole.CUSTOM,
-			headX = parent.tailX, headY = parent.tailY, tailX = parent.tailX, tailY = parent.tailY + 60f)
-		skeletonDraft = draft.withBone(bone)
+		createBone(parent.tailX, parent.tailY, parent.tailX, parent.tailY + 60f, parent.id)
+	}
+
+	/** Creation stays in the edit draft, sharing its finish/cancel and history behavior. */
+	fun createBone(headX: Float, headY: Float, tailX: Float, tailY: Float, parentId: String? = null) {
+		if (skeletonDraft == null) return
+		val result = editSkeletonDraft(SkeletonDraftIntent.CreateBone(headX, headY, tailX, tailY, parentId)) ?: return
+		result.selected?.singleOrNull()?.let { selectedBoneId = it }
 	}
 
 	fun removeSelectedBone() {
 		val draft = skeletonDraft ?: return
 		val bone = draft.bone(selectedBoneId ?: return) ?: return
 		if (bone.role.anchor || bone.role.body) return
-		skeletonDraft = draft.withoutBone(bone.id)
+		editSkeletonDraft(SkeletonDraftIntent.RemoveBone(bone.id)) ?: return
 		selectedBoneId = bone.parentId
 	}
 
 	fun setOptionalSkeletonChain(role: io.github.psd2live.core.BoneRole, enabled: Boolean) {
 		require(role == io.github.psd2live.core.BoneRole.TAIL || role == io.github.psd2live.core.BoneRole.WING)
-		val draft = skeletonDraft ?: return
-		if (!enabled) {
-			val removed = draft.bones.filter { it.role == role }.mapTo(HashSet()) { it.id }
-			skeletonDraft = draft.copy(bones = draft.bones.filterNot { it.id in removed })
-			if (selectedBoneId in removed) selectedBoneId = io.github.psd2live.core.SkeletonSpec.LOWER_BODY_ID
-			return
-		}
-		val preview = state.previewModel ?: return
-		val template = io.github.psd2live.core.SkeletonAutoBuilder.build(preview.analysis, preview.rig)
-		val additions = template.bones.filter { it.role == role && draft.bone(it.id) == null }
-		if (additions.isNotEmpty()) skeletonDraft = draft.copy(bones = draft.bones + additions)
+		if (skeletonDraft == null) return
+		val result = editSkeletonDraft(SkeletonDraftIntent.OptionalChain(role, enabled)) ?: return
+		if (selectedBoneId != null && result.draft.bone(selectedBoneId!!) == null) selectedBoneId = io.github.psd2live.core.SkeletonSpec.LOWER_BODY_ID
 	}
     val state: PSD2LiveState
         get() = viewModel.uiState.value.forCanvas(canvasId, workspaceId, CanvasMode.EDIT)
@@ -746,6 +1015,8 @@ internal class CanvasEditor(
             tool == CanvasTool.SELECT && target?.kind == "rotation" -> "editor.rotationGestureHint"
             tool == CanvasTool.CREATE_DEFORM_PATH -> "editor.pathHint"
             tool == CanvasTool.INFLATE -> "editor.inflateHint"
+            tool == CanvasTool.WEIGHT_PAINT -> "editor.weightHint"
+            tool == CanvasTool.WEIGHT_GRADIENT -> "editor.weightGradientHint"
             hierarchyMode == EditHierarchyMode.PAINT -> "editor.paintHint"
             hierarchyMode == EditHierarchyMode.SELECT && tool == CanvasTool.SELECT -> "editor.objectHint"
             hierarchyMode == EditHierarchyMode.EDIT && tool == CanvasTool.SELECT &&
@@ -776,6 +1047,45 @@ internal class CanvasEditor(
     var paintBrushSize by mutableStateOf(16f)
     var paintPencilSize by mutableStateOf(4f)
     var paintEraserSize by mutableStateOf(24f)
+
+    /** The open document's longest side in pixels; 0 with nothing open. */
+    val documentLongSide: Int
+        get() = state.let { it.analysis ?: it.previewModel?.analysis }?.source?.let { maxOf(it.widthPx, it.heightPx) } ?: 0
+
+    /**
+     * The largest size any brush takes: never below [MIN_BRUSH_SIZE_LIMIT], and otherwise the document's longest
+     * side, since a brush wider than the document has nothing more to cover.
+     */
+    val brushSizeLimit: Float
+        get() = maxOf(MIN_BRUSH_SIZE_LIMIT, documentLongSide.toFloat())
+
+    /**
+     * How much larger brushes start on this document: 1 up to [io.github.psd2live.core.MeshResolution.REFERENCE_SIDE],
+     * in proportion above it, so a default stroke covers the same share of a large document as of a small one.
+     */
+    val brushScale: Float
+        get() = (documentLongSide.toFloat() / io.github.psd2live.core.MeshResolution.REFERENCE_SIDE).coerceAtLeast(1f)
+
+    private var brushScaleApplied = 1f
+
+    /**
+     * Scales every brush size - paint, pencil, eraser, the deform and weight brushes - by the change in [brushScale]
+     * since the last call, so the defaults suit a newly opened document and sizes the user picked keep their share
+     * of it. Nothing happens with no document open.
+     */
+    fun fitBrushesToDocument() {
+        if (documentLongSide <= 0) return
+        val scale = brushScale
+        if (scale == brushScaleApplied) return
+        val k = scale / brushScaleApplied
+        val limit = brushSizeLimit
+        paintBrushSize = (paintBrushSize * k).coerceIn(1f, limit)
+        paintPencilSize = (paintPencilSize * k).coerceIn(1f, limit)
+        paintEraserSize = (paintEraserSize * k).coerceIn(1f, limit)
+        radius = (radius * k).coerceIn(1f, limit)
+        skeletonWeightRadius = (skeletonWeightRadius * k).coerceIn(1f, limit)
+        brushScaleApplied = scale
+    }
 
     /** Edge softness of the paint and erase tips: 1 is a pen, 0 fades the whole tip to nothing. */
     var paintHardness by mutableStateOf(0.85f)
@@ -908,6 +1218,28 @@ internal class CanvasEditor(
     var glueStrokeB by mutableStateOf<Set<Int>>(emptySet())
     private var glueStroking = false
     private var glueErasing = false
+
+    /** The kind of vertex group the weight brush paints; each mesh has one group of each kind. */
+    var weightGroupKind by mutableStateOf(VertexGroupKind.PIN)
+    /** How strokes and gradients combine with the group; Alt swaps adding and subtracting for one stroke. */
+    var weightPaintMode by mutableStateOf(WeightPaintMode.ADD)
+    private var weightStroking = false
+    /** The mode the stroke in hand runs in, Alt included; the options bar keeps showing [weightPaintMode]. */
+    var weightStrokeMode by mutableStateOf(WeightPaintMode.ADD)
+        private set
+    /** Per edited mesh, the strongest reach the current stroke or gradient has at each vertex. */
+    var weightStroke by mutableStateOf<Map<String, FloatArray>>(emptyMap())
+        private set
+    /** Alt as of the last pointer move, so the brush ring shows a subtracting stroke before it starts. */
+    private var weightAltHeld by mutableStateOf(false)
+
+    /** The mode the stroke in hand runs in, or the one a press right now would start. */
+    fun weightStrokeModeShown(): WeightPaintMode =
+        if (weightStroking) weightStrokeMode else WeightPaint.effective(weightPaintMode, weightAltHeld)
+
+    /** The gradient being dragged, in screen space: start and end. */
+    var weightGradient by mutableStateOf<Pair<Offset, Offset>?>(null)
+        private set
     var brushSelecting by mutableStateOf(false)
 
     /**
@@ -950,9 +1282,9 @@ internal class CanvasEditor(
     /** Which parameter the live adjustment latched onto; null until the drag clears the lock threshold. */
     var brushAxis by mutableStateOf<BrushAdjustAxis?>(null)
         private set
-    var pathWidth by mutableStateOf(0.12f)
+    var pathWidth by mutableStateOf(DeformPath.DEFAULT_WIDTH)
     var pathLevel by mutableStateOf(2)
-    var pathHardness by mutableStateOf(0.5f)
+    var pathHardness by mutableStateOf(DeformPath.DEFAULT_HARDNESS)
     var pathClosed by mutableStateOf(false)
     var activePath by mutableStateOf<String?>(null)
     var pathPoint by mutableStateOf(-1)
@@ -995,6 +1327,24 @@ internal class CanvasEditor(
     /** The drawable [knifeDraft] belongs to, so switching targets drops a cut that could not apply. */
     private var knifeDrawableId: String? = null
 
+    /**
+     * What the open Warp/Rotation placement, knife cut and path were started on. Their later inputs and confirm
+     * are read against this capture, so an edit made elsewhere meanwhile is a conflict, not a reinterpretation.
+     */
+    private var placementInput: WorkspaceCanvasInputDraft<Unit, DrawableSpaceMapping>? = null
+    private var knifeInput: WorkspaceCanvasInputDraft<MeshRefinementOps.KnifeAnchor, CanvasTarget>? = null
+    private var pathInput: WorkspaceCanvasInputDraft<Pair<Float, Float>, CanvasTarget>? = null
+
+    private fun draftScope() = viewModel.uiState.value.let {
+        CanvasDraftScope(it.projectId, it.projectOpenGeneration, it.activeWorkspace.id, canvasId)
+    }
+
+    private fun <I, F> startInput(targetId: String, frame: F, inputs: List<I>): WorkspaceCanvasInputDraft<I, F>? {
+        val expected = viewModel.currentWorkspaceState() ?: return null
+        val source = state.previewModel ?: return null
+        return WorkspaceCanvasInputDraft(expected, draftScope(), source, state.parameterValues.toMap(), targetId, frame, inputs)
+    }
+
     /** The only say the artist has over snapping: how close, in screen pixels, counts as "on" a vertex or an
      *  edge. Snapping itself is not optional - outside this radius a click always drops a new point. */
     var knifeSnapRadius by mutableStateOf(10f)
@@ -1007,8 +1357,15 @@ internal class CanvasEditor(
 
     fun undoDraftPoint() {
         if (busy) return
-        if (tool == CanvasTool.KNIFE) knifeDraft = knifeDraft.dropLast(1)
-        else if (drawingPath) draft = draft.dropLast(1)
+        if (tool == CanvasTool.KNIFE) {
+            knifeInput?.dropLast()
+            knifeDraft = knifeDraft.dropLast(1)
+            if (knifeDraft.isEmpty()) knifeInput = null
+        } else if (drawingPath) {
+            pathInput?.dropLast()
+            draft = draft.dropLast(1)
+            if (draft.isEmpty()) pathInput = null
+        }
         error = null
     }
 
@@ -1081,7 +1438,7 @@ internal class CanvasEditor(
     private var targetAtPress: CanvasTarget? = null
     private var original: PuppetModel? = null
     private var pending: JsonObject? = null
-    private var head: String? = null
+    private var gestureState: String? = null
     private var moved = false
     private var additive = false
     private var subtractive = false
@@ -1106,9 +1463,6 @@ internal class CanvasEditor(
     var activeBrushWeights by mutableStateOf<FloatArray?>(null)
     /** Screen position where the active brush stroke was pressed. */
     var activeBrushCenter by mutableStateOf<Offset?>(null)
-    private var brushInitialBase: FloatArray? = null
-    private var brushInitialScreen: List<Offset>? = null
-    private var brushAffectedIndices: Set<Int> = emptySet()
 
     fun cycleBrushShape() {
         val entries = BrushShape.entries
@@ -1122,7 +1476,7 @@ internal class CanvasEditor(
 
     val inGesture get() = dragging
     val model get() = preview ?: state.previewModel!!.rig.puppet
-    val pose get() = state.parameterValues.mapKeys { it.key.raw }
+    val pose get() = viewModel.canvasPose(state).mapKeys { it.key.raw }
 
 
     /**
@@ -1163,7 +1517,7 @@ internal class CanvasEditor(
             val t = target() ?: return false
             return t.kind == "rotation" || vertices.any { it in 0 until t.count }
         }
-    val editable get() = !busy && !state.canvasEditBusy && !state.isGenerating && !state.isAnalyzing && state.historySnapshot != null
+    val editable get() = !busy && !state.workspaceEditBusy && !state.isGenerating && !state.isAnalyzing && state.historySnapshot != null
 
     fun target(source: PuppetModel? = preview ?: state.previewModel?.rig?.puppet, layerId: String? = state.selectedLayerId, deformerId: String? = state.selectedDeformerId): CanvasTarget? {
         // Panels can be composed before a project is loaded or while it is closing.
@@ -1434,42 +1788,8 @@ internal class CanvasEditor(
         if (currentSession != null) {
             discardPaintSession()
         }
-        val currentAnalysis = state.analysis ?: state.previewModel?.analysis ?: return null
-        val docWidth = currentAnalysis.source.widthPx.coerceAtLeast(1)
-        val docHeight = currentAnalysis.source.heightPx.coerceAtLeast(1)
-
-        val layer = sourceLayerFor(currentAnalysis, targetLid) ?: return null
-        val layerName = layer.name.ifBlank { targetLid }
-        val bounds = layer.bounds
-        val raster = layer.raster
-
-        val workingCopy = BufferedImage(docWidth, docHeight, BufferedImage.TYPE_INT_ARGB)
-        if (raster.width > 0 && raster.height > 0 && raster.rgba.isNotEmpty()) {
-            val layerImg = BufferedImage(raster.width, raster.height, BufferedImage.TYPE_INT_ARGB)
-            val rgba = raster.rgba
-            val intPixels = IntArray(raster.width * raster.height)
-            for (i in intPixels.indices) {
-                val r = rgba[i * 4].toInt() and 0xFF
-                val g = rgba[i * 4 + 1].toInt() and 0xFF
-                val b = rgba[i * 4 + 2].toInt() and 0xFF
-                val a = rgba[i * 4 + 3].toInt() and 0xFF
-                intPixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
-            }
-            layerImg.setRGB(0, 0, raster.width, raster.height, intPixels, 0, raster.width)
-            val g = workingCopy.createGraphics()
-            try {
-                g.drawImage(layerImg, bounds.left, bounds.top, null)
-            } finally {
-                g.dispose()
-            }
-        }
-
-        val newSession = PaintSession(
-            layerId = targetLid,
-            layerName = layerName,
-            workingImage = workingCopy,
-            originalImageCopy = PaintSession.copyImage(workingCopy),
-        )
+        val handle = viewModel.beginPaintSession(targetLid) ?: return null
+        val newSession = PaintSession(handle)
         paintSession = newSession
         return newSession
     }
@@ -1499,6 +1819,7 @@ internal class CanvasEditor(
     }
 
     fun resetPaintSession() {
+        paintSession?.dismiss()
         paintSession = null
         isPainting = false
         paintStrokeStart = null
@@ -1517,92 +1838,17 @@ internal class CanvasEditor(
 
     fun clearCurrentLayerPaint() {
         val session = ensurePaintSession() ?: return
-        session.edit(java.awt.Rectangle(0, 0, session.docWidth, session.docHeight)) { image ->
-            LayerPaintEngine.clear(image)
-        }
-        session.recordStroke(tr("editor.paint.strokeClear"))
+        session.clear(tr("editor.paint.strokeClear"))
     }
 
     fun promptCommitPaintSession() {
         val session = paintSession ?: return
         if (!session.isDirty) return
+        if (DepthSplit.isFrontLayer(state.previewModel, session.layerId)) {
+            commitPaintSession(rebuildMesh = false)
+            return
+        }
         showRebuildMeshDialog = true
-    }
-
-    private fun resetRebuiltMeshEdits(
-        overlay: RigEditOverlay,
-        drawableId: String,
-        previousVertexCount: Int,
-        vertexCount: Int,
-    ): RigEditOverlay {
-        val meshTarget = "mesh:$drawableId"
-        val topologyChanged = previousVertexCount != vertexCount
-        val journal = overlay.authoringJournal.mapNotNull { command ->
-            when (command["op"]?.jsonPrimitive?.content) {
-                "canvas_topology" -> if (command["id"]?.jsonPrimitive?.content == drawableId) null else command
-                "canvas_geometry" -> {
-                    val isTargetMesh = command["kind"]?.jsonPrimitive?.content == "mesh" &&
-                        command["id"]?.jsonPrimitive?.content == drawableId
-                    val pointsMatch = command["points"]?.jsonArray?.size == vertexCount * 2
-                    val isBaseMove = command["key"]?.jsonObject.isNullOrEmpty()
-                    if (isTargetMesh && (isBaseMove || !pointsMatch)) null else command
-                }
-                "set" -> {
-                    val geometry = command["geometry"]?.jsonObject
-                    val positions = geometry?.get("positionDeltas")?.jsonArray
-                    if (command["target"]?.jsonPrimitive?.content == meshTarget &&
-                        positions != null && positions.size != vertexCount * 2
-                    ) {
-                        if (command["channels"] == null) null else buildJsonObject {
-                            command.forEach { (key, value) -> if (key != "geometry") put(key, value) }
-                        }
-                    } else command
-                }
-                "copy" -> {
-                    val source = command["target"]?.jsonPrimitive?.content
-                    val destination = command["destination"]?.jsonPrimitive?.content ?: source
-                    val touchesMesh = source == meshTarget || destination == meshTarget
-                    val channels = command["channels"]?.jsonArray
-                    val copiesGeometry = channels == null || channels.any {
-                        it.jsonPrimitive.content.equals("geometry", ignoreCase = true)
-                    }
-                    if (topologyChanged && touchesMesh && copiesGeometry) {
-                        val retainedChannels = channels?.map { it.jsonPrimitive.content }?.filterNot {
-                            it.equals("geometry", ignoreCase = true)
-                        } ?: listOf("opacity", "draw_order", "multiply_color", "screen_color", "flip_x", "flip_y")
-                        if (retainedChannels.isEmpty()) null else buildJsonObject {
-                            command.forEach { (key, value) -> if (key != "channels") put(key, value) }
-							put("channels", JsonArray(retainedChannels.map { JsonPrimitive(it) }))
-                        }
-                    } else command
-                }
-                else -> command
-            }
-        }
-        val keyformSets = overlay.keyformSetEdits.mapNotNull { edit ->
-            val positions = edit.geometry?.positionDeltas
-            if (edit.target.kind == RigTargetKind.ART_MESH && edit.target.id == drawableId &&
-                positions != null && positions.size != vertexCount * 2
-            ) {
-                if (edit.channels == null) null else edit.copy(geometry = null)
-            } else edit
-        }
-        val keyformCopies = overlay.keyformCopyEdits.mapNotNull { edit ->
-            val copiesGeometry = edit.channels == null || edit.channels.any { it.equals("geometry", ignoreCase = true) }
-            val touchesMesh =
-                (edit.sourceTarget.kind == RigTargetKind.ART_MESH && edit.sourceTarget.id == drawableId) ||
-                    (edit.destinationTarget.kind == RigTargetKind.ART_MESH && edit.destinationTarget.id == drawableId)
-            if (topologyChanged && copiesGeometry && touchesMesh) {
-                val retainedChannels = edit.channels?.filterNot { it.equals("geometry", ignoreCase = true) }
-                    ?: listOf("opacity", "draw_order", "multiply_color", "screen_color", "flip_x", "flip_y")
-                if (retainedChannels.isEmpty()) null else edit.copy(channels = retainedChannels)
-            } else edit
-        }
-        return overlay.copy(
-            keyformSetEdits = keyformSets,
-            keyformCopyEdits = keyformCopies,
-            authoringJournal = journal,
-        )
     }
 
     fun commitPaintSession(
@@ -1611,434 +1857,19 @@ internal class CanvasEditor(
         preserveSourceRaster: Boolean = false,
     ) {
         val session = paintSession ?: return
-        showRebuildMeshDialog = false
-
         val currentPreview = state.previewModel ?: return
-        val currentAnalysis = currentPreview.analysis
-        // The frames the live rig was built on. Rebuilt from the previous analysis on purpose: the
-        // commit preserves every deformer, so a mesh rebuilt against frames moved by the new paint
-        // would no longer line up with the parent deformer it hangs under.
-        val rigContext = RigBuilder.rigContext(currentAnalysis, currentPreview.config)
-        val img = session.workingImage
-        val docW = session.docWidth
-        val docH = session.docHeight
-
-        val newBounds: LayerBounds
-        val newRaster: LayerRaster
-
-        // A hierarchy rebuild changes only the mesh. Keep the exact saved pixels and bounds instead
-        // of running the paint-commit crop step over an untouched raster.
-        val existingLayer = sourceLayerFor(currentAnalysis, session.layerId)
-        if (preserveSourceRaster && existingLayer != null) {
-            newBounds = existingLayer.bounds
-            newRaster = existingLayer.raster
-        } else {
-            // 1. Scan workingImage to find tight non-transparent bounding box
-            var minX = docW
-            var minY = docH
-            var maxX = -1
-            var maxY = -1
-
-            val row = IntArray(docW)
-            for (y in 0 until docH) {
-                img.getRGB(0, y, docW, 1, row, 0, docW)
-                for (x in 0 until docW) {
-                    val alpha = (row[x] ushr 24) and 0xFF
-                    if (alpha > 0) {
-                        if (x < minX) minX = x
-                        if (x > maxX) maxX = x
-                        if (y < minY) minY = y
-                        if (y > maxY) maxY = y
-                    }
-                }
-            }
-
-            if (maxX < minX || maxY < minY) {
-                // Completely erased / transparent layer
-                newBounds = LayerBounds(0, 0, 1, 1)
-                newRaster = LayerRaster(1, 1, ByteArray(4))
-            } else {
-                val cropW = maxX - minX + 1
-                val cropH = maxY - minY + 1
-                newBounds = LayerBounds(minX, minY, cropW, cropH)
-                val croppedImg = img.getSubimage(minX, minY, cropW, cropH)
-                val pixels = IntArray(cropW * cropH)
-                croppedImg.getRGB(0, 0, cropW, cropH, pixels, 0, cropW)
-                val rgba = ByteArray(cropW * cropH * 4)
-                for (i in pixels.indices) {
-                    val argb = pixels[i]
-                    rgba[i * 4] = ((argb ushr 16) and 0xFF).toByte()     // R
-                    rgba[i * 4 + 1] = ((argb ushr 8) and 0xFF).toByte()  // G
-                    rgba[i * 4 + 2] = (argb and 0xFF).toByte()           // B
-                    rgba[i * 4 + 3] = ((argb ushr 24) and 0xFF).toByte() // A
-                }
-                newRaster = LayerRaster(cropW, cropH, rgba)
-            }
-        }
-
-        // 2. Identify target Drawable, ClassifiedLayer, and SourceLayer
-        val targetLid = session.layerId
-        val targetDrawable = currentPreview.rig.puppet.drawables.firstOrNull {
-            it.id.raw == targetLid || currentPreview.rig.layerIdByDrawableId[it.id.raw] == targetLid
-        }
-        val targetClassified = classifiedLayerFor(currentAnalysis, targetLid)
-        val targetSourceLayerId = targetClassified?.source?.id?.raw
-            ?: targetLid.substringBefore(':').substringBeforeLast('-')
-        val oldBounds = sourceLayerFor(currentAnalysis, targetLid)?.bounds ?: newBounds
-
-        // 3. Update Source Art and Classified Layers
-        val updatedSrcLayers = currentAnalysis.source.layers.map { sl ->
-            if (sl.id.raw == targetSourceLayerId || sl.id.raw == targetLid || sl.id.raw == targetClassified?.source?.id?.raw) {
-                val base = if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order) as WorkspaceSourceLayer
-                base.copy(bounds = newBounds, raster = newRaster)
-            } else {
-                if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order)
-            }
-        }
-        val updatedSourceArt = WorkspaceSourceArt(
-            widthPx = currentAnalysis.source.widthPx,
-            heightPx = currentAnalysis.source.heightPx,
-            layers = updatedSrcLayers,
-            groups = currentAnalysis.source.groups,
-        )
-
-        val updatedClassifiedLayers = currentAnalysis.layers.map { cl ->
-            if (cl.source.id.raw == (targetClassified?.source?.id?.raw ?: targetLid)) {
-                val updatedSource = (cl.source as? WorkspaceSourceLayer)?.copy(bounds = newBounds, raster = newRaster)
-                    ?: (WorkspaceSourceLayer.copyOf(cl.source, cl.source.order) as WorkspaceSourceLayer).copy(bounds = newBounds, raster = newRaster)
-                val updatedFloatBounds = newBounds.toBounds()
-                cl.copy(
-                    source = updatedSource,
-                    bounds = updatedFloatBounds,
-                    opaquePixels = newBounds.width * newBounds.height,
-                    centroidX = newBounds.left + newBounds.width * 0.5f,
-                    centroidY = newBounds.top + newBounds.height * 0.5f,
-                )
-            } else cl
-        }
-
-        val updatedAnalysis = currentAnalysis.copy(
-            source = updatedSourceArt,
-            layers = updatedClassifiedLayers,
-        )
-
-        // 4. Repack texture atlas with updated layer raster
-        val refreshedAnalysis = MouthLipLayers.prepare(updatedAnalysis, currentPreview.config)
-        // The ribbons are generated from the mouth layer, so a repaint would normally regenerate them
-        // too. Keeping the existing mesh means keeping the ribbons' own pixels as well: a regenerated
-        // ribbon follows a contour the kept mesh no longer has, and its coordinates would fall outside
-        // the slice it was packed into.
-        val effectiveAnalysis = if (rebuildMesh) refreshedAnalysis else refreshedAnalysis.copy(
-            layers = refreshedAnalysis.layers.map { layer ->
-                if (layer.source is MouthLipLayer) {
-                    currentAnalysis.layers.firstOrNull { it.source.id.raw == layer.source.id.raw } ?: layer
-                } else {
-                    layer
-                }
-            },
-        )
-        val newAtlas = AtlasPacker.pack(
-            effectiveAnalysis.layers,
-            currentPreview.config.atlasSize,
-            currentPreview.config.texturePadding,
-            currentPreview.config.textureUpscale,
-        )
-        val oldAtlas = currentPreview.atlas
-
-        fun findPlacement(atlas: PackedAtlas, drawableId: String, layerId: String?): io.github.psd2live.core.AtlasPlacement? {
-            if (layerId != null && atlas.placementByLayerId.containsKey(layerId)) {
-                return atlas.placementByLayerId[layerId]
-            }
-            if (atlas.placementByLayerId.containsKey(drawableId)) {
-                return atlas.placementByLayerId[drawableId]
-            }
-            val mappedId = currentPreview.rig.layerIdByDrawableId[drawableId]
-            if (mappedId != null && atlas.placementByLayerId.containsKey(mappedId)) {
-                return atlas.placementByLayerId[mappedId]
-            }
-            val baseId = (layerId ?: drawableId).substringBefore(':').substringBeforeLast('-')
-            if (atlas.placementByLayerId.containsKey(baseId)) {
-                return atlas.placementByLayerId[baseId]
-            }
-            return null
-        }
-
-        /** One layer's slice of [atlas], or null when it holds none. An unknown [bounds] reads as the
-         *  canvas origin, which leaves the texture coordinates translated but unscaled. */
-        fun sliceOf(atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds?): AtlasSlice? {
-            val placement = findPlacement(atlas, drawableId, layerId) ?: return null
-            val page = atlas.pages.getOrNull(placement.page)
-            return AtlasSlice(
-                placement = placement,
-                pageWidth = page?.image?.width ?: placement.width,
-                pageHeight = page?.image?.height ?: placement.height,
-                sourceBounds = bounds?.let { Bounds(it.left.toFloat(), it.top.toFloat(), (it.left + it.width).toFloat(), (it.top + it.height).toFloat()) }
-                    ?: Bounds(0f, 0f, 0f, 0f),
-            )
-        }
-
-        /** The mesh a rebuild replaces, described so the frame its parent deformer expects can be
-         *  recovered from the geometry itself - the only source left for an imported or hand-made rig. */
-        fun replacedMesh(mesh: DrawableMesh, atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds): RigBuilder.ReplacedMesh {
-            val slice = sliceOf(atlas, drawableId, layerId, bounds)
-            return RigBuilder.ReplacedMesh(
-                mesh = mesh,
-                placement = slice?.placement,
-                pageWidth = slice?.pageWidth ?: 1,
-                pageHeight = slice?.pageHeight ?: 1,
-                sourceBounds = slice?.sourceBounds ?: Bounds(0f, 0f, 0f, 0f),
-            )
-        }
-
-        val targetPlacement = findPlacement(newAtlas, targetDrawable?.id?.raw ?: targetLid, targetClassified?.source?.id?.raw ?: targetLid)
-            ?: newAtlas.placementByLayerId[targetLid]
-            ?: newAtlas.placementByLayerId.values.firstOrNull()
-            ?: io.github.psd2live.core.AtlasPlacement(0, 0, 0, newBounds.width, newBounds.height)
-        val targetPage = newAtlas.pages.getOrNull(targetPlacement.page)
-        val targetPageWidth = targetPage?.image?.width ?: currentPreview.config.atlasSize
-        val targetPageHeight = targetPage?.image?.height ?: currentPreview.config.atlasSize
-
-        val regeneratedLips = RigBuilder.generatedMouthLips(effectiveAnalysis)
-        val finalTargetClassified = effectiveAnalysis.layers.firstOrNull { it.source.id.raw == (targetClassified?.source?.id?.raw ?: targetLid) }
-            ?: updatedClassifiedLayers.firstOrNull { it.source.id.raw == (targetClassified?.source?.id?.raw ?: targetLid) }
-            ?: targetClassified
-
-        // 5. Update drawables (preserving deformers, hierarchy, keyforms, and rigging)
-        val updatedPageByDrawableId = currentPreview.rig.pageByDrawableId.toMutableMap()
-        val updatedSourceBounds = currentPreview.rig.sourceBoundsByDrawableId.toMutableMap()
-
-        val droppedDrawables = mutableSetOf<DrawableId>()
-        val rebuiltLips = mutableMapOf<String, RigBuilder.MouthLip>()
-        val reboundPathsById = mutableMapOf<String, DeformPath>()
-        val updatedDrawables = currentPreview.rig.puppet.drawables.mapNotNull { drawable ->
-            val layerId = currentPreview.rig.layerIdByDrawableId[drawable.id.raw] ?: drawable.id.raw
-            val isTarget = (targetDrawable != null && drawable.id == targetDrawable.id) ||
-                           drawable.id.raw == targetLid ||
-                           layerId == targetLid ||
-                           layerId == targetClassified?.source?.id?.raw ||
-                           drawable.id.raw == targetClassified?.source?.id?.raw
-
-            if (isTarget) {
-                updatedPageByDrawableId[drawable.id.raw] = targetPlacement.page
-
-                if (rebuildMesh || drawable.mesh == null) {
-                    // The neutral-pose reference follows the mesh, not the texture: a kept mesh keeps
-                    // describing the area it covers even when new pixels were painted beyond it.
-                    updatedSourceBounds[drawable.id.raw] =
-                        newBounds.toBounds()
-
-                    val targetClassifiedLayer = finalTargetClassified
-                        ?: targetClassified
-                        ?: error("Target classified layer not found for paint commit: $targetLid")
-
-                    // The rig keeps its deformers, so the new mesh has to be normalized against the
-                    // frames those deformers were built on - the context of the analysis the rig came
-                    // from - and not against frames derived from the freshly painted bounds, which
-                    // would rescale the drawable against every sibling that kept the old frames.
-                    val rebuilt = RigBuilder.rebuildDrawableMesh(
-                        layer = targetClassifiedLayer,
-                        context = rigContext,
-                        placement = targetPlacement,
-                        pageWidth = targetPageWidth,
-                        pageHeight = targetPageHeight,
-                        config = currentPreview.config,
-                        parentId = drawable.parentDeformerId,
-                        owner = drawable,
-                        atlas = newAtlas,
-                        generatedLips = regeneratedLips,
-                        previous = drawable.mesh?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldBounds) },
-                    )
-                    drawable.mesh?.let { previousMesh ->
-                        currentPreview.rig.puppet.deformPaths
-                            .filter { it.drawableId == drawable.id }
-                            .forEach { path ->
-                                reboundPathsById[path.id] = DeformPathJournal.rebind(path, previousMesh, rebuilt.mesh)
-                            }
-                    }
-                    for (lip in rebuilt.mouthLips) rebuiltLips[lip.drawable.id.raw] = lip
-
-                    drawable.copy(
-                        mesh = rebuilt.mesh,
-                        texturePage = targetPlacement.page,
-                        // A user-edited grid only survives a rebuild that kept the vertex count.
-                        geometryGrid = if (drawable.mesh?.positions?.size == rebuilt.mesh.positions.size) {
-                            drawable.geometryGrid ?: rebuilt.geometryGrid
-                        } else {
-                            rebuilt.geometryGrid
-                        },
-                    )
-                } else {
-                    val oldMesh = drawable.mesh
-                    val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, oldBounds)
-                    val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, newBounds)
-                    if (oldSlice != null && newSlice != null) {
-                        drawable.copy(
-                            mesh = DrawableMesh(oldMesh.positions, remapUvs(oldMesh, oldSlice, newSlice), oldMesh.indices),
-                            texturePage = targetPlacement.page,
-                        )
-                    } else {
-                        drawable.copy(texturePage = targetPlacement.page)
-                    }
-                }
-            } else {
-                val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, sourceLayerFor(currentAnalysis, layerId)?.bounds)
-                val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, sourceLayerFor(effectiveAnalysis, layerId)?.bounds)
-                val oldMesh = drawable.mesh
-                when {
-                    // The repack has no slice for this drawable any more. That is what a generated layer
-                    // does when the layer it follows loses the shape it was built from - an erased mouth
-                    // takes its lip ribbons with it - and keeping the drawable would leave it sampling
-                    // whatever the repack happened to place at its old texture coordinates, which reads
-                    // as the art tearing apart instead of disappearing.
-                    oldMesh != null && oldSlice != null && newSlice == null -> {
-                        droppedDrawables += drawable.id
-                        null
-                    }
-                    oldMesh != null && oldSlice != null && newSlice != null -> {
-                        updatedPageByDrawableId[drawable.id.raw] = newSlice.placement.page
-                        drawable.copy(
-                            mesh = DrawableMesh(oldMesh.positions, remapUvs(oldMesh, oldSlice, newSlice), oldMesh.indices),
-                            texturePage = newSlice.placement.page,
-                        )
-                    }
-                    else -> drawable
-                }
-            }
-        }
-
-        // 6. Update puppet and rig (deformers, hierarchy, parameters preserved 100%). Deleting a drawable
-        // goes through the model's own delete so the org tree, clip masks, glues and the derived render
-        // order all stop referring to it.
-        for (id in droppedDrawables) {
-            updatedPageByDrawableId.remove(id.raw)
-            updatedSourceBounds.remove(id.raw)
-        }
-        // Ribbons are swapped in by id, whichever side of their owner they sit on, and a ribbon the rig
-        // never had - a mouth painted back after its own erase - joins the part its own mouth is in.
-        var drawablesAfterRepack = updatedDrawables.map { drawable ->
-            val lip = rebuiltLips[drawable.id.raw]
-            if (lip == null) drawable else lip.drawable.copy(
-                drawOrder = drawable.drawOrder,
-                blendMode = drawable.blendMode,
-                isVisible = drawable.isVisible,
-                maskedBy = drawable.maskedBy,
-            )
-        }
-        val addedLips = rebuiltLips.values.filter { lip -> drawablesAfterRepack.none { it.id == lip.drawable.id } }
-        for (lip in addedLips) {
-            updatedPageByDrawableId[lip.drawable.id.raw] = lip.drawable.texturePage
-            updatedSourceBounds[lip.drawable.id.raw] = lip.neutralBounds
-        }
-        if (addedLips.isNotEmpty()) drawablesAfterRepack = drawablesAfterRepack + addedLips.map { it.drawable }
-        val partsAfterRepack = if (addedLips.isEmpty()) {
-            currentPreview.rig.puppet.parts
-        } else {
-            val addedByOwner = addedLips.groupBy { it.ownerId }
-            currentPreview.rig.puppet.parts.map { part ->
-                val added = part.children.filterIsInstance<OrgChild.Drawable>()
-                    .flatMap { addedByOwner[it.id].orEmpty() }
-                if (added.isEmpty()) part else part.copy(children = part.children + added.map { OrgChild.Drawable(it.drawable.id) })
-            }
-        }
-        val updatedPuppet = currentPreview.rig.puppet
-            .let { puppet -> if (droppedDrawables.isEmpty()) puppet else puppet.withDrawablesDeleted(droppedDrawables) }
-            .copy(
-                drawables = drawablesAfterRepack,
-                parts = partsAfterRepack,
-                deformPaths = currentPreview.rig.puppet.deformPaths
-                    .filterNot { it.drawableId in droppedDrawables }
-                    .map { reboundPathsById[it.id] ?: it } +
-                    addedLips.mapNotNull { it.path },
-            )
-            .let { puppet -> if (addedLips.isEmpty()) puppet else puppet.withDerivedRenderRoot() }
-        val updatedRig = currentPreview.rig.copy(
-            puppet = updatedPuppet,
-            pageByDrawableId = updatedPageByDrawableId,
-            sourceBoundsByDrawableId = updatedSourceBounds,
-            layerIdByDrawableId = currentPreview.rig.layerIdByDrawableId +
-                addedLips.associate { it.drawable.id.raw to it.layer.source.id.raw },
-        )
-
-        val (runtimeBundle, _) = viewModel.pipeline.buildRuntimeBundle(
-            "psd2live-preview",
-            effectiveAnalysis,
-            newAtlas,
-            updatedRig,
-            currentPreview.config,
-        )
-
-        val committedConfig = if (rebuildMesh && targetDrawable != null) {
-            val rebuiltMesh = updatedRig.puppet.drawables
-                .firstOrNull { it.id == targetDrawable.id }?.mesh
-            val meshVertexCount = rebuiltMesh?.positions?.size?.div(2)
-            val baseEdits = if (preserveSourceRaster && meshVertexCount != null) {
-                resetRebuiltMeshEdits(
-                    currentPreview.config.rigEdits,
-                    targetDrawable.id.raw,
-                    targetDrawable.mesh?.vertexCount ?: 0,
-                    meshVertexCount,
-                )
-            } else currentPreview.config.rigEdits
-            val previousBasePaths = currentPreview.baseRig.puppet.deformPaths
-                .filter { it.drawableId == targetDrawable.id }
-            val survivingPaths = currentPreview.rig.puppet.deformPaths
-                .filter { it.drawableId == targetDrawable.id }
-                .mapNotNull { reboundPathsById[it.id] }
-            currentPreview.config.copy(
-                rigEdits = DeformPathJournal.replaceMeshPaths(
-                    baseEdits,
-                    targetDrawable.id.raw,
-                    previousBasePaths,
-                    survivingPaths,
-                ),
-            )
-        } else currentPreview.config
-
-        val finalPreview = currentPreview.copy(
-            analysis = updatedAnalysis,
-            atlas = newAtlas,
-            rig = updatedRig,
-            config = committedConfig,
-            baseRig = currentPreview.baseRig.copy(puppet = updatedPuppet, pageByDrawableId = updatedPageByDrawableId, sourceBoundsByDrawableId = updatedSourceBounds),
-            runtimeBundle = runtimeBundle,
-        )
-
-        // 7. Update state and project history. The canvas rebuilds its texture painter from the new
-        // preview model, so the committed atlas reaches the screen without a swap of its own.
-        viewModel.applyCommittedPaint(
-            finalPreview,
-            summary ?: tr("editor.paint.commitSummary", session.layerName),
-        )
-        if (rebuildMesh) viewModel.offerMeshSplit(listOf(session.layerId))
-
-        // 8. Refresh PaintSession baseline with new committed image
-        paintSession = startPaintSession(session.layerId, forceReload = true)
-        isPainting = false
-        paintStrokeStart = null
-        paintStrokeCurrent = null
+        val rebuild = rebuildMesh && !DepthSplit.isFrontLayer(currentPreview, session.layerId)
         showRebuildMeshDialog = false
-    }
-
-    /**
-     * Every id a paint target can be named by: the rig maps generated drawables back to their layer,
-     * and generated mouth lips carry a suffix on top of it.
-     */
-    private fun paintTargetIds(layerId: String): List<String> = buildList {
-        add(layerId)
-        state.previewModel?.rig?.layerIdByDrawableId?.get(layerId)?.let { add(it) }
-        layerId.substringBefore(':').substringBeforeLast('-').let { if (it !in this) add(it) }
-    }
-
-    private fun classifiedLayerFor(analysis: PipelineAnalysis, layerId: String): ClassifiedLayer? =
-        paintTargetIds(layerId).firstNotNullOfOrNull { id ->
-            analysis.layers.firstOrNull { it.source.id.raw == id }
+        viewModel.savePaintSession(session.handle, rebuild, preserveSourceRaster,
+            summary ?: tr("editor.paint.commitSummary", session.layerName)) {
+            if (rebuild) viewModel.offerMeshSplit(listOf(session.layerId))
+            paintSession = startPaintSession(session.layerId, forceReload = true)
+            isPainting = false
+            paintStrokeStart = null
+            paintStrokeCurrent = null
+            showRebuildMeshDialog = false
         }
-
-    private fun sourceLayerFor(analysis: PipelineAnalysis, layerId: String): SourceLayer? =
-        paintTargetIds(layerId).firstNotNullOfOrNull { id ->
-            analysis.layers.firstOrNull { it.source.id.raw == id }?.source
-                ?: analysis.source.layers.firstOrNull { it.id.raw == id }
-        }
+    }
 
     fun screenToCanvasPixel(pos: Offset, viewport: CanvasViewport): Pair<Int, Int>? {
         val session = paintSession ?: return null
@@ -2058,7 +1889,7 @@ internal class CanvasEditor(
     fun sampleColorAt(pos: Offset, viewport: CanvasViewport): androidx.compose.ui.graphics.Color? {
         val session = paintSession ?: return null
         val pixel = screenToCanvasPixel(pos, viewport) ?: return null
-        val argb = session.workingImage.getRGB(pixel.first, pixel.second)
+        val argb = session.sample(pixel.first, pixel.second)
         if (((argb ushr 24) and 0xFF) == 0) return null
         return androidx.compose.ui.graphics.Color(
             red = ((argb ushr 16) and 0xFF) / 255f,
@@ -2119,9 +1950,7 @@ internal class CanvasEditor(
         val start = screenToCanvasPoint(from, vp) ?: return
         val end = screenToCanvasPoint(to, vp) ?: return
         // Nothing new under the segment - a stroke doubling back over itself - is nothing to redraw.
-        val claimed = session.stroke()
-            .addSegment(start.first, start.second, end.first, end.second, paintTip()) ?: return
-        session.landSegment(claimed, paintColor, paintOpacity, erase = erase)
+        session.segment(start.first, start.second, end.first, end.second, paintTip(), paintColor, paintOpacity, erase)
         refreshPaintPreview()
     }
 
@@ -2134,7 +1963,12 @@ internal class CanvasEditor(
     }
 
     fun cancel() {
+        skeletonEntrySerial++
         if (busy) return
+        if (poseDrag != null) {
+            poseDrag = null; draggingIkTargetId = null; ikTargetDragOrigin = null; ikTargetDragValues = null; ikTargetPoseDraft = null
+            viewModel.cancelParameterScrub()
+        }
         // Every tip edits pixels as it goes, so an abandoned gesture has to give them back.
         val session = paintSession
         if (isPainting && session != null) {
@@ -2146,22 +1980,27 @@ internal class CanvasEditor(
         swingHandle = null
         knifeDraft = emptyList(); knifeDrawableId = null; subdividing = false; subdivideEdges = emptySet()
         knifeHover = null; knifeSnapKind = null
+        placementInput = null; knifeInput = null; pathInput = null
         isCreatingWarp = false; isCreatingRotation = false; creationStart = null; creationCurrent = null
         // LAYER placement is a committed import waiting for confirm — do not treat gesture
         // cleanup (history refresh, focus loss, tool churn) as Esc/Cancel.
         if (placement?.kind != CreatePlacementKind.LAYER) {
-            placement = null; placementHandle = PlacementHandle.NONE; placementDragStart = null; placementDragSnapshot = null
+            placement?.imagePlacement?.dismiss(); placement = null; placementHandle = PlacementHandle.NONE; placementDragStart = null; placementDragSnapshot = null
         }
         glueStroking = false
+        weightStroking = false
+        weightStroke = emptyMap()
+        weightGradient = null
+        weightStrokePose = null
+        weightStrokePoints.clear()
         glueStrokeA = emptySet()
         glueStrokeB = emptySet()
         poseDrag = null
         activeBezierAnchor = null; activeBezierHandle = null
         activeBrushWeights = null; activeBrushCenter = null; endMeshStroke()
-        brushInitialBase = null; brushInitialScreen = null; brushAffectedIndices = emptySet()
         marquee = emptyList(); draft = emptyList(); draftPathId = null; drawingPath = false
         pathDragging = false
-        axis = null; head = null; objectTargets = emptyList(); pendingObjects = emptyList()
+        axis = null; gestureState = null; objectTargets = emptyList(); pendingObjects = emptyList()
         activeHandle = BoundingHandle.NONE
         initialBounds = null
         boxDrag = false; dragIndices = emptyList()
@@ -2183,13 +2022,15 @@ internal class CanvasEditor(
      */
     fun activateTool(next: CanvasTool) {
         if (busy) return
+        skeletonEntrySerial++
+        endTemporarySelection()
         if (next in CREATION_TOOLS) {
             activateCreationTool(next)
             return
         }
         createSessionReturnMode = null
-        if (next == CanvasTool.SKELETON_POSE || next == CanvasTool.SKELETON_EDIT) {
-            // The skeleton tools are how the skeleton is reached, so arming one selects it.
+        if (next in SKELETON_TOOLS) {
+            // The skeleton tools are how the skeleton is reached, so arming one enters Skeleton mode on it.
             if (next == CanvasTool.SKELETON_EDIT) beginSkeletonEdit() else beginSkeletonPose()
             return
         }
@@ -2324,11 +2165,13 @@ internal class CanvasEditor(
         canvasWidth: Float,
         canvasHeight: Float,
         cancelLayerIds: List<String>,
+        imagePlacement: io.github.psd2live.application.WorkspaceImagePlacement,
     ) {
         if (createSessionReturnMode == null) createSessionReturnMode = hierarchyMode
         // Dismiss any in-progress warp/rotation/path ghost without deleting imported layers.
         // A prior LAYER session keeps its layers at the last committed import position.
         if (placement?.kind == CreatePlacementKind.LAYER) {
+            placement?.imagePlacement?.dismiss()
             placement = null
             placementHandle = PlacementHandle.NONE
             placementDragStart = null
@@ -2352,6 +2195,7 @@ internal class CanvasEditor(
             localW = canvasWidth.coerceAtLeast(1f),
             localH = canvasHeight.coerceAtLeast(1f),
             cancelLayerIds = cancelLayerIds.ifEmpty { listOf(layerId) },
+            imagePlacement = imagePlacement,
         )
         tool = CanvasTool.SELECT
         error = null
@@ -2380,6 +2224,7 @@ internal class CanvasEditor(
         if (createSessionReturnMode == null) createSessionReturnMode = hierarchyMode
         cancelKeepingReturnMode()
         deferredMode = null
+        placementInput = null; pathInput = null
         val spaceParentId = resolvePlacementSpaceParent(relation, anchorKind, anchorId, meshIds)
         val local = placementLocalBounds(meshIds, anchorKind, anchorId, spaceParentId)
         val cx = local[0] + local[2] / 2f
@@ -2422,6 +2267,9 @@ internal class CanvasEditor(
             bezierRows = warpCreateBezierRows,
             bezierCols = warpCreateBezierCols,
         )
+        if (kind == CreatePlacementKind.WARP || kind == CreatePlacementKind.ROTATION) {
+            placementInput = startInput(anchorId, placementMapping(spaceParentId), emptyList<Unit>())
+        }
         tool = when (kind) {
             CreatePlacementKind.WARP -> CanvasTool.CREATE_WARP
             CreatePlacementKind.ROTATION -> CanvasTool.CREATE_ROTATION
@@ -2502,6 +2350,7 @@ internal class CanvasEditor(
         val keep = createSessionReturnMode
         if (placement?.kind == CreatePlacementKind.LAYER) {
             // Switching to another create tool: keep imported layers, only dismiss the panel.
+            placement?.imagePlacement?.dismiss()
             placement = null
             placementHandle = PlacementHandle.NONE
             placementDragStart = null
@@ -2523,6 +2372,7 @@ internal class CanvasEditor(
             localH = h.coerceAtLeast(1f),
         )
         viewModel.relocateImportedLayer(
+            placement = requireNotNull(p.imagePlacement),
             layerId = p.anchorId,
             name = p.name,
             left = x,
@@ -2557,8 +2407,23 @@ internal class CanvasEditor(
     }
 
     fun cancelPlacement() {
-        val cancelling = placement
+        val p = placement
+        if (p?.kind == CreatePlacementKind.LAYER) {
+            viewModel.cancelImportedLayerPlacement(requireNotNull(p.imagePlacement)) {
+                if (placement?.imagePlacement === p.imagePlacement) clearPlacementUi()
+            }
+        } else clearPlacementUi()
+    }
+
+    internal fun dismissImagePlacement() {
+        val p = placement?.takeIf { it.kind == CreatePlacementKind.LAYER } ?: return
+        p.imagePlacement?.dismiss()
+        clearPlacementUi()
+    }
+
+    private fun clearPlacementUi() {
         placement = null
+        placementInput = null; pathInput = null
         placementHandle = PlacementHandle.NONE
         placementDragStart = null
         placementDragSnapshot = null
@@ -2571,9 +2436,6 @@ internal class CanvasEditor(
         }
         tool = CanvasTool.SELECT
         clearHover()
-        if (cancelling?.kind == CreatePlacementKind.LAYER) {
-            viewModel.cancelImportedLayerPlacement(cancelling.cancelLayerIds)
-        }
     }
 
     /** Commits the placed ghost into the model. */
@@ -2594,25 +2456,17 @@ internal class CanvasEditor(
 
     private fun commitPlacedLayer(p: CreatePlacement) {
         viewModel.relocateImportedLayer(
-            layerId = p.anchorId,
-            name = p.name,
-            left = p.localX,
-            top = p.localY,
-            width = p.localW,
-            height = p.localH,
-            commitHistory = true,
-            splitCandidates = p.cancelLayerIds,
-        )
-        placement = null
-        placementHandle = PlacementHandle.NONE
-        placementDragStart = null
-        placementDragSnapshot = null
-        createSessionReturnMode = null
-        deferredMode = null
-        hierarchyMode = EditHierarchyMode.SELECT
-        tool = CanvasTool.SELECT
-        clearHover()
-        selectLayer(p.anchorId)
+            placement = requireNotNull(p.imagePlacement), layerId = p.anchorId, name = p.name,
+            left = p.localX, top = p.localY, width = p.localW, height = p.localH,
+            commitHistory = true, splitCandidates = p.cancelLayerIds,
+        ) {
+            if (placement?.imagePlacement === p.imagePlacement) {
+                p.imagePlacement.dismiss()
+                clearPlacementUi()
+                deferredMode = null; hierarchyMode = EditHierarchyMode.SELECT
+                selectLayer(p.anchorId)
+            }
+        }
     }
 
     private fun commitPlacedWarp(p: CreatePlacement) {
@@ -2645,11 +2499,13 @@ internal class CanvasEditor(
                 }
             }
         }
-        // Store Bezier edit density before the journal round-trip clears placement.
-        warpBezierDivisions[id] = p.bezierRows to p.bezierCols
-        placement = null
-        head = null
-        commit(cmd)
+        val input = placementInput ?: return
+        val controls = try {
+            RigBezierJournal.prepare(CanvasEdits.apply(input.model.rig.puppet, cmd), input.model.config.rigEdits, "divisions", buildJsonObject {
+                put("target", "warp:$id"); put("rows", p.bezierRows); put("columns", p.bezierCols)
+            })
+        } catch (failure: Exception) { error = failure.message; return }
+        commitPlacedInput(input, listOf(cmd, controls), id)
     }
 
     private fun commitPlacedRotation(p: CreatePlacement) {
@@ -2679,13 +2535,37 @@ internal class CanvasEditor(
                 }
             }
         }
-        placement = null
-        head = null
-        commit(cmd)
+        commitPlacedInput(placementInput ?: return, listOf(cmd), id)
+    }
+
+    /** The ghost stays up until the write lands, so a refused one can be adjusted or cancelled. */
+    private fun commitPlacedInput(input: WorkspaceCanvasInputDraft<Unit, DrawableSpaceMapping>, commands: List<JsonObject>, id: String) {
+        commitInput(input, commands) {
+            if (placementInput === input) { placementInput = null; placement = null }
+            finishCreateSession(id)
+        }
+    }
+
+    /** Confirms a multi-input draft against its own start; a refused write leaves the draft open for Esc. */
+    private fun <I, F> commitInput(input: WorkspaceCanvasInputDraft<I, F>, commands: List<JsonObject>, onSuccess: () -> Unit) {
+        topologyFills = null
+        if (!editable || !input.open) return
+        when (val submit = input.submit(draftScope(), JsonArray(commands))) {
+            is CanvasDraftSubmit.Rejected -> error = submit.failure
+            CanvasDraftSubmit.Unchanged -> onSuccess()
+            is CanvasDraftSubmit.Write -> {
+                preview = submit.preview; busy = true; error = null
+                viewModel.saveAuthoringEdits(submit.state, submit.edits) { failure ->
+                    busy = false; preview = null; error = failure
+                    if (input.settle(failure)) onSuccess()
+                }
+            }
+        }
     }
 
     /** Mapping for [CreatePlacement.spaceParentId]; root uses identity (model with camera Y-flip). */
     private fun placementMapping(spaceParentId: String?): DrawableSpaceMapping {
+        placementInput?.takeIf { placement?.spaceParentId == spaceParentId }?.let { return it.frame }
         val source = model
         if (cachedSource !== source || cachedPose != state.parameterValues) {
             cachedSource = source
@@ -2916,6 +2796,10 @@ internal class CanvasEditor(
                         )
                     }
                 }
+                placement?.let { updated ->
+                    viewModel.relocateImportedLayer(requireNotNull(updated.imagePlacement), updated.anchorId, updated.name,
+                        updated.localX, updated.localY, updated.localW, updated.localH, commitHistory = false)
+                }
             }
             CreatePlacementKind.ROTATION -> {
                 when (placementHandle) {
@@ -3021,12 +2905,89 @@ internal class CanvasEditor(
     @JvmName("changeHierarchyMode")
     fun setHierarchyMode(next: EditHierarchyMode) {
         if (busy) return
+        if (next != EditHierarchyMode.SKELETON) skeletonEntrySerial++
+        endTemporarySelection()
+        if (next == EditHierarchyMode.SKELETON) {
+            if (hierarchyMode == EditHierarchyMode.SKELETON) return
+            if (placement != null) cancelPlacement()
+            ensureSkeleton {
+                enterSkeletonMode(if (committedSkeleton?.enabled == true) CanvasTool.SKELETON_POSE else CanvasTool.SKELETON_EDIT)
+            }
+            return
+        }
         if (!hasPartFor(next)) { deferMode(next, null); return }
         enterMode(next)
     }
 
-    /** The left toolbar's tools for the current mode and target. */
-    fun palette(): List<CanvasTool> = toolbarGroups(hierarchyMode, skeletonSelected).flatten()
+    private data class TemporarySelection(
+        val mode: EditHierarchyMode,
+        val tool: CanvasTool,
+        val selection: Map<String, Set<Int>>,
+        val objects: Set<String>,
+        val layerId: String?,
+        val deformerId: String?,
+        val skeleton: Boolean,
+        val deferred: DeferredMode?,
+    )
+
+    private var temporarySelection: TemporarySelection? = null
+    internal val temporarilySelecting get() = temporarySelection != null
+
+    /** Suspend the mode without ending paint or skeleton drafts. Key repeat must not overwrite it. */
+    internal fun beginTemporarySelection(): Boolean {
+        if (temporarilySelecting) return true
+        if (busy || inGesture || adjustingBrush || drawingPath || placement != null || state.previewModel == null) return false
+        temporarySelection = TemporarySelection(hierarchyMode, tool, selection, objects,
+            state.selectedLayerId, state.selectedDeformerId, skeletonSelected, deferredMode)
+        deferredMode = null
+        hierarchyMode = EditHierarchyMode.SELECT
+        tool = CanvasTool.SELECT
+        selection = emptyMap()
+        clearHover()
+        return true
+    }
+
+    /** Keep the new object pick, restoring the old mode and tool whenever the new target supports them. */
+    internal fun endTemporarySelection() {
+        val previous = temporarySelection ?: return
+        temporarySelection = null
+        if (inGesture) cancel()
+        val sameTarget = objects == previous.objects && state.selectedLayerId == previous.layerId &&
+            state.selectedDeformerId == previous.deformerId && skeletonSelected == previous.skeleton
+        hierarchyMode = previous.mode
+        tool = previous.tool
+        selection = if (sameTarget) previous.selection else emptyMap()
+        deferredMode = previous.deferred
+        if (previous.mode == EditHierarchyMode.SKELETON && !skeletonSelected) {
+            if (takeSkeleton()) switchSkeletonTool(previous.tool)
+            else hierarchyMode = EditHierarchyMode.SELECT
+        }
+        if (previous.deferred != null) {
+            resolveDeferredMode()
+        } else if (!hasPartFor(previous.mode)) {
+            deferMode(previous.mode, previous.tool)
+        } else if (previous.mode == EditHierarchyMode.PAINT) {
+            startPaintSession(forceReload = false)
+        }
+        clearHover()
+    }
+
+    internal fun toggleQuickPreview() {
+        if (busy || inGesture || adjustingBrush || drawingPath || placement != null) return
+        endTemporarySelection()
+        val current = viewModel.uiState.value.activeWorkspace.canvases.firstOrNull { it.id == canvasId } ?: return
+        showCanvasMode(if (current.mode == CanvasMode.PREVIEW) CanvasMode.EDIT else CanvasMode.PREVIEW)
+        viewModel.requestCanvasFocus(canvasId)
+    }
+
+    /** Switches this canvas between editing and preview, as the canvas mode menu's Preview row does. */
+    fun showCanvasMode(mode: CanvasMode) {
+        if (busy) return
+        viewModel.setCanvasMode(canvasId, mode)
+    }
+
+    /** The left toolbar's tools for the current mode. */
+    fun palette(): List<CanvasTool> = toolbarGroups(hierarchyMode).flatten()
 
     /**
      * Re-fits the mode to a target that changed kind — the skeleton picked, or dropped for a layer. The
@@ -3034,15 +2995,9 @@ internal class CanvasEditor(
      */
     private fun settleModeOnTarget() {
         if (busy) return
+        // Skeleton mode is the skeleton as the target; once something else is picked, it has nothing left to do.
+        if (hierarchyMode == EditHierarchyMode.SKELETON && !skeletonSelected) { enterMode(EditHierarchyMode.SELECT); return }
         if (!hasPartFor(hierarchyMode)) { enterMode(EditHierarchyMode.SELECT); return }
-        if (hierarchyMode == EditHierarchyMode.EDIT && skeletonSelected && skeletonDraft == null) openSkeletonDraft()
-        if (hierarchyMode == EditHierarchyMode.DEFORM && skeletonSelected) {
-            if (state.showWarp || state.showRotation || state.showMesh) {
-                viewModel.updateEditViewOptions(canvasId, workspaceId) {
-                    it.copy(showWarp = false, showRotation = false, showMesh = false)
-                }
-            }
-        }
         if (tool !in palette()) {
             cancel()
             tool = palette().first()
@@ -3059,18 +3014,18 @@ internal class CanvasEditor(
      */
     private fun hasPartFor(mode: EditHierarchyMode): Boolean = when {
         mode == EditHierarchyMode.SELECT -> true
-        // The skeleton poses once it is switched on, and reshapes whether or not it is.
-        skeletonSelected -> when (mode) {
-            EditHierarchyMode.DEFORM -> committedSkeleton?.enabled == true
-            EditHierarchyMode.EDIT -> committedSkeleton != null
-            else -> false
-        }
+        // Skeleton mode brings its own target, proposing an armature when there is none.
+        mode == EditHierarchyMode.SKELETON -> state.previewModel != null
+        // With the skeleton picked there is no drawable for the other modes to work on.
+        skeletonSelected -> false
         // No rig, no part: the canvas that would pick one is not there either, and there is no model for
         // [target] to read. The request waits, which is what it does anyway.
         state.previewModel == null -> false
         // Paint repaints one layer's pixels. A deformer is a target these modes can edit but not paint, and
         // entering paint mode on one would leave the session and the tools alike with nothing to draw on.
         mode == EditHierarchyMode.PAINT -> target(deformerId = null)?.kind == "mesh"
+        // Vertex groups live on meshes.
+        mode == EditHierarchyMode.SIMULATE -> target()?.kind == "mesh"
         else -> target() != null
     }
 
@@ -3079,9 +3034,9 @@ internal class CanvasEditor(
      * Creation tools are handled separately and never force Edit.
      */
     private fun modeForTool(tool: CanvasTool): EditHierarchyMode = when {
-        tool == CanvasTool.SKELETON_POSE -> EditHierarchyMode.DEFORM
-        tool == CanvasTool.SKELETON_EDIT -> EditHierarchyMode.EDIT
+        tool in SKELETON_TOOLS -> EditHierarchyMode.SKELETON
         tool in PAINT_TOOLS -> EditHierarchyMode.PAINT
+        tool in WEIGHT_TOOLS -> EditHierarchyMode.SIMULATE
         tool == CanvasTool.KNIFE || tool == CanvasTool.SUBDIVIDE -> EditHierarchyMode.EDIT
         else -> EditHierarchyMode.DEFORM
     }
@@ -3134,24 +3089,15 @@ internal class CanvasEditor(
         createSessionReturnMode = null
         cancel()
         val prev = hierarchyMode
-        val savedBeforeEdit = if (next != EditHierarchyMode.EDIT || !skeletonSelected) viewBeforeSkeletonEdit else null
-        // Leaving skeleton Edit mode keeps the edit; entering it opens a working copy of the armature.
-        // The draft opens after the mode's own display toggles are swapped in, so its display switch sticks.
-        if (next != EditHierarchyMode.EDIT || !skeletonSelected) commitSkeletonDraft(restoreView = false)
-        hierarchyMode = next
-        if (savedBeforeEdit != null) {
-            viewModel.updateEditViewOptions(canvasId, workspaceId) {
-                savedBeforeEdit.copy(showWarp = false, showRotation = false, showMesh = false)
-            }
-            viewBeforeSkeletonEdit = null
-        } else if (skeletonSelected && next == EditHierarchyMode.DEFORM) {
-            if (state.showWarp || state.showRotation || state.showMesh) {
-                viewModel.updateEditViewOptions(canvasId, workspaceId) {
-                    it.copy(showWarp = false, showRotation = false, showMesh = false)
-                }
-            }
+        // Leaving Skeleton mode keeps an open edit, and gives the skeleton up as the target unless the mode
+        // gone to is Object mode, which can hold it. Entering it takes the skeleton.
+        if (next != EditHierarchyMode.SKELETON) {
+            commitSkeletonDraft()
+            if (skeletonSelected && next != EditHierarchyMode.SELECT) skeletonSelected = false
+        } else if (!takeSkeleton()) {
+            return
         }
-        if (next == EditHierarchyMode.EDIT && skeletonSelected && skeletonDraft == null) openSkeletonDraft()
+        hierarchyMode = next
         // Only Edit edits several meshes; any other mode keeps the primary's slice alone.
         if (next != EditHierarchyMode.EDIT) selection = target()?.id?.let { id -> selection.filterKeys { it == id } }.orEmpty()
         if (prev == EditHierarchyMode.PAINT && next != EditHierarchyMode.PAINT) {
@@ -3165,9 +3111,10 @@ internal class CanvasEditor(
             if (editLevel == 2) ensureBezierState()
         }
         if (tool !in palette()) {
-            tool = palette().first()
+            tool = if (next == EditHierarchyMode.SKELETON && committedSkeleton?.enabled != true) CanvasTool.SKELETON_EDIT else palette().first()
             if (objectMode) selection = emptyMap()
         }
+        if (next == EditHierarchyMode.SKELETON && tool == CanvasTool.SKELETON_EDIT && skeletonDraft == null) openSkeletonDraft()
         clearHover()
     }
 
@@ -3180,9 +3127,25 @@ internal class CanvasEditor(
         clearHover()
     }
 
-    val warpBezierDivisions = mutableMapOf<String, Pair<Int, Int>>()
+    val warpBezierDivisions: Map<String, Pair<Int, Int>> get() = model.deformers.filterIsInstance<Deformer.Warp>().associate {
+        it.id.raw to RigBezierJournal.divisions(state.previewModel?.config?.rigEdits ?: state.rigEdits, it.id.raw)
+    }
     private var bezierTargetId: String? = null
     private var bezierSourcePoints: FloatArray? = null
+    private var bezierResidual = FloatArray(0)
+
+    private fun bezierRequest(t: CanvasTarget) = buildJsonObject {
+        put("target", "warp:${t.id}")
+        put("coordinate", buildJsonObject { coordinate(t).forEach { (id, value) -> put(id, value) } })
+        put("pose", buildJsonObject { pose.forEach { (id, value) -> put(id, value) } })
+    }
+
+    fun setBezierDivisionsLive(token: String, rows: Int, columns: Int) {
+        val t = target()?.takeIf { it.kind == "warp" } ?: return
+        viewModel.applyWarpControlField(token, "warp_bezier_divisions", JsonObject(bezierRequest(t) + buildJsonObject {
+            put("rows", rows); put("columns", columns)
+        }))
+    }
 
     fun ensureBezierState() {
         val t = target()
@@ -3195,9 +3158,10 @@ internal class CanvasEditor(
                 val cur = bezierState
                 if (cur == null || bezierTargetId != t.id || cur.bezierRows != bRows || cur.bezierCols != bCols ||
                     (!dragging && !busy && bezierSourcePoints?.contentEquals(t.geometry.points) != true)) {
-                    val bState = BezierDeformerState(bRows, bCols)
-                    bState.initFromLattice(t.geometry.points, rows, cols)
-                    bezierState = bState
+                    val controls = RigBezierJournal.read(model, state.previewModel?.config?.rigEdits ?: state.rigEdits,
+                        t.id, coordinate(t), pose)
+                    bezierState = controls.state
+                    bezierResidual = controls.residual
                     bezierTargetId = t.id
                     bezierSourcePoints = t.geometry.points.copyOf()
                 }
@@ -3212,18 +3176,8 @@ internal class CanvasEditor(
 		val t = target() ?: return
 		if (t.kind != "warp" || !editable || busy) return
 		val warp = model.deformers.filterIsInstance<Deformer.Warp>().firstOrNull { it.id.raw == t.id } ?: return
-		val (bRows, bCols) = warpBezierDivisions[t.id] ?: (2 to 2)
-		val reset = BezierDeformerState(bRows, bCols).apply {
-			initFromLattice(t.geometry.points, warp.rows, warp.columns)
-		}
-		bezierState = reset
-		bezierTargetId = t.id
-		val evaluated = reset.evaluateLattice(warp.rows, warp.columns)
-		bezierSourcePoints = evaluated.copyOf()
 		clearHover()
-		if (!evaluated.contentEquals(t.geometry.points)) {
-			commit(canvasGeometryCommand(EditHierarchyMode.DEFORM, t.kind, t.id, coordinate(t), evaluated))
-		}
+		commit(RigBezierJournal.prepare(model, state.previewModel?.config?.rigEdits ?: state.rigEdits, "reset", bezierRequest(t)))
 	}
 
     fun clearHover() {
@@ -3303,6 +3257,14 @@ internal class CanvasEditor(
     private var cachedGeometryPose = emptyMap<ParameterId, Float>()
     private var cachedGeometry: DeformedGeometry? = null
 
+    /** Bounds of [cachedGeometry]'s drawables; the hover asks for them on every pointer move. */
+    private var cachedBoundsGeometry: DeformedGeometry? = null
+    private var cachedBounds = emptyMap<String, Bounds>()
+
+    private var cachedCornersPoints: Map<String, FloatArray>? = null
+    private var cachedCornersViewport: CanvasViewport? = null
+    private var cachedCorners = emptyMap<String, java.awt.geom.Area>()
+
     private var warpOutlineSource: PuppetModel? = null
     private var warpOutlinePose = emptyMap<ParameterId, Float>()
     private var warpOutlineIds = emptySet<String>()
@@ -3321,10 +3283,11 @@ internal class CanvasEditor(
      */
     private fun evaluatedGeometry(): DeformedGeometry? {
         val drawn = drawnPreview ?: return null
-        if (cachedGeometrySource !== drawn.rig.puppet || cachedGeometryPose != state.parameterValues) {
+        val pose = viewModel.canvasPose(state)
+        if (cachedGeometrySource !== drawn.rig.puppet || cachedGeometryPose != pose) {
             cachedGeometrySource = drawn.rig.puppet
-            cachedGeometryPose = state.parameterValues
-            cachedGeometry = RigCanvasSupport.evaluate(drawn, state.parameterValues)
+            cachedGeometryPose = pose
+            cachedGeometry = RigCanvasSupport.evaluate(drawn, pose)
         }
         return cachedGeometry
     }
@@ -3333,9 +3296,13 @@ internal class CanvasEditor(
     private fun layerCandidates(pos: Offset, viewport: CanvasViewport): List<String> {
         val source = state.previewModel ?: return emptyList()
         val geometry = evaluatedGeometry() ?: return emptyList()
+        if (cachedBoundsGeometry !== geometry) {
+            cachedBounds = RigCanvasSupport.boundsByDrawable(geometry)
+            cachedBoundsGeometry = geometry
+        }
         return RigCanvasSupport.hitLayers(
             source,
-            RigCanvasSupport.boundsByDrawable(geometry),
+            cachedBounds,
             viewport.canvasX(pos.x.toInt()),
             viewport.canvasY(pos.y.toInt()),
             state.effectiveVisibleLayerIds,
@@ -3358,7 +3325,14 @@ internal class CanvasEditor(
         val source = drawnPreview?.rig?.puppet ?: return emptyMap()
         val ids = activeWarpIds()
         if (ids.isEmpty()) return emptyMap()
-        return RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(source, warpOutlinePoints(source, ids)), viewport)
+        // The marks are constructive Areas, rebuilt only when the lattices or the camera move, not per hover.
+        val points = warpOutlinePoints(source, ids)
+        if (cachedCornersPoints !== points || cachedCornersViewport != viewport) {
+            cachedCorners = RigCanvasSupport.deformerCorners(RigCanvasSupport.deformerOutlines(source, points), viewport)
+            cachedCornersPoints = points
+            cachedCornersViewport = viewport
+        }
+        return cachedCorners
     }
 
     /**
@@ -3641,6 +3615,16 @@ internal class CanvasEditor(
         commitBatch(listOf(command))
     }
 
+    private fun commitWarpCreation(command: JsonObject, rows: Int = warpCreateBezierRows, columns: Int = warpCreateBezierCols) {
+        try {
+            val created = CanvasEdits.apply(model, command)
+            val controls = RigBezierJournal.prepare(created, state.previewModel?.config?.rigEdits ?: state.rigEdits, "divisions", buildJsonObject {
+                put("target", "warp:${command.getValue("id").jsonPrimitive.content}"); put("rows", rows); put("columns", columns)
+            })
+            commitBatch(listOf(command, controls))
+        } catch (failure: Exception) { error = failure.message }
+    }
+
     /** Returns false when the edit never reached history, so the caller can drop its preview. */
     private fun commitBatch(commands: List<JsonObject>, onSuccess: (() -> Unit)? = null): Boolean {
         // The provisional fill describes faces of the mesh as it stands; after any commit those indices
@@ -3648,7 +3632,7 @@ internal class CanvasEditor(
         // after calling through here, which is why clearing on the way in is enough.
         topologyFills = null
         if (!editable) { endTransformBox(); return false }
-        val expected = head ?: state.historySnapshot?.headNodeId
+        val expected = gestureState ?: viewModel.currentWorkspaceState()
         if (expected == null) { endTransformBox(); return false }
         try {
             val result = RigAuthoringJournal.compile(state.previewModel!!.rig.puppet, JsonArray(commands))
@@ -3657,19 +3641,19 @@ internal class CanvasEditor(
             // the workspace for an edit that cannot change anything, so drop it here and let the caller's
             // `false` clear the preview. This is also what keeps the gesture from flipping canvasEditBusy
             // and queueing a pointless save.
-            if (result.second.isEmpty()) { preview = null; pending = null; head = null; endTransformBox(); return false }
+            if (result.second.isEmpty()) { preview = null; pending = null; gestureState = null; endTransformBox(); return false }
             preview = result.first; busy = true; error = null
             // The pending edit is only settled here, so this is where the box a drag was holding gives
             // way to one computed from what the model actually became.
             viewModel.saveAuthoringEdits(expected, JsonArray(result.second)) { failure ->
-                busy = false; preview = null; pending = null; head = null; error = failure
+                busy = false; preview = null; pending = null; gestureState = null; error = failure
                 endTransformBox()
                 if (failure == null) onSuccess?.invoke()
                 if (failure == null) commands.lastOrNull { it["op"]?.jsonPrimitive?.content in setOf("canvas_create_warp", "canvas_create_rotation") }?.let {
                     finishCreateSession(it.getValue("id").jsonPrimitive.content)
                 }
             }
-        } catch (e: Exception) { error = e.message; preview = null; pending = null; head = null; endTransformBox() }
+        } catch (e: Exception) { error = e.message; preview = null; pending = null; gestureState = null; endTransformBox() }
         return true
     }
 
@@ -3685,7 +3669,7 @@ internal class CanvasEditor(
     fun topology(action: String, picked: Set<Int>? = null, edges: Set<MeshElement.Edge> = emptySet()) {
         val t = target() ?: return
         if (t.kind != "mesh" || !editable) return
-        head = null
+        gestureState = null
         // Vertex-wise actions run on every edited mesh with a selection, as one history step. Merge and
         // connect join vertices of one mesh, and brushed edges belong to the primary, so those stay there.
         if (picked == null && editsMeshes() && edges.isEmpty() &&
@@ -3730,20 +3714,22 @@ internal class CanvasEditor(
     /** Commits the knife polyline. All or nothing - see [MeshRefinementOps.knifeCut]. */
     fun finishKnife() {
         val t = target() ?: return
-        if (!editable || t.kind != "mesh" || t.id != knifeDrawableId || knifeDraft.size < 2) return
-        val anchors = knifeDraft
-        head = null
-        val mesh = state.previewModel?.rig?.puppet?.drawables?.firstOrNull { it.id.raw == t.id }?.mesh
+        val input = knifeInput ?: return
+        if (!editable || t.kind != "mesh" || t.id != knifeDrawableId || input.targetId != t.id || input.inputs.size < 2) return
+        val anchors = input.inputs
+        // The anchors were resolved against the mesh the first click saw, so the cut is built on that one too.
+        val mesh = input.model.rig.puppet.drawables.firstOrNull { it.id.raw == t.id }?.mesh
         val outcome = mesh?.let { runCatching { CanvasTopology.build(it, "knife", emptySet(), anchors) }.getOrNull() }
         if (outcome == null) {
             error = tr("editor.knifeCannotConnect")
             return
         }
-        commitBatch(listOf(buildJsonObject {
+        commitInput(input, listOf(buildJsonObject {
             put("op", "canvas_topology"); put("id", t.id); put("action", "knife")
             put("vertices", JsonArray(emptyList()))
             put("anchors", CanvasTopology.encodeAnchors(anchors))
         })) {
+            if (knifeInput === input) knifeInput = null
             knifeDraft = emptyList()
             vertices = CanvasTopology.selectedVertices(outcome)
             selectedEdges = emptySet(); selectedFaces = emptySet()
@@ -3813,33 +3799,37 @@ internal class CanvasEditor(
     fun finishPath() {
         val t = target() ?: return
         if (draft.size < 2 || t.kind != "mesh") return
+        val input = pathInput ?: return
+        val frame = input.frame
         try {
-            val extent = RigGeometryTools.bounds(t.geometry.points).let { max(it[2], it[3]) }
-            val previous = paths().firstOrNull { it.id == draftPathId }
-            val points = draft.mapIndexed { i, p -> DeformPathTools.bind(t.geometry.points, t.indices, p.first, p.second, previous?.points?.getOrNull(i)?.corner ?: false) }
+            val previous = input.model.rig.puppet.deformPaths.firstOrNull { it.id == draftPathId }
+            val points = input.inputs.mapIndexed { i, p -> DeformPathTools.bind(frame.geometry.points, frame.indices, p.first, p.second, previous?.points?.getOrNull(i)?.corner ?: false) }
             val path = previous?.copy(points = points, closed = if (previous.closed) previous.closed else pathClosed)
                 ?: DeformPath(
                     UUID.randomUUID().toString(),
-                    DrawableId(t.id),
+                    DrawableId(frame.id),
                     points,
-                    extent * pathWidth,
+                    pathWidth,
                     hardness = pathHardness,
                     closed = pathClosed && points.size >= 3,
                     editLevel = pathLevel,
                 )
-            head = null; commit(DeformPathJournal.encode(path)); activePath = path.id; drawingPath = false; draft = emptyList()
-            placement = null
-            // After binding, enter EDIT so dragging control points rebinds without deforming.
-            createSessionReturnMode = null
-            hierarchyMode = EditHierarchyMode.EDIT
-            tool = CanvasTool.SELECT
-            pathClosed = false
-            clearHover()
+            commitInput(input, listOf(DeformPathJournal.encode(path))) {
+                if (pathInput === input) pathInput = null
+                activePath = path.id; drawingPath = false; draft = emptyList()
+                placement = null
+                // After binding, enter EDIT so dragging control points rebinds without deforming.
+                createSessionReturnMode = null
+                hierarchyMode = EditHierarchyMode.EDIT
+                tool = CanvasTool.SELECT
+                pathClosed = false
+                clearHover()
+            }
         } catch (e: Exception) { error = e.message }
     }
 
     fun changePath(update: (DeformPath) -> DeformPath) {
-        try { selectedPath()?.let { head = null; commit(DeformPathJournal.encode(update(it))) } }
+        try { selectedPath()?.let { gestureState = null; commit(DeformPathJournal.encode(update(it))) } }
         catch (failure: IllegalArgumentException) { error = failure.message }
     }
 
@@ -3847,6 +3837,7 @@ internal class CanvasEditor(
         val t = target() ?: return; val path = selectedPath() ?: return
         if (path.closed) return
         draft = DeformPathTools.positions(path, t.geometry.points); draftPathId = path.id; drawingPath = true; tool = CanvasTool.CREATE_DEFORM_PATH
+        pathInput = startInput(t.id, t, draft)
     }
 
     fun preciseTransform(vp: CanvasViewport? = null, first: Float, second: Float = 0f, scaleMode: Boolean = false, rotateMode: Boolean = false) {
@@ -3881,13 +3872,13 @@ internal class CanvasEditor(
         val commands = targets.mapIndexed { itemIndex, item ->
             geometryCommand(item, item.mapping.worldToLocal(worlds[itemIndex], item.geometry.points, movedSets[itemIndex]))
         }
-        head = null; commitBatch(commands)
+        gestureState = null; commitBatch(commands)
     }
 
     fun deletePathPoint() {
         val p = selectedPath() ?: return
         if (pathPoint >= 0 && p.points.size > 2) changePath { it.copy(points = it.points.filterIndexed { i, _ -> i != pathPoint }) }
-        else { head = null; commit(buildJsonObject { put("op", "path_delete"); put("id", p.id) }); activePath = null }
+        else { gestureState = null; commit(buildJsonObject { put("op", "path_delete"); put("id", p.id) }); activePath = null }
         pathPoint = -1
     }
 
@@ -3994,9 +3985,8 @@ internal class CanvasEditor(
         }
         val name = defaultCreateName(targets.first().id, rotation = false)
         val id = "Warp_${UUID.randomUUID()}"
-        warpBezierDivisions[id] = warpCreateBezierRows to warpCreateBezierCols
-        head = null
-        commit(buildJsonObject {
+        gestureState = null
+        commitWarpCreation(buildJsonObject {
             put("op", "canvas_create_warp")
             put("id", id); put("name", name)
             put("rows", warpCreateGridRows); put("columns", warpCreateGridCols)
@@ -4016,7 +4006,7 @@ internal class CanvasEditor(
         if (targets.isEmpty()) return
         // Origin in the meshes' shared parent-local space (UV under Warp, etc.).
         val locals = targets.flatMap { it.geometry.points.toList().chunked(2) }
-        head = null
+        gestureState = null
         commit(buildJsonObject {
             put("op", "canvas_create_rotation")
             put("id", id); put("name", name); put("preservePose", true)
@@ -4042,9 +4032,8 @@ internal class CanvasEditor(
         val parent = model.deformers.firstOrNull { it.id.raw == parentId } ?: return
         val name = tr("editor.defaultWarpName", parent.name)
         val id = "Warp_${UUID.randomUUID()}"
-        warpBezierDivisions[id] = warpCreateBezierRows to warpCreateBezierCols
-        head = null
-        commit(buildJsonObject {
+        gestureState = null
+        commitWarpCreation(buildJsonObject {
             put("op", "canvas_create_warp")
             put("id", id); put("name", name)
             put("rows", warpCreateGridRows); put("columns", warpCreateGridCols)
@@ -4065,7 +4054,6 @@ internal class CanvasEditor(
         if (targetMeshes.isEmpty()) return
         val id = "Warp_${UUID.randomUUID()}"
         val name = defaultCreateName(targetMeshes.first(), rotation = false)
-        warpBezierDivisions[id] = warpCreateBezierRows to warpCreateBezierCols
         val cmd = buildJsonObject {
             put("op", "canvas_create_warp")
             put("id", id)
@@ -4081,8 +4069,8 @@ internal class CanvasEditor(
             putCreationPlacement(this, targetMeshes)
             put("meshes", JsonArray(targetMeshes.map(::JsonPrimitive)))
         }
-        head = null
-        commit(cmd)
+        gestureState = null
+        commitWarpCreation(cmd)
     }
 
     fun createRotationFromPoints(s: Offset, e: Offset, viewport: CanvasViewport) {
@@ -4108,7 +4096,7 @@ internal class CanvasEditor(
             putCreationPartId(this, targetMeshes)
             put("meshes", JsonArray(targetMeshes.map(::JsonPrimitive)))
         }
-        head = null
+        gestureState = null
         commit(cmd)
     }
 
@@ -4232,7 +4220,7 @@ internal class CanvasEditor(
      * in selection order. Empty outside Edit, and when the primary target is a deformer.
      */
     fun editMeshTargets(source: PuppetModel? = preview ?: state.previewModel?.rig?.puppet): List<CanvasTarget> {
-        if (hierarchyMode != EditHierarchyMode.EDIT) return emptyList()
+        if (hierarchyMode != EditHierarchyMode.EDIT && hierarchyMode != EditHierarchyMode.SIMULATE) return emptyList()
         val primary = target(source) ?: return emptyList()
         if (primary.kind != "mesh") return emptyList()
         val layers = LinkedHashSet(objects).apply { state.selectedLayerId?.let(::add) }
@@ -4323,25 +4311,12 @@ internal class CanvasEditor(
     /** The glued point [vertex] belongs to is hovered, picked and moved as one. */
     var hoveredMeshVertex by mutableStateOf<MeshVertex?>(null)
 
-    /** Per-mesh stroke state for the deform brushes when they act on the whole edit set. */
-    private class MeshStroke(
-        val targets: List<CanvasTarget>,
-        /** Only the edited meshes are brushed; the rest are glue partners that follow their points. */
-        val brushed: Set<String>,
-        val bases: List<FloatArray>,
-        val screens: List<List<Offset>>,
-        val weights: List<FloatArray>,
-    )
-
-    private var meshStroke: MeshStroke? = null
+    private var meshStroke: CanvasDeformStroke.Session? = null
 
     /** Live deform-brush weights of each edited mesh, for the overlay's wash. */
     var activeMeshBrushWeights by mutableStateOf<Map<String, FloatArray>>(emptyMap())
 
-    /**
-     * The targets a gesture on the edit set writes: every edited mesh, plus each mesh a glued point of
-     * theirs is shared with. A glued point is moved on both sides or not at all.
-     */
+    /** Transform selections also include the unselected members of their welded points. */
     private fun strokeTargets(source: PuppetModel?): List<CanvasTarget> {
         val edited = editMeshTargets(source)
         val ids = edited.mapTo(LinkedHashSet()) { it.id }
@@ -4353,177 +4328,85 @@ internal class CanvasEditor(
         return edited + partners.mapNotNull { meshTarget(source, it) }
     }
 
-    /**
-     * Makes every glued point that any of [moved] touched land on one spot: the mean of its moved
-     * members' destinations. [worlds] and [moved] are index-aligned with [targets] and are updated.
-     */
-    private fun keepWeldsTogether(targets: List<CanvasTarget>, worlds: List<FloatArray>, moved: List<MutableSet<Int>>) {
-        val slot = targets.withIndex().associate { it.value.id to it.index }
-        for (group in weldGroups().groups) {
-            val present = group.filter { member -> slot[member.mesh]?.let { member.index in 0 until targets[it].count } == true }
-            if (present.size < 2) continue
-            val movers = present.filter { member -> member.index in moved[slot.getValue(member.mesh)] }
-            if (movers.isEmpty()) continue
-            var x = 0f
-            var y = 0f
-            for (member in movers) {
-                val world = worlds[slot.getValue(member.mesh)]
-                x += world[member.index * 2]
-                y += world[member.index * 2 + 1]
-            }
-            x /= movers.size
-            y /= movers.size
-            for (member in present) {
-                val at = slot.getValue(member.mesh)
-                worlds[at][member.index * 2] = x
-                worlds[at][member.index * 2 + 1] = y
-                moved[at] += member.index
-            }
-        }
+    private fun keepWeldsTogether(targets: List<CanvasTarget>, worlds: List<FloatArray>, moved: List<MutableSet<Int>>) =
+        CanvasDeformStroke.keepWeldsTogether(targets.map { it.id }, targets.map { it.count }, worlds, moved, model.glues)
+
+    /** Freeze canvas pose, destination coordinates and vertex selection independently of the viewport. */
+    private fun deformStrokeRequest(source: PuppetModel, targets: List<CanvasTarget>, editedSet: Boolean): CanvasDeformStroke.Request {
+        val capturedPose = pose.toMap()
+        val parameters = source.parameters.associateBy { it.id.raw }
+        val blends = source.parameters.filter { it.kind == ParameterKind.BLEND_SHAPE }
+        val named = parameter?.let { id -> blends.find { it.id.raw == id } }
+        val active = blends.filter { abs(capturedPose[it.id.raw] ?: it.default) >= org.umamo.runtime.eval.EPS_KEY }
+        val chosen = named?.takeIf { abs(capturedPose[it.id.raw] ?: it.default) >= org.umamo.runtime.eval.EPS_KEY } ?: active.singleOrNull()
+        val selected = editedSet && selection.values.any { it.isNotEmpty() }
+        return CanvasDeformStroke.Request(
+            CanvasDeformStroke.Action.valueOf(tool.name),
+            if (hierarchyMode == EditHierarchyMode.EDIT) CanvasDeformStroke.Mode.EDIT else CanvasDeformStroke.Mode.DEFORM,
+            targets.map { target ->
+                val geometry = RigGeometryTools.geometry(source, target.kind, target.id, capturedPose)
+                val key = geometry.axes.associate { axis -> axis.parameterId.raw to (capturedPose[axis.parameterId.raw] ?: parameters.getValue(axis.parameterId.raw).default) } +
+                    listOfNotNull(parameter?.let(parameters::get), chosen).associate { it.id.raw to (capturedPose[it.id.raw] ?: it.default) }
+                val allowed = if (editedSet) (if (selected) selection[target.id].orEmpty().toSet() else null)
+                    else vertices.takeIf { it.isNotEmpty() }?.toSet()
+                CanvasDeformStroke.Target(target.kind, target.id, key, allowed)
+            }, capturedPose, weightTip(), strength, connectedOnly, shrinkAtPress)
     }
 
-    /**
-     * The strength-scaled weight a deform brush gives each point of [targets] (seen at [screens]) for the
-     * pointer segment [from] -> [to], with the chosen falloff and connected-only reach. Points [allowed]
-     * turns down weigh nothing.
-     */
-    private fun strokeWeights(
-        targets: List<CanvasTarget>,
-        screens: List<List<Offset>>,
-        from: Offset,
-        to: Offset,
-        viewport: CanvasViewport,
-        allowed: (CanvasTarget, Int) -> Boolean,
-    ): List<FloatArray> {
-        val tip = BrushTip((radius * viewport.scale).toFloat(), hardness, brushShape, brushAngle, brushAspect, brushFalloff)
-        val surfaces = targets.mapIndexed { at, t ->
-            BrushSurface(screens[at], if (connectedOnly) neighbors(t) else null, t.indices.takeIf { t.kind == "mesh" }, t.id.hashCode())
-        }
-        val weights = brushWeights(surfaces, from, to, tip, connectedOnly)
-        weights.forEachIndexed { at, w ->
-            for (i in w.indices) w[i] = if (allowed(targets[at], i)) w[i] * strength else 0f
-        }
-        return weights
-    }
-
-    /** Which points of [t] a brush on the edit set may move: the selected ones, when anything is selected. */
-    private fun brushableInEditSet(t: CanvasTarget, i: Int): Boolean =
-        selection.values.none { it.isNotEmpty() } || i in selection[t.id].orEmpty()
-
-    /**
-     * What a press at the pointer would weigh each target right now. The Alt + right-drag retune washes it
-     * on the art, so the falloff and the connected-only reach are judged on the real mesh.
-     */
     fun brushPreviewWeights(viewport: CanvasViewport): Map<String, FloatArray> {
         val center = cursor ?: return emptyMap()
         val source = state.previewModel?.rig?.puppet ?: return emptyMap()
         val edited = editsMeshes()
         val targets = if (edited) editMeshTargets(source) else listOfNotNull(target(source)?.takeIf { it.kind != "rotation" })
-        if (targets.isEmpty()) return emptyMap()
-        val screens = targets.map { screen(it.geometry.points, it, viewport) }
-        val weights = strokeWeights(targets, screens, center, center, viewport) { t, i ->
-            if (edited) brushableInEditSet(t, i) else vertices.isEmpty() || i in vertices
-        }
-        return targets.indices.associate { targets[it].id to weights[it] }
+        if (targets.isEmpty() || tool !in DEFORM_BRUSH_TOOLS) return emptyMap()
+        return try {
+            CanvasDeformStroke.begin(source, deformStrokeRequest(source, targets, edited),
+                CanvasDeformStroke.Sample(weightCanvasPoint(center, viewport))).weights.mapKeys { it.key.substringAfter(':') }
+        } catch (_: IllegalArgumentException) { emptyMap() }
     }
 
-    /** Starts a deform-brush stroke over the whole edit set. */
-    private fun beginMeshStroke(pos: Offset, viewport: CanvasViewport, source: PuppetModel) {
-        val targets = strokeTargets(source)
-        val brushed = editMeshTargets(source).mapTo(HashSet()) { it.id }
-        val screens = targets.map { screen(it.geometry.points, it, viewport) }
-        val weights = targets.mapTo(ArrayList()) { FloatArray(it.count) }
-        if (tool == CanvasTool.BRUSH) {
-            val brushedAt = targets.indices.filter { targets[it].id in brushed }
-            val computed = strokeWeights(brushedAt.map { targets[it] }, brushedAt.map { screens[it] }, pos, pos, viewport, ::brushableInEditSet)
-            brushedAt.forEachIndexed { k, at -> weights[at] = computed[k] }
-        }
-        meshStroke = MeshStroke(targets, brushed, targets.map { it.geometry.points.copyOf() }, screens, weights)
-        activeMeshBrushWeights = if (tool == CanvasTool.BRUSH) targets.withIndex()
-            .filter { it.value.id in brushed }.associate { it.value.id to weights[it.index] } else emptyMap()
-        objectTargets = targets
+    private fun beginDeformStroke(pos: Offset, viewport: CanvasViewport, source: PuppetModel, targets: List<CanvasTarget>, editedSet: Boolean) {
+        val session = CanvasDeformStroke.begin(source, deformStrokeRequest(source, targets, editedSet),
+            CanvasDeformStroke.Sample(weightCanvasPoint(pos, viewport)))
+        meshStroke = session
+        activeMeshBrushWeights = if (editedSet && tool == CanvasTool.BRUSH) session.weights.mapKeys { it.key.substringAfter(':') } else emptyMap()
+        activeBrushWeights = if (!editedSet && tool == CanvasTool.BRUSH) session.weights[targets.single().let { "${it.kind}:${it.id}" }] else null
+        activeBrushCenter = pos
         original = source
         dragging = true
     }
 
-    /** One pointer step of a deform brush over the whole edit set; previews every mesh it moves. */
+    private fun beginMeshStroke(pos: Offset, viewport: CanvasViewport, source: PuppetModel) =
+        beginDeformStroke(pos, viewport, source, editMeshTargets(source), true)
+
     private fun moveMeshStroke(pos: Offset, viewport: CanvasViewport, shift: Boolean, ctrl: Boolean) {
-        val stroke = meshStroke ?: return
-        val source = original ?: return
-        val screenRadius = (radius * viewport.scale).toFloat()
-        val deform = tool == CanvasTool.BRUSH && !shift
-        val smooth = tool == CanvasTool.SMOOTH || (tool == CanvasTool.BRUSH && shift)
-        val inflate = tool == CanvasTool.INFLATE
-        val live = preview
-        val worlds = ArrayList<FloatArray>()
-        val bases = ArrayList<FloatArray>()
-        val moved = stroke.targets.map { HashSet<Int>() }
-        stroke.targets.forEachIndexed { at, t ->
-            // The deform brush measures the whole stroke from the press; smooth and inflate work step by step.
-            val base = if (deform || live == null) stroke.bases[at] else RigGeometryTools.geometry(live, t.kind, t.id, pose).points
-            bases += base
-            worlds += t.mapping.localToWorld(base)
-        }
-        val brushedAt = stroke.targets.indices.filter { stroke.targets[it].id in stroke.brushed }
-        if (deform) {
-            val total = pos - start
-            for (at in brushedAt) {
-                val world = worlds[at]
-                for (i in stroke.screens[at].indices) {
-                    val w = stroke.weights[at][i]
-                    if (w <= 0.0001f) continue
-                    val destination = stroke.screens[at][i] + total * w
-                    world[i * 2] = ((destination.x - viewport.offsetX) / viewport.scale).toFloat()
-                    world[i * 2 + 1] = -((destination.y - viewport.offsetY) / viewport.scale).toFloat()
-                    moved[at] += i
-                }
-            }
-        } else {
-            val screens = brushedAt.map { screen(bases[it], stroke.targets[it], viewport) }
-            // Weighed over the whole set at once, so connected-only starts from the one part under the pointer.
-            val weights = strokeWeights(brushedAt.map { stroke.targets[it] }, screens, previous, pos, viewport, ::brushableInEditSet)
-            val delta = pos - previous
-            brushedAt.forEachIndexed { k, at ->
-                val world = worlds[at]
-                val points = screens[k]
-                val adjacency = if (smooth) neighbors(stroke.targets[at]) else null
-                for (i in points.indices) {
-                    val weight = weights[k].getOrElse(i) { 0f }
-                    if (weight <= 0f) continue
-                    val p = points[i]
-                    val destination = when {
-                        inflate -> p + inflateOffset(p, previous, pos, delta.getDistance().coerceAtMost(screenRadius) * weight * INFLATE_GAIN * (if (shrinkAtPress) -1f else 1f))
-                        adjacency != null -> {
-                            val ns = adjacency[i]
-                            if (ns.isEmpty()) p else p + (Offset(ns.map { points[it].x }.average().toFloat(), ns.map { points[it].y }.average().toFloat()) - p) * weight
-                        }
-                        else -> p + delta * weight
-                    }
-                    world[i * 2] = ((destination.x - viewport.offsetX) / viewport.scale).toFloat()
-                    world[i * 2 + 1] = -((destination.y - viewport.offsetY) / viewport.scale).toFloat()
-                    moved[at] += i
-                }
-            }
-        }
-        keepWeldsTogether(stroke.targets, worlds, moved)
-        val commands = stroke.targets.indices.filter { moved[it].isNotEmpty() }.map { at ->
-            val t = stroke.targets[at]
-            geometryCommand(t, t.mapping.worldToLocal(worlds[at], bases[at], moved[at]), ctrl)
-        }
+        val session = meshStroke ?: return
+        preview = session.step(CanvasDeformStroke.Sample(weightCanvasPoint(pos, viewport),
+            smooth = session.request.action == CanvasDeformStroke.Action.BRUSH && shift, preserveChildren = ctrl))
         previous = pos
-        if (commands.isEmpty()) return
-        // Smooth and inflate accumulate, so each step builds on the last preview; the deform brush does not.
-        val merged = if (deform) commands else {
-            val byId = pendingObjects.associateBy { it.getValue("id").jsonPrimitive.content }.toMutableMap()
-            commands.forEach { byId[it.getValue("id").jsonPrimitive.content] = it }
-            byId.values.toList()
+    }
+
+    private fun finishDeformStroke() {
+        val session = meshStroke ?: return
+        val expected = gestureState
+        val changed = moved && session.commands.isNotEmpty() && session.capturedSamples().size > 1
+        meshStroke = null; dragging = false; ctrlAtPress = false
+        activeMeshBrushWeights = emptyMap(); activeBrushWeights = null; activeBrushCenter = null
+        pending = null; pendingObjects = emptyList(); objectTargets = emptyList(); targetAtPress = null; original = null
+        if (!changed || expected == null) {
+            session.cancel(); preview = null; gestureState = null; endTransformBox()
+            return
         }
-        pendingObjects = merged
-        preview = merged.fold(source) { m, command -> RigAuthoringJournal.apply(m, command) }
+        val operation = io.github.psd2live.application.WorkspaceCanvasDeformEdits.operation(session)
+        busy = true; error = null
+        viewModel.saveDocumentEdits(expected, "Deformed canvas geometry", listOf(operation)) { failure ->
+            busy = false; preview = null; gestureState = null; error = failure
+            endTransformBox()
+        }
     }
 
     private fun endMeshStroke() {
-        meshStroke = null
+        meshStroke?.cancel(); meshStroke = null
         activeMeshBrushWeights = emptyMap()
     }
 
@@ -4614,7 +4497,6 @@ internal class CanvasEditor(
             GlueWeightMode.BALANCE -> "balance"
         }
         val cmd = buildJsonObject {
-            put("op", "canvas_glue_edit")
             put("id", existingId ?: "Glue_${UUID.randomUUID()}")
             put("action", action)
             put("mesh_a", a)
@@ -4626,8 +4508,28 @@ internal class CanvasEditor(
             put("hits_b", JsonArray(hitsB.sorted().map(::JsonPrimitive)))
             put("pose", JsonObject(pose.mapValues { JsonPrimitive(it.value) }))
         }
-        head = null
-        commit(cmd)
+        commitWeightOperations(listOf(io.github.psd2live.application.WorkspaceDocumentOperation("canvas_glue_edit", cmd)))
+    }
+
+    /** Preview neutral requests locally; their final materialization uses the captured candidate. */
+    private fun commitWeightOperations(operations: List<io.github.psd2live.application.WorkspaceDocumentOperation>) {
+        if (!editable || operations.isEmpty()) return
+        val expected = gestureState ?: viewModel.currentWorkspaceState() ?: return
+        try {
+            val base = state.previewModel?.rig?.puppet ?: return
+            var evaluated = base
+            for (operation in operations) {
+                val commands = io.github.psd2live.application.WorkspaceCanvasWeightEdits.commands(evaluated, operation)
+                evaluated = RigAuthoringJournal.compile(evaluated, commands).first
+            }
+            preview = evaluated; busy = true; error = null
+            viewModel.saveDocumentEdits(expected, "Edited canvas weights", operations) { failure ->
+                busy = false; preview = null; pending = null; gestureState = null; error = failure
+                endTransformBox()
+            }
+        } catch (failure: Exception) {
+            error = failure.message; preview = null; pending = null; gestureState = null; endTransformBox()
+        }
     }
 
     private fun glueOutline(drawableId: String): Set<Int> {
@@ -4665,6 +4567,196 @@ internal class CanvasEditor(
 
     internal fun layerIdForDrawable(drawableId: String): String? =
         state.previewModel?.rig?.layerIdByDrawableId[drawableId]
+
+    /** [drawableId]'s group of the brushed kind: the first one, as the simulation reads it. */
+    private fun paintedGroup(drawableId: String): VertexGroup? =
+        model.vertexGroups.firstOrNull { it.drawableId.raw == drawableId && it.kind == weightGroupKind }
+
+    /** The name [drawableId]'s group of the brushed kind has, or gets: the kind's own, numbered past other kinds' groups. */
+    private fun paintedGroupName(drawableId: String): String = paintedGroup(drawableId)?.name ?: run {
+        val taken = model.vertexGroups.filter { it.drawableId.raw == drawableId }.mapTo(HashSet()) { it.name }
+        val stem = weightGroupKind.jsonName
+        if (stem !in taken) stem else generateSequence(2) { it + 1 }.map { "$stem$it" }.first { it !in taken }
+    }
+
+    /** [drawableId]'s current weights in the brushed group, or null when it has no such group. */
+    fun vertexGroupWeights(drawableId: String): FloatArray? {
+        val mesh = model.drawables.firstOrNull { it.id.raw == drawableId }?.mesh ?: return null
+        return paintedGroup(drawableId)?.weights?.takeIf { it.size == mesh.vertexCount }
+    }
+
+    /** What [drawableId]'s group becomes when the current stroke or gradient is released; its current weights between them. */
+    fun paintedWeights(drawableId: String): FloatArray? {
+        val reach = weightStroke[drawableId] ?: return vertexGroupWeights(drawableId)
+        val base = vertexGroupWeights(drawableId) ?: FloatArray(reach.size)
+        val neighbors = if (weightStrokeMode == WeightPaintMode.SMOOTH) {
+            editMeshTargets().firstOrNull { it.id == drawableId }?.let(::neighbors)
+        } else null
+        return WeightPaint.apply(base, reach, weightStrokeMode, strength, neighbors)
+    }
+
+    /** The weight brush's tip, in screen pixels. */
+    private fun weightTip() = io.github.psd2live.core.CanvasBrushTip(radius, hardness,
+        io.github.psd2live.core.CanvasBrushShape.valueOf(brushShape.name), brushAngle, brushAspect,
+        io.github.psd2live.core.CanvasBrushFalloff.valueOf(brushFalloff.name))
+
+    private fun weightCanvasPoint(pos: Offset, viewport: CanvasViewport) =
+        io.github.psd2live.core.CanvasBrushPoint(viewport.canvasX(pos.x), viewport.canvasY(pos.y))
+
+    private val weightStrokePoints = mutableListOf<io.github.psd2live.core.CanvasBrushPoint>()
+    private var weightStrokePose: Map<String, Float>? = null
+    private fun weightPose(source: PuppetModel): Map<String, Float> = weightStrokePose ?: pose.mapNotNull { (id, value) ->
+        source.parameters.firstOrNull { it.id.raw == id }?.let {
+            id to (if (value.isFinite()) value else it.default).coerceIn(it.min, it.max)
+        }
+    }.toMap()
+
+    /** How strongly a dab from [from] to [to] reaches each vertex of each edited mesh. */
+    private fun weightReach(from: Offset, to: Offset, viewport: CanvasViewport): Map<String, FloatArray> {
+        val targets = editMeshTargets()
+        if (targets.isEmpty()) return emptyMap()
+        val source = preview ?: state.previewModel?.rig?.puppet ?: return emptyMap()
+        val surfaces = io.github.psd2live.core.CanvasWeightAuthoring.surfaces(source,
+            targets.map { DrawableId(it.id) }, weightPose(source), connectedOnly)
+        val reached = io.github.psd2live.core.canvasBrushWeights(surfaces, weightCanvasPoint(from, viewport),
+            weightCanvasPoint(to, viewport), weightTip(), connectedOnly)
+        return targets.indices.associate { targets[it].id to reached[it] }
+    }
+
+    /**
+     * What a press at the pointer would reach right now, for the hover preview. Nothing while a stroke or a
+     * gradient is in hand: those show their own result.
+     */
+    fun weightBrushPreview(viewport: CanvasViewport): Map<String, FloatArray> {
+        if (tool != CanvasTool.WEIGHT_PAINT || weightStroking || weightGradient != null) return emptyMap()
+        val center = cursor ?: return emptyMap()
+        return weightReach(center, center, viewport).filterValues { w -> w.any { it > 0.0001f } }
+    }
+
+    /** The vertex nearest the pointer on the edited meshes and its weight, for the readout beside the cursor. */
+    fun weightUnderCursor(viewport: CanvasViewport): Pair<Offset, Float>? {
+        val center = cursor ?: return null
+        var best: Pair<Offset, Float>? = null
+        var bestDistance = WEIGHT_READOUT_REACH_PX
+        for (t in editMeshTargets()) {
+            val weights = paintedWeights(t.id)
+            val points = screen(t.geometry.points, t, viewport)
+            for (i in points.indices) {
+                val d = (points[i] - center).getDistance()
+                if (d < bestDistance) {
+                    bestDistance = d
+                    best = points[i] to (weights?.getOrNull(i) ?: 0f)
+                }
+            }
+        }
+        return best
+    }
+
+    private fun beginWeightTool(pos: Offset, viewport: CanvasViewport, alt: Boolean): Boolean {
+        if (editMeshTargets().isEmpty()) {
+            error = tr("editor.weightNeedMesh")
+            return true
+        }
+        weightStrokeMode = WeightPaint.effective(weightPaintMode, alt)
+        weightStroke = emptyMap()
+        weightStrokePoints.clear()
+        weightStrokePose = null
+        weightStrokePose = weightPose(model).toMap()
+        weightStroking = true
+        dragging = true
+        if (tool == CanvasTool.WEIGHT_GRADIENT) {
+            weightGradient = pos to pos
+        } else {
+            accumulateWeightStroke(pos, pos, viewport)
+        }
+        return true
+    }
+
+    private fun dragWeightTool(from: Offset, to: Offset, viewport: CanvasViewport) {
+        val gradient = weightGradient
+        if (gradient == null) {
+            accumulateWeightStroke(from, to, viewport)
+            return
+        }
+        weightGradient = gradient.first to to
+        val targets = editMeshTargets()
+        val source = preview ?: state.previewModel?.rig?.puppet ?: return
+        val surfaces = io.github.psd2live.core.CanvasWeightAuthoring.surfaces(source,
+            targets.map { DrawableId(it.id) }, weightPose(source), connected = false)
+        weightStroke = targets.indices.associate { at ->
+            targets[at].id to io.github.psd2live.core.CanvasWeightAuthoring.gradient(
+                surfaces[at].points,
+                weightCanvasPoint(gradient.first, viewport), weightCanvasPoint(to, viewport))
+        }
+    }
+
+    private fun accumulateWeightStroke(from: Offset, to: Offset, viewport: CanvasViewport) {
+        if (weightStrokePoints.isEmpty()) weightStrokePoints += weightCanvasPoint(from, viewport)
+        weightStrokePoints += weightCanvasPoint(to, viewport)
+        val reached = weightReach(from, to, viewport)
+        val next = weightStroke.toMutableMap()
+        for ((id, w) in reached) {
+            if (w.none { it > 0f }) continue
+            val merged = next[id]?.copyOf() ?: FloatArray(w.size)
+            for (i in 0 until minOf(merged.size, w.size)) merged[i] = maxOf(merged[i], w[i])
+            next[id] = merged
+        }
+        weightStroke = next
+    }
+
+    private fun commitWeightStroke() {
+        val targets = editMeshTargets().map { it.id }
+        val vp = viewport ?: return
+        val gradient = weightGradient
+        val points = weightStrokePoints.toList()
+        val strokePose = weightPose(model)
+        val request = buildJsonObject {
+            put("action", if (gradient == null) "brush" else "gradient")
+            put("targets", JsonArray(targets.map(::JsonPrimitive))); put("kind", weightGroupKind.jsonName)
+            put("mode", weightStrokeMode.name.lowercase()); put("strength", strength)
+            put("pose", JsonObject(strokePose.mapValues { JsonPrimitive(it.value) }))
+            fun point(p: io.github.psd2live.core.CanvasBrushPoint) = JsonArray(listOf(JsonPrimitive(p.x), JsonPrimitive(p.y)))
+            if (gradient == null) {
+                put("points", JsonArray(points.map(::point))); put("radius", radius); put("hardness", hardness)
+                put("shape", brushShape.name.lowercase()); put("angle", brushAngle); put("aspect", brushAspect)
+                put("falloff", brushFalloff.name.lowercase()); put("connected_only", connectedOnly)
+            } else { put("from", point(weightCanvasPoint(gradient.first, vp))); put("to", point(weightCanvasPoint(gradient.second, vp))) }
+        }
+        weightStroke = emptyMap()
+        weightGradient = null
+        weightStrokePoints.clear()
+        weightStrokePose = null
+        if (targets.isEmpty() || (gradient == null && points.isEmpty())) return
+        commitWeightOperations(listOf(io.github.psd2live.application.WorkspaceDocumentOperation("vertex_group_paint", buildJsonObject { put("edit", request) })))
+    }
+
+    /** Fills or clears the brushed group on every edited mesh at once. */
+    fun fillVertexGroup(value: Float) {
+        val commands = editMeshTargets().mapNotNull { t ->
+            val mesh = model.drawables.firstOrNull { it.id.raw == t.id }?.mesh ?: return@mapNotNull null
+            VertexGroupJournal.encode(VertexGroup(paintedGroupName(t.id), DrawableId(t.id), weightGroupKind, FloatArray(mesh.vertexCount) { value.coerceIn(0f, 1f) }))
+        }
+        if (commands.isEmpty()) return
+        gestureState = null
+        commitBatch(commands)
+    }
+
+    /** Flips the brushed group (w -> 1 - w) on every edited mesh that has it. */
+    fun invertVertexGroup() {
+        val targets = editMeshTargets().map { it.id }
+        if (targets.isEmpty()) return
+        commitWeightOperations(listOf(io.github.psd2live.application.WorkspaceDocumentOperation("vertex_group_paint", buildJsonObject { put("edit", buildJsonObject {
+            put("action", "invert"); put("targets", JsonArray(targets.map(::JsonPrimitive))); put("kind", weightGroupKind.jsonName)
+        }) })))
+    }
+
+    /** Removes the brushed group from every edited mesh that has it. */
+    fun deleteVertexGroup() {
+        val commands = editMeshTargets().mapNotNull { t -> paintedGroup(t.id)?.let { VertexGroupJournal.delete(t.id, it.name) } }
+        if (commands.isEmpty()) return
+        gestureState = null
+        commitBatch(commands)
+    }
 
     private fun accumulateGlueHits(from: Offset, to: Offset, viewport: CanvasViewport) {
         val pair = glueMeshPair() ?: return
@@ -4728,7 +4820,21 @@ internal class CanvasEditor(
 
 	fun pickSkeletonDrawable(pos: Offset, viewport: CanvasViewport): String? {
 		val layerId = pickLayer(pos, viewport) ?: return null
-		return state.previewModel?.rig?.layerIdByDrawableId?.entries?.firstOrNull { it.value == layerId }?.key
+		val preview = state.previewModel ?: return null
+		val geometry = RigCanvasSupport.evaluate(preview)
+		val x = viewport.canvasX(pos.x); val y = -viewport.canvasY(pos.y)
+		return preview.rig.puppet.drawables.asReversed().firstOrNull { drawable ->
+			if ((preview.rig.layerIdByDrawableId[drawable.id.raw] ?: drawable.id.raw) != layerId) return@firstOrNull false
+			val positions = geometry.worldPositions[drawable.id] ?: return@firstOrNull false
+			val indices = drawable.mesh?.indices ?: return@firstOrNull false
+			fun cross(a: Int, b: Int) = (positions[b * 2] - positions[a * 2]) * (y - positions[a * 2 + 1]) -
+				(positions[b * 2 + 1] - positions[a * 2 + 1]) * (x - positions[a * 2])
+			indices.indices.step(3).any { i ->
+				val a = indices[i]; val b = indices[i + 1]; val c = indices[i + 2]
+				val ab = cross(a, b); val bc = cross(b, c); val ca = cross(c, a)
+				(ab >= 0f && bc >= 0f && ca >= 0f) || (ab <= 0f && bc <= 0f && ca <= 0f)
+			}
+		}?.id?.raw
 	}
 
     /**
@@ -4866,7 +4972,7 @@ internal class CanvasEditor(
         if (space) return false
         if (viewModel.isSnappingParameters) return true
         this.viewport = viewport
-        error = null; head = state.historySnapshot?.headNodeId; start = pos; previous = pos; dragStartPos = pos
+        error = null; gestureState = viewModel.currentWorkspaceState(); start = pos; previous = pos; dragStartPos = pos
         moved = false; additive = shift; subtractive = alt; pressedObject = null
         ctrlAtPress = ctrl
 
@@ -4936,19 +5042,8 @@ internal class CanvasEditor(
                 }
                 tool == CanvasTool.PAINT_BUCKET -> {
                     if (canvasPos != null) {
-                        val clip = java.awt.Rectangle(0, 0, session.docWidth, session.docHeight)
-                        LayerPaintEngine.floodFill(
-                            image = session.workingImage,
-                            startX = canvasPos.first,
-                            startY = canvasPos.second,
-                            fillColor = paintColor,
-                            tolerance = paintTolerance,
-                            clipRect = clip,
-                            // The fill reports the ground it is about to cover, so the session can keep
-                            // the pixels it replaces - and the fill stays one undoable action.
-                            before = { session.willWrite(it) },
-                        )
-                        session.recordStroke(tr("editor.paint.strokeFill"))
+                        session.bucket(canvasPos.first, canvasPos.second, paintColor, paintTolerance,
+                            tr("editor.paint.strokeFill"))
                     }
                     isPainting = false
                     dragging = false
@@ -4980,6 +5075,7 @@ internal class CanvasEditor(
             error = tr("editor.creationSelectFirst")
             return true
         }
+        if (tool in WEIGHT_TOOLS) return beginWeightTool(pos, viewport, alt)
         if (tool == CanvasTool.GLUE) {
             if (glueMeshPair() == null) {
                 error = tr("editor.glueNeedTwo", glueMeshCount())
@@ -4997,7 +5093,11 @@ internal class CanvasEditor(
             val t = target()
             if (t != null && t.kind == "mesh") {
                 if (drawingPath) {
-                    draft = draft + local(pos, t, viewport, draft.lastOrNull() ?: (0.5f to 0.5f))
+                    // Every point is read through the target the path started on, which is what it binds to.
+                    val input = pathInput
+                    val point = local(pos, input?.frame ?: t, viewport, draft.lastOrNull() ?: (0.5f to 0.5f))
+                    if (input == null) pathInput = startInput(t.id, t, draft + point) else if (!input.append(point)) return true
+                    draft = draft + point
                     return true
                 }
                 if (beginPathInteraction(pos, t, viewport, ctrl)) return true
@@ -5006,6 +5106,7 @@ internal class CanvasEditor(
                 drawingPath = true
                 draftPathId = null
                 draft = listOf(local(pos, t, viewport))
+                pathInput = startInput(t.id, t, draft)
                 return true
             }
             return true
@@ -5017,11 +5118,16 @@ internal class CanvasEditor(
             val t = target()
             if (t != null && t.kind == "mesh") {
                 if (t.id != knifeDrawableId) {
-                    knifeDraft = emptyList()
+                    knifeDraft = emptyList(); knifeInput = null
                     knifeDrawableId = t.id
                 }
-                val anchor = knifeAnchor(pos, t, viewport, shift)
-                if (anchor != knifeDraft.lastOrNull()) knifeDraft = knifeDraft + anchor
+                // Later clicks snap to the mesh the first one did, so every vertex index names the same mesh.
+                val input = knifeInput
+                val anchor = knifeAnchor(pos, input?.frame ?: t, viewport, shift)
+                if (anchor != knifeDraft.lastOrNull()) {
+                    if (input == null) knifeInput = startInput(t.id, t, listOf(anchor)) else if (!input.append(anchor)) return true
+                    knifeDraft = knifeDraft + anchor
+                }
             }
             return true
         }
@@ -5183,17 +5289,11 @@ internal class CanvasEditor(
         if (brush) {
             shrinkAtPress = inflateInvert xor alt
             if (editTarget.kind == "rotation") { dragging = false; error = io.github.psd2live.i18n.tr("editor.rotationBrush"); return true }
-            val basePoints = editTarget.geometry.points.copyOf()
-            val initialScreen = points
-            val weights = strokeWeights(listOf(editTarget), listOf(initialScreen), pos, pos, viewport) { _, i ->
-                vertices.isEmpty() || i in vertices
-            }[0]
-            val affected = weights.indices.filterTo(mutableSetOf()) { weights[it] > 0.0001f }
-            activeBrushWeights = weights
-            activeBrushCenter = pos
-            brushInitialBase = basePoints
-            brushInitialScreen = initialScreen
-            brushAffectedIndices = affected
+            try { beginDeformStroke(pos, viewport, model, listOf(editTarget), false) }
+            catch (failure: Exception) {
+                endMeshStroke(); dragging = false; preview = null; gestureState = null
+                targetAtPress = null; original = null; error = failure.message
+            }
             return true
         }
 
@@ -5264,7 +5364,10 @@ internal class CanvasEditor(
         val source = state.previewModel?.rig?.puppet ?: return true
         if (tool in DEFORM_BRUSH_TOOLS) {
             shrinkAtPress = inflateInvert xor alt
-            beginMeshStroke(pos, viewport, source)
+            try { beginMeshStroke(pos, viewport, source) } catch (failure: Exception) {
+                endMeshStroke(); dragging = false; preview = null; gestureState = null
+                targetAtPress = null; original = null; error = failure.message
+            }
             return true
         }
         val picked = pickEditVertex(pos, viewport)
@@ -5297,6 +5400,7 @@ internal class CanvasEditor(
         this.viewport = viewport
         updateHover(pos, viewport, ctrl, shift)
         shrinks = if (dragging && tool == CanvasTool.INFLATE) shrinkAtPress else inflateInvert xor alt
+        weightAltHeld = alt
         if (!dragging || busy) return
         swingHandle?.let { handle -> dragSwing(handle, pos, viewport); previous = pos; return }
         moved = moved || (pos - start).getDistance() > 2f
@@ -5316,6 +5420,13 @@ internal class CanvasEditor(
 
         if (glueStroking) {
             accumulateGlueHits(previous, pos, viewport)
+            previous = pos
+            return
+        }
+
+        if (weightStroking) {
+            cursor = pos
+            dragWeightTool(previous, pos, viewport)
             previous = pos
             return
         }
@@ -5348,11 +5459,14 @@ internal class CanvasEditor(
             val (lx, ly) = local(pos, t, viewport)
             bezierState?.moveHandle(br, bc, dir, lx, ly, smooth = !alt)
             val warp = source.deformers.filterIsInstance<Deformer.Warp>().firstOrNull { it.id.raw == t.id } ?: return
-            val evaluated = bezierState?.evaluateLattice(warp.rows, warp.columns) ?: return
+            val evaluated = bezierState?.evaluateLattice(warp.rows, warp.columns)?.also { points ->
+                require(points.size == bezierResidual.size); for (index in points.indices) points[index] += bezierResidual[index]
+            } ?: return
             // Keep the authored handles when this lattice is committed. Reconstructing them
             // from sampled anchors would straighten the curves before the next gesture.
             bezierSourcePoints = evaluated.copyOf()
-            val cmd = geometryCommand(t, evaluated, effectiveCtrl)
+            val cmd = RigBezierJournal.materialize(source, t.id, coordinate(t), pose,
+                RigBezierJournal.Controls(requireNotNull(bezierState), bezierResidual), preserveChildren = effectiveCtrl)
             preview = RigAuthoringJournal.apply(source, cmd); pending = cmd; previous = pos
             return
         }
@@ -5364,9 +5478,12 @@ internal class CanvasEditor(
             val (prevLx, prevLy) = local(previous, t, viewport)
             bezierState?.moveAnchor(br, bc, lx - prevLx, ly - prevLy)
             val warp = source.deformers.filterIsInstance<Deformer.Warp>().firstOrNull { it.id.raw == t.id } ?: return
-            val evaluated = bezierState?.evaluateLattice(warp.rows, warp.columns) ?: return
+            val evaluated = bezierState?.evaluateLattice(warp.rows, warp.columns)?.also { points ->
+                require(points.size == bezierResidual.size); for (index in points.indices) points[index] += bezierResidual[index]
+            } ?: return
             bezierSourcePoints = evaluated.copyOf()
-            val cmd = geometryCommand(t, evaluated, effectiveCtrl)
+            val cmd = RigBezierJournal.materialize(source, t.id, coordinate(t), pose,
+                RigBezierJournal.Controls(requireNotNull(bezierState), bezierResidual), preserveChildren = effectiveCtrl)
             preview = RigAuthoringJournal.apply(source, cmd); pending = cmd; previous = pos
             return
         }
@@ -5396,7 +5513,10 @@ internal class CanvasEditor(
         }
 
         if (meshStroke != null) {
-            try { moveMeshStroke(pos, viewport, shift, effectiveCtrl) } catch (e: Exception) { error = e.message }
+            try { moveMeshStroke(pos, viewport, shift, effectiveCtrl) } catch (failure: Exception) {
+                endMeshStroke(); dragging = false; preview = null; pending = null; pendingObjects = emptyList()
+                targetAtPress = null; original = null; gestureState = null; error = failure.message
+            }
             return
         }
 
@@ -5451,7 +5571,7 @@ internal class CanvasEditor(
                     if (hierarchyMode == EditHierarchyMode.DEFORM) {
                         val points = DeformPathTools.positions(path, t.geometry.points).toMutableList()
                         points[pathPoint] = dest
-                        val cmd = geometryCommand(t, DeformPathTools.deform(t.geometry.points, source.deformPaths, path.id, points))
+                        val cmd = geometryCommand(t, DeformPathTools.deform(t.geometry.points, source.deformPaths, path.id, points, org.umamo.render.eval.DeformPathMetrics.canvasScale(source, source.drawables.single { it.id == path.drawableId })))
                         preview = RigAuthoringJournal.apply(source, cmd)
                         pending = cmd
                     } else {
@@ -5499,48 +5619,13 @@ internal class CanvasEditor(
                 return
             }
 
-            val brush = tool in DEFORM_BRUSH_TOOLS
-            val inflate = tool == CanvasTool.INFLATE
-            val isDeformBrush = tool == CanvasTool.BRUSH && !shift
-            val screenRadius = (radius * viewport.scale).toFloat()
-
-            if (isDeformBrush) {
-                val base = brushInitialBase ?: t.geometry.points
-                val initScreen = brushInitialScreen ?: screen(base, t, viewport)
-                val weights = activeBrushWeights
-                val affected = brushAffectedIndices
-                if (weights == null || affected.isEmpty()) { previous = pos; return }
-
-                val totalDelta = pos - start
-                val world = t.mapping.localToWorld(base)
-                for (i in affected) {
-                    val w = weights[i]
-                    val destination = initScreen[i] + totalDelta * w
-                    world[i * 2] = ((destination.x - viewport.offsetX) / viewport.scale).toFloat()
-                    world[i * 2 + 1] = -((destination.y - viewport.offsetY) / viewport.scale).toFloat()
-                }
-                val cmd = geometryCommand(t, t.mapping.worldToLocal(world, base, affected), effectiveCtrl)
-                preview = RigAuthoringJournal.apply(source, cmd); pending = cmd; previous = pos
-                return
-            }
-
-            val base = if (brush && preview != null) RigGeometryTools.geometry(preview!!, t.kind, t.id, pose).points else t.geometry.points
-            val screen = screen(base, t, viewport); val world = t.mapping.localToWorld(base)
-            val weights = if (brush) strokeWeights(listOf(t), listOf(screen), previous, pos, viewport) { _, i ->
-                vertices.isEmpty() || i in vertices
-            }[0] else null
-            val affected = if (weights != null) screen.indices.filter { weights[it] > 0f }.toSet()
-            else vertices.filter { it in screen.indices }.toSet()
-            val delta = if (brush) pos - previous else pos - start
-            val adjacency = if (tool == CanvasTool.SMOOTH || (tool == CanvasTool.BRUSH && shift)) neighbors(t) else null
+            // Brush gestures use the captured neutral session above. This is the select-tool translation.
+            val base = t.geometry.points
+            val points = screen(base, t, viewport); val world = t.mapping.localToWorld(base)
+            val affected = vertices.filter { it in points.indices }.toSet()
+            val delta = pos - start
             for (i in affected) {
-                val p = screen[i]
-                val weight = weights?.get(i) ?: 1f
-                val destination = when {
-                    inflate -> p + inflateOffset(p, previous, pos, delta.getDistance().coerceAtMost(screenRadius) * weight * INFLATE_GAIN * (if (shrinkAtPress) -1f else 1f))
-                    adjacency != null -> { val ns = adjacency[i]; if (ns.isEmpty()) p else p + (Offset(ns.map { screen[it].x }.average().toFloat(), ns.map { screen[it].y }.average().toFloat()) - p) * weight }
-                    else -> p + delta * weight
-                }
+                val destination = points[i] + delta
                 world[i * 2] = ((destination.x - viewport.offsetX) / viewport.scale).toFloat()
                 world[i * 2 + 1] = -((destination.y - viewport.offsetY) / viewport.scale).toFloat()
             }
@@ -5570,6 +5655,13 @@ internal class CanvasEditor(
             subdivideEdges = emptySet()
             targetAtPress = null; original = null
             if (covered.isNotEmpty()) topology("subdivide", edges = covered)
+            return
+        }
+
+        if (weightStroking) {
+            weightStroking = false
+            dragging = false
+            commitWeightStroke()
             return
         }
 
@@ -5624,21 +5716,8 @@ internal class CanvasEditor(
                             val x1 = floor(p1.first).toInt()
                             val y1 = floor(p1.second).toInt()
                             val shapeStrokeWidth = paintBrushSize.coerceAtLeast(1f)
-                            val area = LayerPaintEngine.shapeArea(x0, y0, x1, y1, shapeStrokeWidth, clip)
-                            session.edit(area) { image ->
-                                LayerPaintEngine.drawShape(
-                                    image = image,
-                                    x0 = x0, y0 = y0,
-                                    x1 = x1, y1 = y1,
-                                    shape = shape,
-                                    color = paintColor,
-                                    opacity = paintOpacity,
-                                    strokeWidth = shapeStrokeWidth,
-                                    filled = paintShapeFilled && shape.canFill,
-                                    clipRect = clip
-                                )
-                            }
-                            session.recordStroke(tr(shape.strokeLabelKey))
+                            session.shape(x0, y0, x1, y1, shape, paintColor, paintOpacity,
+                                shapeStrokeWidth, paintShapeFilled && shape.canFill, tr(shape.strokeLabelKey))
                         }
                     }
                     else -> {}
@@ -5655,12 +5734,13 @@ internal class CanvasEditor(
             return
         }
 
+        if (meshStroke != null) { finishDeformStroke(); return }
+
         dragging = false; ctrlAtPress = false; axis = null; activeHandle = BoundingHandle.NONE
         initialBounds = null
         initialScreenPoints = emptyList()
         boxDrag = false; dragIndices = emptyList()
         activeBrushWeights = null; activeBrushCenter = null; endMeshStroke()
-        brushInitialBase = null; brushInitialScreen = null; brushAffectedIndices = emptySet()
         endPathDrag()
 
         if (isCreatingWarp) {
@@ -5692,6 +5772,7 @@ internal class CanvasEditor(
             // Push the ghost rect onto the real layer so paint/mesh edits land where the artist placed it.
             if (layerPlace != null) {
                 viewModel.relocateImportedLayer(
+                    placement = requireNotNull(layerPlace.imagePlacement),
                     layerId = layerPlace.anchorId,
                     name = layerPlace.name,
                     left = layerPlace.localX,
@@ -5711,7 +5792,7 @@ internal class CanvasEditor(
             if (moved && cmd != null) {
                 commit(cmd)
             } else {
-                preview = null; head = null
+                preview = null; gestureState = null
             }
             pending = null; targetAtPress = null; original = null
             return
@@ -5727,7 +5808,7 @@ internal class CanvasEditor(
         val cmd = pending
         if (moved && pendingObjects.isNotEmpty()) { if (!commitBatch(pendingObjects)) preview = null }
         else if (moved && cmd != null) { if (!commitBatch(listOf(cmd))) preview = null }
-        else { preview = null; head = null; endTransformBox() }
+        else { preview = null; gestureState = null; endTransformBox() }
         pendingObjects = emptyList(); objectTargets = emptyList()
         pending = null; targetAtPress = null; original = null
     }
@@ -5741,7 +5822,8 @@ internal class CanvasEditor(
         if (adjustingBrush || dragging) return false
         val painting = paintBrushActive
         if (!painting && tool != CanvasTool.BRUSH && tool != CanvasTool.SMOOTH && tool != CanvasTool.INFLATE &&
-            tool != CanvasTool.SUBDIVIDE && tool != CanvasTool.BRUSH_SELECT && tool != CanvasTool.GLUE
+            tool != CanvasTool.SUBDIVIDE && tool != CanvasTool.BRUSH_SELECT && tool != CanvasTool.GLUE &&
+            tool != CanvasTool.WEIGHT_PAINT
         ) return false
         adjustingBrush = true
         brushAxis = when {
@@ -5783,7 +5865,7 @@ internal class CanvasEditor(
         }
         if (paintBrushActive) {
             when (brushAxis) {
-                BrushAdjustAxis.RADIUS -> paintSize = (paintSizeAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(1f, 512f)
+                BrushAdjustAxis.RADIUS -> paintSize = (paintSizeAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(1f, brushSizeLimit)
                 BrushAdjustAxis.HARDNESS -> paintHardness = (paintHardnessAtStart + dy / BRUSH_HARDNESS_SPAN_PX).coerceIn(0f, 1f)
                 BrushAdjustAxis.OPACITY -> paintOpacity = (paintOpacityAtStart + dy / BRUSH_HARDNESS_SPAN_PX).coerceIn(0.01f, 1f)
                 BrushAdjustAxis.ANGLE, null -> Unit
@@ -5791,7 +5873,7 @@ internal class CanvasEditor(
             return
         }
         when (brushAxis) {
-            BrushAdjustAxis.RADIUS -> radius = (brushRadiusAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(4f, 500f)
+            BrushAdjustAxis.RADIUS -> radius = (brushRadiusAtStart * 1.2f.pow(dx / BRUSH_RADIUS_STEP_PX)).coerceIn(4f, brushSizeLimit)
             BrushAdjustAxis.HARDNESS -> hardness = (brushHardnessAtStart + dy / BRUSH_HARDNESS_SPAN_PX * 0.95f).coerceIn(0f, 0.95f)
             BrushAdjustAxis.ANGLE -> brushAngle = (brushAngleAtStart + dx * 0.75f).mod(360f)
             BrushAdjustAxis.OPACITY, null -> Unit
@@ -5821,7 +5903,7 @@ internal class CanvasEditor(
         // which the marquee has no way to express at all.
         val pickingObjects = hierarchyMode == EditHierarchyMode.SELECT
         if (pickingObjects && !moved) {
-            pressedObject = null; marquee = emptyList(); original = null; head = null; return
+            pressedObject = null; marquee = emptyList(); original = null; gestureState = null; return
         }
         val polygon = if (selectionStyle == SelectionStyle.LASSO) marquee else listOf(marquee.first(), Offset(marquee.last().x, marquee.first().y), marquee.last(), Offset(marquee.first().x, marquee.last().y))
         if (pickingObjects) {
@@ -5832,13 +5914,13 @@ internal class CanvasEditor(
                 found.isEmpty() && pressedObject != null -> objects
                 else -> found
             }
-            selectLayer(objects.lastOrNull()); pressedObject = null; marquee = emptyList(); original = null; head = null; return
+            selectLayer(objects.lastOrNull()); pressedObject = null; marquee = emptyList(); original = null; gestureState = null; return
         }
         if (editsMeshes()) {
             val found = editVerticesWhere(viewport) { insidePolygon(it, polygon) }
             selection = mergedSelection(found, add = additive, subtract = subtractive)
             selectedEdges = emptySet(); selectedFaces = emptySet()
-            pressedObject = null; marquee = emptyList(); targetAtPress = null; original = null; head = null
+            pressedObject = null; marquee = emptyList(); targetAtPress = null; original = null; gestureState = null
             return
         }
         val t = targetAtPress ?: target() ?: return
@@ -5846,7 +5928,7 @@ internal class CanvasEditor(
         vertices = when { subtractive -> vertices - found; additive -> vertices + found; else -> found }
         selectedEdges = if (elementMode == 1) MeshTopology.edgesWithBothEndpointsSelected(t.indices, vertices) else emptySet()
         selectedFaces = if (elementMode == 2) MeshTopology.facesWithAllVerticesSelected(t.indices, vertices).mapTo(LinkedHashSet()) { it.triangleIndex } else emptySet()
-        pressedObject = null; marquee = emptyList(); targetAtPress = null; original = null; head = null
+        pressedObject = null; marquee = emptyList(); targetAtPress = null; original = null; gestureState = null
     }
 
     private fun neighbors(t: CanvasTarget): List<IntArray> = if (t.kind == "mesh") MeshTopology.buildVertexAdjacency(t.count, t.indices) else {
@@ -5860,11 +5942,11 @@ internal fun brushWeight(distance: Float, radius: Float, hardness: Float, fallof
     return falloff.weight(1f - x, seed)
 }
 
-/** Radial gain for the inflate brush: displacement = min(cursor travel, radius) * weight * gain. */
-private const val INFLATE_GAIN = 0.5f
-
 /** Travel in raw px that equals one `]` press (one 1.2x step) in the Alt + right-drag radius gesture. */
 private const val BRUSH_RADIUS_STEP_PX = 12f
+
+/** The brush size limit on documents smaller than this. */
+private const val MIN_BRUSH_SIZE_LIMIT = 512f
 
 /** Vertical travel in raw px that spans the whole 0f..0.95f hardness range in the same gesture. */
 private const val BRUSH_HARDNESS_SPAN_PX = 200f
@@ -5872,20 +5954,18 @@ private const val BRUSH_HARDNESS_SPAN_PX = 200f
 /** Drag distance before the gesture commits to radius or hardness; below it nothing is adjusted. */
 private const val BRUSH_AXIS_LOCK_PX = 4f
 
+/** How far from a vertex the weight readout still names it, in screen pixels. */
+private const val WEIGHT_READOUT_REACH_PX = 24f
+
 /**
  * Radially pushes [point] away from the closest point on the stroke segment [from]→[to], by [amount] pixels.
  * Degenerate directions return [Offset.Zero] rather than a NaN — a NaN here would be committed to history.
  * The epsilon (instead of an exact zero test) also stops the sign from strobing as the cursor sweeps a vertex.
  */
 internal fun inflateOffset(point: Offset, from: Offset, to: Offset, amount: Float): Offset {
-    val segment = to - from
-    val length2 = segment.x * segment.x + segment.y * segment.y
-    val direction = if (length2 < 1e-8f) point - from else {
-        val t = (((point - from).x * segment.x + (point - from).y * segment.y) / length2).coerceIn(0f, 1f)
-        point - (from + segment * t)
-    }
-    val distance = direction.getDistance()
-    return if (distance < 1e-3f) Offset.Zero else direction / distance * amount
+    val result = CanvasDeformStroke.inflateOffset(CanvasBrushPoint(point.x, point.y), CanvasBrushPoint(from.x, from.y),
+        CanvasBrushPoint(to.x, to.y), amount)
+    return Offset(result.x, result.y)
 }
 
 internal fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {

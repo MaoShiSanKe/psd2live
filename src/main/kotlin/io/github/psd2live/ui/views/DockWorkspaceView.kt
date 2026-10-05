@@ -342,6 +342,9 @@ internal fun DockWorkspaceView(
                 }
             }
         }
+        key(state.projectOpenGeneration, workspace.id) {
+            WorkspaceEditPanels(state, viewModel, Modifier.align(Alignment.BottomStart).padding(10.dp))
+        }
         val pendingPaint = viewModel.canvasAwaitingMeshRebuild()
         if (pendingPaint != null) {
             io.github.psd2live.ui.components.RebuildMeshPromptDialog(
@@ -349,6 +352,10 @@ internal fun DockWorkspaceView(
                 onConfirmRebuild = { pendingPaint.commitPaintSession(rebuildMesh = true) },
                 onKeepExisting = { pendingPaint.commitPaintSession(rebuildMesh = false) },
                 onDismiss = { pendingPaint.showRebuildMeshDialog = false })
+        }
+        viewModel.pendingDepthSplit?.takeIf { it.workspaceId == workspace.id }?.let { offer ->
+            io.github.psd2live.ui.components.DepthSplitDialog(offer,
+                onConfirm = viewModel::confirmDepthSplit, onDismiss = viewModel::dismissDepthSplit)
         }
         viewModel.pendingMeshSplit?.let { offer ->
             io.github.psd2live.ui.components.MeshSplitDialog(
@@ -358,11 +365,11 @@ internal fun DockWorkspaceView(
                 onDismissAll = viewModel::dismissAllMeshSplits,
             )
         }
-        viewModel.pendingBatchMeshSplit?.let { batchOffer ->
-            io.github.psd2live.ui.components.BatchMeshSplitDialog(
-                batchOffer = batchOffer,
-                onSplit = viewModel::confirmBatchMeshSplit,
-                onDismiss = viewModel::dismissBatchMeshSplit,
+        viewModel.pendingStartScreen?.let { offer ->
+            io.github.psd2live.ui.components.StartScreenDialog(
+                offer = offer,
+                onApply = viewModel::applyStartScreen,
+                onDismiss = viewModel::dismissStartScreen,
             )
         }
     }
@@ -451,6 +458,7 @@ private fun DockTree(node: DockNode, session: DockSession, modifier: Modifier, w
 				"animation" -> Modifier.tutorialTarget(TutorialTargetId.ANIMATION_DOCK)
 				"animationEditor" -> Modifier.tutorialTarget(TutorialTargetId.ANIMATION_EDITOR_DOCK)
 				"physics" -> Modifier.tutorialTarget(TutorialTargetId.PHYSICS_DOCK)
+				"simulation" -> Modifier.tutorialTarget(TutorialTargetId.SIMULATION_DOCK)
 				else -> Modifier
 			},
 		)
@@ -852,18 +860,7 @@ private fun DockHeader(id: String, session: DockSession, modifier: Modifier,
                 }
                 .padding(horizontal = if (tab) 10.dp else 7.dp, vertical = 2.dp))
         if (showCanvasTools) {
-            CanvasModeChip(
-                label = tr("tab.edit"),
-                active = canvas.mode == CanvasMode.EDIT,
-                modifier = Modifier.tutorialTarget(TutorialTargetId.EDIT_TAB),
-                onClick = { viewModel.setCanvasMode(canvas.id, CanvasMode.EDIT) },
-            )
-            CanvasModeChip(
-                label = tr("tab.preview"),
-                active = canvas.mode == CanvasMode.PREVIEW,
-                modifier = Modifier.tutorialTarget(TutorialTargetId.PREVIEW_TAB),
-                onClick = { viewModel.setCanvasMode(canvas.id, CanvasMode.PREVIEW) },
-            )
+            // Edit / Preview is picked from the canvas's own mode menu, with the editing modes.
             Box(Modifier.tutorialTarget(TutorialTargetId.VIEW_OPTIONS_MENU)) {
                 CanvasModeChip(
                     label = "${tr("tab.options.short")} \u25BE",
@@ -1024,12 +1021,7 @@ private fun DockModuleContent(
 		"animationEditor" -> AnimationEditorView(state, vm)
 		"settings" -> {
 			Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-				ModelSettingsSection(
-					state,
-					vm,
-					state.modelSettingsExpanded,
-					{ vm.setModelSettingsExpanded(!state.modelSettingsExpanded) },
-				)
+				ModelPresetsSection(state, vm)
 			}
 		}
 		"layers" -> LayersTableView(state, vm)
@@ -1039,6 +1031,7 @@ private fun DockModuleContent(
 		"inspector" -> InspectorPanelView(vm.canvasEditorFor(state.activeCanvas.id), vm, state)
 		"animation" -> AnimationPanelView(vm, state)
 		"physics" -> PhysicsPanelView(vm, state)
+		"simulation" -> io.github.psd2live.ui.views.simulation.SimulationPanelView(vm, state)
 	}
 }
 

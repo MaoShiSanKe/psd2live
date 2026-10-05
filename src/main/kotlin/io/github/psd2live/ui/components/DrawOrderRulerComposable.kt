@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.ui.ComponentPalette
+import io.github.psd2live.core.ComponentPalette
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -232,6 +232,7 @@ fun DrawOrderRuler(
 					if (targetId != null) {
 						isLeftDragging = true
 						activeDragTargetId = targetId
+						viewModel.beginEditorField("layer.draw_order.ruler")
 						val newOrder = yToOrder(pos.y, rulerHeightPx).roundToInt().toFloat().coerceIn(0f, 1000f)
 						viewModel.setLayerDrawOrder(targetId, newOrder)
 					}
@@ -266,6 +267,7 @@ fun DrawOrderRuler(
 				if (event.button == PointerButton.Primary) {
 					isLeftDragging = false
 					activeDragTargetId = null
+					viewModel.endEditorField("layer.draw_order.ruler")
 				} else if (event.button == PointerButton.Secondary) {
 					val press = rightPressPos
 					isRightDragging = false

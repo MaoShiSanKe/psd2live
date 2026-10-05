@@ -371,27 +371,30 @@ internal object CanvasEdits {
                     else applyKeyformSet(model,RigKeyformSetEdit(RigTargetRef(RigTargetKind.ROTATION_DEFORMER,id),key,RigKeyformGeometryEdit(originX=form.originX,originY=form.originY,angle=form.angle,scale=form.scale)))
                 } else if (kind == "warp") {
                     val oldWarp = model.deformers.firstOrNull { it.id.raw == id } as? Deformer.Warp
-                    val oldPoints = if (key.isNotEmpty()) RigGeometryTools.geometry(model, "warp", id, if (pose.isEmpty()) key else pose).points
-                        else (oldWarp?.geometryGrid?.cells?.singleOrNull()?.form?.controlPoints ?: RigGeometryTools.geometry(model, "warp", id, emptyMap()).points)
+                    val oldPoints = geometry.points
                     val warpPoints = if (blendEdit) points else {
                         val offset = RigGeometryTools.blendOffset(model, "warp", id, pose)
                         FloatArray(points.size) { index -> points[index] - offset.getOrElse(index) { 0f } }
                     }
                     val updated = if (key.isNotEmpty()) {
-                        applyKeyformSet(model, RigKeyformSetEdit(RigTargetRef(RigTargetKind.WARP_DEFORMER, id), key, RigKeyformGeometryEdit(controlPoints = warpPoints.toList())))
+                        applyKeyformSet(model, RigKeyformSetEdit(RigTargetRef(RigTargetKind.WARP_DEFORMER, id), key, RigKeyformGeometryEdit(controlPoints = warpPoints.toList())), capturePose = pose)
                     } else {
                         val grid = oldWarp?.geometryGrid
-                        val newGrid = if (grid != null && grid.axes.isNotEmpty()) {
-                            val shift = FloatArray(points.size) { points[it] - oldPoints[it] }
+                        val shift = FloatArray(points.size) { points[it] - oldPoints[it] }
+                        val newGrid = if (grid != null) {
                             KeyformGrid(grid.axes, grid.cells.map { cell ->
                                 val cp = cell.form.controlPoints
                                 KeyformCell(cell.coordinate, WarpLatticeForm(FloatArray(cp.size) { j -> cp[j] + shift[j] }))
                             })
                         } else {
-                            KeyformGrid(emptyList(), listOf(KeyformCell(intArrayOf(), WarpLatticeForm(points))))
+                            KeyformGrid(emptyList(), listOf(KeyformCell(intArrayOf(), WarpLatticeForm(warpPoints))))
                         }
                         model.copy(deformers = model.deformers.map {
-                            if (it.id.raw == id && it is Deformer.Warp) it.copy(geometryGrid = newGrid) else it
+                            if (it.id.raw == id && it is Deformer.Warp) it.copy(geometryGrid = newGrid,
+                                blendShapes = it.blendShapes.map { binding -> binding.copy(forms = binding.forms.map { form ->
+                                    form?.let { value -> WarpForm(FloatArray(value.controlPoints.size) { j -> value.controlPoints[j] + shift[j] },
+                                        value.opacity, value.multiplyColor, value.screenColor) }
+                                }) }) else it
                         })
                     }
                     val preserveChildren = edit["preserve_children"]?.jsonPrimitive?.booleanOrNull == true ||
@@ -404,7 +407,7 @@ internal object CanvasEdits {
                 } else if (key.isNotEmpty()) {
                     val offset = if (blendEdit) FloatArray(0) else RigGeometryTools.blendOffset(model, "mesh", id, pose)
                     applyKeyformSet(model, RigKeyformSetEdit(RigTargetRef(RigTargetKind.fromString(kind), id), key,
-                        RigKeyformGeometryEdit(positionDeltas = points.indices.map { points[it] - geometry.base[it] - offset.getOrElse(it) { 0f } })))
+                        RigKeyformGeometryEdit(positionDeltas = points.indices.map { points[it] - geometry.base[it] - offset.getOrElse(it) { 0f } })), capturePose = pose)
                 } else {
                     // The mesh moves by how far its DISPLAYED geometry moved, not to the displayed points.
                     // Assigning the displayed points to the rest mesh would apply a keyed default delta a
@@ -514,39 +517,33 @@ internal object CanvasEdits {
         val samePair: (Glue) -> Boolean = { glue ->
             (glue.meshA == meshA && glue.meshB == meshB) || (glue.meshA == meshB && glue.meshB == meshA)
         }
-        val existing = model.glues.firstOrNull(samePair)
-        // Pairs are stored in the glue's own A/B order; the edit speaks in its own. Work in the edit's.
-        val reversed = existing != null && existing.meshA != meshA
-        fun oriented(pair: GluePair) = if (reversed) GluePair(pair.indexB, pair.indexA, pair.weightB, pair.weightA) else pair
-        val prior = existing?.pairs.orEmpty().map(::oriented)
+        val existing = model.glues.filter(samePair)
+        fun oriented(glue: Glue, pair: GluePair) = if (glue.meshA != meshA)
+            GluePair(pair.indexB, pair.indexA, pair.weightB, pair.weightA) else pair
+        val prior = existing.flatMap { glue -> glue.pairs.map { oriented(glue, it) } }
         fun touched(pair: GluePair) = pair.indexA in hitsA || pair.indexB in hitsB
-
-        fun written(working: PuppetModel, pairs: List<GluePair>): PuppetModel {
-            val stored = pairs.map(::oriented)
-            if (existing == null) {
-                if (stored.isEmpty()) return working
-                val id = edit["id"]?.jsonPrimitive?.content ?: "Glue_${java.util.UUID.randomUUID()}"
-                return working.copy(glues = working.glues + Glue(meshA, meshB, stored, intensity = 1f, id = id))
-            }
-            // Ungluing the last pair removes the glue rather than leaving an empty affecter behind.
-            if (stored.isEmpty()) return working.copy(glues = working.glues.filterNot(samePair))
-            return working.copy(glues = working.glues.map { if (samePair(it)) it.copy(pairs = stored) else it })
-        }
+        fun transform(working: PuppetModel, update: (List<GluePair>) -> List<GluePair>): PuppetModel =
+            working.copy(glues = working.glues.mapNotNull { glue ->
+                if (!samePair(glue)) glue else {
+                    val pairs = update(glue.pairs.map { oriented(glue, it) }).map { oriented(glue, it) }
+                    if (pairs.isEmpty()) null else glue.copy(pairs = pairs)
+                }
+            })
 
         return when (action) {
             "weights" -> {
-                requireNotNull(existing) { "No glue between these meshes" }
+                require(existing.isNotEmpty()) { "No glue between these meshes" }
                 val mode = when (edit["weight_mode"]?.jsonPrimitive?.content) {
                     "a" -> GlueWeightPaint.A
                     "b" -> GlueWeightPaint.B
                     else -> GlueWeightPaint.BALANCE
                 }
                 val delta = edit["delta"]?.jsonPrimitive?.float ?: 0.35f
-                written(model, paintGlueWeights(prior, hitsA, hitsB, mode, delta))
+                transform(model) { paintGlueWeights(it, hitsA, hitsB, mode, delta) }
             }
             "unglue" -> {
-                requireNotNull(existing) { "No glue between these meshes" }
-                written(model, prior.filterNot(::touched))
+                require(existing.isNotEmpty()) { "No glue between these meshes" }
+                transform(model) { it.filterNot(::touched) }
             }
             "brush", "remerge" -> {
                 val whole = action == "remerge" && hitsA.isEmpty() && hitsB.isEmpty()
@@ -564,7 +561,18 @@ internal object CanvasEdits {
                 )
                 val merged = kept + welded.pairs
                 require(merged.isNotEmpty()) { "No vertices to glue here; brush where the two meshes overlap or raise the matching distance" }
-                written(welded.model, merged)
+                val retained = transform(welded.model) { pairs -> when {
+                    action == "brush" -> pairs
+                    whole -> emptyList()
+                    else -> pairs.filterNot(::touched)
+                } }
+                if (welded.pairs.isEmpty()) retained else {
+                    val requested = edit["id"]?.jsonPrimitive?.content
+                    val id = requested?.takeIf { candidate -> retained.glues.none { it.id == candidate } }
+                        ?: generateSequence(retained.glues.size) { it + 1 }.map { "Glue_${meshA.raw}_${meshB.raw}_$it" }
+                            .first { candidate -> retained.glues.none { it.id == candidate } }
+                    retained.copy(glues = retained.glues + Glue(meshA, meshB, welded.pairs, intensity = 1f, id = id))
+                }
             }
             else -> error("Unknown glue action: $action")
         }

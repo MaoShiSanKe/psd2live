@@ -79,63 +79,64 @@ object MotionClips {
 			val parameter = definitions[curve.parameterId] ?: return@mapNotNull null
 			curve.copy(keys = curve.keys.map { key ->
 				val value = key.value.coerceIn(parameter.min, parameter.max)
+				fun constrain(handle: MotionHandle): MotionHandle {
+					val control = key.value + handle.y
+					return if (value == key.value && control in parameter.min..parameter.max) handle
+					else handle.copy(y = control.coerceIn(parameter.min, parameter.max) - value)
+				}
 				key.copy(value = value,
-					inHandle = key.inHandle.copy(y = (key.value + key.inHandle.y).coerceIn(parameter.min, parameter.max) - value),
-					outHandle = key.outHandle.copy(y = (key.value + key.outHandle.y).coerceIn(parameter.min, parameter.max) - value))
+					inHandle = constrain(key.inHandle), outHandle = constrain(key.outHandle))
 			})
 		}) }
 	}
 
+	/** The basic generated motions, which every rig can play; the model presets switch them as one group. */
+	val BASIC_NAMES: List<String> = listOf("Idle", "Blink", "Nod", "Shake")
+
 	/** The generated motions, in the order the panel lists them. */
-	val BUILTIN_NAMES: List<String> = listOf("Idle", "Blink", "Nod", "Shake") + SkeletonMotions.presets.map { it.name }
+	val BUILTIN_NAMES: List<String> = BASIC_NAMES + SkeletonMotions.presets.map { it.name }
+
+	/** Whether [name] is a skeleton preset rather than a basic motion. */
+	fun isSkeletonPreset(name: String): Boolean = SkeletonMotions.presets.any { it.name.equals(name, ignoreCase = true) }
 
 	/** Keys closer than this are one key. */
 	const val TIME_EPSILON = 1e-4f
 
-	fun isLoopBuiltin(name: String): Boolean = name.equals("Idle", ignoreCase = true) ||
-		SkeletonMotions.presets.any { it.loop && it.name.equals(name, ignoreCase = true) }
+	fun isLoopBuiltin(name: String): Boolean = MotionPresets.loops(name)
 
 	/**
-	 * The tracks a generated motion plays, the same the export writes. A looping one blinks like the idle.
-	 * [exclude] keeps physics-driven parameters out of the idle.
+	 * The tracks a generated motion plays as [settings] tune it, the same the export writes. A looping one
+	 * blinks like the idle. [exclude] keeps physics-driven parameters out of the idle.
 	 */
-	fun builtinTracks(name: String, skeleton: SkeletonSpec?, exclude: Set<String> = emptySet()): List<MotionTrack> =
-		when (name.lowercase()) {
-			"idle" -> SkeletonMotions.idle(skeleton, exclude) + MotionGenerator.idleBlinkTracks
-			"blink" -> MotionGenerator.blinkTracks
-			"nod" -> MotionGenerator.nodTracks
-			"shake" -> MotionGenerator.shakeTracks
-			else -> SkeletonMotions.presets.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { preset ->
-				val tracks = preset.tracks(skeleton)
-				if (preset.loop && tracks.isNotEmpty()) tracks + MotionGenerator.idleBlinkTracks else tracks
-			}.orEmpty()
-		}
+	fun builtinTracks(
+		name: String,
+		skeleton: SkeletonSpec?,
+		exclude: Set<String> = emptySet(),
+		settings: MotionPresetSettings = MotionPresetSettings(),
+	): List<MotionTrack> = MotionPresets.tracks(name, skeleton, settings, exclude)
 
-	fun builtinDuration(name: String, tracks: List<MotionTrack>): Float =
-		if (name.equals("Idle", ignoreCase = true)) SkeletonMotions.IDLE_DURATION
-		else tracks.maxOfOrNull { it.second.last().first } ?: 0f
+	fun builtinDuration(name: String, tracks: List<MotionTrack>, settings: MotionPresetSettings = MotionPresetSettings()): Float =
+		MotionPresets.duration(name, tracks, settings)
 
 	/** The override of [builtin] in [clips], if the user edited it. */
 	fun overrideOf(clips: List<MotionClip>, builtin: String): MotionClip? =
 		clips.firstOrNull { it.builtin.equals(builtin, ignoreCase = true) }
 
-	/** Linear keys through [tracks]; how a generated motion becomes an editable clip. */
+	/** The keys of [tracks] as they are; how a generated motion becomes an editable clip. */
 	fun fromTracks(
 		id: String,
 		name: String,
 		builtin: String?,
 		loop: Boolean,
 		tracks: List<MotionTrack>,
-		duration: Float = tracks.maxOfOrNull { it.second.last().first } ?: 2f,
+		duration: Float = tracks.maxOfOrNull { it.keys.last().time } ?: 2f,
 	): MotionClip = MotionClip(
 		id = id,
 		name = name,
 		builtin = builtin,
 		loop = loop,
 		duration = duration.takeIf { it > 0f } ?: 2f,
-		curves = tracks.distinctBy { it.first }.map { (parameter, points) ->
-			MotionCurve(parameter, normalized(points.map { (time, value) -> MotionKey(time, value, MotionInterpolation.LINEAR) }))
-		},
+		curves = tracks.distinctBy { it.parameterId }.map { it.copy(keys = normalized(it.keys)) },
 	)
 
 	/** Keys sorted by time, a later key replacing an earlier one at the same time. */

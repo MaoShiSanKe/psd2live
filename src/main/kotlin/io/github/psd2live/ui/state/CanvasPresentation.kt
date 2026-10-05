@@ -12,25 +12,26 @@ data class WorkspacePose(
     val previewParameterValues: Map<ParameterId, Float> = emptyMap(),
     val animationEnabled: Boolean = false,
     val mouseTrackingEnabled: Boolean = true,
+    val smoothMouseTracking: Boolean = false,
 ) {
     fun applyTo(state: PSD2LiveState) = state.copy(
         parameterValues = parameterValues, lockedParameters = lockedParameters,
         previewParameterValues = previewParameterValues, animationEnabled = animationEnabled,
-        mouseTrackingEnabled = mouseTrackingEnabled,
+        mouseTrackingEnabled = mouseTrackingEnabled, smoothMouseTracking = smoothMouseTracking,
     )
 
     fun applyTo(presentation: CanvasPresentation) = presentation.copy(
         parameterValues = parameterValues, lockedParameters = lockedParameters,
         previewParameterValues = previewParameterValues, animationEnabled = animationEnabled,
-        mouseTrackingEnabled = mouseTrackingEnabled,
+        mouseTrackingEnabled = mouseTrackingEnabled, smoothMouseTracking = smoothMouseTracking,
     )
 
     companion object {
         fun capture(state: PSD2LiveState) = WorkspacePose(state.activeWorkspace.pose?.authoringPose ?: false, state.parameterValues, state.lockedParameters,
-            state.previewParameterValues, state.animationEnabled, state.mouseTrackingEnabled)
+            state.previewParameterValues, state.animationEnabled, state.mouseTrackingEnabled, state.smoothMouseTracking)
         fun capture(presentation: CanvasPresentation) = WorkspacePose(false, presentation.parameterValues,
             presentation.lockedParameters, presentation.previewParameterValues,
-            presentation.animationEnabled, presentation.mouseTrackingEnabled)
+            presentation.animationEnabled, presentation.mouseTrackingEnabled, presentation.smoothMouseTracking)
     }
 }
 
@@ -70,6 +71,7 @@ data class CanvasPresentation(
     val previewParameterValues: Map<ParameterId, Float> = emptyMap(),
     val animationEnabled: Boolean = false,
     val mouseTrackingEnabled: Boolean = true,
+    val smoothMouseTracking: Boolean = false,
 ) {
     fun applyTo(state: PSD2LiveState): PSD2LiveState = state.copy(
         selectedLayerId = selectedLayerId,
@@ -85,7 +87,7 @@ data class CanvasPresentation(
         lockedParameters = lockedParameters,
         previewParameterValues = previewParameterValues,
         animationEnabled = animationEnabled,
-        mouseTrackingEnabled = mouseTrackingEnabled,
+        mouseTrackingEnabled = mouseTrackingEnabled, smoothMouseTracking = smoothMouseTracking,
     )
 
     companion object {
@@ -103,10 +105,17 @@ data class CanvasPresentation(
             lockedParameters = state.lockedParameters,
             previewParameterValues = state.previewParameterValues,
             animationEnabled = state.animationEnabled,
-            mouseTrackingEnabled = state.mouseTrackingEnabled,
+            mouseTrackingEnabled = state.mouseTrackingEnabled, smoothMouseTracking = state.smoothMouseTracking,
         )
     }
 }
+
+internal fun CanvasMode.canvasViewMode(): io.github.psd2live.application.CanvasViewMode =
+    if (this == CanvasMode.EDIT) io.github.psd2live.application.CanvasViewMode.EDIT else io.github.psd2live.application.CanvasViewMode.PREVIEW
+
+/** The presentation fields the shared canvas visibility processor owns. */
+internal fun CanvasPresentation.canvasVisibility() = io.github.psd2live.application.CanvasVisibility(
+    layerVisibility, deformerVisibility, isolatedLayerId, isolationSnapshot)
 
 /** Panels use the active canvas projection; canvas rendering always requests its explicit owner. */
 fun PSD2LiveState.forCanvas(
@@ -254,7 +263,10 @@ internal fun reconcileCanvasPresentation(previous: PSD2LiveState, next: PSD2Live
     // An authored pose change invalidates the cached preview, never the user's locks.
     if (!switched && shared.parameterValues != previous.parameterValues)
         shared = shared.copy(previewParameterValues = emptyMap())
-    if (shared.animationEnabled || shared.mouseTrackingEnabled != previous.mouseTrackingEnabled)
+    val enteringPreview = next.previewLive && (!previous.previewLive ||
+        (next.activeCanvas.mode == CanvasMode.PREVIEW && (switched ||
+            previous.activeCanvas.id != next.activeCanvas.id || previous.activeCanvas.mode != CanvasMode.PREVIEW)))
+    if (enteringPreview || shared.animationEnabled || shared.mouseTrackingEnabled != previous.mouseTrackingEnabled)
         shared = shared.copy(authoringPose = false)
     var result = local
     if (switched && previous.projectOpenGeneration == next.projectOpenGeneration)

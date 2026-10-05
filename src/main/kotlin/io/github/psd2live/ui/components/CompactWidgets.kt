@@ -678,9 +678,7 @@ fun IconBone(
 	tint: Color = LocalToolColors.current.textPrimary,
 ) {
 	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		drawBoneIcon(Offset(w * 0.16f, h * 0.84f), Offset(w * 0.88f, h * 0.12f), tint, stroke = 1.1f, headRadius = w * 0.13f)
+		drawSingleBoneIcon(tint)
 	}
 }
 

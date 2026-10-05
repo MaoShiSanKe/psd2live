@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import kotlin.math.exp
+import kotlin.math.ln
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,6 +55,7 @@ import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconCheck
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconDeformPath
+import io.github.psd2live.ui.components.IconDrawOrder
 import io.github.psd2live.ui.components.IconRotationDeformer
 import io.github.psd2live.ui.components.IconTrash
 import io.github.psd2live.ui.components.IconWarpDeformer
@@ -75,7 +78,10 @@ internal fun canvasContextMenuHasContent(editor: CanvasEditor): Boolean {
         EditHierarchyMode.SELECT -> editor.tool in setOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT)
         EditHierarchyMode.DEFORM,
         EditHierarchyMode.EDIT,
+        EditHierarchyMode.SIMULATE,
         EditHierarchyMode.PAINT -> true
+        // Skeleton's two tools keep their actions on the mode strip and in the skeleton panel.
+        EditHierarchyMode.SKELETON -> false
     }
 }
 
@@ -115,6 +121,8 @@ internal fun CanvasContextMenu(
                 EditHierarchyMode.SELECT -> SelectModeContextMenu(editor, onDismissRequest, onAction)
                 EditHierarchyMode.DEFORM -> DeformModeContextMenu(editor, onDismissRequest, onAction)
                 EditHierarchyMode.EDIT -> EditModeContextMenu(editor, onDismissRequest, onAction)
+                EditHierarchyMode.SIMULATE -> SimulateModeContextMenu(editor, onDismissRequest, onAction)
+                EditHierarchyMode.SKELETON -> Unit
                 EditHierarchyMode.PAINT -> PaintModeContextMenu(editor, onDismissRequest, onAction)
             }
         }
@@ -148,6 +156,20 @@ private fun ColumnScope.SelectModeContextMenu(
     when (editor.tool) {
         CanvasTool.SELECT, CanvasTool.LASSO_SELECT -> {
             SelectionActionsSection(editor, onDismissRequest, onAction, objectMode = true)
+            val splitTarget = editor.target()?.takeIf { it.kind == "mesh" }
+            if (splitTarget != null && editor.viewModel.depthSplitMiddleIds(splitTarget.id).isNotEmpty()) {
+                CompactMenuDivider()
+                CompactMenuItem(
+                    text = tr("editor.depthSplit.quick", editor.model.drawables.first { it.id.raw == splitTarget.id }.name),
+                    enabled = editor.editable,
+                    icon = { IconDrawOrder(modifier = Modifier.size(12.dp)) },
+                    onClick = {
+                        editor.viewModel.requestDepthSplit(splitTarget.id)
+                        onAction()
+                        onDismissRequest()
+                    },
+                )
+            }
             if (editor.target()?.kind == "mesh") {
                 CompactMenuDivider()
                 MenuSectionLabel(tr("editor.deformers"))
@@ -232,6 +254,65 @@ private fun ColumnScope.SelectModeContextMenu(
     }
 }
 
+// ─── SIMULATE mode ───────────────────────────────────────────────────────────
+
+@Composable
+private fun ColumnScope.SimulateModeContextMenu(
+    editor: CanvasEditor,
+    onDismissRequest: () -> Unit,
+    onAction: () -> Unit,
+) {
+    fun done() {
+        onAction()
+        onDismissRequest()
+    }
+    if (editor.tool == CanvasTool.WEIGHT_PAINT) {
+        ParamsPanel {
+            ParamSliderRow(
+                label = tr("editor.radius"),
+                value = editor.radius,
+                onValueChange = { editor.radius = it },
+                valueRange = 4f..editor.brushSizeLimit,
+                    logarithmic = true,
+                display = "${editor.radius.toInt()}px",
+            )
+            ParamSliderRow(
+                label = tr("editor.hardness"),
+                value = editor.hardness * 100f,
+                onValueChange = { editor.hardness = (it / 100f).coerceIn(0f, 0.95f) },
+                valueRange = 0f..95f,
+                display = "${(editor.hardness * 100).toInt()}%",
+            )
+            ParamSliderRow(
+                label = tr("editor.strength"),
+                value = editor.strength * 100f,
+                onValueChange = { editor.strength = (it / 100f).coerceIn(0.01f, 1f) },
+                valueRange = 1f..100f,
+                display = "${(editor.strength * 100).toInt()}%",
+            )
+        }
+        CompactMenuDivider()
+    }
+    MenuSectionLabel(tr("editor.weightGroup"))
+    ActionGrid(
+        io.github.psd2live.ui.WeightPaintMode.entries.map { mode ->
+            ActionSpec(tr(mode.labelKey), primary = editor.weightPaintMode == mode) {
+                editor.weightPaintMode = mode
+                done()
+            }
+        }
+    )
+    CompactMenuDivider()
+    ActionGrid(
+        listOf(
+            ActionSpec(tr("editor.weightFill"), enabled = editor.editable) { editor.fillVertexGroup(1f); done() },
+            ActionSpec(tr("editor.weightClear"), enabled = editor.editable) { editor.fillVertexGroup(0f); done() },
+            ActionSpec(tr("editor.weightInvert"), enabled = editor.editable) { editor.invertVertexGroup(); done() },
+            ActionSpec(tr("editor.weightDelete"), enabled = editor.editable, danger = true) { editor.deleteVertexGroup(); done() },
+        )
+    )
+}
+
 // ─── DEFORM mode ─────────────────────────────────────────────────────────────
 
 @Composable
@@ -250,7 +331,8 @@ private fun ColumnScope.DeformModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.radius,
                     onValueChange = { editor.radius = it },
-                    valueRange = 1f..500f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.radius.toInt()}px",
                 )
             }
@@ -291,7 +373,8 @@ private fun ColumnScope.EditModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.radius,
                     onValueChange = { editor.radius = it },
-                    valueRange = 1f..500f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.radius.toInt()}px",
                 )
             }
@@ -315,7 +398,8 @@ private fun ColumnScope.EditModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.radius,
                     onValueChange = { editor.radius = it },
-                    valueRange = 1f..500f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.radius.toInt()}px",
                 )
             }
@@ -401,7 +485,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.paintBrushSize,
                     onValueChange = { editor.paintBrushSize = it },
-                    valueRange = 1f..256f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintBrushSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -429,7 +514,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.paintPencilSize,
                     onValueChange = { editor.paintPencilSize = it },
-                    valueRange = 1f..64f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintPencilSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -449,7 +535,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.radius"),
                     value = editor.paintEraserSize,
                     onValueChange = { editor.paintEraserSize = it },
-                    valueRange = 1f..256f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintEraserSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -508,7 +595,8 @@ private fun ColumnScope.PaintModeContextMenu(
                     label = tr("editor.width"),
                     value = editor.paintBrushSize,
                     onValueChange = { editor.paintBrushSize = it },
-                    valueRange = 1f..128f,
+                    valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
                     display = "${editor.paintBrushSize.toInt()}px",
                 )
                 ParamSliderRow(
@@ -870,7 +958,8 @@ private fun ColumnScope.DeformBrushParamsSection(editor: CanvasEditor) {
             label = tr("editor.radius"),
             value = editor.radius,
             onValueChange = { editor.radius = it },
-            valueRange = 1f..500f,
+            valueRange = 1f..editor.brushSizeLimit,
+                    logarithmic = true,
             display = "${editor.radius.toInt()}px",
         )
         ParamSliderRow(
@@ -1084,6 +1173,7 @@ private fun ParamSliderRow(
     onValueChange: (Float) -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
     display: String,
+    logarithmic: Boolean = false,
 ) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
@@ -1108,13 +1198,27 @@ private fun ParamSliderRow(
                 style = typography.monoSmall.copy(fontSize = 9.5.sp),
             )
         }
-        CompactSlider(
-            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            modifier = Modifier.fillMaxWidth(),
-            height = 12.dp,
-        )
+        // A size range can run to the document's long side; on a log scale the small sizes keep their room.
+        val clamped = value.coerceIn(valueRange.start, valueRange.endInclusive)
+        if (logarithmic && valueRange.start > 0f) {
+            val start = ln(valueRange.start)
+            val end = ln(valueRange.endInclusive)
+            CompactSlider(
+                value = ln(clamped),
+                onValueChange = { onValueChange(exp(it).coerceIn(valueRange.start, valueRange.endInclusive)) },
+                valueRange = start..end,
+                modifier = Modifier.fillMaxWidth(),
+                height = 12.dp,
+            )
+        } else {
+            CompactSlider(
+                value = clamped,
+                onValueChange = onValueChange,
+                valueRange = valueRange,
+                modifier = Modifier.fillMaxWidth(),
+                height = 12.dp,
+            )
+        }
     }
 }
 

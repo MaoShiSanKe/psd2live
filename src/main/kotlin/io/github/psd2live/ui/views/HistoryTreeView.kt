@@ -43,7 +43,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.psd2live.agent.AgentHistoryNodeSnapshot
+import io.github.psd2live.project.WorkspaceHistoryNodeSnapshot
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.PaintSession
 import io.github.psd2live.ui.components.CompactButton
@@ -53,9 +53,8 @@ import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconRedo
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.IconUndo
-import io.github.psd2live.ui.state.HistoryAnnotation
+import io.github.psd2live.project.HistoryAnnotation
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -77,7 +76,7 @@ private const val MAX_SCALE = 2.5f
 private const val ZOOM_STEP = 1.15f
 
 internal class TreeNodeLayout(
-	val node: AgentHistoryNodeSnapshot,
+	val node: WorkspaceHistoryNodeSnapshot,
 	var x: Float = 0f,
 	var y: Float = 0f,
 	val children: MutableList<TreeNodeLayout> = mutableListOf(),
@@ -146,7 +145,7 @@ fun HistoryTreeView(
 	// ancestors no matter what the annotations say.
 	val operationChain = remember(historySnapshot) {
 		val byId = historySnapshot.nodes.associateBy { it.id }
-		val chain = ArrayDeque<AgentHistoryNodeSnapshot>()
+		val chain = ArrayDeque<WorkspaceHistoryNodeSnapshot>()
 		var cursor: String? = historySnapshot.headNodeId
 		while (cursor != null) {
 			val node = byId[cursor] ?: break
@@ -230,7 +229,7 @@ fun HistoryTreeView(
 				OperationListSidebar(
 					chain = operationChain,
 					annotations = state.historyAnnotations,
-					enabled = !state.canvasEditBusy,
+					enabled = !state.workspaceEditBusy,
 					onCheckout = { viewModel.checkoutHistoryNode(it) },
 					paintSession = viewModel.canvasEditor.paintSession,
 					onJumpToPaintStroke = { viewModel.canvasEditor.jumpToPaintStroke(it) },
@@ -343,7 +342,7 @@ fun HistoryTreeView(
 								isInspectionPanelOpen = true
 							},
 							onDoubleClick = {
-								if (!node.isHead && !state.canvasEditBusy) viewModel.checkoutHistoryNode(node.id)
+								if (!node.isHead && !state.workspaceEditBusy) viewModel.checkoutHistoryNode(node.id)
 							},
 							modifier = Modifier
 								.offset { IntOffset(cardX, cardY) }
@@ -370,7 +369,7 @@ fun HistoryTreeView(
 					NodeInspector(
 						node = selectedNode,
 						annotation = state.historyAnnotations[selectedNode.id] ?: HistoryAnnotation(),
-						canCheckout = !state.canvasEditBusy,
+						canCheckout = !state.workspaceEditBusy,
 						onClose = { isInspectionPanelOpen = false },
 						onApply = { title, note, hidden -> viewModel.editHistoryAnnotation(selectedNode.id, title, note, hidden) },
 						onCheckout = { viewModel.checkoutHistoryNode(selectedNode.id) },
@@ -382,7 +381,7 @@ fun HistoryTreeView(
 	}
 }
 
-/** Toolbar in the log and parameters panels' style: 22dp icon buttons whose labels show when there is room. */
+/** Search, the operation list, undo and redo, and whether hidden nodes show. */
 @Composable
 private fun HistoryToolbar(
 	operationListOpen: Boolean,
@@ -395,70 +394,43 @@ private fun HistoryToolbar(
 	onRedo: () -> Unit,
 ) {
 	val colors = LocalToolColors.current
-	BoxWithConstraints(
-		Modifier
-			.fillMaxWidth()
-			.height(28.dp)
-			.background(colors.panelElevated)
-			.border(BorderStroke(1.dp, colors.divider))
-			.padding(horizontal = 4.dp),
-	) {
-		val searchWidth = if (maxWidth < 260.dp) 88.dp else 132.dp
-		// Labels appear in this order as the panel widens, each only once everything before it fits.
-		val labels = listOf(tr("history.operations"), tr("project.historyShow"))
-		val labelsShown = shownToolLabels(labels, 4, maxWidth - searchWidth - 6.dp)
-		Row(
-			modifier = Modifier.fillMaxSize(),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(3.dp),
+	// Labels appear in this order as the panel widens, each only once everything before it fits.
+	val labels = listOf(tr("history.operations"), tr("project.historyShow"))
+	PanelToolbar(
+		labels = labels,
+		iconCount = 4,
+		search = PanelSearch(searchQuery, onSearchChange, tr("history.search")),
+	) { labelsShown ->
+		PanelToolButton(
+			label = labels[0],
+			showLabel = labelsShown > 0,
+			onClick = onToggleOperationList,
+			enabled = true,
+			active = operationListOpen,
+			tooltip = tr("history.operations"),
 		) {
-			PanelToolButton(
-				label = labels[0],
-				showLabel = labelsShown > 0,
-				onClick = onToggleOperationList,
-				enabled = true,
-				active = operationListOpen,
-				tooltip = tr("history.operations"),
-			) {
-				IconOperationList(tint = if (operationListOpen) colors.accent else colors.textPrimary)
-			}
-			PanelToolbarSeparator()
-			CompactIconButton(onClick = onUndo, size = 22.dp, tooltip = tr("project.undo")) {
-				IconUndo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-			}
-			CompactIconButton(onClick = onRedo, size = 22.dp, tooltip = tr("project.redo")) {
-				IconRedo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-			}
-			PanelToolbarSeparator()
-			PanelToolButton(
-				label = labels[1],
-				showLabel = labelsShown > 1,
-				onClick = onToggleHidden,
-				enabled = true,
-				active = showHidden,
-				tooltip = tr("project.historyShow"),
-			) {
-				IconEye(
-					visible = showHidden,
-					modifier = Modifier.size(12.dp),
-					tint = if (showHidden) colors.accent else colors.textPrimary,
-				)
-			}
-			Spacer(Modifier.weight(1f))
-			CompactTextField(
-				value = searchQuery,
-				onValueChange = onSearchChange,
-				placeholder = tr("history.search"),
-				leadingIcon = { IconSearch(tint = colors.textMuted) },
-				trailingIcon = if (searchQuery.isEmpty()) null else {
-					{
-						CompactIconButton(onClick = { onSearchChange("") }, size = 16.dp, tooltip = tr("parameters.clearSearch")) {
-							IconClose(modifier = Modifier.size(8.dp), tint = colors.textMuted)
-						}
-					}
-				},
-				modifier = Modifier.width(searchWidth),
-				height = 22.dp,
+			IconOperationList(tint = if (operationListOpen) colors.accent else colors.textPrimary)
+		}
+		PanelToolbarSeparator()
+		PanelIconButton(onClick = onUndo, tooltip = tr("project.undo")) {
+			IconUndo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+		}
+		PanelIconButton(onClick = onRedo, tooltip = tr("project.redo")) {
+			IconRedo(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+		}
+		PanelToolbarSeparator()
+		PanelToolButton(
+			label = labels[1],
+			showLabel = labelsShown > 1,
+			onClick = onToggleHidden,
+			enabled = true,
+			active = showHidden,
+			tooltip = tr("project.historyShow"),
+		) {
+			IconEye(
+				visible = showHidden,
+				modifier = Modifier.size(12.dp),
+				tint = if (showHidden) colors.accent else colors.textPrimary,
 			)
 		}
 	}
@@ -471,7 +443,7 @@ private fun HistoryToolbar(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HistoryNodeCard(
-	node: AgentHistoryNodeSnapshot,
+	node: WorkspaceHistoryNodeSnapshot,
 	annotation: HistoryAnnotation?,
 	selected: Boolean,
 	dimmed: Boolean,
@@ -598,7 +570,7 @@ private fun HistoryNodeCard(
  * node, its note, who made it and when, and what clicking does.
  */
 @Composable
-private fun NodeTooltip(node: AgentHistoryNodeSnapshot, annotation: HistoryAnnotation?, hint: String?) {
+private fun NodeTooltip(node: WorkspaceHistoryNodeSnapshot, annotation: HistoryAnnotation?, hint: String?) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val customTitle = annotation?.title?.takeIf { it.isNotBlank() }
@@ -752,7 +724,7 @@ private fun PillButton(
  */
 @Composable
 private fun NodeInspector(
-	node: AgentHistoryNodeSnapshot,
+	node: WorkspaceHistoryNodeSnapshot,
 	annotation: HistoryAnnotation,
 	canCheckout: Boolean,
 	onClose: () -> Unit,
@@ -917,7 +889,7 @@ private fun FormRow(label: String, content: @Composable () -> Unit) {
  */
 @Composable
 private fun OperationListSidebar(
-	chain: List<AgentHistoryNodeSnapshot>,
+	chain: List<WorkspaceHistoryNodeSnapshot>,
 	annotations: Map<String, HistoryAnnotation>,
 	enabled: Boolean,
 	onCheckout: (String) -> Unit,
@@ -1245,7 +1217,7 @@ internal data class TreeCalculationResult(
 	val height: Float,
 )
 
-internal fun calculateTreeLayout(nodes: List<AgentHistoryNodeSnapshot>): TreeCalculationResult {
+internal fun calculateTreeLayout(nodes: List<WorkspaceHistoryNodeSnapshot>): TreeCalculationResult {
 	if (nodes.isEmpty()) return TreeCalculationResult(emptyList(), emptyList(), 0f, 0f)
 
 	val layoutNodeMap = nodes.associate { it.id to TreeNodeLayout(it) }
@@ -1336,4 +1308,3 @@ private fun Modifier.clipShape(shape: Shape): Modifier = drawWithContent {
 		this@drawWithContent.drawContent()
 	}
 }
-

@@ -7,6 +7,7 @@ import kotlin.math.hypot
 /** Numerical evidence only; no aesthetic pass/fail score. */
 internal object RigGeometryDiagnostics {
     internal const val DEGENERATE_AREA_EPSILON = 1e-12
+    internal const val DEGENERATE_AREA_RATIO = 1e-6
     internal const val COLLAPSE_AREA_RATIO = 0.01
 
     internal data class TriangleStatus(
@@ -42,7 +43,8 @@ internal object RigGeometryDiagnostics {
             minimum = minimum?.let { minOf(it, ratio) } ?: ratio
             maximum = maximum?.let { maxOf(it, ratio) } ?: ratio
             if (ratio < 0) flipped += triangle
-            if (abs(b) < DEGENERATE_AREA_EPSILON) degenerate += triangle
+            // Float geometry can leave a tiny signed residue when two vertices coincide.
+            if (abs(b) < DEGENERATE_AREA_EPSILON || abs(ratio) <= DEGENERATE_AREA_RATIO) degenerate += triangle
             else if (abs(ratio) < COLLAPSE_AREA_RATIO) collapsed += triangle
         }
         return TriangleStatus(flipped, collapsed, degenerate, degenerateReference, minimum, maximum)

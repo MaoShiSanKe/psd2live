@@ -63,11 +63,11 @@ class CubismJsonTest {
 			bone("foot", "shin", BoneRole.FOOT, 20f, 440f, 470f, Side.LEFT),
 		))
 		val idleTracks = SkeletonMotions.idle(spec)
-		val idleIds = idleTracks.mapTo(HashSet()) { it.first }
+		val idleIds = idleTracks.mapTo(HashSet()) { it.parameterId }
 		return listOf("skeletonIdle" to MotionGenerator.idle(idleIds, spec)) + SkeletonMotions.presets.mapNotNull { preset ->
 			val tracks = preset.tracks(spec)
 			if (tracks.isEmpty()) null
-			else preset.name to MotionGenerator.skeleton(tracks, tracks.mapTo(HashSet()) { it.first }, loop = preset.loop)
+			else preset.name to MotionGenerator.skeleton(tracks, tracks.mapTo(HashSet()) { it.parameterId }, loop = preset.loop)
 		}
 	}
 

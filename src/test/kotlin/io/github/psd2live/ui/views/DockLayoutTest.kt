@@ -7,6 +7,7 @@ import io.github.psd2live.ui.state.SidebarSide
 import io.github.psd2live.ui.state.WorkspacePreset
 import io.github.psd2live.ui.state.isCanvasModule
 import io.github.psd2live.ui.state.presetEditorWorkspace
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -67,6 +68,37 @@ class DockLayoutTest {
         assertSame(withoutLog, ensureAnimationEditorDockTab(withoutLog))
     }
 
+    @Test fun simulationTabFollowsPhysicsInNewAndOlderLayouts() {
+        WorkspacePreset.entries.forEach { preset ->
+            val modules = presetDockLayout(presetEditorWorkspace("w", preset)).containing("physics")?.modules.orEmpty()
+            assertEquals(modules.indexOf("physics") + 1, modules.indexOf("simulation"), "$preset")
+            assertEquals("physics" in preset.hiddenModules, "simulation" in preset.hiddenModules, "$preset")
+        }
+        val legacy = DockNode(modules = listOf("inspector", "physics", "layers"))
+        val updated = ensureSimulationDockTab(legacy)
+        assertEquals(listOf("inspector", "physics", "simulation", "layers"), updated.modules)
+        assertSame(updated, ensureSimulationDockTab(updated))
+        assertEquals(listOf("mesh") + updated.modules, repairLegacyCanvasDocking(legacy).modules)
+    }
+
+    @Test fun olderWorkspaceHidingPhysicsAlsoHidesTheSimulationTab() {
+        val state = io.github.psd2live.ui.state.PSD2LiveState()
+        val encoded = io.github.psd2live.ui.state.WorkspaceStateCodec.encode(state)
+        fun withWorkspace(layout: String, hidden: List<String>) = kotlinx.serialization.json.JsonObject(encoded + ("workspaces" to
+            kotlinx.serialization.json.JsonArray(encoded.getValue("workspaces").let { it as kotlinx.serialization.json.JsonArray }.map { workspace ->
+                kotlinx.serialization.json.JsonObject(workspace as kotlinx.serialization.json.JsonObject +
+                    ("layout" to kotlinx.serialization.json.JsonPrimitive(layout)) +
+                    ("hiddenModules" to kotlinx.serialization.json.JsonArray(hidden.map(::JsonPrimitive))))
+            })))
+        val old = dockJson.encodeToString(DockNode.serializer(), DockNode(modules = listOf("canvas", "physics")))
+        fun hidden(layout: String, hidden: List<String>) =
+            io.github.psd2live.ui.state.WorkspaceStateCodec.decode(withWorkspace(layout, hidden)).activeWorkspace.hiddenModules
+        assertEquals(setOf("physics", "simulation"), hidden(old, listOf("physics")))
+        assertEquals(emptySet(), hidden(old, emptyList()))
+        val current = dockJson.encodeToString(DockNode.serializer(), DockNode(modules = listOf("canvas", "physics", "simulation")))
+        assertEquals(setOf("physics"), hidden(current, listOf("physics")))
+    }
+
     @Test fun everyPresetDocksEachPanelOnceAndShowsItsCanvases() {
         WorkspacePreset.entries.forEach { preset ->
             val workspace = presetEditorWorkspace("w", preset)
@@ -107,7 +139,7 @@ class DockLayoutTest {
     @Test fun sidebarsAreTheRegionsAroundTheCanvases() {
         assertEquals(
             mapOf(
-                SidebarSide.RIGHT to listOf("settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics"),
+                SidebarSide.RIGHT to listOf("settings", "layers", "parameters", "tools", "mesh", "inspector", "animation", "physics", "simulation"),
                 SidebarSide.LEFT to listOf("hierarchy", "skeleton"),
                 SidebarSide.BOTTOM to listOf("log", "animationEditor"),
             ),

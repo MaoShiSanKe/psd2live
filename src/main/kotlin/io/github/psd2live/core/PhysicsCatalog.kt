@@ -17,7 +17,8 @@ object PhysicsCatalog {
 	): List<PhysicsGroup> {
 		val generated = PhysicsGenerator.presetRules(present, available).map { it to PhysicsOrigin.PRESET } +
 			PhysicsGenerator.skeletonRules(overlay.skeleton, available).map { it to PhysicsOrigin.SKELETON } +
-			PhysicsGenerator.swingRules(overlay.swingEdits, available).map { it to PhysicsOrigin.SWING }
+			PhysicsGenerator.swingRules(overlay.swingEdits, available).map { it to PhysicsOrigin.SWING } +
+			io.github.psd2live.core.sim.SimGenerator.physicsRules(overlay.simEdits, available).map { it to PhysicsOrigin.SIMULATION }
 		val generatedIds = generated.mapTo(HashSet()) { it.first.id }
 		val authored = overlay.physicsEdits.associateBy { it.id }
 		fun enabled(id: String, origin: PhysicsOrigin) =
@@ -46,7 +47,8 @@ object PhysicsCatalog {
 	}
 
 	fun groups(analysis: PipelineAnalysis?, config: PipelineConfig, available: Set<String>): List<PhysicsGroup> =
-		groups(PhysicsGenerator.Presets.present(analysis), PhysicsGenerator.Presets.enabled(config), config.rigEdits, available)
+		groups(if (config.rigEdits.importedCmo3 != null) PhysicsGenerator.Presets(false, false, false)
+			else PhysicsGenerator.Presets.present(analysis, config.hairSimulationFront, config.hairSimulationBack), PhysicsGenerator.Presets.enabled(config), config.rigEdits, available)
 
 	/** What exports, in evaluation order: nothing when physics is off or the model is mesh-only. */
 	fun active(analysis: PipelineAnalysis?, config: PipelineConfig, available: Set<String>): List<RigPhysicsEdit> =

@@ -161,7 +161,9 @@ object RigIntegrityValidator {
 	/**
 	 * Guards directional parameters against accidental signed scale in authored and round-tripped
 	 * warp grids. Perspective feature warps and expression parameters are intentionally excluded:
-	 * near/far face sizes and MouthForm +/- are semantic differences, not mirror directions.
+	 * near/far face sizes and MouthForm +/- are semantic differences, not mirror directions. So is the
+	 * body's Body Y: leaning in and standing up straight are different poses, and both change the upper
+	 * body's size in perspective, which the rotations hung from it follow on their Body Y keys.
 	 */
 	fun validateDirectionalWarpDimensions(label: String, puppet: PuppetModel): List<String> {
 		if (puppet.deformers.isEmpty()) return emptyList()
@@ -177,10 +179,9 @@ object RigIntegrityValidator {
 			return warp
 		}
 
-		checkWarp("DeformBodyXY")?.let {
-			auditSymmetricExtent(label, it, StandardParameters.BODY_X, LatticeExtent.RowWidth, true, warnings)
-			auditSymmetricExtent(label, it, StandardParameters.BODY_Y, LatticeExtent.ColumnHeight, true, warnings)
-		}
+		// The body turns about the torso's centre line in perspective, which the body's own parts need not
+		// sit even about, so its turns mirror the figure rather than the lattice.
+		checkWarp("DeformBodyXY")
 		checkWarp("DeformBodyZBreath")?.let {
 			auditSymmetricExtent(label, it, StandardParameters.BODY_Z, LatticeExtent.RowWidth, true, warnings)
 		}
@@ -210,7 +211,9 @@ object RigIntegrityValidator {
 
 		for (rotation in puppet.deformers.filterIsInstance<Deformer.Rotation>()) {
 			val grid = rotation.geometryGrid ?: continue
+			val shaping = grid.axes.indices.filter { grid.axes[it].parameterId == StandardParameters.BODY_LEAN || grid.axes[it].parameterId == StandardParameters.PROPORTION }
 			for (cell in grid.cells) {
+				if (shaping.any { grid.axes[it].keys[cell.coordinate[it]] != 0f }) continue
 				val form: RotationPivotForm = cell.form
 				if (!form.scale.isFinite() || abs(form.scale - 1f) > 1e-5f) {
 					warnings += tr("validation.directionalRotationScale", label, rotation.id.raw, cell.coordinate.contentToString(), form.scale)

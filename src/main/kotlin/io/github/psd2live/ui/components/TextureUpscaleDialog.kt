@@ -8,15 +8,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.DownloadState
@@ -34,8 +31,7 @@ fun TextureUpscaleDialog(
 	config: TextureUpscaleConfig,
 	isBusy: Boolean,
 	isUpscaling: Boolean = false,
-	progress: Float = 0f,
-	statusText: String = "",
+	onDownloadStateChange: (DownloadState) -> Unit,
 	onDismiss: () -> Unit,
 	onApply: (TextureUpscaleConfig) -> Unit,
 ) {
@@ -52,6 +48,12 @@ fun TextureUpscaleDialog(
 	var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
 	val cancelFlag = remember { AtomicBoolean(false) }
 	val coroutineScope = rememberCoroutineScope()
+	DisposableEffect(Unit) {
+		onDispose {
+			cancelFlag.set(true)
+			onDownloadStateChange(DownloadState.Idle)
+		}
+	}
 
 	val isDownloading = downloadState is DownloadState.Downloading ||
 		downloadState is DownloadState.Extracting ||
@@ -100,63 +102,9 @@ fun TextureUpscaleDialog(
 						style = typography.title.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Bold),
 						color = colors.textPrimary,
 					)
-					if (isUpscaling) {
-						Box(
-							modifier = Modifier
-								.clip(RoundedCornerShape(4.dp))
-								.background(colors.highlightContainer)
-								.border(BorderStroke(1.dp, colors.highlight), RoundedCornerShape(4.dp))
-								.padding(horizontal = 6.dp, vertical = 2.dp),
-						) {
-							Text(
-								text = "PROCESSING",
-								style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-								color = colors.highlight,
-							)
-						}
-					}
 				}
 				CompactIconButton(onClick = onDismiss, enabled = !isUpscaling && !isDownloading, size = 20.dp) {
 					IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-				}
-			}
-
-			// Real-time progress display when upscaling is running
-			if (isUpscaling) {
-				Column(
-					modifier = Modifier
-						.fillMaxWidth()
-						.background(colors.inputBackground, RoundedCornerShape(4.dp))
-						.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
-						.padding(10.dp),
-					verticalArrangement = Arrangement.spacedBy(6.dp),
-				) {
-					Row(
-						modifier = Modifier.fillMaxWidth(),
-						horizontalArrangement = Arrangement.SpaceBetween,
-						verticalAlignment = Alignment.CenterVertically,
-					) {
-						Text(
-							text = statusText.ifBlank { tr("upscale.startingInference") },
-							style = typography.caption.copy(fontSize = 11.sp),
-							color = colors.accent,
-							maxLines = 1,
-							overflow = TextOverflow.Ellipsis,
-							modifier = Modifier.weight(1f),
-						)
-						Spacer(Modifier.width(8.dp))
-						Text(
-							text = "%3d%%".format((progress * 100).toInt()),
-							style = typography.monoSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-							color = colors.accent,
-						)
-					}
-					LinearProgressIndicator(
-						progress = progress,
-						modifier = Modifier.fillMaxWidth().height(4.dp),
-						color = colors.accent,
-						backgroundColor = colors.controlBackground,
-					)
 				}
 			}
 
@@ -174,7 +122,15 @@ fun TextureUpscaleDialog(
 				)
 
 				// Model Availability Status & Download Card
-				if (isModelInstalled && !isDownloading) {
+				if (isDownloading) {
+					if (downloadState is DownloadState.Downloading) {
+						CompactButton(
+							text = tr("upscale.cancel"),
+							onClick = { cancelFlag.set(true) },
+							height = 22.dp,
+						)
+					}
+				} else if (isModelInstalled) {
 					Row(
 						modifier = Modifier
 							.fillMaxWidth()
@@ -213,65 +169,6 @@ fun TextureUpscaleDialog(
 						verticalArrangement = Arrangement.spacedBy(8.dp),
 					) {
 						when (val state = downloadState) {
-							is DownloadState.Downloading -> {
-								Row(
-									modifier = Modifier.fillMaxWidth(),
-									verticalAlignment = Alignment.CenterVertically,
-									horizontalArrangement = Arrangement.SpaceBetween,
-								) {
-									Text(
-										text = if (state.currentItem == "nunif") tr("upscale.downloadingNunif") else tr("upscale.downloadingModel"),
-										style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Medium),
-										color = colors.accent,
-									)
-									Text(
-										text = "${(state.progress * 100).toInt()}%",
-										style = typography.monoSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-										color = colors.accent,
-									)
-								}
-								LinearProgressIndicator(
-									progress = state.progress,
-									modifier = Modifier.fillMaxWidth().height(4.dp),
-									color = colors.accent,
-									backgroundColor = colors.controlBackground,
-								)
-								Row(
-									modifier = Modifier.fillMaxWidth(),
-									verticalAlignment = Alignment.CenterVertically,
-									horizontalArrangement = Arrangement.SpaceBetween,
-								) {
-									Text(
-										text = "${ModelDownloader.formatBytes(state.bytesDownloaded)} / ${ModelDownloader.formatBytes(state.totalBytes)} (${ModelDownloader.formatSpeed(state.speedBytesPerSec)})",
-										style = typography.monoSmall.copy(fontSize = 9.sp),
-										color = colors.textMuted,
-									)
-									CompactButton(
-										text = tr("upscale.cancel"),
-										isPrimary = false,
-										onClick = { cancelFlag.set(true) },
-										height = 22.dp,
-									)
-								}
-							}
-							is DownloadState.Extracting, is DownloadState.Verifying -> {
-								Row(
-									modifier = Modifier.fillMaxWidth(),
-									verticalAlignment = Alignment.CenterVertically,
-									horizontalArrangement = Arrangement.spacedBy(8.dp),
-								) {
-									Text(
-										text = if (state is DownloadState.Verifying) tr("upscale.verifying") else tr("upscale.extracting"),
-										style = typography.caption.copy(fontSize = 10.5.sp),
-										color = colors.accent,
-									)
-								}
-								LinearProgressIndicator(
-									modifier = Modifier.fillMaxWidth().height(4.dp),
-									color = colors.accent,
-									backgroundColor = colors.controlBackground,
-								)
-							}
 							is DownloadState.Failed -> {
 								Text(
 									text = "${tr("upscale.downloadFailed")}: ${state.error}",
@@ -290,6 +187,7 @@ fun TextureUpscaleDialog(
 											coroutineScope.launch {
 												ModelDownloader.downloadAndInstall(cancelFlag) { s ->
 													downloadState = s
+													onDownloadStateChange(s)
 													if (s is DownloadState.Success) {
 														val autoPython = draft.python.ifBlank { TextureUpscaleConfig.detectAvailablePython() }
 														draft = draft.copy(
@@ -334,6 +232,7 @@ fun TextureUpscaleDialog(
 											coroutineScope.launch {
 												ModelDownloader.downloadAndInstall(cancelFlag) { s ->
 													downloadState = s
+													onDownloadStateChange(s)
 													if (s is DownloadState.Success) {
 														val autoPython = draft.python.ifBlank { TextureUpscaleConfig.detectAvailablePython() }
 														draft = draft.copy(

@@ -1,13 +1,9 @@
 package io.github.psd2live.ui.views
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.translate
@@ -26,10 +22,8 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -92,6 +86,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -124,17 +119,14 @@ import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
 import io.github.psd2live.ui.components.IconDragHandle
-import io.github.psd2live.ui.components.IconExpandAll
 import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconLock
 import io.github.psd2live.ui.components.IconMeshWireframe
 import io.github.psd2live.ui.components.IconParameterLink
+import io.github.psd2live.ui.components.IconPhysics
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.components.IconRotationDeformer
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.IconSelectedOnly
 import io.github.psd2live.ui.components.IconWarpDeformer
 import io.github.psd2live.ui.components.InlineEditorRegions
@@ -149,6 +141,7 @@ import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.ParameterLabelColor
 import io.github.psd2live.ui.parameterKeyMarks
 import io.github.psd2live.ui.state.PSD2LiveState
+import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -190,6 +183,13 @@ internal sealed interface ParameterPanelRow {
 		val folderLabelColor: ParameterLabelColor = ParameterLabelColor.None,
 	) : ParameterPanelRow
 }
+
+private data class ParameterPhysicsStatus(
+	val outputs: Set<String> = emptySet(),
+	val controlled: Set<String> = emptySet(),
+)
+
+private val LocalParameterPhysicsStatus = compositionLocalOf { ParameterPhysicsStatus() }
 
 /** Layout bounds of one parameter-panel row, in the drag container's local coordinates. */
 private data class ParamItemLayout(
@@ -412,6 +412,13 @@ internal fun ParametersListView(
 	val model = state.previewModel
 	val puppet = model?.rig?.puppet
 	val allParameters = puppet?.parameters.orEmpty()
+	val physicsGroups = viewModel.physicsGroups(state)
+	val physicsOutputs = physicsGroups.flatMapTo(HashSet()) { it.setting.outputParameters }
+	// Physics drives these sliders whenever a preview runs it, whichever canvas has focus.
+	val physicsLive = state.previewLive && state.activeWorkspace.pose?.authoringPose != true && state.generatePhysics && !state.meshOnly
+	val physicsControlled = if (physicsLive) physicsGroups.filter { it.active }
+		.flatMapTo(HashSet()) { it.setting.outputParameters }
+		.minus(state.lockedParameters.map { it.raw }) else emptySet()
     var creatingParameter by remember { mutableStateOf(false) }
 	var creatingUnderGroupId by remember { mutableStateOf<String?>(null) }
     if (creatingParameter && puppet != null) {
@@ -435,17 +442,12 @@ internal fun ParametersListView(
     val activeRelatedFilter = relatedOnly && owner != null
 	val query = state.parameterSearchQuery.trim().lowercase()
 	val openOverrides = remember { mutableStateMapOf<String, Boolean>() }
+	val padHeights = remember { mutableStateMapOf<Pair<ParameterId, ParameterId>, Dp>() }
 	var renamingGroupId by remember { mutableStateOf<String?>(null) }
 	var renameDraft by remember { mutableStateOf("") }
 	var renameOriginal by remember { mutableStateOf("") }
 	var renameSettled by remember { mutableStateOf(false) }
 	var renamingSnapshotId by remember { mutableStateOf<String?>(null) }
-	var searchOpen by remember { mutableStateOf(state.parameterSearchQuery.isNotEmpty()) }
-	val searchFocus = remember { FocusRequester() }
-	fun closeSearch() {
-		viewModel.setParameterSearchQuery("")
-		searchOpen = false
-	}
 	var folderMenuFor by remember { mutableStateOf<String?>(null) }
 	var folderMenuOffset by remember { mutableStateOf(Offset.Zero) }
 	val focusManager = LocalFocusManager.current
@@ -521,8 +523,29 @@ internal fun ParametersListView(
 	}
 	val listState = rememberLazyListState()
 
-	val nameWidth = remember { mutableStateOf(ParamRowNameWidth) }
-	CompositionLocalProvider(LocalParameterNameWidth provides nameWidth, LocalInlineEditorRegions provides renameEditorRegions) {
+	var nameWidth by remember { mutableStateOf(AppSettings.parameterNameWidth.dp) }
+	// The divider sits at one x for every row: deeper rows give their indent back out of the name column.
+	val maxDepth = rows.maxOfOrNull {
+		when (it) {
+			is ParameterPanelRow.Single -> it.depth
+			is ParameterPanelRow.Linked -> it.depth
+			is ParameterPanelRow.Folder -> 0
+		}
+	} ?: 0
+	val nameWidthRange = (ParamRowNameWidthRange.start + (maxDepth * ParamRowDepthIndent).dp).let { min ->
+		min..maxOf(min, ParamRowNameWidthRange.endInclusive)
+	}
+	val shownNameWidth = nameWidth.coerceIn(nameWidthRange.start, nameWidthRange.endInclusive)
+	val density = LocalDensity.current
+	val dividerCenter = with(density) { (ParamRowNameStart + shownNameWidth + ParamRowDividerWidth / 2).toPx() }
+	val dividerHalfWidth = with(density) { (ParamRowDividerWidth / 2).toPx() }
+	var dividerHovered by remember { mutableStateOf(false) }
+	var dividerDrag by remember { mutableStateOf<Pair<Float, Dp>?>(null) }
+	CompositionLocalProvider(
+		LocalParameterNameWidth provides shownNameWidth,
+		LocalInlineEditorRegions provides renameEditorRegions,
+		LocalParameterPhysicsStatus provides ParameterPhysicsStatus(physicsOutputs, physicsControlled),
+	) {
 	Column(
 		modifier = Modifier
 			.fillMaxSize()
@@ -535,145 +558,73 @@ internal fun ParametersListView(
 				}
 			},
 	) {
-		Column(
-			modifier = Modifier
-				.fillMaxWidth()
-				.background(colors.panelElevated)
-				.padding(horizontal = 4.dp, vertical = 3.dp),
-			verticalArrangement = Arrangement.spacedBy(3.dp),
-		) {
-			val editable = puppet != null && state.historySnapshot != null && !state.canvasEditBusy
-			BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
-			// Labels appear in this order as the panel widens, each only once everything before it fits.
-			val labels = listOf(tr("parameters.relatedOnly"), tr("parameters.newParameterShort"), tr("parameters.newFolderShort"))
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 8 else 7, maxWidth)
-			Row(
-				modifier = Modifier.fillMaxSize(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
+		val editable = puppet != null && state.historySnapshot != null && !state.canvasEditBusy
+		// Labels appear in this order as the panel widens, each only once everything before it fits.
+		val labels = listOf(tr("parameters.newParameterShort"), tr("parameters.newFolderShort"), tr("parameters.relatedOnly"))
+		PanelToolbar(
+			labels = labels,
+			iconCount = if (state.previewLive) 7 else 6,
+			search = PanelSearch(state.parameterSearchQuery, viewModel::setParameterSearchQuery, tr("parameters.search")),
+			secondary = { ParameterSnapshotBar(state, viewModel, renamingSnapshotId) { renamingSnapshotId = it } },
+		) { labelsShown ->
+			PanelToolButton(
+				label = labels[0],
+				showLabel = labelsShown > 0,
+				onClick = {
+					creatingUnderGroupId = null
+					creatingParameter = true
+				},
+				enabled = editable,
+				tooltip = tr("parameters.create"),
 			) {
-				if (searchOpen) {
-					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
-					CompactTextField(
-						value = state.parameterSearchQuery,
-						onValueChange = { viewModel.setParameterSearchQuery(it) },
-						placeholder = tr("parameters.search"),
-						leadingIcon = { IconSearch(tint = colors.textMuted) },
-						trailingIcon = {
-							CompactIconButton(
-								onClick = { closeSearch() },
-								tooltip = tr("parameters.clearSearch"), size = 16.dp,
-							) { IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
-						},
-						modifier = Modifier
-							.weight(1f)
-							.focusRequester(searchFocus)
-							.onPreviewKeyEvent { event ->
-								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-									closeSearch()
-									true
-								} else false
-							},
-						height = 22.dp,
-					)
-				} else {
-					CompactIconButton(
-						onClick = { searchOpen = true },
-						size = 22.dp,
-						tooltip = tr("parameters.search"),
-					) {
-						IconSearch(tint = colors.textMuted)
-					}
-					PanelToolButton(
-						label = labels[0],
-						showLabel = labelsShown > 0,
-						onClick = { relatedOnly = !relatedOnly },
-						enabled = owner != null,
-						active = activeRelatedFilter,
-						tooltip = if (owner != null) tr("parameters.relatedOnly") + " · " + tr("parameters.relatedCount", relatedIds.size)
-						else tr("parameters.relatedOnly"),
-					) {
-						IconSelectedOnly(
-							tint = when {
-								owner == null -> colors.textDisabled
-								activeRelatedFilter -> colors.accent
-								else -> colors.textMuted
-							},
-							modifier = Modifier.size(12.dp),
-						)
-					}
-					PanelToolbarSeparator()
-					PanelToolButton(
-						label = labels[1],
-						showLabel = labelsShown > 1,
-						onClick = {
-							creatingUnderGroupId = null
-							creatingParameter = true
-						},
-						enabled = editable,
-						tooltip = tr("parameters.create"),
-					) {
-						IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-					}
-					PanelToolButton(
-						label = labels[2],
-						showLabel = labelsShown > 2,
-						onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
-						enabled = puppet != null,
-						tooltip = tr("parameters.newFolder"),
-					) {
-						IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
-					}
-					Spacer(Modifier.weight(1f))
-					CompactIconButton(
-						onClick = {
-							for (id in collectParameterGroupIds(puppet)) {
-								openOverrides[id] = true
-							}
-						},
-						enabled = puppet != null,
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.expandAll"),
-					) {
-						IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					CompactIconButton(
-						onClick = {
-							for (id in collectParameterGroupIds(puppet)) {
-								openOverrides[id] = false
-							}
-						},
-						enabled = puppet != null,
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.collapseAll"),
-					) {
-						IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					if (state.previewLive) {
-						CompactIconButton(
-							onClick = { viewModel.unlockAllParameters() },
-							enabled = state.lockedParameters.isNotEmpty(),
-							size = 22.dp,
-							tooltip = tr("parameters.unlockAll") +
-								if (state.lockedParameters.isNotEmpty()) " (${state.lockedParameters.size})" else "",
-						) {
-							IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-						}
-					}
-					CompactIconButton(
-						onClick = { viewModel.resetAllParameters() },
-						enabled = allParameters.isNotEmpty(),
-						size = 22.dp,
-						tooltip = tr("parameters.resetAll"),
-					) {
-						IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-					}
+				IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
+			}
+			PanelToolButton(
+				label = labels[1],
+				showLabel = labelsShown > 1,
+				onClick = { viewModel.createParameterGroup(tr("parameters.newFolderName")) },
+				enabled = puppet != null,
+				tooltip = tr("parameters.newFolder"),
+			) {
+				IconFolder(modifier = Modifier.size(12.dp), tint = colors.textPrimary)
+			}
+			PanelToolbarSeparator()
+			PanelToolButton(
+				label = labels[2],
+				showLabel = labelsShown > 2,
+				onClick = { relatedOnly = !relatedOnly },
+				enabled = owner != null,
+				active = activeRelatedFilter,
+				tooltip = if (owner != null) tr("parameters.relatedOnly") + " · " + tr("parameters.relatedCount", relatedIds.size)
+				else tr("parameters.relatedOnly"),
+			) {
+				IconSelectedOnly(
+					tint = when {
+						owner == null -> colors.textDisabled
+						activeRelatedFilter -> colors.accent
+						else -> colors.textMuted
+					},
+					modifier = Modifier.size(12.dp),
+				)
+			}
+			Spacer(Modifier.weight(1f))
+			PanelExpandCollapseButtons(
+				onExpandAll = { for (id in collectParameterGroupIds(puppet)) openOverrides[id] = true },
+				onCollapseAll = { for (id in collectParameterGroupIds(puppet)) openOverrides[id] = false },
+				enabled = puppet != null,
+			)
+			if (state.previewLive) {
+				PanelIconButton(
+					onClick = { viewModel.unlockAllParameters() },
+					enabled = state.lockedParameters.isNotEmpty(),
+					tooltip = tr("parameters.unlockAll") +
+						if (state.lockedParameters.isNotEmpty()) " (${state.lockedParameters.size})" else "",
+				) {
+					IconLock(locked = false, modifier = Modifier.size(11.dp), tint = colors.textPrimary)
 				}
 			}
-			}
-			ParameterSnapshotBar(state, viewModel, renamingSnapshotId) { renamingSnapshotId = it }
+			PanelResetButton(onClick = { viewModel.resetAllParameters() }, enabled = allParameters.isNotEmpty(), tooltip = tr("parameters.resetAll"))
 		}
-		Divider(color = colors.divider)
 
 		if (rows.isEmpty()) {
 			Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -689,6 +640,38 @@ internal fun ParametersListView(
 					modifier = Modifier
 						.fillMaxSize()
 						.onGloballyPositioned { containerCoordinates = it }
+						// The name divider is one column through every row, so the list hovers and drags it
+						// as a whole and the highlight runs unbroken across folders and row gaps.
+						.onPointerEvent(PointerEventType.Move, pass = PointerEventPass.Initial) { event ->
+							val change = event.changes.firstOrNull() ?: return@onPointerEvent
+							val drag = dividerDrag
+							if (drag != null) {
+								val next = drag.second + with(density) { (change.position.x - drag.first).toDp() }
+								nameWidth = next.coerceIn(nameWidthRange.start, nameWidthRange.endInclusive)
+								AppSettings.parameterNameWidth = nameWidth.value
+								change.consume()
+							} else {
+								val rowsBottom = itemBoundsMap.values.maxOfOrNull { it.bottom } ?: 0f
+								dividerHovered = !dragState.isPressed && change.position.y <= rowsBottom &&
+									abs(change.position.x - dividerCenter) <= dividerHalfWidth
+							}
+						}
+						.onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) { event ->
+							val change = event.changes.firstOrNull() ?: return@onPointerEvent
+							if (dividerHovered && event.button == PointerButton.Primary) {
+								dividerDrag = change.position.x to shownNameWidth
+								change.consume()
+							}
+						}
+						.onPointerEvent(PointerEventType.Release, pass = PointerEventPass.Initial) { event ->
+							if (dividerDrag != null) {
+								dividerDrag = null
+								event.changes.forEach { it.consume() }
+							}
+						}
+						.onPointerEvent(PointerEventType.Exit) {
+							if (dividerDrag == null) dividerHovered = false
+						}
 						.onPointerEvent(PointerEventType.Move) { event ->
 							val pos = event.changes.firstOrNull()?.position ?: return@onPointerEvent
 							dragState.onMove(pos, itemBoundsMap.values)
@@ -700,9 +683,13 @@ internal fun ParametersListView(
 						}
 						.pointerHoverIcon(
 							PointerIcon(
-								if (dragState.isDragging) Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
-								else Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR),
+								when {
+									dividerHovered || dividerDrag != null -> Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)
+									dragState.isDragging -> Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
+									else -> Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)
+								},
 							),
+							overrideDescendants = dividerHovered || dividerDrag != null,
 						),
 				) {
 				LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(end = 6.dp)) {
@@ -863,6 +850,12 @@ internal fun ParametersListView(
 										LinkedParameterPad(
 											horizontal = row.horizontal,
 											vertical = row.vertical,
+											padHeight = padHeights[row.horizontal.id to row.vertical.id]
+												?: AppSettings.parameterPadHeight(row.horizontal.id.raw, row.vertical.id.raw).dp,
+											onPadHeightChange = {
+												padHeights[row.horizontal.id to row.vertical.id] = it
+												AppSettings.setParameterPadHeight(row.horizontal.id.raw, row.vertical.id.raw, it.value)
+											},
 											depth = row.depth,
 											state = state,
 											viewModel = viewModel,
@@ -908,6 +901,19 @@ internal fun ParametersListView(
 							}
 							Divider(color = colors.divider.copy(alpha = 0.4f), thickness = 0.5.dp)
 						}
+					}
+				}
+
+				if ((dividerHovered || dividerDrag != null) && !dragState.isDragging) {
+					val rowsTop = itemBoundsMap.values.minOfOrNull { it.top }?.coerceAtLeast(0f) ?: 0f
+					val rowsBottom = itemBoundsMap.values.maxOfOrNull { it.bottom } ?: 0f
+					Canvas(Modifier.fillMaxSize()) {
+						drawLine(
+							colors.accent,
+							Offset(dividerCenter, rowsTop),
+							Offset(dividerCenter, rowsBottom.coerceAtMost(size.height)),
+							strokeWidth = 1.5.dp.toPx(),
+						)
 					}
 				}
 
@@ -1359,13 +1365,14 @@ private fun ParameterLabelSwatch(
 private fun ParameterName(param: Parameter, locked: Boolean = false, modifier: Modifier = Modifier) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
+	val controlled = param.id.raw in LocalParameterPhysicsStatus.current.controlled
 	Text(
 		text = param.name,
 		style = typography.body.copy(
 			fontSize = 11.sp,
 			fontWeight = if (locked) FontWeight.SemiBold else FontWeight.Normal,
 		),
-		color = if (locked) colors.accent else colors.textPrimary,
+		color = if (controlled) colors.textDisabled else if (locked) colors.accent else colors.textPrimary,
 		maxLines = 1,
 		overflow = TextOverflow.Ellipsis,
 		modifier = modifier,
@@ -1374,6 +1381,8 @@ private fun ParameterName(param: Parameter, locked: Boolean = false, modifier: M
 
 @Composable
 private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (Float) -> Unit) {
+	val enabled = param.id.raw !in LocalParameterPhysicsStatus.current.controlled
+	val enabledState by rememberUpdatedState(enabled)
 	val focusManager = LocalFocusManager.current
 	var focused by remember(param.id) { mutableStateOf(false) }
 	var draft by remember(param.id) { mutableStateOf(formatParamValue(value)) }
@@ -1382,13 +1391,14 @@ private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (
 	}
 	CompactTextField(
 		value = draft,
+		enabled = enabled,
 		onValueChange = { draft = it },
 		isMono = true,
 		onCommit = { focusManager.clearFocus() },
 		modifier = Modifier.width(44.dp)
 			.semantics { contentDescription = param.name + " (" + param.id.raw + ")" }
 			.onFocusChanged { focus ->
-				if (focused && !focus.isFocused) {
+				if (focused && !focus.isFocused && enabledState) {
 					draft.replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() }?.let {
 						onValueChange(it.coerceIn(param.min, param.max))
 					}
@@ -1412,8 +1422,11 @@ private val ParamRowInputSpacer = 2.dp
 private val ParamRowResetWidth = 14.dp
 private val ParamRowHandleWidth = 14.dp
 private val ParamRowDepthIndent = 8
+/** Where the name column starts in a depth-0 row: row padding, then the link slot. */
+private val ParamRowNameStart = 2.dp + ParamRowLinkWidth + ParamRowLinkSpacer
 
 private val ParamTrackInsetHorizontal = 6.dp
+private val ParamPadInsetVertical = 14.dp
 private val ParamKeyRadius = 2.8.dp
 private val ParamThumbRadius = 5.2.dp
 
@@ -1653,83 +1666,6 @@ private fun ParameterLinkSlot(
 	) { content() }
 }
 
-internal val PanelToolLabelGap = 8.dp
-
-/** Icon button that slides its text label in beside the icon when the toolbar has room. */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-internal fun PanelToolButton(
-	label: String,
-	showLabel: Boolean,
-	onClick: () -> Unit,
-	enabled: Boolean,
-	tooltip: String,
-	active: Boolean = false,
-	icon: @Composable () -> Unit,
-) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val interaction = remember { MutableInteractionSource() }
-	val hovered by interaction.collectIsHoveredAsState()
-	val pressed by interaction.collectIsPressedAsState()
-	TooltipArea(tooltip = { ParameterTooltip(tooltip) }, delayMillis = 400) {
-		Row(
-			modifier = Modifier
-				.height(22.dp)
-				.widthIn(min = 22.dp)
-				.background(
-					when {
-						!enabled -> Color.Transparent
-						pressed -> colors.controlActive
-						hovered -> colors.controlHover
-						else -> colors.controlBackground
-					},
-					RoundedCornerShape(2.dp),
-				)
-				.border(
-					BorderStroke(1.dp, if (active) colors.accent else if (hovered && enabled) colors.borderHover else colors.border),
-					RoundedCornerShape(2.dp),
-				)
-				.hoverable(interaction)
-				.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
-				.pointerHoverIcon(if (enabled) PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) else PointerIcon.Default)
-				.padding(horizontal = 5.dp),
-			verticalAlignment = Alignment.CenterVertically,
-		) {
-			Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) { icon() }
-			AnimatedVisibility(
-				visible = showLabel,
-				enter = expandHorizontally(tween(160)) + fadeIn(tween(160)),
-				exit = shrinkHorizontally(tween(160)) + fadeOut(tween(120)),
-			) {
-				Text(
-					text = label,
-					style = typography.caption.copy(fontSize = 10.5.sp),
-					color = when {
-						!enabled -> colors.textDisabled
-						active -> colors.accent
-						else -> colors.textPrimary
-					},
-					maxLines = 1,
-					softWrap = false,
-					modifier = Modifier.padding(start = 4.dp),
-				)
-			}
-		}
-	}
-}
-
-@Composable
-internal fun PanelToolbarSeparator() {
-	Box(
-		Modifier
-			.padding(horizontal = 2.dp)
-			.width(1.dp)
-			.height(14.dp)
-			.background(LocalToolColors.current.divider),
-	)
-}
-
 @Composable
 internal fun ParameterTooltip(text: String) {
 	val colors = LocalToolColors.current
@@ -1749,42 +1685,27 @@ internal fun ParameterTooltip(text: String) {
 	}
 }
 
-/** Width of the name column, shared by every row so one divider drag moves them all. */
-private val LocalParameterNameWidth = compositionLocalOf<MutableState<Dp>> { mutableStateOf(ParamRowNameWidth) }
+/** Width of the name column at depth 0; deeper rows are narrower by their indent so the divider lines up. */
+private val LocalParameterNameWidth = compositionLocalOf { ParamRowNameWidth }
 
-/** Thin line between the names and the tracks; drag it to trade width between the two. */
+/** Thin line between the names and the tracks; the list hovers and drags it for every row at once. */
 @Composable
-private fun ParameterNameDivider() {
+private fun ParameterNameDivider(pad: Boolean = false) {
 	val colors = LocalToolColors.current
-	val density = LocalDensity.current
-	val nameWidth = LocalParameterNameWidth.current
-	val interaction = remember { MutableInteractionSource() }
-	val hovered by interaction.collectIsHoveredAsState()
-	var dragging by remember { mutableStateOf(false) }
 	Box(
 		modifier = Modifier
 			.width(ParamRowDividerWidth)
-			.fillMaxHeight()
-			.hoverable(interaction)
-			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
-			.pointerInput(nameWidth, density) {
-				detectHorizontalDragGestures(
-					onDragStart = { dragging = true },
-					onDragEnd = { dragging = false },
-					onDragCancel = { dragging = false },
-				) { change, dx ->
-					change.consume()
-					val next = nameWidth.value + with(density) { dx.toDp() }
-					nameWidth.value = next.coerceIn(ParamRowNameWidthRange.start, ParamRowNameWidthRange.endInclusive)
-				}
-			},
+			.fillMaxHeight(),
 		contentAlignment = Alignment.Center,
 	) {
 		Box(
 			Modifier
-				.width(if (hovered || dragging) 1.5.dp else 0.5.dp)
-				.fillMaxHeight(0.7f)
-				.background(if (hovered || dragging) colors.accent else colors.divider),
+				.width(0.5.dp)
+				.then(if (pad) Modifier.fillMaxHeight().padding(
+					top = ParamPadInsetVertical,
+					bottom = ParamPadInsetVertical + ParamRowDividerWidth,
+				) else Modifier.fillMaxHeight(0.7f))
+				.background(colors.divider),
 		)
 	}
 }
@@ -1805,6 +1726,7 @@ private fun ParameterRowItem(
 ) {
 	val colors = LocalToolColors.current
 	val isLocked = param.id in state.lockedParameters
+	val controlled = param.id.raw in LocalParameterPhysicsStatus.current.controlled
 	val currentValue = liveValue(param, state, viewModel)
 	val sliderMarks = remember(keyMarks) { keyMarks.toSliderMarks() }
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -1828,15 +1750,16 @@ private fun ParameterRowItem(
 			modifier = Modifier.width(ParamRowLinkWidth),
 		)
 		Spacer(Modifier.width(ParamRowLinkSpacer))
-		EditableParameterName(param, isLocked, currentValue, state, viewModel, related)
+		EditableParameterName(param, depth, isLocked, currentValue, state, viewModel, related)
 		ParameterNameDivider()
 		ParameterTrack(
 			value = currentValue.coerceIn(param.min, param.max),
+			enabled = !controlled,
 			onValueChange = { viewModel.setParameterValue(param.id, it) },
 			valueRange = param.min..param.max,
 			keyMarks = sliderMarks,
             highlightedKeys = selectedKeys,
-			modifier = Modifier.weight(1f),
+			modifier = Modifier.weight(1f).alpha(if (controlled) 0.45f else 1f),
 			thumbShape = if (param.kind == ParameterKind.BLEND_SHAPE) SliderKeyShape.Square else SliderKeyShape.Circle,
 			onHoverKey = onKeyHover,
 			onGestureStart = viewModel::beginParameterScrub,
@@ -1846,7 +1769,7 @@ private fun ParameterRowItem(
 		Spacer(Modifier.width(ParamRowInputSpacer))
 		CompactIconButton(
 			onClick = { viewModel.resetParameter(param.id) },
-			enabled = isLocked || abs(currentValue - param.default) > 0.001f,
+			enabled = !controlled && (isLocked || abs(currentValue - param.default) > 0.001f),
 			size = ParamRowResetWidth,
 			tooltip = tr("parameters.resetTooltip"),
 		) {
@@ -1856,10 +1779,13 @@ private fun ParameterRowItem(
 	}
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LinkedParameterPad(
 	horizontal: Parameter,
 	vertical: Parameter,
+	padHeight: Dp,
+	onPadHeightChange: (Dp) -> Unit,
 	depth: Int,
 	state: PSD2LiveState,
 	viewModel: PSD2LiveViewModel,
@@ -1875,16 +1801,25 @@ private fun LinkedParameterPad(
 	val colors = LocalToolColors.current
 	val xLocked = horizontal.id in state.lockedParameters
 	val yLocked = vertical.id in state.lockedParameters
+	val xControlled = horizontal.id.raw in LocalParameterPhysicsStatus.current.controlled
+	val yControlled = vertical.id.raw in LocalParameterPhysicsStatus.current.controlled
 	val xValue = liveValue(horizontal, state, viewModel)
 	val yValue = liveValue(vertical, state, viewModel)
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+	val density = LocalDensity.current
+	val currentPadHeight by rememberUpdatedState(padHeight)
+	val changePadHeight by rememberUpdatedState(onPadHeightChange)
+	var resizeCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+	val resizeInteraction = remember { MutableInteractionSource() }
+	val resizeHovered by resizeInteraction.collectIsHoveredAsState()
+	var resizing by remember { mutableStateOf(false) }
 
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
 			.onGloballyPositioned { rowCoords = it }
 			.padding(start = (2 + depth * ParamRowDepthIndent).dp, end = 0.dp, top = 3.dp, bottom = 3.dp)
-			.height(84.dp),
+			.height(padHeight),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		// Cubism: tall interlocking two-chain link spanning both axis rows.
@@ -1898,33 +1833,75 @@ private fun LinkedParameterPad(
 		)
 		Spacer(Modifier.width(ParamRowLinkSpacer))
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			EditableParameterName(horizontal, xLocked, xValue, state, viewModel, horizontal.id in relatedIds)
-			EditableParameterName(vertical, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
+			EditableParameterName(horizontal, depth, xLocked, xValue, state, viewModel, horizontal.id in relatedIds)
+			EditableParameterName(vertical, depth, yLocked, yValue, state, viewModel, vertical.id in relatedIds)
 		}
-		ParameterNameDivider()
-		ParameterPad2D(
-			horizontal = horizontal,
-			vertical = vertical,
-			xValue = xValue,
-			yValue = yValue,
-			xLocked = xLocked,
-			yLocked = yLocked,
-			horizontalKeys = horizontalKeys,
-            highlightedX = highlightedX,
-            highlightedY = highlightedY,
-			verticalKeys = verticalKeys,
-			modifier = Modifier.weight(1f).fillMaxHeight(),
-			onChange = { x, y ->
-				val values = buildMap {
-					if (!xLocked) put(horizontal.id, x)
-					if (!yLocked) put(vertical.id, y)
+		ParameterNameDivider(pad = true)
+		Column(Modifier.weight(1f).fillMaxHeight()) {
+			ParameterPad2D(
+				horizontal = horizontal,
+				vertical = vertical,
+				xValue = xValue,
+				yValue = yValue,
+				xLocked = xLocked || xControlled,
+				yLocked = yLocked || yControlled,
+				horizontalKeys = horizontalKeys,
+	            highlightedX = highlightedX,
+	            highlightedY = highlightedY,
+				verticalKeys = verticalKeys,
+				modifier = Modifier.weight(1f).fillMaxWidth().alpha(if (xControlled && yControlled) 0.45f else 1f),
+				onChange = { x, y ->
+					val values = buildMap {
+						if (!xLocked && !xControlled) put(horizontal.id, x)
+						if (!yLocked && !yControlled) put(vertical.id, y)
+					}
+					viewModel.setParameterValues(values)
+				},
+				onHoverKey = onKeyHover,
+				onGestureStart = viewModel::beginParameterScrub,
+				onGestureEnd = viewModel::endParameterScrub,
+			)
+			TooltipArea(tooltip = { ParameterTooltip(tr("parameters.padHeightTooltip")) }) {
+				Box(
+					Modifier.fillMaxWidth().height(ParamRowDividerWidth)
+						.onGloballyPositioned { resizeCoords = it }
+						.hoverable(resizeInteraction)
+						.semantics { contentDescription = tr("parameters.padHeightTooltip") }
+						.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.S_RESIZE_CURSOR)))
+						.pointerInput(density) {
+							awaitEachGesture {
+								val down = awaitFirstDown()
+								val splitter = resizeCoords ?: return@awaitEachGesture
+								if (!splitter.isAttached) return@awaitEachGesture
+								val startMouseY = splitter.positionInWindow().y + down.position.y
+								val startHeight = currentPadHeight
+								down.consume()
+								resizing = true
+								try {
+									while (true) {
+										val event = awaitPointerEvent()
+										val change = event.changes.firstOrNull { it.id == down.id } ?: break
+										if (!change.pressed) break
+										change.consume()
+										if (splitter.isAttached) {
+											val mouseY = splitter.positionInWindow().y + change.position.y
+											val delta = with(density) { (mouseY - startMouseY).toDp() }
+											changePadHeight((startHeight + delta).coerceIn(64.dp, 320.dp))
+										}
+									}
+								} finally {
+									resizing = false
+								}
+							}
+						},
+					contentAlignment = Alignment.Center,
+				) {
+					Box(Modifier.fillMaxWidth().padding(horizontal = ParamTrackInsetHorizontal)
+						.height(if (resizeHovered || resizing) 1.5.dp else 0.5.dp)
+						.background(if (resizeHovered || resizing) colors.accent else colors.divider))
 				}
-				viewModel.setParameterValues(values)
-			},
-			onHoverKey = onKeyHover,
-			onGestureStart = viewModel::beginParameterScrub,
-			onGestureEnd = viewModel::endParameterScrub,
-		)
+			}
+		}
 		Column(
 			modifier = Modifier.width(ParamRowInputWidth),
 			verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1940,7 +1917,7 @@ private fun LinkedParameterPad(
 		) {
 			CompactIconButton(
 				onClick = { viewModel.resetParameter(horizontal.id) },
-				enabled = xLocked || abs(xValue - horizontal.default) > 0.001f,
+				enabled = !xControlled && (xLocked || abs(xValue - horizontal.default) > 0.001f),
 				size = ParamRowResetWidth,
 				tooltip = tr("parameters.resetTooltip"),
 			) {
@@ -1948,7 +1925,7 @@ private fun LinkedParameterPad(
 			}
 			CompactIconButton(
 				onClick = { viewModel.resetParameter(vertical.id) },
-				enabled = yLocked || abs(yValue - vertical.default) > 0.001f,
+				enabled = !yControlled && (yLocked || abs(yValue - vertical.default) > 0.001f),
 				size = ParamRowResetWidth,
 				tooltip = tr("parameters.resetTooltip"),
 			) {
@@ -2015,14 +1992,15 @@ private fun ParameterPad2D(
 
 	// Same horizontal inset as ParameterTrack so the pad's x range lines up with the sliders above and below.
 	val insetHorizontalDp = ParamTrackInsetHorizontal
-	val insetVerticalDp = 14.dp
+	val insetVerticalDp = ParamPadInsetVertical
 	val keyRadiusDp = ParamKeyRadius
 	val thumbRadiusDp = ParamThumbRadius
 
 	Canvas(
 		modifier = modifier
 			.onGloballyPositioned { padCoords = it }
-			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)))
+			.pointerHoverIcon(if (xLocked && yLocked) PointerIcon.Default
+				else PointerIcon(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)))
 			.onPointerEvent(PointerEventType.Move) { event ->
 				val pos = event.changes.firstOrNull()?.position ?: return@onPointerEvent
 				val insetX = insetHorizontalDp.toPx()
@@ -2056,7 +2034,7 @@ private fun ParameterPad2D(
 				hoverKeyCb?.invoke(null, null, null, 0f)
 			}
 			.onPointerEvent(PointerEventType.Press) { event ->
-				if (event.button != PointerButton.Secondary) return@onPointerEvent
+				if ((xLockedState && yLockedState) || event.button != PointerButton.Secondary) return@onPointerEvent
 				val hit = hoverKey ?: return@onPointerEvent
 				onChangeState(
 					if (!xLockedState) hit.first else xValueState,
@@ -2064,7 +2042,8 @@ private fun ParameterPad2D(
 				)
 				event.changes.forEach { it.consume() }
 			}
-			.pointerInput(horizontal.id, vertical.id) {
+			.pointerInput(horizontal.id, vertical.id, xLocked && yLocked) {
+				if (xLocked && yLocked) return@pointerInput
 				val insetX = insetHorizontalDp.toPx()
 				val insetY = insetVerticalDp.toPx()
 				awaitEachGesture {
@@ -2200,19 +2179,15 @@ private fun ParameterKeyMarks?.toSliderMarks(): List<SliderKeyMark> {
 }
 
 /**
- * What the preview shows for [param]: its frame-by-frame pose while it plays or follows the pointer, so the
- * sliders move with the model at the project rate. Reads [PSD2LiveViewModel.livePoseOf] so only this row
+ * What the canvases show for [param]: the slider being dragged, else the evaluated frame (animation, the pointer's
+ * look, paused physics, or the open motion at the playhead), else the authored pose. Whichever canvas has focus,
+ * the sliders move with the model at the project rate. Reads [PSD2LiveViewModel.livePoseOf] so only this row
  * invalidates when its live value changes — not every parameter row on every frame.
  */
 @Composable
 private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2LiveViewModel): Float {
 	viewModel.parameterScrubValueOf(param.id)?.let { return it }
-	val live = state.activeCanvas.mode == io.github.psd2live.ui.state.CanvasMode.PREVIEW &&
-		state.activeWorkspace.pose?.authoringPose != true &&
-		state.previewLive &&
-		(state.animationEnabled || state.mouseTrackingEnabled || (state.generatePhysics && !state.meshOnly))
 	val document = state.parameterValues[param.id] ?: param.default
-	if (!live) return document
 	return viewModel.livePoseOf(param.id) ?: document
 }
 
@@ -2223,6 +2198,7 @@ private fun formatParamValue(value: Float): String =
 @Composable
 private fun EditableParameterName(
     param: Parameter,
+    depth: Int,
     locked: Boolean,
     value: Float,
     state: PSD2LiveState,
@@ -2231,16 +2207,26 @@ private fun EditableParameterName(
 ) {
     var editing by remember(param.id) { mutableStateOf(false) }
     val editable = state.historySnapshot != null && !state.canvasEditBusy
+    val physics = LocalParameterPhysicsStatus.current
+    val physicsOutput = param.id.raw in physics.outputs
+    val controlled = param.id.raw in physics.controlled
+    val colors = LocalToolColors.current
     TooltipArea(
-        tooltip = { ParameterTooltip(param.name) },
-        modifier = Modifier.width(LocalParameterNameWidth.current.value),
+        tooltip = { ParameterTooltip(param.name + if (physicsOutput) " · " +
+            tr(if (controlled) "parameters.physicsControlled" else "parameters.physicsOutput") else "") },
+        modifier = Modifier.width(LocalParameterNameWidth.current - (depth * ParamRowDepthIndent).dp),
         delayMillis = 400,
     ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+    if (physicsOutput) {
+        IconPhysics(active = controlled, modifier = Modifier.size(10.dp), tint = if (controlled) colors.textDisabled else colors.textMuted)
+        Spacer(Modifier.width(2.dp))
+    }
     ParameterName(
         param,
         locked = locked,
         modifier = Modifier
-            .fillMaxWidth()
+            .weight(1f)
             .semantics {
                 contentDescription = param.name + " — " + tr("parameters.properties") +
                     if (related) " — " + tr("parameters.related") else ""
@@ -2253,6 +2239,7 @@ private fun EditableParameterName(
                 }
             },
     )
+    }
     }
     if (editing) ParameterDefinitionDialog(param, state, viewModel, lockValue = value) { editing = false }
 }

@@ -14,7 +14,7 @@ import kotlin.math.abs
 internal object ParameterKeyEdits {
     fun apply(model: PuppetModel, edit: JsonObject): PuppetModel {
         if (edit["target"] == null) return applyParameterPoints(model, edit)
-        val ref = RigAuthoringJournal.target(edit.getValue("target").jsonPrimitive.content)
+        val ref = RigAuthoringJournal.target(model, edit.getValue("target").jsonPrimitive.content)
         val owner = ref.asKeyformOwner()
         val parameter = model.parameters.single { it.id.raw == edit.getValue("parameter").jsonPrimitive.content }
         if (parameter.kind == ParameterKind.BLEND_SHAPE) return applyBlendObjectKeys(model, owner, edit, parameter)
@@ -278,7 +278,7 @@ internal object ParameterKeyEdits {
             current = current.retargetChannels(KeyformOwner.Part(part.id), part.channelGrids, parameterId, from, to, delete)
         }
         for (glue in glues) {
-            current = current.retargetChannels(KeyformOwner.Glue(glue.meshA, glue.meshB), glue.channelGrids, parameterId, from, to, delete)
+            current = current.retargetChannels(KeyformOwner.Glue(glue.meshA, glue.meshB, glue.id), glue.channelGrids, parameterId, from, to, delete)
         }
         return current
     }

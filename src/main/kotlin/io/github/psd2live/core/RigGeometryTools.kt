@@ -23,7 +23,10 @@ internal object RigGeometryTools {
         val defaults = model.parameters.associate { it.id to it.default }
         val paramValue: (ParameterId) -> Float = { id -> pose[id.raw] ?: defaults[id] ?: 0f }
         val defaultValue: (ParameterId) -> Float = { id -> defaults[id] ?: 0f }
-        require(pose.all { (id, v) -> params[id]?.let { v.isFinite() && v in it.min..it.max } == true }) { "Unknown or out-of-range parameter" }
+        pose.entries.firstOrNull { (id, v) -> params[id]?.let { v.isFinite() && v in it.min..it.max } != true }?.let { (id, v) ->
+            val range = params[id]?.let { " (range ${it.min}..${it.max})" } ?: " (not in this model)"
+            throw IllegalArgumentException("Unknown or out-of-range parameter: $id = $v$range")
+        }
         fun <T> sample(grid: KeyformGrid<T>?, base: FloatArray, values: (T) -> FloatArray): FloatArray {
             if (grid == null) return base.copyOf()
             val result = base.copyOf()

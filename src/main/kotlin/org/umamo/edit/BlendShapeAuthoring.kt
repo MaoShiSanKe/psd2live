@@ -51,6 +51,7 @@ internal fun PuppetModel.gridCoordinateOf(coordinate: Map<String, Float>): Map<S
  * Writes [observed] mesh deltas, warp points, or a rotation pivot into the single non-neutral
  * blend parameter named by the coordinate. The grid is left unchanged: the stored form is solved
  * so that grid(pose) + blends reproduces [observed].
+ * [coordinate] chooses the destination; [poseCoordinate] retains the other viewed blends and limits.
  */
 internal fun PuppetModel.withBlendShapeCaptured(
 	owner: KeyformOwner,
@@ -59,6 +60,7 @@ internal fun PuppetModel.withBlendShapeCaptured(
 	observedWarp: FloatArray? = null,
 	observedRotation: RotationPivotForm? = null,
 	channels: RigKeyformChannelsEdit? = null,
+	poseCoordinate: Map<String, Float> = coordinate,
 ): PuppetModel {
 	val targets = blendParametersIn(coordinate)
 	require(targets.size == 1) { "Name one blend shape parameter away from 0" }
@@ -66,7 +68,7 @@ internal fun PuppetModel.withBlendShapeCaptured(
 	val value = coordinate.getValue(parameter.id.raw)
 	require(value in parameter.min..parameter.max) { "Blend shape key is outside the parameter range" }
 	val defaults = parameters.associate { it.id to it.default }
-	val pose: (ParameterId) -> Float = { id -> coordinate[id.raw] ?: defaults[id] ?: 0f }
+	val pose: (ParameterId) -> Float = { id -> poseCoordinate[id.raw] ?: coordinate[id.raw] ?: defaults[id] ?: 0f }
 	val defaultValue: (ParameterId) -> Float = { id -> defaults[id] ?: 0f }
 	var current = this
 	if (parameter.keys != null && parameter.keys.none { abs(it - value) < EPS_KEY }) {

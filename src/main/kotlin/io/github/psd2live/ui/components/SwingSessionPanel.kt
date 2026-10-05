@@ -25,7 +25,7 @@ import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.theme.frostedGlass
 
 /**
- * The swing session's companion panel at the canvas corner. Everything with a place on the canvas is
+ * The swing session's companion panel in the workspace or a separate window. Everything with a place on the canvas is
  * set there by its handle; this holds only the choices that have none, and the values as a readout.
  */
 @Composable
@@ -35,6 +35,8 @@ internal fun SwingSessionPanel(
     targetLabel: (String) -> String,
     selectionTargets: () -> List<String>,
     focus: () -> Unit,
+    titleModifier: Modifier = Modifier,
+    windowActions: @Composable () -> Unit = {},
 ) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
@@ -65,10 +67,11 @@ internal fun SwingSessionPanel(
                 text = "${tr(if (existing) "swing.title.edit" else "swing.title.create")} · ${draft.name}",
                 color = colors.textPrimary,
                 style = typography.body.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                modifier = Modifier.weight(1f).clickable { collapsed = !collapsed },
+                modifier = Modifier.weight(1f).then(titleModifier).clickable { collapsed = !collapsed },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            windowActions()
             CompactIconButton(onClick = { collapsed = !collapsed }, size = 18.dp, tooltip = tr(if (collapsed) "swing.expand" else "swing.collapse")) {
                 IconChevron(expanded = !collapsed, tint = colors.textMuted, modifier = Modifier.size(10.dp))
             }

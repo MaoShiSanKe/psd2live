@@ -35,6 +35,13 @@ internal class BoneShape(val head: Offset, val tail: Offset, val left: Offset, v
 	}
 }
 
+/** Shared single-bone glyph for tree rows, overlay toggles and the mode menu. */
+internal fun DrawScope.drawSingleBoneIcon(tint: Color) {
+	val w = size.width
+	val h = size.height
+	drawBoneIcon(Offset(w * 0.16f, h * 0.84f), Offset(w * 0.88f, h * 0.12f), tint, stroke = 1.1f, headRadius = w * 0.13f)
+}
+
 /** A bone icon: shaded octahedron with a solid head, in [tint] at icon scale. */
 internal fun DrawScope.drawBoneIcon(head: Offset, tail: Offset, tint: Color, stroke: Float, headRadius: Float) {
 	val shape = BoneShape.of(head, tail, shoulder = 0.24f, width = 0.16f) ?: return

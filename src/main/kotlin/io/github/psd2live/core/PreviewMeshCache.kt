@@ -8,7 +8,7 @@ class PreviewMeshCache(private val capacity: Int = 128) {
 
     private data class Key(
         val width: Int, val height: Int, val digest: String,
-        val threshold: Int, val settings: MeshSettings,
+        val threshold: Int, val settings: MeshSettings, val unitScale: Float,
     )
 
     private val entries = LinkedHashMap<Key, AdaptiveMeshGenerator.Result?>(16, 0.75f, true)
@@ -16,13 +16,14 @@ class PreviewMeshCache(private val capacity: Int = 128) {
     @Synchronized
     internal fun generate(
         width: Int, height: Int, rgba: ByteArray, alphaThreshold: Int, settings: MeshSettings,
+        unitScale: Float = 1f,
     ): AdaptiveMeshGenerator.Result? {
         // Content addressing also invalidates in-place pixel edits, not just replaced rasters.
         val digest = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(rgba))
-        val key = Key(width, height, digest, alphaThreshold, settings)
+        val key = Key(width, height, digest, alphaThreshold, settings, unitScale)
         if (entries.containsKey(key)) return entries[key]?.detached()
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
-        val result = AdaptiveMeshGenerator.generate(width, height, rgba, alphaThreshold, settings)
+        val result = AdaptiveMeshGenerator.generate(width, height, rgba, alphaThreshold, settings, unitScale)
         entries[key] = result
         while (entries.size > capacity) entries.remove(entries.keys.first())
         return result?.detached()

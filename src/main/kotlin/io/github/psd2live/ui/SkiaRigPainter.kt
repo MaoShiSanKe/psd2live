@@ -1,19 +1,25 @@
 package io.github.psd2live.ui
 
+import io.github.psd2live.core.RigCanvasSupport
+
+import io.github.psd2live.core.CanvasViewport
+
+import io.github.psd2live.ui.utils.toSkiaImage
 import io.github.psd2live.core.PackedAtlas
 import io.github.psd2live.core.RigPreviewModel
 import org.jetbrains.skia.*
 import org.umamo.render.eval.DeformedGeometry
-import org.umamo.render.glsl.SELECTION_TINT_STRENGTH
+import io.github.psd2live.render.ArtworkDraw
+import io.github.psd2live.render.ArtworkDrawList
+import io.github.psd2live.render.ArtworkOptions
+import io.github.psd2live.render.HOVER_TINT_STRENGTH
 import org.umamo.runtime.model.DrawableId
 
-import androidx.compose.ui.graphics.asSkiaBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
 
 /** Draw the editing texture channel on Compose's Skia canvas, without per-triangle Java2D clips. */
 internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
     private val images = atlas.pages.map { page ->
-        Image.makeFromBitmap(page.image.toComposeImageBitmap().asSkiaBitmap())
+        page.image.toSkiaImage()
     }
     private val shaders = images.map {
         it.makeShader(FilterTileMode.CLAMP, FilterTileMode.CLAMP, SamplingMode.LINEAR, null)
@@ -32,27 +38,23 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
         dimmedAlphaMultiplier: Float = 0.22f,
         tintLayerIds: Set<String>? = null,
         tintColor: Int = 0,
-        /** Defaults to the GpuRenderer's own wash, so the two paths tint by the same amount. */
-        tintAlpha: Float = SELECTION_TINT_STRENGTH,
-    ) {
-        val drawables = model.rig.puppet.drawables.filter { it.mesh != null && it.id in geometry.worldPositions }
-            .sortedBy { RigCanvasSupport.displayOrder(model, it, geometry, drawOrderOverrides) }
+        tintAlpha: Float = HOVER_TINT_STRENGTH,
+    ) = paint(canvas, model, geometry, viewport, ArtworkDrawList.build(model, geometry, ArtworkOptions(
+        alpha, visibleLayerIds, drawOrderOverrides, dimUnselected, highlightedLayerIds, dimmedAlphaMultiplier,
+        tintLayerIds, tintColor, tintAlpha,
+    )))
+
+    /** Draws [draws], the list the GPU renderer draws too, so the two paths cannot disagree about what shows. */
+    fun paint(canvas: Canvas, model: RigPreviewModel, geometry: DeformedGeometry, viewport: CanvasViewport, draws: List<ArtworkDraw>) {
         val byId = model.rig.puppet.drawables.associateBy { it.id }
         val masks = mutableMapOf<List<DrawableId>, Path?>()
         Paint().use { paint ->
             try {
-                for (drawable in drawables) {
-                    val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-                    if (visibleLayerIds != null && layerId != null && layerId !in visibleLayerIds) continue
-                    if (visibleLayerIds != null && layerId == null && drawable.id.raw !in visibleLayerIds && !drawable.isVisible) continue
-                    val highlighted = highlightedLayerIds == null || (layerId != null && layerId in highlightedLayerIds) || drawable.id.raw in highlightedLayerIds
-                    val dim = if (dimUnselected && !highlighted) dimmedAlphaMultiplier else 1f
-                    val opacity = ((geometry.opacity[drawable.id] ?: drawable.opacity) * alpha * dim).coerceIn(0f, 1f)
-                    if (opacity <= 0.001f) continue
+                for (draw in draws) {
+                    val drawable = byId[draw.drawableId] ?: continue
                     val mesh = drawable.mesh ?: continue
                     val world = geometry.worldPositions[drawable.id] ?: continue
-                    val page = model.rig.pageByDrawableId[drawable.id.raw] ?: drawable.texturePage
-                    val image = images.getOrNull(page) ?: continue
+                    val image = images.getOrNull(draw.page) ?: continue
                     val positions = FloatArray(mesh.indices.size * 2)
                     val uvs = FloatArray(positions.size)
                     // Expanded vertices avoid the unsigned-short index limit for large authored meshes.
@@ -62,14 +64,12 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
                         uvs[index * 2] = mesh.uvs[vertex * 2] * image.width
                         uvs[index * 2 + 1] = mesh.uvs[vertex * 2 + 1] * image.height
                     }
-                    val mask = if (drawable.maskedBy.isNotEmpty() && !drawable.invertMask) {
-                        masks.getOrPut(drawable.maskedBy) {
+                    val mask = if (draw.maskIds.isNotEmpty()) {
+                        masks.getOrPut(draw.maskIds) {
                             PathBuilder().use { path ->
                                 var triangles = 0
-                                for (id in drawable.maskedBy) {
-                                    val source = byId[id] ?: continue
-                                    if (!source.isVisible) continue
-                                    val maskMesh = source.mesh ?: continue
+                                for (id in draw.maskIds) {
+                                    val maskMesh = byId[id]?.mesh ?: continue
                                     val points = geometry.worldPositions[id] ?: continue
                                     for (i in maskMesh.indices.indices step 3) {
                                         val a = maskMesh.indices[i] * 2
@@ -93,19 +93,17 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
                     val saved = canvas.save()
                     try {
                         mask?.let { canvas.clipPath(it, false) }
-                        paint.shader = shaders[page]
-                        paint.setAlphaf(opacity)
+                        paint.shader = shaders[draw.page]
+                        paint.setAlphaf(draw.opacity)
                         canvas.drawVertices(VertexMode.TRIANGLES, positions, null, uvs, null, BlendMode.MODULATE, paint)
                         // Hover annotation: wash the very triangles just drawn with the component colour
                         // instead of boxing them. Re-drawing the mesh keeps the tint on the artwork's own
                         // silhouette — a part lights up rather than growing a rectangle — and because it
                         // runs inside the same clip, a masked part is tinted only where it actually shows.
-                        if (tintColor != 0 && tintLayerIds != null &&
-                            ((layerId != null && layerId in tintLayerIds) || drawable.id.raw in tintLayerIds)
-                        ) {
+                        if (draw.tintColor != 0) {
                             paint.shader = null
-                            paint.color = tintColor
-                            paint.setAlphaf(tintAlpha)
+                            paint.color = draw.tintColor
+                            paint.setAlphaf(draw.tintAlpha)
                             canvas.drawVertices(VertexMode.TRIANGLES, positions, null, null, null, BlendMode.SRC_OVER, paint)
                         }
                     } finally { canvas.restoreToCount(saved) }
@@ -120,27 +118,70 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
     }
 }
 
-/** Keeps the unchanged texture pass as Skia draw commands for this one viewport. */
+/**
+ * The camera translation a cached pass was drawn at, and everything else it depends on. While the user pans,
+ * a pass whose [stableKey] still matches is drawn shifted instead of being drawn again.
+ */
+internal class PanShift(val stableKey: List<Any?>, val offsetX: Double, val offsetY: Double, val panning: Boolean)
+
+/**
+ * Keeps the unchanged texture pass for this one viewport.
+ *
+ * A new key is recorded as Skia draw commands and replayed while it keeps changing (a drag, a scrub).
+ * Replaying is not free: every textured mesh is sampled from the atlas again and every masked part clips
+ * against a path of all its mask's triangles, on each frame the canvas draws, which includes every hover
+ * and overlay change. So once the same key is drawn twice it is rasterized, and later frames draw one image.
+ */
 internal class CachedSkiaPicture : AutoCloseable {
     private var key: List<Any?>? = null
     private var picture: Picture? = null
+    private var raster: Image? = null
+    private var shift: PanShift? = null
 
-    fun draw(canvas: Canvas, key: List<Any?>, width: Int, height: Int, record: (Canvas) -> Unit) {
+    fun draw(
+        canvas: Canvas, key: List<Any?>, width: Int, height: Int, pan: PanShift? = null, record: (Canvas) -> Unit,
+    ) {
+        val cached = shift
+        if (pan != null && pan.panning && cached != null && (picture != null || raster != null) && cached.stableKey == pan.stableKey &&
+            (cached.offsetX != pan.offsetX || cached.offsetY != pan.offsetY)) {
+            val saved = canvas.save()
+            try {
+                canvas.translate((pan.offsetX - cached.offsetX).toFloat(), (pan.offsetY - cached.offsetY).toFloat())
+                drawCached(canvas)
+            } finally { canvas.restoreToCount(saved) }
+            return
+        }
         if (picture == null || this.key != key) {
             val next = PictureRecorder().use { recorder ->
                 record(recorder.beginRecording(Rect.makeWH(width.toFloat(), height.toFloat())))
                 recorder.finishRecordingAsPicture()
             }
             picture?.close()
+            raster?.close()
+            raster = null
             picture = next
             this.key = key
+            shift = pan
+        } else if (raster == null && width > 0 && height > 0) {
+            raster = Surface.makeRasterN32Premul(width, height).use { surface ->
+                picture?.let { surface.canvas.drawPicture(it) }
+                surface.makeImageSnapshot()
+            }
         }
-        picture?.let { canvas.drawPicture(it) }
+        drawCached(canvas)
+    }
+
+    private fun drawCached(canvas: Canvas) {
+        val image = raster
+        if (image != null) canvas.drawImage(image, 0f, 0f) else picture?.let { canvas.drawPicture(it) }
     }
 
     override fun close() {
         picture?.close()
         picture = null
+        raster?.close()
+        raster = null
         key = null
+        shift = null
     }
 }

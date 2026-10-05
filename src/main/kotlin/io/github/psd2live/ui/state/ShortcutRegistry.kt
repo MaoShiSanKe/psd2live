@@ -71,6 +71,17 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     OPEN_SETTINGS(ShortcutCategory.VIEW, "help.shortcuts.settings"),
     OPEN_HELP(ShortcutCategory.VIEW, "help.shortcuts.help"),
 
+    TEMPORARY_SELECT(ShortcutCategory.CANVAS_TOOLS, "shortcut.temporarySelect"),
+    QUICK_PREVIEW(ShortcutCategory.CANVAS_TOOLS, "shortcut.quickPreview"),
+
+    MODE_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.select"),
+    MODE_DEFORM(ShortcutCategory.CANVAS_TOOLS, "editor.mode.deform"),
+    MODE_EDIT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.edit"),
+    MODE_SIMULATE(ShortcutCategory.CANVAS_TOOLS, "editor.mode.simulate"),
+    MODE_SKELETON(ShortcutCategory.CANVAS_TOOLS, "editor.mode.skeleton"),
+    MODE_PAINT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.paint"),
+    MODE_PREVIEW(ShortcutCategory.CANVAS_TOOLS, "editor.mode.preview"),
+
     // Canvas tools
     TOOL_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.select"),
     TOOL_LASSO_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.lasso_select"),
@@ -86,6 +97,8 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     TOOL_GLUE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.glue"),
     TOOL_SUBDIVIDE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.subdivide"),
     TOOL_KNIFE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.knife"),
+    TOOL_WEIGHT_PAINT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.weight_paint"),
+    TOOL_WEIGHT_GRADIENT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.weight_gradient"),
     TOOL_PAINT_BRUSH(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_brush"),
     TOOL_PAINT_PENCIL(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_pencil"),
     TOOL_PAINT_ERASER(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_eraser"),
@@ -193,6 +206,17 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.OPEN_SETTINGS to keys("Ctrl+,"),
     ShortcutAction.OPEN_HELP to keys("F1"),
 
+    ShortcutAction.TEMPORARY_SELECT to keys("Z"),
+    ShortcutAction.QUICK_PREVIEW to keys("`"),
+
+    ShortcutAction.MODE_SELECT to keys("Alt+1", "Alt+NumPad1"),
+    ShortcutAction.MODE_DEFORM to keys("Alt+2", "Alt+NumPad2"),
+    ShortcutAction.MODE_EDIT to keys("Alt+3", "Alt+NumPad3"),
+    ShortcutAction.MODE_SIMULATE to keys("Alt+4", "Alt+NumPad4"),
+    ShortcutAction.MODE_SKELETON to keys("Alt+5", "Alt+NumPad5"),
+    ShortcutAction.MODE_PAINT to keys("Alt+6", "Alt+NumPad6"),
+    ShortcutAction.MODE_PREVIEW to keys("Alt+7", "Alt+NumPad7"),
+
     ShortcutAction.TOOL_SELECT to keys("V", "T"),
     ShortcutAction.TOOL_LASSO_SELECT to keys("L"),
     ShortcutAction.TOOL_BRUSH_SELECT to keys("W"),
@@ -210,6 +234,8 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     // losing its conventional key.
     ShortcutAction.TOOL_SUBDIVIDE to keys("M"),
     ShortcutAction.TOOL_KNIFE to keys("K"),
+    ShortcutAction.TOOL_WEIGHT_PAINT to keys("Shift+V"),
+    ShortcutAction.TOOL_WEIGHT_GRADIENT to keys("Alt+V"),
     ShortcutAction.TOOL_PAINT_BRUSH to keys("Shift+P", "J"),
     ShortcutAction.TOOL_PAINT_PENCIL to keys("N"),
     ShortcutAction.TOOL_PAINT_ERASER to keys("E"),

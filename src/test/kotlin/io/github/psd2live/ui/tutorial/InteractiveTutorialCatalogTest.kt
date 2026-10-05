@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.tutorial
 
+import io.github.psd2live.ui.EditHierarchyMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -54,6 +55,35 @@ class InteractiveTutorialCatalogTest {
 		state = state.continueNextTutorial()
 		assertEquals(TutorialPath.EXPERIENCED, state.path)
 		assertEquals(TutorialId.WORKSPACE, state.tutorialId)
+	}
+
+	@Test
+	fun chaptersStartedWithoutAModelOpenOneFirst() {
+		val gated = InteractiveTutorialState().start(TutorialId.SIMULATION, hasModel = false)
+		assertEquals(OpenModelStep, gated.step)
+		assertFalse(gated.step.allowsNext)
+		assertFalse(gated.step.skippable)
+		assertEquals(tutorialDefinition(TutorialId.SIMULATION).steps.size + 1, gated.definition.steps.size)
+		assertEquals(tutorialDefinition(TutorialId.SIMULATION).steps.first(), gated.advance().step)
+
+		assertEquals("openFile", InteractiveTutorialState().start(TutorialId.BASIC, hasModel = false).step.key)
+		assertEquals("presets", InteractiveTutorialState().start(TutorialId.SIMULATION, hasModel = true).step.key)
+
+		var state = InteractiveTutorialState().start(TutorialId.PHYSICS)
+		while (!state.isDoneStep) state = state.advance()
+		assertEquals(OpenModelStep, state.continueNextTutorial(hasModel = false).step)
+	}
+
+	@Test
+	fun openModelStepHasTranslationsAcrossLocales() {
+		listOf("Messages", "Messages_zh_CN", "Messages_ja").forEach { name ->
+			val props = java.util.Properties()
+			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
+			listOf(
+				OpenModelStep.titleKey(TutorialId.SIMULATION), OpenModelStep.bodyKey(TutorialId.SIMULATION),
+				OpenModelStep.actionKey(TutorialId.SIMULATION), "tutorial.common.hint.required", "tutorial.common.progress.prepare",
+			).forEach { key -> assertTrue(props.getProperty(key).orEmpty().isNotBlank(), "$name missing $key") }
+		}
 	}
 
 	@Test
@@ -134,6 +164,16 @@ class InteractiveTutorialCatalogTest {
 		assertTrue(tutorialDefinition(TutorialId.ANIMATION).steps.any { it.key == "autoKey" })
 		assertEquals(TutorialTargetId.PHYSICS_DOCK, tutorialDefinition(TutorialId.PHYSICS).steps.first().targetId)
 		assertTrue(tutorialDefinition(TutorialId.PHYSICS).steps.any { it.targetId == TutorialTargetId.CANVAS_VIEWPORT })
+		val simulation = tutorialDefinition(TutorialId.SIMULATION).steps
+		assertEquals(TutorialTargetId.MODEL_SETTINGS, simulation.first().targetId)
+		assertTrue(simulation.first().expandSimulationPresets)
+		val generate = simulation.first { it.key == "generate" }
+		assertEquals(TutorialCompletion.HAS_SIMULATION, generate.completion)
+		assertTrue(generate.skippable && !generate.allowsNext)
+		assertTrue(simulation.indexOf(generate) < simulation.indexOfFirst { it.targetId == TutorialTargetId.SIMULATION_DOCK })
+		assertTrue(simulation.any { it.key == "weightKinds" })
+		assertTrue(tutorialDefinition(TutorialId.SIMULATION).steps.any { it.setHierarchyMode == EditHierarchyMode.SIMULATE && it.requireLayerSelection })
+		TutorialPath.entries.forEach { assertEquals(TutorialId.SIMULATION, it.nextAfter(TutorialId.PHYSICS), it.name) }
 	}
 
 	@Test
@@ -171,7 +211,7 @@ class InteractiveTutorialCatalogTest {
 			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
 			name to props
 		}
-		val keys = listOf("animation", "skeleton", "history", "workspace", "physics")
+		val keys = listOf("simulation", "skeleton", "animation", "workspace")
 		bundles.forEach { (bundleName, props) ->
 			keys.forEach { key ->
 				val title = props.getProperty("canvas.start.update.$key.title")

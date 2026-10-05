@@ -13,6 +13,16 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MotionClipsTest {
+	@Test fun repeatedParameterReconciliationPreservesAuthoredOffsetsExactly() {
+		val parameter = org.umamo.runtime.model.Parameter(org.umamo.runtime.model.ParameterId("Axis"), "Axis", -1f, 1f, 0f)
+		val curve = MotionCurve("Axis", listOf(MotionKey(0f, 0f), MotionKey(1.25f, 0.7f,
+			outHandle = MotionHandle(0.2f, 0.1f), inHandle = MotionHandle(0.3f, -0.1f))))
+		val clips = listOf(MotionClip("clip", "Clip", curves = listOf(curve)))
+		var reconciled = clips
+		repeat(10) { reconciled = MotionClips.reconcileParameters(reconciled, listOf(parameter)) }
+		assertEquals(clips, reconciled)
+		assertEquals(curve, MotionCurveMath.clamped(curve, -1f, 1f))
+	}
 	@Test fun changedDefinitionsRemoveDeletedTracksAndClampBezierControls() {
 		val parameter = org.umamo.runtime.model.Parameter(org.umamo.runtime.model.ParameterId("kept"), "Kept", -1f, 1f, 0f)
 		val clips = listOf(MotionClip("clip", "Clip", curves = listOf(
@@ -64,10 +74,10 @@ class MotionClipsTest {
 	@Test fun convertedTracksSampleLikeTheGeneratedMotion() {
 		val clip = MotionClips.fromTracks("c", "Nod", "Nod", loop = false, tracks = MotionGenerator.nodTracks)
 		for (time in listOf(0f, 0.3f, 0.55f, 1f, 1.7f, 2f)) {
-			for ((id, points) in MotionGenerator.nodTracks) {
+			for (curve in MotionGenerator.nodTracks) {
 				assertEquals(
-					SkeletonMotions.sample(points, time.toDouble(), loop = false),
-					MotionClips.sampleAll(clip, time.toDouble()).getValue(org.umamo.runtime.model.ParameterId(id)),
+					SkeletonMotions.sample(curve, time.toDouble(), loop = false),
+					MotionClips.sampleAll(clip, time.toDouble()).getValue(org.umamo.runtime.model.ParameterId(curve.parameterId)),
 					1e-4f,
 				)
 			}
@@ -159,7 +169,7 @@ class MotionClipsTest {
 	@Test fun builtinTracksMatchWhatTheExportWrites() {
 		assertEquals(MotionGenerator.blinkTracks, MotionClips.builtinTracks("Blink", null))
 		val idle = MotionClips.builtinTracks("Idle", null)
-		assertTrue(idle.any { it.first == "ParamEyeLOpen" })
+		assertTrue(idle.any { it.parameterId == "ParamEyeLOpen" })
 		assertEquals(SkeletonMotions.IDLE_DURATION, MotionClips.builtinDuration("Idle", idle))
 		assertTrue(MotionClips.isLoopBuiltin("idle"))
 		assertTrue(MotionClips.isLoopBuiltin("IdleCute"))

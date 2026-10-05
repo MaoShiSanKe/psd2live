@@ -203,17 +203,7 @@ fun nearestKeyPose(
 	axes: List<KeyformAxis>,
 	pose: Map<ParameterId, Float>,
 	defaults: Map<ParameterId, Float>,
-): Map<ParameterId, Float> {
-	val targets = LinkedHashMap<ParameterId, Float>()
-	for (axis in axes) {
-		if (axis.keys.isEmpty()) continue
-		val current = pose[axis.parameterId] ?: defaults[axis.parameterId] ?: continue
-		if (isOnParameterKey(current, axis.keys)) continue
-		val nearest = nearestParameterKey(current, axis.keys) ?: continue
-		targets[axis.parameterId] = nearest
-	}
-	return targets
-}
+): Map<ParameterId, Float> = io.github.psd2live.core.nearestKeyPose(axes, pose, defaults)
 
 /**
  * Keyform axes that the given geometry kind/id writes when deformed: geometry grid plus channel tracks.

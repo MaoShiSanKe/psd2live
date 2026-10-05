@@ -37,6 +37,8 @@ internal object RigCommandDelta {
             "canvas_geometry" -> with(RigAuthoringJournal) { isCanvasGeometryNoOp(model, command) }
             "structure" -> isStructureNoOp(model, command)
             "path_put" -> isPathPutNoOp(model, command)
+            VertexGroupJournal.PUT -> VertexGroupJournal.isNoOp(model, command)
+            RasterMeshJournal.OP -> RasterMeshJournal.isNoOp(model, command)
             // "copy" and "delete" rewrite or remove a slot with no single value to compare; "warp" and
             // "canvas_create_*" require an unused id; "canvas_topology" and "structure" rebuild or
             // restructure rather than overwrite one addressed slot. Each is a change whenever it is
@@ -47,10 +49,43 @@ internal object RigCommandDelta {
     }
 
     private fun RigAuthoringJournal.isSetNoOp(model: PuppetModel, command: JsonObject): Boolean {
-        val target = target(command.text("target"))
+        val target = target(model, command.text("target"))
         val coordinate = command.coordinate("key")
-        val geometry = command["geometry"]?.jsonObject ?: return true
-        return isGeometryNoOp(model, target, coordinate, geometry)
+        if (coordinate.keys.any { id -> model.parameters.any { it.id.raw == id && it.kind == ParameterKind.BLEND_SHAPE } }) return false
+        val geometry = command["geometry"]?.jsonObject
+        val channels = command["channels"]?.jsonObject
+        return (geometry == null || isGeometryNoOp(model, target, coordinate, geometry)) &&
+            (channels == null || isChannelsNoOp(model, target, coordinate, channels))
+    }
+
+    /** A scalar/color key still seeds a new track even when geometry is unchanged or absent. */
+    private fun isChannelsNoOp(model: PuppetModel, target: RigTargetRef, coordinate: Map<String, Float>, channels: JsonObject): Boolean {
+        val grids = model.channelGridsOf(target.asKeyformOwner()) ?: return false
+        val values = buildList<Pair<FormChannel, ChannelValue>> {
+            fun scalar(name: String, channel: FormChannel, range: ClosedFloatingPointRange<Float>) {
+                channels[name]?.jsonPrimitive?.float?.let { add(channel to ChannelValue.Scalar(it.coerceIn(range))) }
+            }
+            scalar("opacity", FormChannel.OPACITY, 0f..1f)
+            scalar("drawOrder", FormChannel.DRAW_ORDER, 0f..1000f)
+            scalar("glueIntensity", FormChannel.GLUE_INTENSITY, 0f..1f)
+            fun color(name: String, channel: FormChannel) {
+                channels[name]?.jsonArray?.let { value -> add(channel to ChannelValue.Color(ColorRgb(
+                    value[0].jsonPrimitive.float.coerceIn(0f, 1f), value[1].jsonPrimitive.float.coerceIn(0f, 1f), value[2].jsonPrimitive.float.coerceIn(0f, 1f)))) }
+            }
+            color("multiplyColor", FormChannel.MULTIPLY_COLOR); color("screenColor", FormChannel.SCREEN_COLOR)
+            channels["flipX"]?.jsonPrimitive?.boolean?.let { add(FormChannel.FLIP_X to ChannelValue.Flag(it)) }
+            channels["flipY"]?.jsonPrimitive?.boolean?.let { add(FormChannel.FLIP_Y to ChannelValue.Flag(it)) }
+        }
+        return values.all { (channel, requested) ->
+            val grid = grids[channel] ?: return false
+            val stored = addressedCell(grid, coordinate)?.form ?: return false
+            when {
+                stored is ChannelValue.Scalar && requested is ChannelValue.Scalar -> stored.value.approx(requested.value)
+                stored is ChannelValue.Color && requested is ChannelValue.Color -> stored.color == requested.color
+                stored is ChannelValue.Flag && requested is ChannelValue.Flag -> stored.flag == requested.flag
+                else -> false
+            }
+        }
     }
 
     private fun RigAuthoringJournal.isGeometryNoOp(

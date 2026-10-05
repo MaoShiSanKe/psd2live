@@ -4,7 +4,7 @@
 
 **Generate a Live2D model from a layered PSD, then refine, rig, animate, simulate and export it in one desktop workspace.**
 
-![PSD2Live editing workspace: hierarchy on the left, the canvas in Deform mode showing the front-hair mesh, model settings and the layer classification table on the right](../imgs/overview.webp)
+![PSD2Live editing workspace: hierarchy on the left, the canvas in Deform mode showing the front-hair mesh, model presets and the layer classification table on the right](../imgs/overview.webp)
 
 PSD2Live recognizes parts from layer names and generates meshes, a deformer hierarchy, head, body and facial parameters, basic motions and physics. The generated model is a starting point: keep shaping it on the canvas, cut and subdivide meshes, paint textures, build a skeleton and edit motion curves, then export a `.cmo3` for further work in Cubism Editor or a `.moc3` runtime bundle.
 
@@ -23,7 +23,7 @@ PSD2Live recognizes parts from layer names and generates meshes, a deformer hier
 | Artwork and variants | Transparent image placement, toggle and exclusive variants, layer painting and edge cleanup, optional 2× / 4× texture upscaling |
 | Animation | Timeline, keyframe and curve editing with live preview; preset crouch, wave, cheer and other motions when a skeleton is available |
 | Projects | Single-file `.psd2live` projects, branching history, tabs, six workspace presets (Edit, Mesh, Rigging, Animation, Preview, Physics), light and dark themes, Photoshop / Blender / Cubism keymaps |
-| Agents | Authenticated local MCP server with 23 public tools for observation, shapes, artwork, parameters, skeletons, motions, physics, export and history |
+| Agents | Authenticated local MCP server with 170 public tools (discovered page by page through `workspace_list_operations`) for observation, shapes, artwork, parameters, skeletons, motions, physics, simulation, export and history |
 
 <table>
 <tr>
@@ -54,14 +54,14 @@ The Linux native preview does not support pure Wayland without XWayland, aarch64
 
 ## Quick start
 
-1. **Import a PSD** with **File → Import PSD…** (`Ctrl+Shift+O`) or drop it on the window. If a layer holds several disconnected parts (such as both legs), PSD2Live offers to split it by mesh.
+1. **Import a PSD** with **File → Import PSD…** (`Ctrl+Shift+O`) or drop it on the window. The Start screen opens next: set the model presets with the Minimal / Default / Full quick choices (Default includes loose clothing simulation) and tick the layers holding several disconnected parts (such as both legs) to split by mesh. Reopen it later from Tools → Start Screen….
 2. **Check the classification** in the Layers table: part type, side and variant settings. Correct anything that was misread.
 3. **Preview and refine** in the Preview workspace, then adjust in the Edit, Rigging, Animation and Physics workspaces as needed.
 4. **Save and export**: `Ctrl+S` saves a `.psd2live` project; `Ctrl+G` opens export settings for `.cmo3` and / or the `.moc3` bundle.
 
-<img src="../imgs/import-split.webp" width="560" alt="Batch split dialog: legwear, footwear, eyelash and front hair are each detected as two parts">
+<img src="../imgs/import-split.webp" width="560" alt="Splitting layers by mesh: legwear, footwear, eyelash and front hair are each detected as two parts">
 
-**New to PSD2Live? Open Help → Tutorials… (`F1`).** The interactive tutorials highlight each control and use your current shortcuts. There is a beginner path (17 lessons) and a path for Cubism users (12 lessons); the [user guide](guide/USER_GUIDE.md) is the text companion.
+**New to PSD2Live? Open Help → Tutorials… (`F1`).** The interactive tutorials highlight each control and use your current shortcuts. There is a beginner path (18 lessons) and a path for Cubism users (13 lessons); the [user guide](guide/USER_GUIDE.md) is the text companion.
 
 ## Preparing artwork
 
@@ -91,7 +91,7 @@ The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBIS
 
 1. Keep PSD2Live running and open **Tools → MCP → MCP Connection & Setup…**.
 2. Copy the configuration for your host. Hosts with Streamable HTTP connect directly; Stdio-only hosts use [`mcp_proxy.py`](../../mcp_proxy.py) in the repository root.
-3. Have the agent call `inspect` first. Every write goes into the same history as UI edits and can be undone in the app.
+3. Have the agent call `workspace_inspect` first. Every write goes into the same history as UI edits and can be undone in the app.
 
 The [MCP reference](../zh/agent/MCP_AUTHORING.md) (Chinese) lists requests and examples. The MCP server does not generate images; new artwork requires image generation in the host. A callable tool does not make a complex modeling task reliable; [recorded evaluations](../zh/STATUS.md) keep both successes and failures.
 

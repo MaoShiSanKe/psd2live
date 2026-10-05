@@ -43,6 +43,8 @@ internal class NinePoseFaceRig(
 	val chinY: Float,
 	val regions: List<FaceRegion>,
 	val coordinateSpace: HeadCoordinateSpace = HeadCoordinateSpace.Identity,
+	/** How far the turn and the tilt move the face and each feature. */
+	val tuning: RigTuning = RigTuning(),
 ) {
 	val initialAngleZ: Float get() = coordinateSpace.angleDegrees
 
@@ -50,7 +52,7 @@ internal class NinePoseFaceRig(
 		val angleXKeys = floatArrayOf(-45f, 0f, 45f)
 		val angleYKeys = floatArrayOf(-30f, 0f, 30f)
 
-		fun from(analysis: PipelineAnalysis): NinePoseFaceRig {
+		fun from(analysis: PipelineAnalysis, tuning: RigTuning = RigTuning()): NinePoseFaceRig {
 			val initialAngleZ = HeadOrientationEstimator.estimate(analysis.layers, analysis.anchors.face)
 			val coordinateSpace = HeadCoordinateSpace(
 				initialAngleZ,
@@ -149,6 +151,7 @@ internal class NinePoseFaceRig(
 				chinY = face.bottom,
 				regions = regions,
 				coordinateSpace = coordinateSpace,
+				tuning = tuning,
 			)
 		}
 	}
@@ -182,29 +185,29 @@ internal class NinePoseFaceRig(
 		// sensitive to width, so the face surface mostly TRANSLATES the near eye instead of stretching
 		// it.  The far half descends continuously and supplies the visible perspective compression.
 		// Feature deformers then add their own, much smaller, eye/brow/mouth-specific width changes.
-		val rollCurve = 0.020f + perspectiveRollProfile(orientedX) * 0.112f
+		val rollCurve = (tuning.faceTurnBase + perspectiveRollProfile(orientedX) * tuning.faceTurn) / 100f
 		var shiftX = yaw * radiusX * rollCurve * (0.90f + verticalArch * 0.10f)
 
 		// Positive AngleY looks up: ^ curvature plus increased latitude spacing.  Negative AngleY
 		// looks down: V curvature plus concentration of eye/nose/mouth/chin bands.
-		var shiftY = -pitch * radiusY * 0.018f
-		shiftY += pitch * surfaceY * radiusY * 0.062f * (0.78f + horizontalArch * 0.22f)
-		shiftY += -pitch * horizontalArch * radiusY * 0.040f
+		var shiftY = -pitch * radiusY * tuning.faceLift / 100f
+		shiftY += pitch * surfaceY * radiusY * tuning.faceTilt / 100f * (0.78f + horizontalArch * 0.22f)
+		shiftY += -pitch * horizontalArch * radiusY * tuning.faceArch / 100f
 
 		// The four corners are authored poses, not X+Y.  This interaction stabilizes the far cheek and
 		// skews the V/^ so it follows the new near/far relationship instead of staying symmetric.
-		val interaction = yaw * pitch
+		val interaction = yaw * pitch * tuning.faceCorner / 100f
 		shiftX += interaction * radiusX * horizontalArch * (0.012f + lowerFace * 0.018f)
 		shiftY += interaction * radiusY * surfaceX * horizontalArch * 0.028f
-		shiftY += -absYaw * pitch * radiusY * horizontalArch * (0.007f + lowerFace * 0.008f)
+		shiftY += -absYaw * pitch * tuning.faceCorner / 100f * radiusY * horizontalArch * (0.007f + lowerFace * 0.008f)
 
 		// Hair and other head layers outside the skin silhouette follow the pose, but do not inherit the
 		// full cheek/jaw sculpt.  Blend toward a rigid center shift rather than letting them tear away.
 		val outsideX = max(0f, abs(x) - 1f)
 		val outsideY = max(0f, abs(y) - 1f)
 		val surfaceInfluence = (1f - outsideX * 0.62f - outsideY * 0.38f).coerceIn(0.24f, 1f)
-		val rigidX = yaw * radiusX * 0.018f
-		val rigidY = -pitch * radiusY * 0.018f
+		val rigidX = yaw * radiusX * tuning.faceOutsideFollow / 100f
+		val rigidY = -pitch * radiusY * tuning.faceOutsideFollow / 100f
 		shiftX = shiftX * surfaceInfluence + rigidX * (1f - surfaceInfluence)
 		shiftY = shiftY * surfaceInfluence + rigidY * (1f - surfaceInfluence)
 		return (canvasX + shiftX) to (canvasY + shiftY)
@@ -239,7 +242,7 @@ internal class NinePoseFaceRig(
 		// A single signed projective plane is shared by both eyes and both brows.  It is exactly zero
 		// on the AngleY=0 row.  In the four corners its sign flips with either X or Y, so the line
 		// joining both feature centres stays parallel to every feature's left/right envelope edge.
-		val perspectiveSlope = yaw * pitch * 0.050f
+		val perspectiveSlope = yaw * pitch * tuning.featurePlane / 100f
 
 		return when (feature) {
 			FaceFeature.EYE -> {
@@ -248,35 +251,35 @@ internal class NinePoseFaceRig(
 				// of pitch prevents the four diagonal poses from reversing near/far perspective.
 				val yawShape = absYaw.toDouble().pow(1.35).toFloat()
 				val widthScale = if (farSide) {
-					1f - 0.085f * yawShape
+					1f - tuning.eyeFarShrink / 100f * yawShape
 				} else {
-					1f + 0.012f * yawShape
+					1f + tuning.eyeNearGrow / 100f * yawShape
 				}
-				val dx = direction * absYaw * radiusX * 0.020f + (u - 0.5f) * region.width * (widthScale - 1f)
+				val dx = direction * absYaw * radiusX * tuning.eyeShift / 100f + (u - 0.5f) * region.width * (widthScale - 1f)
 				var dy = perspectiveSlope * ((pointX + dx) - centerX)
 				// The envelope corners remain on the plane; only interior lid rows receive curved redraw.
-				dy += -pitch * region.height * (0.080f + arch * 0.030f)
-				dy += pitch * (v - 0.5f) * region.height * 0.070f
+				dy += -pitch * region.height * (tuning.eyeTilt + arch * tuning.eyeLidCurve) / 100f
+				dy += pitch * (v - 0.5f) * region.height * tuning.eyeTiltStretch / 100f
 				dx to dy
 			}
 
 			FaceFeature.IRIS -> {
 				// Iris/pupil preserves its graphic symbol more strongly than the eye white and receives a
 				// small counter-shift so it does not look glued to a shrinking white.
-				val compensationScale = if (farSide) 0.050f * absYaw else 0.010f * absYaw
-				val dx = (u - 0.5f) * region.width * compensationScale - direction * region.width * absYaw * 0.055f
+				val compensationScale = (if (farSide) tuning.irisKeepWidth else tuning.irisKeepWidth / 5f) / 100f * absYaw
+				val dx = (u - 0.5f) * region.width * compensationScale - direction * region.width * absYaw * tuning.irisShift / 100f
 				// The iris is parented to the eye plane and must not apply that shear a second time.
-				val dy = -pitch * region.height * 0.035f
+				val dy = -pitch * region.height * tuning.irisTilt / 100f
 				dx to dy
 			}
 
 			FaceFeature.BROW -> {
 				// Brows tolerate a little more perspective than eyes but share the exact same projective
 				// plane, keeping each brow and the inter-brow line parallel in diagonal poses.
-				val scale = if (farSide) 1f - absYaw * 0.105f else 1f + absYaw * 0.018f
-				val dx = direction * absYaw * radiusX * 0.018f + (u - 0.5f) * region.width * (scale - 1f)
+				val scale = if (farSide) 1f - absYaw * tuning.browFarShrink / 100f else 1f + absYaw * tuning.browNearGrow / 100f
+				val dx = direction * absYaw * radiusX * tuning.browShift / 100f + (u - 0.5f) * region.width * (scale - 1f)
 				var dy = perspectiveSlope * ((pointX + dx) - centerX)
-				dy += -pitch * region.height * (0.105f - arch * 0.025f)
+				dy += -pitch * region.height * (tuning.browTilt / 100f - arch * 0.025f)
 				dx to dy
 			}
 
@@ -284,9 +287,9 @@ internal class NinePoseFaceRig(
 				// Nose is the depth ruler: root < bridge < tip, so it outruns mouth/chin and rotates as
 				// a drawn symbol instead of translating as one bitmap.
 				val depthByLatitude = 0.58f + v * 0.52f
-				var dx = direction * absYaw * radiusX * 0.105f * depthByLatitude
+				var dx = direction * absYaw * radiusX * tuning.noseShift / 100f * depthByLatitude
 				dx += direction * absYaw * region.width * arch * (v - 0.28f) * 0.055f
-				var dy = -pitch * region.height * (0.10f + v * 0.19f)
+				var dy = -pitch * region.height * (tuning.noseTilt / 100f + v * 0.19f)
 				dy += absYaw * absYaw * region.height * arch * 0.045f
 				dx += yaw * pitch * radiusX * (0.018f + v * 0.014f)
 				dy += -absYaw * pitch * region.height * v * 0.055f
@@ -298,12 +301,12 @@ internal class NinePoseFaceRig(
 				// lags a little (expanding that segment), and the far corner lags much more (compression).
 				val orientedU = centeredU * direction
 				val farWeight = ((orientedU + 1f) * 0.5f).coerceIn(0f, 1f)
-				val cornerLag = abs(centeredU).toDouble().pow(1.35).toFloat() * (0.035f + farWeight * 0.085f)
-				var dx = direction * absYaw * radiusX * 0.058f - direction * absYaw * region.width * cornerLag
+				val cornerLag = abs(centeredU).toDouble().pow(1.35).toFloat() * (tuning.mouthNearLag + farWeight * (tuning.mouthCornerLag - tuning.mouthNearLag)) / 100f
+				var dx = direction * absYaw * radiusX * tuning.mouthShift / 100f - direction * absYaw * region.width * cornerLag
 				dx += yaw * pitch * region.width * (0.028f + centeredU * 0.018f)
 				var dy = perspectiveSlope * ((pointX + dx) - centerX)
-				dy += arch * region.height * absYaw * 0.060f
-				dy += -pitch * region.height * (0.13f + v * 0.12f)
+				dy += arch * region.height * absYaw * tuning.mouthTurnArch / 100f
+				dy += -pitch * region.height * (tuning.mouthTilt / 100f + v * 0.12f)
 				dy += -absYaw * pitch * arch * region.height * 0.075f
 				dx to dy
 			}
@@ -311,8 +314,8 @@ internal class NinePoseFaceRig(
 			FaceFeature.EAR -> {
 				// Negative perceived depth: ears lag behind the face surface.  Far-ear opacity is handled
 				// on the deformer channel; geometry also narrows and retreats toward the silhouette.
-				val scale = if (farSide) 1f - absYaw * 0.28f else 1f + absYaw * 0.025f
-				val dx = -direction * absYaw * radiusX * 0.035f + (u - 0.5f) * region.width * (scale - 1f)
+				val scale = if (farSide) 1f - absYaw * tuning.earFarShrink / 100f else 1f + absYaw * 0.025f
+				val dx = -direction * absYaw * radiusX * tuning.earShift / 100f + (u - 0.5f) * region.width * (scale - 1f)
 				val dy = -pitch * region.height * 0.055f + yaw * pitch * centeredU * region.height * 0.022f
 				dx to dy
 			}
@@ -323,14 +326,14 @@ internal class NinePoseFaceRig(
 		val yaw = artisticYaw(angleX, strength)
 		if (yaw == 0f || abs(region.centerX - centerX) < radiusX * 0.08f) return 1f
 		val farSide = sign(region.centerX - centerX) * sign(yaw) > 0f
-		return if (farSide) (1f - abs(yaw) * 0.48f).coerceIn(0f, 1f) else 1f
+		return if (farSide) (1f - abs(yaw) * tuning.earFade / 100f).coerceIn(0f, 1f) else 1f
 	}
 
 	private fun artisticYaw(angleX: Float, strength: Float): Float =
-		(tanh(angleX / 32f) * strength.coerceIn(0f, 4f)).coerceIn(-4.6f, 4.6f)
+		(tanh(angleX / tuning.yawEase) * strength.coerceIn(0f, 4f)).coerceIn(-4.6f, 4.6f)
 
 	private fun artisticPitch(angleY: Float, strength: Float): Float =
-		(tanh(angleY / 22f) * strength.coerceIn(0f, 4f)).coerceIn(-4.4f, 4.4f)
+		(tanh(angleY / tuning.pitchEase) * strength.coerceIn(0f, 4f)).coerceIn(-4.4f, 4.4f)
 
 	/** C1-continuous roll: short near-contour reveal, broad identity plateau, long far compression. */
 	private fun perspectiveRollProfile(orientedX: Float): Float {

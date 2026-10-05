@@ -129,6 +129,8 @@ fun AppTitleBar(
 	sidebarToggles: List<SidebarToggle> = emptyList(),
 	onToggleSidebar: (SidebarSide) -> Unit = {},
 	onOpenPsd: () -> Unit,
+    onReplaceCmo3: () -> Unit = {},
+    onNewCmo3: () -> Unit = {},
     onOpenProject: () -> Unit,
     onSaveProject: () -> Unit,
     onSaveProjectAs: () -> Unit,
@@ -148,7 +150,7 @@ fun AppTitleBar(
 	onShowSettings: () -> Unit = {},
 	onShowAgentConnection: () -> Unit,
 	onShowTextureUpscale: () -> Unit,
-	onBatchMeshSplit: () -> Unit = {},
+	onStartScreen: () -> Unit = {},
 	onShowHistory: () -> Unit,
 	onNewEditTab: () -> Unit = {},
 	onNewPreviewTab: () -> Unit = {},
@@ -231,7 +233,8 @@ fun AppTitleBar(
 			) {
 				val showMenuCoach = tutorialId != null && tutorialStep != null &&
 					(tutorialHighlightTarget == TutorialTargetId.FILE_IMPORT ||
-						tutorialHighlightTarget == TutorialTargetId.FILE_EXPORT)
+						tutorialHighlightTarget == TutorialTargetId.FILE_EXPORT ||
+						tutorialHighlightTarget == TutorialTargetId.FILE_MENU_BODY)
 				AppSeamlessDropdownMenu(
 					expanded = activeMenu == "file" || tutorialMenuForce == "file",
 					onDismissRequest = {
@@ -272,6 +275,10 @@ fun AppTitleBar(
 
 					AppMenuSeparator()
 
+					AppMenuHeader(tr("cmo3.menu"))
+					AppMenuItem(text = tr("cmo3.replace"), enabled = !isBusy, onClick = { activeMenu = null; onReplaceCmo3() })
+					AppMenuItem(text = tr("cmo3.new"), enabled = !isBusy, onClick = { activeMenu = null; onNewCmo3() })
+					AppMenuSeparator()
 					// 2. PSD 原画 (Source PSD)
 					AppMenuHeader(tr("menu.file.category.psd"))
 					AppMenuItem(
@@ -598,13 +605,13 @@ fun AppTitleBar(
 						},
 					)
 					AppMenuItem(
-						text = tr("menu.tools.batchMeshSplit"),
+						text = tr("menu.tools.startScreen"),
 						enabled = hasInput && !isBusy,
 						onHover = { activeSubmenu = null },
 						onClick = {
 							activeMenu = null
 							activeSubmenu = null
-							onBatchMeshSplit()
+							onStartScreen()
 						},
 					)
 

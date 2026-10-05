@@ -102,6 +102,42 @@ class SkeletonRigTest {
 		assertEquals(DeformerId("DeformSkel_upper"), baked.drawables.single().parentDeformerId)
 	}
 
+	@Test fun authoredWeightsDriveActualBakedMotionIncludingRefinedVertices() {
+		val mesh = strip("arm", 100f, 95f, 435f, 18f, 20f)
+		val positions = rest(mesh)
+		val weights = SkeletonWeightMap(positions.toList(), mesh.mesh!!.indices.toList(), List(positions.size / 2) { mapOf("fore" to 1f) })
+		val spec = arm("arm").withManualWeights("arm", weights)
+		val restored = SkeletonSpec.fromJson(spec.toJson())
+		val baked = SkeletonRig.apply(legacy(mesh), restored, frame)
+		val neutral = canvas(baked).getValue(mesh.id)
+		val moved = canvas(baked, mapOf(restored.bone("fore")!!.parameterId to 30f)).getValue(mesh.id)
+		for (v in neutral.indices step 2) {
+			val expected = rotate(neutral[v], neutral[v + 1], 100f, 250f, 30f)
+			assertEquals(expected.first, moved[v], 0.1f, "manual weighted vertex $v x")
+			assertEquals(expected.second, moved[v + 1], 0.1f, "manual weighted vertex $v y")
+		}
+		val automatic = SkeletonRig.apply(legacy(mesh), arm("arm"), frame)
+		val autoMoved = canvas(automatic, mapOf(restored.bone("fore")!!.parameterId to 30f)).getValue(mesh.id)
+		assertTrue(abs(autoMoved[0] - moved[0]) > 10f)
+	}
+
+	@Test fun structurallyEditedArmaturesBakeWithStableRestMeshesAndUniqueParameters() {
+		val mesh = strip("arm", 100f, 95f, 435f, 18f, 10f)
+		val original = arm("arm")
+		val specs = listOf(
+			SkeletonAuthoring.duplicate(original, setOf("upper"), true, dx = 0f, dy = 0f, transferBindings = true).spec,
+			SkeletonAuthoring.subdivide(original, "fore", 3).spec,
+			SkeletonAuthoring.dissolve(original, "fore").spec,
+		)
+		for (spec in specs) {
+			val baked = SkeletonRig.apply(legacy(mesh), spec, frame)
+			assertEquals(baked.parameters.size, baked.parameters.map { it.id }.distinct().size)
+			val expected = rest(mesh); val actual = canvas(baked).getValue(mesh.id)
+			for (i in expected.indices) assertEquals(expected[i], actual[i], 0.05f)
+			for (bone in spec.bones.filterNot { it.role.anchor }) assertTrue(baked.parameters.any { it.id.raw == bone.parameterId })
+		}
+	}
+
 	private val breathId = DeformerId("DeformBodyZBreath")
 
 	/** A breath warp over the whole body whose breath key lifts the top edge, stretching the body. */
@@ -118,7 +154,7 @@ class SkeletonRigTest {
 		// Torso and skirt hang from the breath warp, in its normalized space, as the rig builder hangs them.
 		val torso = strip("torso", 250f, 60f, 290f, 40f, 10f).copy(parentDeformerId = breathId)
 		val skirt = strip("skirt", 250f, 330f, 450f, 50f, 10f).copy(parentDeformerId = breathId)
-		// A shoe left on the body warp, bound to no bone, as the rig builder leaves an unsplit pair of legs.
+		// A shoe bound to no bone, beside the body chain: the rig builder stands unsplit legs in the legs warp.
 		val shoe = strip("shoe", 250f, 460f, 490f, 40f, 10f)
 		val source = PuppetModel(emptyList(), emptyList(), listOf(body(), breath()), listOf(arm, torso, skirt, shoe),
 			listOf(arm, torso, skirt, shoe).map { OrgChild.Drawable(it.id) }, null)
@@ -138,15 +174,15 @@ class SkeletonRigTest {
 			for (i in expected.indices) assertEquals(expected[i], actual[i], 0.05f, "rest coordinate $i of " + d.id.raw)
 		}
 		// The torso bend ends the body chain, so every bend above reaches every mesh and bone below it; the
-		// legs bend beside the breath.
+		// legs get no bend of their own.
 		val parent = baked.deformers.associate { it.id.raw to it.parent?.raw }
 		assertEquals("DeformBodyXY", parent["DeformBodyZBreath"])
 		assertEquals("DeformBodyZBreath", parent["DeformSkelTorso"])
-		assertEquals("DeformBodyXY", parent["DeformSkelLegs"])
+		assertTrue("DeformSkelLegs" !in parent)
 		assertEquals("DeformSkelTorso", parent["DeformSkel_upper"])
 		assertEquals("DeformSkelTorso", baked.drawables.single { it.id == torso.id }.parentDeformerId?.raw)
 		assertEquals("DeformSkelTorso", baked.drawables.single { it.id == skirt.id }.parentDeformerId?.raw)
-		assertEquals("DeformSkelLegs", baked.drawables.single { it.id == shoe.id }.parentDeformerId?.raw)
+		assertEquals("DeformBodyXY", baked.drawables.single { it.id == shoe.id }.parentDeformerId?.raw)
 
 		// The breath stretches the body, and the arm rides it: its shoulder lifts with the torso beside it.
 		val breathing = canvas(baked, mapOf("ParamBreath" to 1f))
@@ -188,13 +224,9 @@ class SkeletonRigTest {
 		val p = rotate(skirtRest[hem * 2], skirtRest[hem * 2 + 1], 250f, 300f, 10f)
 		assertEquals(p.first, hips.getValue(skirt.id)[hem * 2], 0.5f)
 		assertEquals(p.second, hips.getValue(skirt.id)[hem * 2 + 1], 0.5f)
-		// The feet turn with the hips exactly as the skirt does.
+		// The feet stay on the floor.
 		val shoeRest = rest.getValue(shoe.id)
-		for (v in 0 until shoeRest.size / 2) {
-			val q = rotate(shoeRest[v * 2], shoeRest[v * 2 + 1], 250f, 300f, 10f)
-			assertEquals(q.first, hips.getValue(shoe.id)[v * 2], 0.5f, "shoe x $v")
-			assertEquals(q.second, hips.getValue(shoe.id)[v * 2 + 1], 0.5f, "shoe y $v")
-		}
+		for (i in shoeRest.indices) assertEquals(shoeRest[i], hips.getValue(shoe.id)[i], 0.05f, "shoe $i")
 		assertEquals(torsoRest[0], hips.getValue(torso.id)[0], 0.05f)
 		// The pose tool draws the upper body where its warp put it.
 		val chest = io.github.psd2live.ui.SkeletonPoseTool.posed(baked, spec, mapOf(ParameterId(waist.parameterId) to 15f))
@@ -651,18 +683,23 @@ class SkeletonRigTest {
 		assertTrue(baked.deformers.none { d -> d is Deformer.Rotation && d.blendShapes.any { it.parameterId in gestures } })
 		// A motion plays it on the bones, added to what it writes there itself, point for point.
 		val sway = SkeletonPoses.armSway.id.raw
-		val played = SkeletonMotions.played(spec, listOf(
-			sway to listOf(0f to 0f, 1f to 1f, 2f to -0.5f),
-			"ParamArmLB" to listOf(0f to 10f, 2f to 30f),
-		)).toMap()
-		assertTrue(sway !in played)
-		for (time in listOf(0.0, 0.3, 1.0, 1.7, 2.0)) {
-			val value = SkeletonMotions.sample(listOf(0f to 0f, 1f to 1f, 2f to -0.5f), time, false)
-			val turns = SkeletonPoses.boneTurns(spec, SkeletonPoses.armSway, value)
-			for (bone in listOf("upper", "fore", "hand")) {
-				val id = spec.bone(bone)!!.parameterId
-				val own = if (id == "ParamArmLB") 10f + 10f * time.toFloat() else 0f
-				assertEquals(own + (turns[bone] ?: 0f), SkeletonMotions.sample(played.getValue(id), time, false), 1e-3f, "$id at $time")
+		// Linear or eased, the bone curves follow the pose exactly between their sparse keys.
+		for (swayCurve in listOf(
+			MotionCurveMath.linear(sway, listOf(0f to 0f, 1f to 1f, 2f to -0.5f)),
+			MotionCurveMath.eased(sway, listOf(0f to 0f, 0.7f to 1f, 2f to -0.5f)),
+		)) {
+			val own = MotionCurveMath.eased("ParamArmLB", listOf(0f to 10f, 2f to 30f))
+			val played = SkeletonMotions.played(spec, listOf(swayCurve, own)).associateBy { it.parameterId }
+			assertTrue(sway !in played)
+			for (step in 0..40) {
+				val time = step / 20.0
+				val value = SkeletonMotions.sample(swayCurve, time, false)
+				val turns = SkeletonPoses.boneTurns(spec, SkeletonPoses.armSway, value)
+				for (bone in listOf("upper", "fore", "hand")) {
+					val id = spec.bone(bone)!!.parameterId
+					val mine = if (id == "ParamArmLB") SkeletonMotions.sample(own, time, false) else 0f
+					assertEquals(mine + (turns[bone] ?: 0f), SkeletonMotions.sample(played.getValue(id), time, false), 1e-2f, "$id at $time")
+				}
 			}
 		}
 		// Played on the bones, the gesture stacks with the arm turned by hand. At the hand, two
@@ -826,28 +863,27 @@ class SkeletonRigTest {
 			SkeletonPoses.tailSwing), SkeletonPoses.available(spec).toSet())
 		val idle = SkeletonMotions.idle(spec)
 		// The idle keeps to the weight: the leg poses only add, so they never play together.
-		val posed = idle.map { it.first }.filter { id -> SkeletonPoses.all.any { it.id.raw == id } }.toSet()
+		val posed = idle.map { it.parameterId }.filter { id -> SkeletonPoses.all.any { it.id.raw == id } }.toSet()
 		assertEquals(setOf(SkeletonPoses.weight, SkeletonPoses.tailSwing).map { it.id.raw }.toSet(), posed)
 		// The body follows on the same loop, without a skeleton too.
 		val body = setOf("ParamBreath", "ParamBodyAngleX", "ParamBodyAngleZ", "ParamAngleZ")
-		assertTrue(idle.map { it.first }.containsAll(body))
-		assertTrue(SkeletonMotions.idle(null).map { it.first }.containsAll(body))
+		assertTrue(idle.map { it.parameterId }.containsAll(body))
+		assertTrue(SkeletonMotions.idle(null).map { it.parameterId }.containsAll(body))
 		for ((id, points) in idle) {
-			assertEquals(points.first().second, points.last().second, 1e-3f, "$id loop seam")
-			assertEquals(SkeletonMotions.IDLE_DURATION, points.last().first, 1e-4f, "$id duration")
+			assertEquals(points.first().value, points.last().value, 1e-3f, "$id loop seam")
+			assertEquals(SkeletonMotions.IDLE_DURATION, points.last().time, 1e-4f, "$id duration")
 			val pose = SkeletonPoses.all.singleOrNull { it.id.raw == id } ?: continue
-			assertTrue(points.all { it.second in pose.min..pose.max }, "$id out of range")
+			assertTrue(points.all { it.value in pose.min..pose.max }, "$id out of range")
 		}
-		assertTrue(idle.single { it.first == "ParamBreath" }.second.all { it.second in -1e-4f..1.0001f })
+		val breath = idle.single { it.parameterId == "ParamBreath" }
+		assertTrue((0..120).all { SkeletonMotions.sample(breath, it / 20.0, loop = true) in -1e-3f..1.001f })
 		for (tracks in listOf(SkeletonMotions.crouch(spec), SkeletonMotions.weightShift(spec), SkeletonMotions.tailSwing(spec))) {
 			assertTrue(tracks.isNotEmpty())
-			for ((id, points) in tracks) {
-				assertTrue(SkeletonPoses.all.any { it.id.raw == id })
-				assertEquals(0f, points.last().second, 1e-4f)
-			}
+			assertTrue(tracks.any { track -> SkeletonPoses.all.any { it.id.raw == track.parameterId } })
+			for ((_, points) in tracks) assertEquals(0f, points.last().value, 1e-4f)
 		}
 		// A leg one-shot holds the other leg pose at rest.
-		assertTrue(SkeletonMotions.crouch(spec).single { it.first == SkeletonPoses.weight.id.raw }.second.all { it.second == 0f })
+		assertTrue(SkeletonMotions.crouch(spec).single { it.parameterId == SkeletonPoses.weight.id.raw }.keys.all { it.value == 0f })
 		assertTrue(SkeletonMotions.oneShot(SkeletonMotions.crouch(spec), 99.0) == null)
 		assertEquals(SkeletonMotions.liveIdle(spec, 0.0).getValue(SkeletonPoses.weight.id),
 			SkeletonMotions.liveIdle(spec, SkeletonMotions.IDLE_DURATION.toDouble()).getValue(SkeletonPoses.weight.id), 1e-3f)
@@ -860,26 +896,26 @@ class SkeletonRigTest {
 			if (name == "Wave") assertTrue(tracks.isEmpty(), "no right arm to wave")
 			else assertTrue(name == "TailSwing" || tracks.isNotEmpty(), "$name has legs to play")
 			if (tracks.isEmpty()) continue
-			val legTracks = tracks.map { it.first }.filter { it in legIds }.toSet()
+			val legTracks = tracks.map { it.parameterId }.filter { it in legIds }.toSet()
 			assertTrue(legTracks.isEmpty() || legTracks == legIds.toSet(), "$name leaves a leg pose free")
-			assertTrue(tracks.count { (id, points) -> id in plantedIds && points.any { it.second != 0f } } <= 1, "$name plays two leg poses")
+			assertTrue(tracks.count { (id, points) -> id in plantedIds && points.any { it.value != 0f } } <= 1, "$name plays two leg poses")
 			for ((id, points) in tracks) {
-				assertEquals(0f, points.last().second, 1e-4f, "$name $id")
+				assertEquals(0f, points.last().value, 1e-4f, "$name $id")
 				val pose = SkeletonPoses.all.singleOrNull { it.id.raw == id } ?: continue
 				assertTrue(pose in SkeletonPoses.available(spec), "$name drives $id")
-				assertTrue(points.all { it.second in pose.min..pose.max }, "$name $id out of range")
+				assertTrue(points.all { it.value in pose.min..pose.max }, "$name $id out of range")
 			}
 			assertTrue(SkeletonMotions.oneShot(tracks, 99.0) == null)
 		}
-		assertTrue(SkeletonMotions.shy(spec).any { (id, points) -> id == SkeletonPoses.kneesIn.id.raw && points.any { it.second > 0f } })
+		assertTrue(SkeletonMotions.shy(spec).any { (id, points) -> id == SkeletonPoses.kneesIn.id.raw && points.any { it.value > 0f } })
 		// The cute idle stands knock-kneed instead of shifting its weight, and still loops.
-		val cute = SkeletonMotions.idleCute(spec).toMap()
-		assertTrue(cute.getValue(SkeletonPoses.kneesIn.id.raw).all { it.second == 0.3f })
-		assertTrue(cute.getValue(SkeletonPoses.weight.id.raw).all { it.second == 0f })
-		for ((id, points) in cute) assertEquals(points.first().second, points.last().second, 1e-3f, "$id loop seam")
+		val cute = SkeletonMotions.idleCute(spec).associate { it.parameterId to it.keys }
+		assertTrue(cute.getValue(SkeletonPoses.kneesIn.id.raw).all { it.value == 0.3f })
+		assertTrue(cute.getValue(SkeletonPoses.weight.id.raw).all { it.value == 0f })
+		for ((id, points) in cute) assertEquals(points.first().value, points.last().value, 1e-3f, "$id loop seam")
 		assertTrue(SkeletonMotions.idleCute(null).isEmpty())
 		// A pose whose every bone is driven by physics stays out of the idle.
-		assertTrue(SkeletonMotions.idle(spec, exclude = setOf("ParamTail1")).none { it.first == SkeletonPoses.tailSwing.id.raw })
+		assertTrue(SkeletonMotions.idle(spec, exclude = setOf("ParamTail1")).none { it.parameterId == SkeletonPoses.tailSwing.id.raw })
 	}
 
 	@Test fun liveIdleReusesTracksAndInvalidatesWhenSkeletonChanges() {

@@ -1,9 +1,11 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.agent.WorkspaceSourceLayer
-import io.github.psd2live.agent.WorkspaceSourceArt
-import io.github.psd2live.agent.AgentWorkspaceDocument
-import io.github.psd2live.agent.AgentWorkspaceStore
+
+import io.github.psd2live.project.WorkspaceSourceLayer
+import org.umamo.runtime.model.DrawableId
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.WorkspaceStore
 import io.github.psd2live.history.WorkspaceHistoryTree
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -22,6 +24,15 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class MeshComponentSplitTest {
+    @Test fun formalSplitNamesAvoidExistingAndBatchCollisions() {
+        val layers = (1..3).map { index -> source(2).copy(id = LayerId("layer-$index"), name = "Front Hair") }
+        val analysis = CharacterAnalyzer.analyze(WorkspaceSourceArt(30, 20, layers, emptyList()), PipelineConfig())
+        val existing = mapOf("layer-1" to DrawableId("ArtMeshFrontHair"))
+        val assigned = RigBuilder.assignSplitDrawableIds(analysis, existing)
+        assertEquals(setOf("ArtMeshFrontHair", "ArtMeshFrontHair2", "ArtMeshFrontHair3"), assigned.values.map { it.raw }.toSet())
+        assertEquals(existing.getValue("layer-1"), assigned.getValue("layer-1"))
+        assertEquals(assigned, RigBuilder.assignSplitDrawableIds(analysis, assigned))
+    }
     @TempDir lateinit var temp: Path
 
     private fun source(count: Int): WorkspaceSourceLayer {
@@ -216,12 +227,13 @@ class MeshComponentSplitTest {
         }.parentDeformerId)
         // A normal project reopen rebuilds from source/config rather than retaining the preview objects.
         val savedSource = WorkspaceSourceArt(30, 20, listOf(layer) + pieces, emptyList())
-        val store = AgentWorkspaceStore(temp)
-        val document = AgentWorkspaceDocument(savedSource, emptyMap(), config.deletedLayerIds,
-            config.layerOverrides, config.parentOverrides, config.rigEdits)
+        val store = WorkspaceStore(temp)
+        val document = WorkspaceDocument(savedSource, emptyMap(), config.deletedLayerIds,
+            config.layerOverrides, config.parentOverrides, split.config.rigEdits)
         store.persistHistory("mesh-split", WorkspaceHistoryTree(document, "revision", "snapshot").state())
         val restored = assertNotNull(store.loadHistory("mesh-split")).head().snapshot
         assertEquals(setOf(layer.id.raw), restored.rigEdits.splitBaselineLayerIds)
+        assertEquals(split.config.rigEdits.splitDrawableIds, restored.rigEdits.splitDrawableIds)
         val reopened = pipeline.buildPreview(restored.source, config.copy(rigEdits = restored.rigEdits))
         val reopenedParent = assertNotNull(reopened.rig.puppet.deformers.firstOrNull { it.id == parentId })
         val oldWarp = oldParent as org.umamo.runtime.model.Deformer.Warp
@@ -297,10 +309,11 @@ class MeshComponentSplitTest {
         val pieceIds = pieces.map { piece ->
             split.rig.layerIdByDrawableId.entries.single { it.value == piece.id.raw }.key
         }
-        assertTrue(pieceIds.all { it.startsWith("ArtMeshSplit") })
+        assertEquals(setOf("ArtMeshHandwearR", "ArtMeshHandwearL"), pieceIds.toSet())
+        assertTrue(pieceIds.none { it.startsWith("ArtMeshSplit") })
         // Binding the pieces to a skeleton is the only edit naming them; a rebuild must keep those ids.
         val bone = SkeletonBone("arm", "Arm", null, BoneRole.UPPER_ARM, headX = 0f, headY = 0f, tailX = 0f, tailY = 10f, drawableIds = pieceIds)
-        val bound = config.copy(rigEdits = config.rigEdits.copy(skeleton = SkeletonSpec(enabled = false, bones = listOf(bone))))
+        val bound = split.config.copy(rigEdits = split.config.rigEdits.copy(skeleton = SkeletonSpec(enabled = false, bones = listOf(bone))))
         val rebuilt = pipeline.buildPreview(source, bound)
         val rebuiltIds = rebuilt.rig.puppet.drawables.map { it.id.raw }.toSet()
         assertTrue(rebuiltIds.containsAll(pieceIds), "rebuild renamed the bound pieces: $rebuiltIds")

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -70,6 +71,7 @@ import org.umamo.edit.withOrgChildMoved
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.ColorRgb
@@ -103,89 +105,92 @@ internal fun InspectorPanelView(
     val selectedDeformer = puppet?.deformers?.firstOrNull { it.id.raw == selectedDeformerId }
     val selectedDrawable = puppet?.drawables?.firstOrNull { it.id.raw == layerDrawableId || it.id.raw == selectedLayerId }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(colors.panelBackground)
-            .verticalScroll(rememberScrollState())
-            .padding(vertical = 4.dp, horizontal = 6.dp),
-    ) {
-        // Tab Header bar matching screenshots
-        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-            Text(
-                text = tr("tab.inspector") + if (state.activeWorkspace.canvases.size > 1) " · ${viewModel.canvasTitle(state.activeCanvas)}" else "",
-                style = typography.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-                color = colors.textPrimary,
-                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-            )
-            Divider(color = colors.textPrimary.copy(alpha = 0.6f), thickness = 1.5.dp)
+    Column(modifier = modifier.fillMaxSize().background(colors.panelBackground)) {
+        // What is being inspected, and on which canvas when there are several.
+        PanelToolbar {
+            val selectedName = selectedDeformer?.name ?: selectedDrawable?.name
+            if (selectedName != null) {
+                PanelToolbarTitle(selectedName, modifier = Modifier.padding(start = 4.dp).weight(1f))
+            } else {
+                PanelToolbarText(tr("tab.inspector"), modifier = Modifier.padding(start = 4.dp).weight(1f))
+            }
+            if (state.activeWorkspace.canvases.size > 1) {
+                PanelToolbarText(viewModel.canvasTitle(state.activeCanvas), modifier = Modifier.widthIn(max = 108.dp))
+            }
         }
-
-        when {
-            selectedDeformer is Deformer.Warp -> {
-                WarpDeformerInspector(
-                    warp = selectedDeformer,
-                    allParts = puppet.parts.map { it.id.raw to it.name },
-                    allDeformers = puppet.deformers.map { it.id.raw to it.name },
-                    editor = editor,
-                    viewModel = viewModel,
-                )
-            }
-            selectedDeformer is Deformer.Rotation -> {
-                RotationDeformerInspector(
-                    rotation = selectedDeformer,
-                    allParts = puppet.parts.map { it.id.raw to it.name },
-                    allDeformers = puppet.deformers.map { it.id.raw to it.name },
-                    editor = editor,
-                    viewModel = viewModel,
-                )
-            }
-            selectedDrawable != null -> {
-                val activePath = editor.selectedPath()?.takeIf { it.drawableId == selectedDrawable.id }
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (activePath != null) {
-                        DeformPathInspector(
-                            path = activePath,
-                            drawable = selectedDrawable,
-                            editor = editor,
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Divider(color = colors.border.copy(alpha = 0.55f), thickness = 1.dp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                    ArtMeshInspector(
-                        drawable = selectedDrawable,
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 6.dp, horizontal = 6.dp),
+        ) {
+            when {
+                selectedDeformer is Deformer.Warp -> {
+                    WarpDeformerInspector(
+                        warp = selectedDeformer,
                         allParts = puppet.parts.map { it.id.raw to it.name },
                         allDeformers = puppet.deformers.map { it.id.raw to it.name },
-                        allDrawables = puppet.drawables.map { it.id.raw to it.name },
                         editor = editor,
                         viewModel = viewModel,
-                        state = state,
                     )
                 }
-            }
-            else -> {
-                // Empty state
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(top = 48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                selectedDeformer is Deformer.Rotation -> {
+                    RotationDeformerInspector(
+                        rotation = selectedDeformer,
+                        allParts = puppet.parts.map { it.id.raw to it.name },
+                        allDeformers = puppet.deformers.map { it.id.raw to it.name },
+                        editor = editor,
+                        viewModel = viewModel,
+                    )
+                }
+                selectedDrawable != null -> {
+                    val activePath = editor.selectedPath()?.takeIf { it.drawableId == selectedDrawable.id }
+                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (activePath != null) {
+                            DeformPathInspector(
+                                path = activePath,
+                                drawable = selectedDrawable,
+                                editor = editor,
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Divider(color = colors.border.copy(alpha = 0.55f), thickness = 1.dp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                        ArtMeshInspector(
+                            drawable = selectedDrawable,
+                            allParts = puppet.parts.map { it.id.raw to it.name },
+                            allDeformers = puppet.deformers.map { it.id.raw to it.name },
+                            allDrawables = puppet.drawables.map { it.id.raw to it.name },
+                            editor = editor,
+                            viewModel = viewModel,
+                            state = state,
+                        )
+                    }
+                }
+                else -> {
+                    // Empty state
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(top = 48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = tr("inspector.noSelection"),
-                            style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                            color = colors.textMuted,
-                        )
-                        Text(
-                            text = tr("inspector.noSelectionHint"),
-                            style = typography.caption.copy(fontSize = 10.5.sp),
-                            color = colors.textDisabled,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = tr("inspector.noSelection"),
+                                style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                                color = colors.textMuted,
+                            )
+                            Text(
+                                text = tr("inspector.noSelectionHint"),
+                                style = typography.caption.copy(fontSize = 10.5.sp),
+                                color = colors.textDisabled,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -221,6 +226,7 @@ private fun DeformPathInspector(
                     max = 100000.0,
                     decimals = 2,
                     step = 1.0,
+                    unit = "px",
                     enabled = editable,
                     height = 23.dp,
                 )
@@ -228,14 +234,14 @@ private fun DeformPathInspector(
 
             InspectorFormRow(label = tr("inspector.deformPathHardness")) {
                 CompactNumberSpinner(
-                    value = path.hardness * 100.0,
+                    value = path.hardness.toDouble(),
                     onValueChange = { h ->
-                        if (editable) editor.changePath { it.copy(hardness = (h.toFloat() / 100f).coerceIn(0f, 1f)) }
+                        if (editable) editor.changePath { it.copy(hardness = h.toFloat().coerceIn(0f, 100f)) }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     min = 0.0,
                     max = 100.0,
-                    decimals = 0,
+                    decimals = 2,
                     step = 1.0,
                     unit = "%",
                     enabled = editable,
@@ -514,11 +520,13 @@ private fun ArtMeshInspector(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 CompactNumberSpinner(
-                    value = drawable.drawOrder.toDouble(),
+                    value = (state.drawOrderOverrides[state.previewModel?.rig?.layerIdByDrawableId?.get(drawable.id.raw)]
+                        ?: state.drawOrderOverrides[drawable.id.raw] ?: drawable.drawOrder).toDouble(),
                     onValueChange = { order ->
-                        viewModel.updatePuppetModel { it.withDrawableDrawOrder(drawable.id, order.toFloat()) }
+                        viewModel.beginEditorField("mesh.draw_order.${drawable.id.raw}")
                         viewModel.setLayerDrawOrder(drawable.id.raw, order.toFloat())
                     },
+                    onEditEnd = { viewModel.endEditorField("mesh.draw_order.${drawable.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 0.0,
                     max = 1000.0,
@@ -675,12 +683,8 @@ private fun WarpDeformerInspector(
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
 
-    var bezierCols by remember(warp.id.raw) {
-        mutableStateOf(editor.warpBezierDivisions[warp.id.raw]?.second ?: 2)
-    }
-    var bezierRows by remember(warp.id.raw) {
-        mutableStateOf(editor.warpBezierDivisions[warp.id.raw]?.first ?: 2)
-    }
+    val bezierCols = editor.warpBezierDivisions[warp.id.raw]?.second ?: 2
+    val bezierRows = editor.warpBezierDivisions[warp.id.raw]?.first ?: 2
 
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // 1. 名称 (Name)
@@ -795,12 +799,11 @@ private fun WarpDeformerInspector(
                     value = warp.columns.toDouble(),
                     onValueChange = { nextCols ->
                         val cols = nextCols.toInt().coerceIn(1, 32)
-                        viewModel.updatePuppetModel { model ->
-                            model.copy(deformers = model.deformers.map {
-                                if (it.id == warp.id && it is Deformer.Warp) it.copy(columns = cols) else it
-                            })
-                        }
+                        viewModel.applyWarpControlField("warp.columns.${warp.id.raw}", "warp_set_topology", buildJsonObject {
+                            put("target", "warp:${warp.id.raw}"); put("rows", warp.rows); put("columns", cols)
+                        })
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.columns.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 32.0,
@@ -813,12 +816,11 @@ private fun WarpDeformerInspector(
                     value = warp.rows.toDouble(),
                     onValueChange = { nextRows ->
                         val rows = nextRows.toInt().coerceIn(1, 32)
-                        viewModel.updatePuppetModel { model ->
-                            model.copy(deformers = model.deformers.map {
-                                if (it.id == warp.id && it is Deformer.Warp) it.copy(rows = rows) else it
-                            })
-                        }
+                        viewModel.applyWarpControlField("warp.rows.${warp.id.raw}", "warp_set_topology", buildJsonObject {
+                            put("target", "warp:${warp.id.raw}"); put("rows", rows); put("columns", warp.columns)
+                        })
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.rows.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 32.0,
@@ -853,10 +855,9 @@ private fun WarpDeformerInspector(
                     value = bezierCols.toDouble(),
                     onValueChange = {
                         val next = it.toInt().coerceIn(1, 16)
-                        bezierCols = next
-                        editor.warpBezierDivisions[warp.id.raw] = bezierRows to next
-                        editor.ensureBezierState()
+                        editor.setBezierDivisionsLive("warp.bezier.columns.${warp.id.raw}", bezierRows, next)
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.bezier.columns.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 16.0,
@@ -869,10 +870,9 @@ private fun WarpDeformerInspector(
                     value = bezierRows.toDouble(),
                     onValueChange = {
                         val next = it.toInt().coerceIn(1, 16)
-                        bezierRows = next
-                        editor.warpBezierDivisions[warp.id.raw] = next to bezierCols
-                        editor.ensureBezierState()
+                        editor.setBezierDivisionsLive("warp.bezier.rows.${warp.id.raw}", next, bezierCols)
                     },
+                    onEditEnd = { viewModel.endWarpControlField("warp.bezier.rows.${warp.id.raw}") },
                     modifier = Modifier.weight(1f),
                     min = 1.0,
                     max = 16.0,

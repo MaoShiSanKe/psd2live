@@ -2,6 +2,7 @@ package io.github.psd2live.core
 
 import kotlinx.serialization.json.*
 import org.umamo.runtime.model.*
+import org.umamo.runtime.eval.meshGridDefaultDeltas
 
 /** An identity child warp preserves every existing mesh keyform and the inherited deformation. */
 data class RigWarpEdit(val id: String, val name: String, val parentId: String,
@@ -13,7 +14,7 @@ data class RigWarpEdit(val id: String, val name: String, val parentId: String,
     }
 
     fun applyTo(model: PuppetModel): PuppetModel {
-        require(model.deformers.none { it.id.raw == id }) { "Deformer ID already exists: $id" }
+        require(model.deformers.none { it.id.raw == id } && model.drawables.none { it.id.raw == id }) { "Object ID already exists: $id" }
         val parent = model.deformers.singleOrNull { it.id.raw == parentId } as? Deformer.Warp
             ?: error("Parent must be an existing Warp; inspect object_get for the mesh parent")
         for (meshId in meshIds) {
@@ -40,16 +41,35 @@ data class RigWarpEdit(val id: String, val name: String, val parentId: String,
             val targets = model.drawables.filter { it.id.raw in meshIds }
             val positions = targets.flatMap { drawable ->
                 val base = requireNotNull(drawable.mesh).positions
-                listOf(base) + drawable.geometryGrid?.cells.orEmpty().map { cell ->
+                val gridPositions = listOf(base) + drawable.geometryGrid?.cells.orEmpty().map { cell ->
                     require(cell.form.positionDeltas.size == base.size)
                     FloatArray(base.size) { base[it] + cell.form.positionDeltas[it] }
                 }
+                val reference = meshGridDefaultDeltas(drawable) { parameter ->
+                    model.parameters.singleOrNull { it.id == parameter }?.default ?: 0f
+                }
+                val minimum = FloatArray(base.size)
+                val maximum = FloatArray(base.size)
+                // Each binding is a convex combination of its keys and neutral. Independent
+                // bindings add, so their component envelopes must add before cropping the lattice.
+                for (binding in drawable.blendShapes) {
+                    val forms = binding.forms.filterIndexed { index, _ -> index != binding.neutralIndex }.filterNotNull()
+                    require(forms.all { it.positionDeltas.size == base.size }) { "Blend shape geometry dimensions do not match the mesh" }
+                    for (component in base.indices) {
+                        val deltas = forms.map { it.positionDeltas[component] - (reference?.get(component) ?: 0f) }
+                        minimum[component] += minOf(0f, deltas.minOrNull() ?: 0f)
+                        maximum[component] += maxOf(0f, deltas.maxOrNull() ?: 0f)
+                    }
+                }
+                gridPositions.flatMap { geometry -> listOf(
+                    FloatArray(base.size) { geometry[it] + minimum[it] },
+                    FloatArray(base.size) { geometry[it] + maximum[it] }) }
             }
             val xs = positions.flatMap { p -> p.indices.step(2).map { p[it] } }
             val ys = positions.flatMap { p -> (1 until p.size step 2).map { p[it] } }
             require(xs.isNotEmpty() && ys.isNotEmpty()) { "Cannot fit empty geometry" }
             require(xs.all { it.isFinite() && it in 0f..1f } && ys.all { it.isFinite() && it in 0f..1f }) {
-                "Local Warp fit requires geometry inside the parent domain; extend or repair the parent first"
+                "Local Warp fit requires the grid and combined blend-shape envelope inside the parent domain; use fit_local=false or extend the parent first"
             }
             val left = maxOf(0, kotlin.math.floor(xs.min() * effectiveColumns).toInt() - 1)
             val right = minOf(effectiveColumns, kotlin.math.ceil(xs.max() * effectiveColumns).toInt() + 1)
@@ -77,6 +97,11 @@ data class RigWarpEdit(val id: String, val name: String, val parentId: String,
                             KeyformCell(cell.coordinate, MeshDeltaForm(FloatArray(cell.form.positionDeltas.size) { j ->
                                 cell.form.positionDeltas[j] / if (j % 2 == 0) width else height
                             }))
+                        }) }, blendShapes = drawable.blendShapes.map { binding -> binding.copy(forms = binding.forms.map { form ->
+                            form?.let { MeshForm(positionDeltas = FloatArray(form.positionDeltas.size) { j ->
+                                form.positionDeltas[j] / if (j % 2 == 0) width else height
+                            }, drawOrder = form.drawOrder, opacity = form.opacity,
+                                multiplyColor = form.multiplyColor, screenColor = form.screenColor) }
                         }) })
                 }
             }).withDerivedRenderRoot()

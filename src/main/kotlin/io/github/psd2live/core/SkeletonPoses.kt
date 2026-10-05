@@ -75,8 +75,11 @@ internal object SkeletonPoses {
 	/** World degrees the upper body leans back against the hips' tilt at full weight shift. */
 	private const val UPPER_BODY_COUNTER = 1.5f
 
+	/** Degrees the weight pose swings the upper arms at full weight shift, the hands away from the hips. */
+	const val WEIGHT_ARM_TURN = 5f
+
 	/**
-	 * The poses [spec] can play: the leg poses when a skinned leg exists, every other pose when it turns
+	 * The poses [spec] can play: the leg poses when it has legs, skinned or standing in the legs warp, every other pose when it turns
 	 * a bone whose skinning tree holds a mesh.
 	 */
 	fun available(spec: SkeletonSpec?): List<SkeletonPose> {
@@ -120,9 +123,8 @@ internal object SkeletonPoses {
 				}?.let { bone.id to it * abs(value) }
 			}.toMap()
 		val turns = when (pose) {
-			crouch -> bones.filter { it.role == BoneRole.UPPER_ARM }.associate { it.id to 8f * value }
 			// The arms hang from the chest, so they trail the hips; the chest leans back against the tilt.
-			weight -> bones.filter { it.role == BoneRole.UPPER_ARM }.associate { it.id to 5f * (if (it.direction > 0f) 1f else -1f) * value } +
+			weight -> bones.filter { it.role == BoneRole.UPPER_ARM }.associate { it.id to WEIGHT_ARM_TURN * (if (it.direction > 0f) 1f else -1f) * value } +
 				bones.filter { it.role == BoneRole.UPPER_BODY }.associate { it.id to UPPER_BODY_COUNTER * value * it.direction }
 			tailSwing -> bones.filter { it.role == BoneRole.TAIL }.associate { bone ->
 				val segment = depth(spec, bone)
@@ -202,6 +204,9 @@ internal object SkeletonPoses {
 
 	/** How much of its chain's amplitude a joint [segment] deep keeps. */
 	private fun decay(segment: Int): Float = 1f / (1f + segment * 0.45f)
+
+	/** True when turning [bone] moves a mesh. */
+	fun isSkinned(spec: SkeletonSpec, bone: SkeletonBone): Boolean = bone.id in skinnedBones(spec)
 
 	/** Bones whose skinning tree holds at least one mesh, so turning them moves something. */
 	private fun skinnedBones(spec: SkeletonSpec): Set<String> {

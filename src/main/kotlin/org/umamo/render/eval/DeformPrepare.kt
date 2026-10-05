@@ -217,7 +217,8 @@ internal fun preparePose(
 						FormChannel.GLUE_INTENSITY,
 						glue.intensity,
 						paramValue,
-						overrides?.get(KeyableTarget(KeyformOwner.Glue(glue.meshA, glue.meshB), FormChannel.GLUE_INTENSITY)),
+						(overrides?.get(KeyableTarget(KeyformOwner.Glue(glue.meshA, glue.meshB, glue.id), FormChannel.GLUE_INTENSITY))
+                            ?: overrides?.get(KeyableTarget(KeyformOwner.Glue(glue.meshA, glue.meshB), FormChannel.GLUE_INTENSITY))),
 					),
 			)
 		}

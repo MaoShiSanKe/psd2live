@@ -29,11 +29,11 @@ The UI is organized into workspace tabs, each with its own canvases and panel la
 
 ## Tutorial paths
 
-The catalog has 18 topics. The beginner path contains the 17 lessons below; the experienced path starts with a Cubism-to-PSD2Live terminology bridge and skips selected introductory lessons.
+The catalog has 19 topics. The beginner path contains the 18 lessons below; the experienced path starts with a Cubism-to-PSD2Live terminology bridge and skips selected introductory lessons. Every chapter except Basic workflow first asks you to import a PSD or open a project when no model is open.
 
 | Lesson | Topic | Remember |
 | --- | --- | --- |
-| 1 | Basic workflow | Import layered artwork, inspect parts and settings, then choose export formats. |
+| 1 | Basic workflow | Import layered artwork, inspect parts and model presets, then choose export formats; texture atlas settings are in the export dialog. |
 | 2 | Workspace | Edit changes the model; Preview shows it; History restores versions. Each canvas tab has its own camera and overlays. |
 | 3 | Hierarchy and mode bar | Select, search and reparent objects. Drop transparent artwork on the tree and confirm placement. Drawing order and parent deformation are different. |
 | 4 | Layer types and variants | Presets apply part algorithms; toggle variants show/hide; exclusive variants share a parameter with different association IDs. |
@@ -45,11 +45,12 @@ The catalog has 18 topics. The beginner path contains the 17 lessons below; the 
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
 | 12 | Tool details | Configure the current tool; canvas context menus also change with mode and tool. |
-| 13 | Skeleton rigging and posing | Build chains, bind ArtMeshes, inspect smoothed weights and IK, and configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
-| 14 | Animation editor | Edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
+| 13 | Skeleton rigging and editing | Create, extrude, duplicate and mirror bones in Skeleton mode, batch-bind ArtMeshes, pose with FK/IK, paint and clean skin weights and save poses; configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
+| 14 | Animation editor | Tune generated motions with each preset's knobs; edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
-| 16 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset. |
-| 17 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
+| 16 | Cloth and hair simulation | Generate hair and clothing simulation in the model presets' Physics & Simulation group (first if there is none) and learn the hair modes and clothing options; then inspect bodies in the Simulation panel, paint and understand pin, stiffness, shape, mass and damping weights in Simulate mode, set glue, material presets and values, inputs and outputs and bake options, and bake into parameters, keyforms and a Cubism pendulum; only the bake exports. |
+| 17 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset. |
+| 18 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
 
 ## Important distinctions
 
@@ -57,6 +58,10 @@ The catalog has 18 topics. The beginner path contains the 17 lessons below; the 
 - Parameter keyforms belong to modeling and interpolate model shapes. Animation keyframes record parameter values at points in time.
 - Deform changes shapes; Edit changes mesh structure; Paint changes pixels in an isolated apply/discard session.
 - Temporary solo visibility and static visibility are not parameter-driven variants. Use variants or opacity keyforms for animated switches.
+
+For collar and hair occlusion workflows, see the [illustrated front/back layering tutorial (Chinese)](../../zh/guide/DEPTH_SPLIT.md).
+
+For hair and clothing simulation, pin weights and baking, see the [illustrated simulation tutorial (Chinese)](../../zh/guide/SIMULATION_TUTORIAL.md).
 
 ## Default shortcuts
 
@@ -73,6 +78,7 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | Tutorials | `F1` |
 | Zoom / pan | Wheel / middle drag or Space + left drag |
 | Frame selection / reset camera | `F` / `Home` or `0` |
+| Temporary selection / toggle quick preview | Hold `Z`, release to restore / grave accent key (below Esc) |
 | Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
 
 ## Troubleshooting

@@ -25,7 +25,11 @@ import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
+import io.github.psd2live.ui.SkeletonEditSubTool
+import io.github.psd2live.ui.SkeletonPoseSubTool
+import io.github.psd2live.ui.components.drawSingleBoneIcon
 import io.github.psd2live.ui.components.drawBoneIcon
+import org.umamo.runtime.model.VertexGroupKind
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -105,8 +109,9 @@ internal fun ToolIcon(
     color: Color,
     brushShape: BrushShape? = null,
     paintShape: PaintShape? = null,
+    skeletonEditSubTool: SkeletonEditSubTool? = null,
 ) {
-    Canvas(Modifier.size(18.dp)) { drawToolIcon(tool, color, brushShape, paintShape) }
+    Canvas(Modifier.size(18.dp)) { drawToolIcon(tool, color, brushShape, paintShape, skeletonEditSubTool) }
 }
 
 /** The hierarchy mode bar's icons, one per mode, on the same grid as the tools. */
@@ -130,11 +135,27 @@ internal fun GlueSubToolIcon(subTool: GlueSubTool, color: Color, size: Dp = 14.d
     Canvas(Modifier.size(size)) { drawGlueSubToolIcon(subTool, color) }
 }
 
+@Composable
+internal fun SkeletonEditSubToolIcon(subTool: SkeletonEditSubTool, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) { IconPen(this, color).skeletonEditSubTool(subTool) }
+}
+
+@Composable
+internal fun SkeletonPoseSubToolIcon(subTool: SkeletonPoseSubTool, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) {
+        val pen = IconPen(this, color)
+        if (subTool == SkeletonPoseSubTool.IK) pen.skeletonEditSubTool(SkeletonEditSubTool.EXTRUDE)
+        else if (subTool == SkeletonPoseSubTool.FK) pen.skeletonPose()
+        else { pen.skeletonPose(); pen.dot(14f, 14f, 2f) }
+    }
+}
+
 internal fun DrawScope.drawToolIcon(
     tool: CanvasTool,
     color: Color,
     brushShape: BrushShape? = null,
     paintShape: PaintShape? = null,
+    skeletonEditSubTool: SkeletonEditSubTool? = null,
 ) {
     val pen = IconPen(this, color)
     when (tool) {
@@ -145,13 +166,15 @@ internal fun DrawScope.drawToolIcon(
         CanvasTool.SMOOTH -> pen.smooth()
         CanvasTool.INFLATE -> pen.inflate()
         CanvasTool.SKELETON_POSE -> pen.skeletonPose()
-        CanvasTool.SKELETON_EDIT -> pen.skeletonEdit()
+        CanvasTool.SKELETON_EDIT -> pen.skeletonEditSubTool(skeletonEditSubTool ?: SkeletonEditSubTool.EDIT)
         CanvasTool.CREATE_WARP -> pen.warpLattice()
         CanvasTool.CREATE_ROTATION -> pen.rotationDeformer()
         CanvasTool.CREATE_DEFORM_PATH -> pen.deformPath()
         CanvasTool.GLUE -> pen.glue()
         CanvasTool.SUBDIVIDE -> pen.subdivide()
         CanvasTool.KNIFE -> pen.knife()
+        CanvasTool.WEIGHT_PAINT -> pen.weightPaint()
+        CanvasTool.WEIGHT_GRADIENT -> pen.weightGradient()
         CanvasTool.PAINT_BRUSH -> pen.paintBrush()
         CanvasTool.PAINT_PENCIL -> pen.pencil()
         CanvasTool.PAINT_ERASER -> pen.eraser()
@@ -205,6 +228,24 @@ internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
             }
             listOf(a, b, c, d).forEach { (x, y) -> pen.dot(x, y, 1.9f) }
         }
+        // Simulate: a cloth pinned along its top edge, its hem swinging free.
+        EditHierarchyMode.SIMULATE -> {
+            val cloth = pen.path {
+                m(3.2f, 3.4f)
+                l(14.8f, 3.4f)
+                c(15.4f, 7.6f, 16.6f, 11.4f, 15.6f, 14.8f)
+                c(13.6f, 13.2f, 11.6f, 16.4f, 9.2f, 14.6f)
+                c(7f, 16.4f, 4.6f, 13.2f, 2.4f, 14.6f)
+                c(2f, 10.6f, 3.4f, 7f, 3.2f, 3.4f)
+                z()
+            }
+            pen.fill(cloth, pen.soft)
+            pen.outline(cloth)
+            pen.dot(3.2f, 3.4f, 1.8f)
+            pen.dot(9f, 3.4f, 1.8f)
+            pen.dot(14.8f, 3.4f, 1.8f)
+        }
+        EditHierarchyMode.SKELETON -> drawSingleBoneIcon(color)
         // Paint: a palette with its wells.
         EditHierarchyMode.PAINT -> {
             val palette = pen.path {
@@ -225,6 +266,21 @@ internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
             pen.dot(5.8f, 11.8f, 1.4f)
         }
     }
+}
+
+/** Preview in the mode list: an eye, since the canvas only watches the model play. */
+internal fun DrawScope.drawPreviewModeIcon(color: Color) {
+    val pen = IconPen(this, color)
+    val eye = pen.path {
+        m(1.8f, 9f)
+        c(4.2f, 4.4f, 13.8f, 4.4f, 16.2f, 9f)
+        c(13.8f, 13.6f, 4.2f, 13.6f, 1.8f, 9f)
+        z()
+    }
+    pen.fill(eye, pen.soft)
+    pen.outline(eye)
+    pen.ring(9f, 9f, 2.6f)
+    pen.dot(9f, 9f, 1.1f)
 }
 
 internal fun DrawScope.drawBrushShapeIcon(shape: BrushShape, color: Color) {
@@ -358,6 +414,25 @@ private fun IconPen.inflate() {
 
 // --- skeleton --------------------------------------------------------------------------------------------
 
+private fun IconPen.skeletonEditSubTool(subTool: SkeletonEditSubTool) {
+    when (subTool) {
+        SkeletonEditSubTool.EDIT -> skeletonEdit()
+        SkeletonEditSubTool.BIND -> glue()
+        SkeletonEditSubTool.WEIGHTS -> weightPaint()
+        SkeletonEditSubTool.NEW_BONE -> {
+            scope.drawBoneIcon(p(3.5f, 13f), p(11f, 5.5f), color, stroke = 1.2f * s, headRadius = 1.6f * s)
+            line(11.5f, 13.5f, 16.5f, 13.5f)
+            line(14f, 11f, 14f, 16f)
+        }
+        SkeletonEditSubTool.EXTRUDE -> {
+            scope.drawBoneIcon(p(2.5f, 15.5f), p(8.5f, 9.5f), color, stroke = 1.2f * s, headRadius = 1.5f * s)
+            scope.drawBoneIcon(p(8.5f, 9.5f), p(14.5f, 3.5f), color, stroke = 1.2f * s, headRadius = 1.5f * s)
+            line(11.5f, 13.5f, 16f, 9f)
+            chevron(16f, 9f, 1f, -1f, 2.5f)
+        }
+    }
+}
+
 /** Pose: a bone swung about its head. */
 private fun IconPen.skeletonPose() {
     scope.drawBoneIcon(p(4.2f, 13.8f), p(12.2f, 5.8f), color, stroke = 1.2f * s, headRadius = 1.9f * s)
@@ -465,6 +540,29 @@ private fun IconPen.knife() = turned(-45f) {
     fillBox(12f, 7.2f, 5.6f, 3.4f, 1.4f)
 }
 
+/** A triangle whose corners carry falling weights, under a brush ring's arc. */
+private fun IconPen.weightPaint() {
+    val face = path { m(3f, 14.5f); l(9f, 4f); l(15f, 14.5f); z() }
+    fill(face, soft)
+    outline(face)
+    dot(3f, 14.5f, 2.4f)
+    dot(9f, 4f, 1.7f)
+    dot(15f, 14.5f, 1.1f)
+}
+
+/** A ramp from full to empty along the drag, with the drag's two ends. */
+private fun IconPen.weightGradient() {
+    val bands = 5
+    for (i in 0 until bands) {
+        val alpha = 1f - i / bands.toFloat()
+        fillBox(2.6f + i * 2.56f, 5f, 2.56f, 8f, 0f, color.copy(alpha = color.alpha * (0.12f + 0.5f * alpha)))
+    }
+    box(2.6f, 5f, 12.8f, 8f, 0.8f)
+    line(3.6f, 9f, 14.4f, 9f, width = 1.1f)
+    dot(3.6f, 9f, 1.8f)
+    ring(14.4f, 9f, 1.6f, width = 1.1f)
+}
+
 // --- painting --------------------------------------------------------------------------------------------
 
 private fun IconPen.paintBrush() = turned(-45f) {
@@ -539,5 +637,108 @@ private fun IconPen.paintShape(shape: PaintShape) {
         PaintShape.RECTANGLE -> box(2.6f, 4.2f, 12.8f, 9.6f, 1.2f)
         PaintShape.ELLIPSE ->
             scope.drawOval(color, p(2.2f, 4f), Size(13.6f * s, 10f * s), style = stroke())
+    }
+}
+
+/** What each kind of vertex group does to a simulated mesh, drawn on the tool grid. */
+@Composable
+internal fun VertexGroupKindIcon(kind: VertexGroupKind, color: Color, size: Dp = 14.dp) {
+    Canvas(Modifier.size(size)) { drawVertexGroupKindIcon(kind, color) }
+}
+
+internal fun DrawScope.drawVertexGroupKindIcon(kind: VertexGroupKind, color: Color) {
+    val pen = IconPen(this, color)
+    when (kind) {
+        // A pushpin: the head, and the needle into the mesh.
+        VertexGroupKind.PIN -> {
+            pen.dot(9f, 6f, 3.6f, pen.soft)
+            pen.ring(9f, 6f, 3.6f)
+            pen.line(9f, 9.6f, 9f, 15.4f)
+        }
+        // A spring.
+        VertexGroupKind.STIFFNESS -> pen.outline(pen.path {
+            m(2.4f, 9f); l(4.4f, 9f); l(6f, 4f); l(8.4f, 14f); l(10.8f, 4f); l(13.2f, 14f); l(14.4f, 9f); l(15.6f, 9f)
+        })
+        // A weight with its handle.
+        VertexGroupKind.MASS -> {
+            val body = pen.path { m(5.4f, 7.4f); l(12.6f, 7.4f); l(15f, 15.2f); l(3f, 15.2f); z() }
+            pen.fill(body, pen.soft)
+            pen.outline(body)
+            pen.ring(9f, 4.8f, 2.1f)
+        }
+        // A swing that dies out.
+        VertexGroupKind.DAMPING -> pen.outline(pen.path {
+            m(2f, 9f); q(3.6f, 1.6f, 5.2f, 9f); q(6.6f, 15f, 8f, 9f); q(9.2f, 5.2f, 10.4f, 9f); q(11.4f, 11.6f, 12.4f, 9f); l(16f, 9f)
+        })
+        // Gusts.
+        VertexGroupKind.WIND -> {
+            pen.outline(pen.path { m(2.4f, 6f); l(11.6f, 6f); q(14.4f, 6f, 14.4f, 3.8f); q(14.4f, 2f, 12.6f, 2.2f) })
+            pen.outline(pen.path { m(2.4f, 10f); l(13.8f, 10f); q(16.2f, 10f, 16.2f, 12.2f); q(16.2f, 14f, 14.4f, 13.8f) })
+            pen.line(2.4f, 14f, 8.4f, 14f)
+        }
+        // The drawn shape, and the way back to it.
+        VertexGroupKind.GOAL -> {
+            pen.fillBox(9f, 9f, 6.4f, 6.4f, 1.2f, pen.soft)
+            pen.box(9f, 9f, 6.4f, 6.4f, 1.2f)
+            pen.outline(pen.path { m(3.4f, 13.6f); q(3.4f, 4f, 12.2f, 4f) })
+            pen.chevron(12.2f, 4f, 1f, 0f, 2.6f)
+        }
+    }
+}
+
+/** The simulation panel's sections. */
+internal enum class SimSectionIcon { BAKE, MATERIAL, INPUTS, OUTPUTS, GLUE, GROUPS }
+
+@Composable
+internal fun SimSectionIconView(icon: SimSectionIcon, color: Color, size: Dp = 12.dp) {
+    Canvas(Modifier.size(size)) { drawSimSectionIcon(icon, color) }
+}
+
+internal fun DrawScope.drawSimSectionIcon(icon: SimSectionIcon, color: Color) {
+    val pen = IconPen(this, color)
+    when (icon) {
+        // Motion caught into keys: a swing over a keyframe.
+        SimSectionIcon.BAKE -> {
+            pen.outline(pen.path { m(2.4f, 5.4f); q(5.6f, 0.6f, 9f, 5.4f); q(12.4f, 10.2f, 15.6f, 5.4f) })
+            val key = pen.path { m(9f, 9.4f); l(13f, 13.2f); l(9f, 17f); l(5f, 13.2f); z() }
+            pen.fill(key, pen.soft)
+            pen.outline(key)
+        }
+        // A hanging cloth, like the Simulate mode.
+        SimSectionIcon.MATERIAL -> {
+            val cloth = pen.path {
+                m(3.4f, 3.4f); l(14.6f, 3.4f)
+                c(15.2f, 7.6f, 16.2f, 11.4f, 15.2f, 14.8f)
+                c(13.4f, 13.2f, 11.4f, 16.4f, 9f, 14.6f)
+                c(6.8f, 16.4f, 4.6f, 13.2f, 2.8f, 14.8f)
+                c(2f, 10.6f, 3.4f, 7f, 3.4f, 3.4f)
+                z()
+            }
+            pen.fill(cloth, pen.soft)
+            pen.outline(cloth)
+        }
+        // Two parameter sliders.
+        SimSectionIcon.INPUTS -> {
+            pen.line(2.6f, 5.6f, 15.4f, 5.6f)
+            pen.dot(6.4f, 5.6f, 2.2f)
+            pen.line(2.6f, 12.4f, 15.4f, 12.4f)
+            pen.dot(11.8f, 12.4f, 2.2f)
+        }
+        // A pendulum hanging from its pivot: what the bake drives.
+        SimSectionIcon.OUTPUTS -> {
+            pen.line(4.4f, 3f, 13.6f, 3f)
+            pen.line(9f, 3f, 12.2f, 11f)
+            pen.dot(12.6f, 12.4f, 2.6f)
+        }
+        SimSectionIcon.GLUE -> pen.glue()
+        // Three vertices, each weighted differently.
+        SimSectionIcon.GROUPS -> {
+            val tri = pen.path { m(9f, 3.6f); l(15f, 14.4f); l(3f, 14.4f); z() }
+            pen.fill(tri, pen.soft)
+            pen.outline(tri)
+            pen.dot(9f, 3.6f, 2.3f)
+            pen.dot(15f, 14.4f, 1.6f)
+            pen.dot(3f, 14.4f, 1.1f)
+        }
     }
 }

@@ -1,5 +1,6 @@
 package org.umamo.format.cmo3
 
+
 import org.umamo.format.FileKind
 import org.umamo.format.FormatCodec
 import org.umamo.format.FormatVersion

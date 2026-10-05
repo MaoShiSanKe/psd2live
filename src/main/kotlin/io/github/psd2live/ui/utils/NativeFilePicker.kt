@@ -26,18 +26,23 @@ object NativeFilePicker {
 	/**
 	 * Opens the modern native OS file picker for selecting a PSD file.
 	 */
-	fun choosePsdFile(window: Window? = null, initialPath: String? = null): String? {
+	fun choosePsdFile(window: Window? = null, initialPath: String? = null): String? =
+		chooseSourceFile(window, initialPath, "psd", tr("dialog.choosePsd"), tr("dialog.psdFilter"))
+
+	fun chooseCmo3File(window: Window? = null, initialPath: String? = null): String? =
+		chooseSourceFile(window, initialPath, "cmo3", tr("cmo3.chooseFile"), "Cubism model (*.cmo3)")
+
+	private fun chooseSourceFile(window: Window?, initialPath: String?, extension: String, title: String, filterLabel: String): String? {
 		if (!isPicking.compareAndSet(false, true)) {
 			return null
 		}
 		try {
-			val title = tr("dialog.choosePsd")
 
 			// 1. Try Java AWT FileDialog (native OS Open File Dialog)
 			try {
 				val dialog = createFileDialog(window, title, FileDialog.LOAD).apply {
-					setFilenameFilter { _, name -> name.endsWith(".psd", ignoreCase = true) }
-					file = "*.psd"
+					setFilenameFilter { _, name -> name.endsWith(".$extension", ignoreCase = true) }
+					file = "*.$extension"
 					if (!initialPath.isNullOrBlank()) {
 						val f = File(initialPath)
 						if (f.exists()) directory = if (f.isDirectory) f.absolutePath else f.parent
@@ -48,7 +53,7 @@ object NativeFilePicker {
 				val selectedFile = dialog.file
 				if (!dir.isNullOrBlank() && !selectedFile.isNullOrBlank()) {
 					val full = File(dir, selectedFile).toPath().toAbsolutePath().normalize().toString()
-					if (full.endsWith(".psd", ignoreCase = true)) {
+					if (full.endsWith(".$extension", ignoreCase = true)) {
 						return full
 					}
 				}
@@ -61,7 +66,7 @@ object NativeFilePicker {
 				UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
 				val chooser = JFileChooser().apply {
 					dialogTitle = title
-					fileFilter = javax.swing.filechooser.FileNameExtensionFilter(tr("dialog.psdFilter"), "psd")
+					fileFilter = javax.swing.filechooser.FileNameExtensionFilter(filterLabel, extension)
 					if (!initialPath.isNullOrBlank()) {
 						val f = File(initialPath)
 						if (f.exists()) currentDirectory = if (f.isDirectory) f else f.parentFile

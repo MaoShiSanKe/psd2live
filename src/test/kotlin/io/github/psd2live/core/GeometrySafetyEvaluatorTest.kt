@@ -141,4 +141,70 @@ class GeometrySafetyEvaluatorTest {
         assertTrue(GeometrySafetyEvaluator.evaluate(before, candidate).safe)
         assertContentEquals(floatArrayOf(-1f, 0f, 1f), candidate.drawables.single().geometryGrid!!.axes.single().keys)
     }
+
+    @Test fun wholeSurfaceAffineMirrorAndCompressionAreValidButZeroAreaIsNot() {
+        val before = model()
+        for (scale in listOf(-1f, 0.005f)) {
+            val after = model(listOf(KeyformCell(intArrayOf(), MeshDeltaForm(deltas(0f, 0f, 1f, 0f, 1f, scale, 0f, scale)))))
+            assertTrue(report(before, after).safe)
+        }
+        val zero = model(listOf(KeyformCell(intArrayOf(), MeshDeltaForm(deltas(0f, 0f, 1f, 0f, 1f, 0f, 0f, 0f)))))
+        assertFalse(report(before, zero).safe)
+    }
+
+    @Test fun pureBlendEditAndSimultaneousBlendKeysAreChecked() {
+        val before = model().copy(parameters = listOf(Parameter(p, "Blend", 0f, 1f, 0f, ParameterKind.BLEND_SHAPE),
+            Parameter(q, "Other", 0f, 1f, 0f, ParameterKind.BLEND_SHAPE)))
+        fun blend(id: ParameterId, amount: Float) = BlendShapeBinding(id, floatArrayOf(0f, 1f), 0,
+            listOf(null, MeshForm(floatArrayOf(0f, 0f, 0f, 0f, 0f, amount, 0f, 0f), opacity = 1f)))
+        val after = before.copy(drawables = listOf(before.drawables.single().copy(blendShapes = listOf(blend(p, -0.6f), blend(q, -0.6f)))))
+        val result = report(before, after)
+        assertFalse(result.safe)
+        assertEquals(4, result.affectedCoordinates.getValue("mesh:mesh").size)
+        assertTrue(result.violations.any { it.coordinate == mapOf("P" to 1f, "Q" to 1f) })
+        val single = before.copy(drawables = listOf(before.drawables.single().copy(blendShapes = listOf(blend(p, -2f)))))
+        assertFalse(report(before, single).safe)
+    }
+
+    @Test fun newInterpolatedKeyDoesNotMisclassifyAnExistingDefect() {
+        val axis = KeyformAxis(p, floatArrayOf(-1f, 1f))
+        val shape = MeshDeltaForm(deltas(0f, 0f, 1f, 0f, 1f, -1f, 0f, 1f))
+        val before = model(listOf(KeyformCell(intArrayOf(0), shape), KeyformCell(intArrayOf(1), shape)), listOf(axis))
+        val after = model(listOf(KeyformCell(intArrayOf(0), shape), KeyformCell(intArrayOf(1), shape), KeyformCell(intArrayOf(2), shape)),
+            listOf(KeyformAxis(p, floatArrayOf(-1f, 0f, 1f))))
+        assertTrue(report(before, after).safe)
+        assertEquals(0, report(before, after).newFlipCount)
+    }
+
+    @Test fun excessiveBlendCombinationsFailExplicitlyInsteadOfSilentlySkippingGeometry() {
+        val parameters = (0..14).map { Parameter(ParameterId("Blend$it"), "Blend $it", 0f, 1f, 0f, ParameterKind.BLEND_SHAPE) }
+        val before = model().copy(parameters = parameters)
+        val blends = parameters.map { BlendShapeBinding(it.id, floatArrayOf(0f, 1f), 0,
+            listOf(null, MeshForm(FloatArray(8), opacity = 1f))) }
+        val after = before.copy(drawables = listOf(before.drawables.single().copy(blendShapes = blends)))
+        val failure = assertFailsWith<GeometrySafetyRejectedException> { report(before, after) }
+        assertEquals(GeometrySafetyReason.GEOMETRY_SAMPLING_LIMIT, failure.safetyReport.violations.single().reason)
+    }
+
+    @Test fun authoringPolicyReportsFoldoversAsWarningsButStillRejectsDegenerateGeometry() {
+        val before = model()
+        val flipped = model(listOf(KeyformCell(intArrayOf(), MeshDeltaForm(deltas(0f, 0f, 1f, 0f, 1f, -1f, 0f, 1f)))))
+        val allowed = GeometrySafetyEvaluator.evaluate(before, flipped, blockFoldovers = false)
+        assertTrue(allowed.safe)
+        assertTrue(allowed.violations.isEmpty())
+        assertEquals(GeometrySafetyReason.GEOMETRY_NEW_FLIP, allowed.warnings.single().reason)
+        val degenerate = model(listOf(KeyformCell(intArrayOf(), MeshDeltaForm(deltas(0f, 0f, 1f, 0f, 1f, 0f, 0f, 1f)))))
+        assertFalse(GeometrySafetyEvaluator.evaluate(before, degenerate, blockFoldovers = false).safe)
+    }
+
+    @Test fun newlyBoundParameterStillComparesExistingGeometryAtItsBaselinePose() {
+        val form = MeshDeltaForm(deltas(0f, 0f, 1f, 0f, 1f, 0f, 0f, 1f))
+        val before = model(listOf(KeyformCell(intArrayOf(), form)))
+        val after = model(listOf(KeyformCell(intArrayOf(0), form), KeyformCell(intArrayOf(1), form)),
+            listOf(KeyformAxis(p, floatArrayOf(-1f, 1f))))
+        val result = report(before, after)
+        assertTrue(result.safe)
+        assertEquals(0, result.newDegenerateCount)
+        assertTrue(result.preexistingDegenerateCount > 0)
+    }
 }

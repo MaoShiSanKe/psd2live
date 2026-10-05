@@ -8,6 +8,7 @@ import org.umamo.runtime.model.KeyformGrid
 import org.umamo.runtime.model.MeshDeltaForm
 import org.umamo.runtime.model.MeshForm
 import org.umamo.runtime.model.PuppetModel
+import org.umamo.runtime.model.VertexGroup
 
 /**
  * How one vertex of a topology-edited mesh derives its keyform deltas (and its glue identity) from the
@@ -202,7 +203,20 @@ fun PuppetModel.withMeshTopologyEdit(id: DrawableId, edit: MeshTopologyEdit): Pu
 				glue.copy(pairs = remappedPairs)
 			}
 		}
-	return copy(drawables = newDrawables, glues = newGlues)
+	val newVertexGroups = vertexGroups.map { group ->
+		if (group.drawableId != id) group else group.copy(weights = remapVertexWeights(group, edit.vertexSources, oldMesh.vertexCount))
+	}
+	return copy(drawables = newDrawables, glues = newGlues, vertexGroups = newVertexGroups)
+}
+
+/**
+ * [group]'s weights at the new vertex count, derived per vertex exactly as keyform deltas are: a weight is
+ * carried as the x of a delta pair through [remapMeshDeltas], then clamped back into 0..1.
+ */
+private fun remapVertexWeights(group: VertexGroup, vertexSources: List<VertexSource>, oldVertexCount: Int): FloatArray {
+	val asDeltas = FloatArray(group.weights.size * 2) { if (it % 2 == 0) group.weights[it / 2] else 0f }
+	val remapped = remapMeshDeltas(MeshDeltaForm(asDeltas), vertexSources, oldVertexCount).positionDeltas
+	return FloatArray(vertexSources.size) { remapped[it * 2].coerceIn(0f, 1f) }
 }
 
 /**

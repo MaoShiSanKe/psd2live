@@ -5,19 +5,27 @@ data class DeformPath(
     val id: String,
     val drawableId: DrawableId,
     val points: List<DeformPathPoint>,
-    val width: Float = 0.1f,
-    val hardness: Float = 0.5f,
+    /** Authoritative Cubism lineWidth: influence radius in canvas pixels. */
+    val width: Float = DEFAULT_WIDTH,
+    /** Authoritative Cubism lineHardnessPercent, in the range 0..100. */
+    val hardness: Float = DEFAULT_HARDNESS,
     val closed: Boolean = false,
     val editLevel: Int = 2,
 ) {
+    companion object {
+        const val DEFAULT_WIDTH = 50f
+        const val DEFAULT_HARDNESS = 50f
+    }
     val safeWidth: Float get() = width.coerceAtLeast(0f)
-    val safeHardness: Float get() = hardness.coerceIn(0f, 1f)
+    val safeHardness: Float get() = hardness.coerceIn(0f, 100f)
 
     init {
         require(id.isNotBlank())
         require(points.size in 2..128)
         require(width.isFinite())
         require(hardness.isFinite())
+        require(width >= 0f)
+        require(hardness in 0f..100f)
         require(editLevel in 2..3)
         require(!closed || points.size >= 3)
     }

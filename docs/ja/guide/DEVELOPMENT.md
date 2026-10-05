@@ -29,6 +29,7 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 | `--lang <zh\|en\|ja>` | システム言語 | ログの言語 |
 | `--atlas <size>` | 4096 | テクスチャアトラスのサイズ |
 | `--mesh-spacing <px>` | 64 | メッシュ間隔 |
+| `--mesh-pixels` | オフ | メッシュの長さを、長辺 2048 px に縮めたドキュメントではなく元のピクセルで測る |
 | `--head-strength <value>` | 1.0 | 頭の変形の強さ |
 | `--body-strength <value>` | 1.0 | 体の変形の強さ |
 | `--mesh-only` | オフ | メッシュのみ生成 |
@@ -66,6 +67,36 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 - 公式 SDK のリソース（`src/main/resources/cubism/`）は、`-Ppsd2live.includeCubism=true` または `PSD2LIVE_INCLUDE_CUBISM=true` を指定したときだけ含まれます。SDK を含むパッケージは公開配布できません。[CI とリリース](../../en/guide/CUBISM_CI_RELEASE.md)（英語）を参照してください。
 - Linux では `./native/package_linux.sh` で、システムの JDK 21 を使うローカル起動パッケージを作成できます（`dist/linux-<タイムスタンプ>/` に出力）。詳しくは [native/README.md](../../../native/README.md) を参照してください。
 - 独立した lint タスクはありません。コードスタイルは `kotlin.code.style=official` です。
+
+## 開発ツール
+
+`src/test/kotlin/io/github/psd2live/tools/` には、結果を目視で確認したり測定したりする開発ツールがあります。パイプラインの内部 API を使えるようにテストとして書かれており、`PSD2LIVE_TOOLS=1` を設定したときだけ実行されます。通常の `./gradlew test` では skip されます。出力先は `build/tools/` です。
+
+```bash
+PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.tools.MotionSheetTool.body"
+```
+
+| ツール | 内容 | 出力 |
+| --- | --- | --- |
+| `MotionSheetTool.motions` | 各プリセットモーションを時間順に並べた一覧、待機ループ、呼吸の前後と差分画像、体 Z | `motion-sheet/<サンプル>-*.png` |
+| `MotionSheetTool.body` | 体 X × 体 Y、脚と上半身の拡大、前後傾、頭身、脚のポーズ。スケルトンなしと自動スケルトンの両方 | `motion-sheet/<サンプル>-{stance,lean,size,legposes}*.png` |
+| `MotionSheetTool.tracking` | ポインタが画面上をゆっくり 12 秒周回し、頭と体がプレビューと同じゲインと速さで追従 | `motion-frames/<サンプル>-track/` |
+| `MotionSheetTool.idle` | 待機 12 秒のフレーム画像 | `motion-frames/<サンプル>-idle/` |
+| `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
+| `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
+| `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
+
+| 環境変数 | 効果 |
+| --- | --- |
+| `PSD2LIVE_SAMPLE` | サンプル名（`tml`、`ds`）または PSD のパス。既定は `tml` |
+| `PSD2LIVE_CMO3` | `ModelProfileTool.cmo3` の入力。`.cmo3` ファイルまたはそのディレクトリ |
+| `PSD2LIVE_PROBES` | プロファイルで調べるパラメータ。`id=値,...`。既定は体 X・Y・Z の両端 |
+| `PSD2LIVE_SHEET_PARAM` | シルエットを体 X × 体 Y ではなくこのパラメータに沿って並べる |
+| `PSD2LIVE_BONES` | `MotionSheetTool.body` で自動スケルトンのボーン位置を補正。`id=頭x,頭y,尾x,尾y;...`（キャンバスピクセル） |
+| `PSD2LIVE_BIND_LEGS` | `1` で脚と靴のメッシュを最初の太ももボーンにバインド |
+| `PSD2LIVE_ZOOM` | 脚の拡大範囲。`左,上,右,下` をキャンバスに対する比率で指定 |
+| `PSD2LIVE_VERBOSE` | `1` で `motions` が各カーブも出力 |
+| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` の設定。`モード数:キー数,...`。既定は `2:5,2:7,1:5` |
 
 ## コード構成
 

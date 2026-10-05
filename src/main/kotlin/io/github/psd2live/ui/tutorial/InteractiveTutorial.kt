@@ -23,6 +23,7 @@ enum class TutorialId {
 	SKELETON,
 	ANIMATION,
 	PHYSICS,
+	SIMULATION,
 	;
 
 	val i18nKey: String
@@ -45,10 +46,14 @@ enum class TutorialId {
 			SKELETON -> "skeleton"
 			ANIMATION -> "animation"
 			PHYSICS -> "physics"
+			SIMULATION -> "simulation"
 		}
 
 	val titleKey: String get() = "tutorial.$i18nKey.title"
 	val descKey: String get() = "tutorial.$i18nKey.desc"
+
+	/** Every chapter but the basic one, which teaches the import itself, works on an open model. */
+	val requiresModel: Boolean get() = this != BASIC
 
 	companion object {
 		/** Computed on access to avoid a TutorialId <-> TutorialPath enum initialization cycle. */
@@ -66,7 +71,7 @@ enum class TutorialPath(val i18nKey: String, val chapters: List<TutorialId>) {
 			TutorialId.PARAMETERS, TutorialId.SELECT_MODE, TutorialId.CREATE_DEFORMER,
 			TutorialId.DEFORM_MODE, TutorialId.EDIT_MODE, TutorialId.PAINT_MODE,
 			TutorialId.INSPECTOR, TutorialId.TOOL_DETAILS, TutorialId.SKELETON, TutorialId.ANIMATION,
-			TutorialId.PHYSICS, TutorialId.PROJECT_HISTORY, TutorialId.TEXTURE_UPSCALE,
+			TutorialId.PHYSICS, TutorialId.SIMULATION, TutorialId.PROJECT_HISTORY, TutorialId.TEXTURE_UPSCALE,
 		),
 	),
 	EXPERIENCED(
@@ -75,7 +80,7 @@ enum class TutorialPath(val i18nKey: String, val chapters: List<TutorialId>) {
 			TutorialId.LIVE2D_BRIDGE, TutorialId.WORKSPACE, TutorialId.HIERARCHY,
 			TutorialId.PARAMETERS, TutorialId.DEFORM_MODE, TutorialId.EDIT_MODE,
 			TutorialId.INSPECTOR, TutorialId.SKELETON, TutorialId.ANIMATION,
-			TutorialId.PHYSICS, TutorialId.PROJECT_HISTORY, TutorialId.TEXTURE_UPSCALE,
+			TutorialId.PHYSICS, TutorialId.SIMULATION, TutorialId.PROJECT_HISTORY, TutorialId.TEXTURE_UPSCALE,
 		),
 	),
 	;
@@ -98,6 +103,8 @@ enum class TutorialCompletion {
 	EDIT_TAB,
 	HISTORY_TAB,
 	EXPORT_DIALOG,
+	/** At least one simulation body exists, made by a model preset or by hand. */
+	HAS_SIMULATION,
 }
 
 data class TutorialStep(
@@ -113,6 +120,8 @@ data class TutorialStep(
 	val ensureHistoryTab: Boolean = false,
 	val ensureHierarchyVisible: Boolean = false,
 	val expandModelSettings: Boolean = false,
+	/** Unfold the Physics & Simulation group of the model presets panel. */
+	val expandSimulationPresets: Boolean = false,
 	val setHierarchyMode: EditHierarchyMode? = null,
 	/** Highlight the hierarchy and ask the user to pick a mesh/deformer before continuing. */
 	val requireSelection: Boolean = false,
@@ -121,10 +130,14 @@ data class TutorialStep(
 	/** Show the tinted “现在这样做” action block (omit for informational steps). */
 	val showAction: Boolean = false,
 	val isDone: Boolean = false,
+	/** Without it the step can only be completed or the tutorial left. */
+	val skippable: Boolean = true,
+	/** Text scope shared across chapters; the chapter's own scope otherwise. */
+	val i18nScope: String? = null,
 ) {
-	fun titleKey(tutorialId: TutorialId): String = "tutorial.${tutorialId.i18nKey}.step.$key.title"
-	fun bodyKey(tutorialId: TutorialId): String = "tutorial.${tutorialId.i18nKey}.step.$key.body"
-	fun actionKey(tutorialId: TutorialId): String = "tutorial.${tutorialId.i18nKey}.step.$key.action"
+	fun titleKey(tutorialId: TutorialId): String = "tutorial.${i18nScope ?: tutorialId.i18nKey}.step.$key.title"
+	fun bodyKey(tutorialId: TutorialId): String = "tutorial.${i18nScope ?: tutorialId.i18nKey}.step.$key.body"
+	fun actionKey(tutorialId: TutorialId): String = "tutorial.${i18nScope ?: tutorialId.i18nKey}.step.$key.action"
 
 	val allowsNext: Boolean
 		get() = when (completion) {
@@ -134,7 +147,8 @@ data class TutorialStep(
 			TutorialCompletion.PREVIEW_TAB,
 			TutorialCompletion.EDIT_TAB,
 			TutorialCompletion.HISTORY_TAB,
-			TutorialCompletion.EXPORT_DIALOG -> false
+			TutorialCompletion.EXPORT_DIALOG,
+			TutorialCompletion.HAS_SIMULATION -> false
 		}
 }
 
@@ -149,6 +163,19 @@ data class TutorialDefinition(
 
 val TutorialCatalog: Map<TutorialId, TutorialDefinition> = buildTutorialCatalog()
 
+/** Put in front of a chapter that needs a model when it starts without one: import a PSD or open a project. */
+val OpenModelStep = TutorialStep(
+	key = "openModel",
+	targetId = TutorialTargetId.FILE_MENU_BODY,
+	completion = TutorialCompletion.HAS_PREVIEW_MODEL,
+	coachBesideMenu = true,
+	forcesMenu = "file",
+	preferSideBubble = false,
+	showAction = true,
+	skippable = false,
+	i18nScope = "common",
+)
+
 fun tutorialDefinition(id: TutorialId): TutorialDefinition =
 	TutorialCatalog.getValue(id)
 
@@ -160,8 +187,11 @@ data class InteractiveTutorialState(
 	val titleBarMenuOpen: String? = null,
 	/** Going back is for reviewing a step; an already completed action must not undo it. */
 	val reviewing: Boolean = false,
+	/** Decided when the chapter starts, so loading the model does not shift the steps under the user. */
+	val openModelFirst: Boolean = false,
 ) {
-	val definition: TutorialDefinition get() = tutorialDefinition(tutorialId)
+	val definition: TutorialDefinition
+		get() = tutorialDefinition(tutorialId).let { if (openModelFirst) it.copy(steps = listOf(OpenModelStep) + it.steps) else it }
 	val step: TutorialStep get() = definition.stepAt(stepIndex)
 	val isFirstStep: Boolean get() = stepIndex <= 0
 	val isDoneStep: Boolean get() = step.isDone
@@ -171,7 +201,9 @@ data class InteractiveTutorialState(
 fun InteractiveTutorialState.start(
 	id: TutorialId = TutorialId.BASIC,
 	path: TutorialPath = TutorialPath.defaultFor(id),
-): InteractiveTutorialState = InteractiveTutorialState(active = true, path = path, tutorialId = id, stepIndex = 0)
+	hasModel: Boolean = true,
+): InteractiveTutorialState =
+	InteractiveTutorialState(active = true, path = path, tutorialId = id, stepIndex = 0, openModelFirst = id.requiresModel && !hasModel)
 
 fun InteractiveTutorialState.stop(): InteractiveTutorialState = InteractiveTutorialState()
 
@@ -186,9 +218,9 @@ fun InteractiveTutorialState.retreat(): InteractiveTutorialState {
 	return copy(stepIndex = stepIndex - 1, titleBarMenuOpen = null, reviewing = true)
 }
 
-fun InteractiveTutorialState.continueNextTutorial(): InteractiveTutorialState {
+fun InteractiveTutorialState.continueNextTutorial(hasModel: Boolean = true): InteractiveTutorialState {
 	val next = nextTutorialId ?: return stop()
-	return InteractiveTutorialState(active = true, path = path, tutorialId = next, stepIndex = 0)
+	return start(next, path, hasModel)
 }
 
 fun TutorialStep.isComplete(
@@ -202,6 +234,7 @@ fun TutorialStep.isComplete(
 	TutorialCompletion.EDIT_TAB -> appState.activeCanvas.mode == CanvasMode.EDIT
 	TutorialCompletion.HISTORY_TAB -> appState.historyPanelShown
 	TutorialCompletion.EXPORT_DIALOG -> appState.showExportDialog
+	TutorialCompletion.HAS_SIMULATION -> appState.rigEdits.simEdits.isNotEmpty()
 }
 
 fun TutorialStep.prerequisiteMet(appState: PSD2LiveState): Boolean = when {
@@ -230,6 +263,7 @@ private fun step(
 	ensureHistoryTab: Boolean = false,
 	ensureHierarchyVisible: Boolean = false,
 	expandModelSettings: Boolean = false,
+	expandSimulationPresets: Boolean = false,
 	setHierarchyMode: EditHierarchyMode? = null,
 	requireSelection: Boolean = false,
 	requireLayerSelection: Boolean = false,
@@ -247,6 +281,7 @@ private fun step(
 	ensureHistoryTab = ensureHistoryTab,
 	ensureHierarchyVisible = ensureHierarchyVisible,
 	expandModelSettings = expandModelSettings,
+	expandSimulationPresets = expandSimulationPresets,
 	setHierarchyMode = setHierarchyMode,
 	requireSelection = requireSelection,
 	requireLayerSelection = requireLayerSelection,
@@ -479,9 +514,12 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 		TutorialId.SKELETON,
 		listOf(
 			step("panel", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true, showAction = true),
+			step("mode", TutorialTargetId.MODE_BAR, ensureEditTab = true, showAction = true),
+			step("build", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true),
 			step("bind", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "skeleton", ensureEditTab = true),
 			step("pose", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "skeleton", ensureEditTab = true, showAction = true),
-			step("weights", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true),
+			step("weights", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true),
+			step("snapshots", TutorialTargetId.TOOLS_DOCK, selectDock = "tools", ensureEditTab = true),
 			step("sampling", TutorialTargetId.SKELETON_DOCK, selectDock = "skeleton", ensureEditTab = true, showAction = true),
 			step("done", isDone = true, preferSideBubble = false),
 		),
@@ -504,6 +542,26 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			step("pendulum", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "physics"),
 			step("io", TutorialTargetId.PHYSICS_DOCK, selectDock = "physics"),
 			step("test", TutorialTargetId.CANVAS_VIEWPORT, selectDock = "physics", showAction = true),
+			step("done", isDone = true, preferSideBubble = false),
+		),
+	),
+	TutorialId.SIMULATION to TutorialDefinition(
+		TutorialId.SIMULATION,
+		listOf(
+			step("presets", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
+			step("generate", TutorialTargetId.MODEL_SETTINGS, TutorialCompletion.HAS_SIMULATION, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true, showAction = true),
+			step("hairModes", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
+			step("clothing", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
+			step("bodies", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
+			step("weights", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true, ensureHierarchyVisible = true, selectDock = "hierarchy", showAction = true),
+			step("weightKinds", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true),
+			step("glue", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("material", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
+			step("materialValues", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("inputs", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("bakeSettings", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
+			step("bake", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
+			step("preview", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
 			step("done", isDone = true, preferSideBubble = false),
 		),
 	),

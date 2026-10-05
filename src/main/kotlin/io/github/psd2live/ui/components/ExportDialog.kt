@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Divider
-import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -115,26 +113,6 @@ fun ExportDialog(
 				)
 			}
 
-			if (isBusy) {
-				Divider(color = colors.divider, thickness = 1.dp)
-				if (state.progress > 0f) {
-					LinearProgressIndicator(
-						progress = state.progress.coerceIn(0f, 1f),
-						modifier = Modifier.fillMaxWidth(),
-						color = colors.accent,
-						backgroundColor = colors.panelElevated,
-					)
-				}
-				if (state.statusText.isNotBlank()) {
-					Text(
-						text = state.statusText,
-						style = typography.caption.copy(fontSize = 11.sp),
-						color = colors.textMuted,
-						maxLines = 2,
-						overflow = TextOverflow.Ellipsis,
-					)
-				}
-			}
 		}
 	}
 }
@@ -202,6 +180,8 @@ internal fun ExportActionSection(
 				)
 			}
 		}
+
+		TextureAtlasSettingsSection(state, viewModel)
 
 		ExportLabeledRow(label = tr("export.sdkTarget")) {
 			CompactDropdown(

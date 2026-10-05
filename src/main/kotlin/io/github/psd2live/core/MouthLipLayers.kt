@@ -35,8 +35,11 @@ internal object MouthLipLayers {
         val layout = input.calibration ?: input
         val faceRig = NinePoseFaceRig.from(layout)
         val headSpace = faceRig.coordinateSpace
+        // A depth front copies exactly the selected mesh, including its already authored mouth motion.
+        val depthFronts = DepthSplit.frontLayerIds(config)
+        val unitScale = MeshResolution.unitScale(config, input.source)
         val layers = originals.flatMap { owner ->
-            if (owner.semantic.tag !in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN) || owner.opaquePixels == 0) listOf(owner)
+            if (owner.source.id.raw in depthFronts || owner.semantic.tag !in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN) || owner.opaquePixels == 0) listOf(owner)
             else {
                 val rgb = config.mouthColor ?: perimeterColor(owner.source.raster, config.alphaThreshold)
                 val adaptive = AdaptiveMeshGenerator.generate(
@@ -53,6 +56,7 @@ internal object MouthLipLayers {
                     suppressBoundaryDiagonals = config.meshOverrides[owner.source.id.raw]?.suppressBoundaryDiagonals
                         ?: config.meshSuppressBoundaryDiagonals,
                     fillParameters = config.meshOverrides[owner.source.id.raw]?.fillParameters ?: config.meshFillParameters,
+                    unitScale = unitScale,
                 )
                 val lips = if (adaptive != null) {
                     val rigPositions = FloatArray(adaptive.positions.size)

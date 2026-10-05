@@ -29,6 +29,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 | `--lang <zh\|en\|ja>` | 系统语言 | 日志语言 |
 | `--atlas <size>` | 4096 | 纹理图集尺寸 |
 | `--mesh-spacing <px>` | 64 | 网格间距 |
+| `--mesh-pixels` | 关闭 | 按源像素而非长边缩放到 2048 px 的文档像素计算网格长度 |
 | `--head-strength <value>` | 1.0 | 头部形变幅度 |
 | `--body-strength <value>` | 1.0 | 身体形变幅度 |
 | `--mesh-only` | 关闭 | 仅生成网格 |
@@ -66,6 +67,37 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 - 官方 SDK 资源（`src/main/resources/cubism/`）默认不打包，只有传入 `-Ppsd2live.includeCubism=true` 或设置 `PSD2LIVE_INCLUDE_CUBISM=true` 时才包含。含 SDK 的包不得公开分发，发行流程见 [CI 与发行](CUBISM_CI_RELEASE.md)。
 - Linux 也可用 `./native/package_linux.sh` 生成需要系统 JDK 21 的本地启动包（输出到 `dist/linux-<时间戳>/`），详见 [native/README.md](../../../native/README.md)。
 - 项目没有独立的 lint 任务，代码风格为 `kotlin.code.style=official`。
+
+## 开发工具
+
+`src/test/kotlin/io/github/psd2live/tools/` 中是用于目视检查和测量的开发工具。它们写成测试，以便调用流水线内部接口；只有设置 `PSD2LIVE_TOOLS=1` 时才运行，平时的 `./gradlew test` 会跳过。输出写到 `build/tools/`。
+
+```bash
+PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.tools.MotionSheetTool.body"
+```
+
+| 工具 | 内容 | 输出 |
+| --- | --- | --- |
+| `MotionSheetTool.motions` | 每个预设动作按时间展开的拼图、待机循环、呼吸前后与差分图、身体 Z | `motion-sheet/<示例>-*.png` |
+| `MotionSheetTool.body` | 身体 X × 身体 Y、腿部和上半身特写、前后倾、大小变、腿部姿势，分别为无骨架和自动骨架 | `motion-sheet/<示例>-{stance,lean,size,legposes}*.png` |
+| `MotionSheetTool.tracking` | 指针在画面上慢速绕行 12 秒，头和身体按预览的增益与速度跟随 | `motion-frames/<示例>-track/` |
+| `MotionSheetTool.idle` | 待机 12 秒的逐帧图 | `motion-frames/<示例>-idle/` |
+| `ModelProfileTool.cmo3` | `.cmo3` 的参数、变形器树（网格轴与范围）、图形网格、分段运动剖面、身体参数下各网格的位移，身体 X × 身体 Y 的剪影，以及物理组 | `model-profile/<名称>.txt`、`.png`、`-physics.txt` |
+| `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
+| `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
+| `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
+
+| 环境变量 | 作用 |
+| --- | --- |
+| `PSD2LIVE_SAMPLE` | 示例名（`tml`、`ds`）或 PSD 路径，默认 `tml` |
+| `PSD2LIVE_CMO3` | `ModelProfileTool.cmo3` 的输入：`.cmo3` 文件或其所在目录 |
+| `PSD2LIVE_PROBES` | 运动剖面探测的参数，`id=值,...`；默认身体 X、Y、Z 的端点 |
+| `PSD2LIVE_SHEET_PARAM` | 剪影改为沿此参数展开，代替身体 X × 身体 Y |
+| `PSD2LIVE_BONES` | `MotionSheetTool.body` 中修正自动骨架的骨骼位置，`id=头x,头y,尾x,尾y;...`（画布像素） |
+| `PSD2LIVE_BIND_LEGS` | 设为 `1` 时把腿和鞋的网格绑定到第一根大腿骨 |
+| `PSD2LIVE_ZOOM` | 腿部特写的范围，`左,上,右,下`，按画布比例 |
+| `PSD2LIVE_VERBOSE` | 设为 `1` 时 `motions` 另外打印每条曲线 |
+| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` 的设置，`模态数:键数,...`，默认 `2:5,2:7,1:5` |
 
 ## 代码结构
 

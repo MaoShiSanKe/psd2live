@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.components
 
+import io.github.psd2live.ui.utils.toImageBitmapFast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,7 +44,7 @@ internal fun MeshSplitDialog(
     val typography = LocalToolTypography.current
     val components = offer.plan.components
     val count = components.size
-    val previews = remember(offer) { offer.plan.previewImages.map { it.toComposeImageBitmap() } }
+    val previews = remember(offer) { offer.plan.previewImages.map { it.toImageBitmapFast() } }
     val horizontal = count == 2 &&
         kotlin.math.abs(components[0].centerX - components[1].centerX) >=
         kotlin.math.abs(components[0].centerY - components[1].centerY)

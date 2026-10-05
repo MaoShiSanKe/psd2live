@@ -47,10 +47,10 @@ object DeformPathTools {
         }
     }
 
-    fun deform(vertices: FloatArray, paths: List<DeformPath>, pathId: String, moved: List<Pair<Float, Float>>): FloatArray =
-        deformAll(vertices, paths, mapOf(pathId to moved))
+    fun deform(vertices: FloatArray, paths: List<DeformPath>, pathId: String, moved: List<Pair<Float, Float>>, canvasScale: Float = 1f): FloatArray =
+        deformAll(vertices, paths, mapOf(pathId to moved), canvasScale)
 
-    fun deformAll(vertices: FloatArray, paths: List<DeformPath>, movedByPathId: Map<String, List<Pair<Float, Float>>>): FloatArray {
+    fun deformAll(vertices: FloatArray, paths: List<DeformPath>, movedByPathId: Map<String, List<Pair<Float, Float>>>, canvasScale: Float = 1f): FloatArray {
         if (movedByPathId.isEmpty()) return vertices.copyOf()
         val active = paths.firstOrNull { it.id in movedByPathId } ?: return vertices.copyOf()
         for ((pId, moved) in movedByPathId) {
@@ -66,7 +66,7 @@ object DeformPathTools {
             val a = curve(original, corners, path.closed)
             val b = curve(moved ?: original, corners, path.closed)
             source.addAll(a); dest.addAll(b)
-            repeat(a.size) { widths.add(path.width); hardness.add(path.hardness) }
+            repeat(a.size) { widths.add(path.safeWidth / canvasScale); hardness.add(path.safeHardness / 100f) }
         }
         if (source == dest) return vertices.copyOf()
         val result = vertices.copyOf()

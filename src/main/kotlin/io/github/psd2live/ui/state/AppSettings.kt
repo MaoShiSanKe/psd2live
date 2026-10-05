@@ -6,6 +6,7 @@ import io.github.psd2live.ui.theme.ThemeCodec
 import java.awt.GraphicsEnvironment
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.util.prefs.Preferences
 
 /**
@@ -21,6 +22,51 @@ object AppSettings {
 
 	private val preferences by lazy {
 		Preferences.userRoot().node(PREFS_NODE_NAME)
+	}
+
+	/** Panel dimensions are in dp; like colour dragging, writes sync asynchronously. */
+	var parameterNameWidth: Float
+		get() = runCatching { preferences.getFloat("parameter_name_width", 40f) }
+			.getOrDefault(40f).let { if (it.isFinite()) it.coerceIn(24f, 240f) else 40f }
+		set(value) {
+			if (value.isFinite()) runCatching { preferences.putFloat("parameter_name_width", value.coerceIn(24f, 240f)) }
+		}
+
+	private val softwareCanvasState = kotlinx.coroutines.flow.MutableStateFlow(
+		runCatching { preferences.getBoolean("software_canvas", false) }.getOrDefault(false),
+	)
+
+	/** The editing canvas paints in software instead of on its GPU renderer; for troubleshooting a driver. */
+	val softwareCanvasFlow: kotlinx.coroutines.flow.StateFlow<Boolean> get() = softwareCanvasState
+
+	var softwareCanvas: Boolean
+		get() = softwareCanvasState.value
+		set(value) {
+			softwareCanvasState.value = value
+			runCatching { preferences.putBoolean("software_canvas", value) }
+		}
+
+	/** Whether edits in the simulation panel bake again as they commit; off by default, as a bake takes seconds. */
+	var simulationAutoBake: Boolean
+		get() = runCatching { preferences.getBoolean("simulation_auto_bake", false) }.getOrDefault(false)
+		set(value) {
+			runCatching { preferences.putBoolean("simulation_auto_bake", value) }
+		}
+
+	private fun parameterPadHeightKey(horizontalId: String, verticalId: String): String {
+		val pair = "${horizontalId.length}:$horizontalId$verticalId"
+		val digest = MessageDigest.getInstance("SHA-256").digest(pair.toByteArray(Charsets.UTF_8))
+		return "param_pad_h_" + digest.joinToString("") { "%02x".format(it) }
+	}
+
+	fun parameterPadHeight(horizontalId: String, verticalId: String): Float = runCatching {
+		preferences.getFloat(parameterPadHeightKey(horizontalId, verticalId), 84f)
+	}.getOrDefault(84f).let { if (it.isFinite()) it.coerceIn(64f, 320f) else 84f }
+
+	fun setParameterPadHeight(horizontalId: String, verticalId: String, height: Float) {
+		if (height.isFinite()) runCatching {
+			preferences.putFloat(parameterPadHeightKey(horizontalId, verticalId), height.coerceIn(64f, 320f))
+		}
 	}
 
 	data class DisplayMetrics(
@@ -168,6 +214,10 @@ object AppSettings {
 	private const val KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT = "auto_detect_mesh_splits_on_import"
 	private const val KEY_RECENT_FILES = "recent_files"
 
+	/**
+	 * Opens the start screen after a PSD import (off: the default presets apply at once) and offers the
+	 * splits of a layer import. The name and key predate the start screen.
+	 */
 	var autoDetectMeshSplitsOnImport: Boolean
 		get() = runCatching { preferences.getBoolean(KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT, true) }.getOrDefault(true)
 		set(value) {

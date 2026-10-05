@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -59,13 +60,14 @@ import io.github.psd2live.ui.components.IconSnapshot
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
-import io.github.psd2live.ui.state.ParameterSnapshot
+import io.github.psd2live.project.ParameterSnapshot
+import io.github.psd2live.ui.state.ParameterSnapshotPreview
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import java.awt.Cursor
 
 /**
- * One-line bar of parameter snapshots: + saves the current pose, a click loads one,
+ * One-line bar of parameter snapshots: + saves the current pose, hover ghosts it on the canvas, a click loads one,
  * right-click overwrites, renames or deletes it, and a middle click deletes it at once.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -78,6 +80,7 @@ internal fun ParameterSnapshotBar(
 ) {
 	val colors = LocalToolColors.current
 	val hasModel = state.previewModel != null
+	val previewContext = listOf(state.projectOpenGeneration, state.activeWorkspace.id, state.activeCanvas.id)
 	Row(
 		modifier = Modifier.fillMaxWidth().height(22.dp),
 		verticalAlignment = Alignment.CenterVertically,
@@ -108,6 +111,9 @@ internal fun ParameterSnapshotBar(
 						},
 						onCancelRename = { onRenamingChange(null) },
 						onDelete = { viewModel.deleteParameterSnapshot(snapshot.id) },
+						previewContext = previewContext,
+						onPreview = { viewModel.previewParameterSnapshot(snapshot.id) },
+						onClearPreview = viewModel::clearParameterSnapshotPreview,
 					)
 				}
 			}
@@ -135,11 +141,20 @@ private fun ParameterSnapshotChip(
 	onRename: (String) -> Unit,
 	onCancelRename: () -> Unit,
 	onDelete: () -> Unit,
+	previewContext: List<Any>,
+	onPreview: () -> ParameterSnapshotPreview?,
+	onClearPreview: (ParameterSnapshotPreview) -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	var menuOpen by remember { mutableStateOf(false) }
 	var menuOffset by remember { mutableStateOf(Offset.Zero) }
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	DisposableEffect(hovered, enabled, renaming, menuOpen, previewContext) {
+		val preview = if (hovered && enabled && !renaming && !menuOpen) onPreview() else null
+		onDispose { if (preview != null) onClearPreview(preview) }
+	}
 	Box {
 		if (renaming) {
 			var draft by remember { mutableStateOf(snapshot.name) }
@@ -172,8 +187,6 @@ private fun ParameterSnapshotChip(
 				onFocusLost = ::commit,
 			)
 		} else {
-			val interaction = remember { MutableInteractionSource() }
-			val hovered by interaction.collectIsHoveredAsState()
 			TooltipArea(tooltip = { ParameterTooltip(snapshot.name.ifBlank { tr("parameters.snapshotName", snapshot.number) }) }, delayMillis = 400) {
 				Box(
 					modifier = Modifier

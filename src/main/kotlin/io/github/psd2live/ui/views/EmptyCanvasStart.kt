@@ -39,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconPhysics
@@ -183,9 +184,9 @@ private fun UpdatesSection(
 			modifier = Modifier.padding(bottom = 1.dp),
 		)
 		listOf(
-			TutorialId.ANIMATION to "animation",
+			TutorialId.SIMULATION to "simulation",
 			TutorialId.SKELETON to "skeleton",
-			TutorialId.PROJECT_HISTORY to "history",
+			TutorialId.ANIMATION to "animation",
 			TutorialId.WORKSPACE to "workspace",
 		).forEach { (tutorial, key) ->
 			FeatureUpdateRow(
@@ -236,6 +237,7 @@ private fun FeatureUpdateRow(
 			TutorialId.PROJECT_HISTORY -> WorkspacePresetIcon(WorkspacePreset.HISTORY, iconTint, Modifier.size(15.dp))
 			TutorialId.WORKSPACE -> WorkspacePresetIcon(WorkspacePreset.EDIT, iconTint, Modifier.size(15.dp))
 			TutorialId.PHYSICS -> IconPhysics(active = true, modifier = Modifier.size(15.dp), tint = iconTint)
+			TutorialId.SIMULATION -> ModeIcon(EditHierarchyMode.SIMULATE, iconTint, 15.dp)
 			else -> IconRoute(tint = iconTint)
 		}
 		Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

@@ -156,10 +156,14 @@ class PhysicsEngine(settings: List<RigPhysicsEdit>, ranges: Map<String, Range>, 
 	}
 
 	/** Runs the strands toward rest under [values]. */
-	fun settle(values: Map<String, Float>, seconds: Float = 2f): Map<String, Float> {
+	fun settle(values: Map<String, Float>, seconds: Float = 2f, progress: (Float) -> Unit = {}, cancelled: () -> Boolean = { false }): Map<String, Float> {
 		var out = emptyMap<String, Float>()
 		var t = 0f
-		while (t < seconds) { out = step(values, SETTLE_STEP); t += SETTLE_STEP }
+		while (t < seconds) {
+			if (cancelled()) throw java.util.concurrent.CancellationException("Physics settling cancelled")
+			out = step(values, SETTLE_STEP); t += SETTLE_STEP
+			progress((t / seconds).coerceIn(0f, 1f))
+		}
 		return out
 	}
 

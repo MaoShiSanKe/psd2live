@@ -51,6 +51,8 @@ import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.frostedGlass
+import io.github.psd2live.ui.tutorial.TutorialTargetId
+import io.github.psd2live.ui.tutorial.tutorialTarget
 
 /**
  * Preview-tab twin of the edit left toolbar: play/pause, mouse tracking, physics and the project's frame
@@ -61,12 +63,14 @@ import io.github.psd2live.ui.theme.frostedGlass
 internal fun BoxScope.CanvasPreviewToolbar(
 	animationEnabled: Boolean,
 	mouseTrackingEnabled: Boolean,
+	smoothMouseTracking: Boolean,
 	physicsEnabled: Boolean,
 	physicsAvailable: Boolean,
 	fps: Int,
 	enabled: Boolean,
 	onToggleAnimation: () -> Unit,
 	onToggleMouseTracking: () -> Unit,
+	onToggleSmoothTracking: () -> Unit,
 	onTogglePhysics: () -> Unit,
 	onSelectFps: (Int) -> Unit,
 	modifier: Modifier = Modifier,
@@ -118,7 +122,7 @@ internal fun BoxScope.CanvasPreviewToolbar(
 	Column(
 		modifier = modifier
 			.align(Alignment.TopStart)
-			.padding(start = 8.dp, top = 8.dp)
+			.padding(start = 8.dp, top = 44.dp)
 			.width(animatedWidth)
 			.frostedGlass(
 				shape = RoundedCornerShape(6.dp),
@@ -164,6 +168,12 @@ internal fun BoxScope.CanvasPreviewToolbar(
 				)
 			},
 		)
+		PreviewToolRow(
+			label = tr("preview.tracking.smooth"), isActive = smoothMouseTracking,
+			isToolbarExpanded = isExpanded, textAlpha = textAlpha, textOffset = textOffset,
+			enabled = enabled && mouseTrackingEnabled, onClick = onToggleSmoothTracking,
+			icon = { tint -> IconMouse(active = smoothMouseTracking, modifier = Modifier.size(14.dp), tint = tint) },
+		)
 		val physicsOn = physicsEnabled && physicsAvailable
 		PreviewToolRow(
 			label = tr(if (physicsOn) "preview.physics.on" else "preview.physics.off"),
@@ -195,6 +205,52 @@ internal fun BoxScope.CanvasPreviewToolbar(
 				}
 			}
 		}
+	}
+}
+
+/**
+ * Preview's mode bar: the canvas mode menu alone, where the edit canvas has it with its mode's extras.
+ * It is the way back to editing, so it stays where the edit canvas keeps it.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun BoxScope.PreviewModeBar(editor: io.github.psd2live.ui.CanvasEditor, focus: () -> Unit) {
+	val interactionSource = remember { MutableInteractionSource() }
+	val isHoveredBySource by interactionSource.collectIsHoveredAsState()
+	var isHoveredByEvent by remember { mutableStateOf(false) }
+	val isHovered = isHoveredBySource || isHoveredByEvent
+	val elevation by animateDpAsState(
+		targetValue = if (isHovered) 8.dp else 2.dp,
+		animationSpec = tween(durationMillis = 200),
+	)
+	Row(
+		modifier = Modifier
+			.align(Alignment.TopStart)
+			.padding(start = 8.dp, top = 8.dp)
+			.tutorialTarget(TutorialTargetId.MODE_BAR)
+			.frostedGlass(
+				shape = RoundedCornerShape(6.dp),
+				isHovered = isHovered,
+				elevation = elevation,
+				alpha = if (isHovered) 0.88f else 0.78f,
+			)
+			.hoverable(interactionSource)
+			.onPointerEvent(PointerEventType.Enter) { isHoveredByEvent = true }
+			.onPointerEvent(PointerEventType.Exit) { isHoveredByEvent = false }
+			.padding(horizontal = 4.dp, vertical = 3.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		CanvasModeMenu(
+			keymap = editor.state.keymap,
+			current = CanvasModeChoice.PREVIEW,
+			modifier = Modifier
+				.tutorialTarget(TutorialTargetId.EDIT_TAB)
+				.tutorialTarget(TutorialTargetId.PREVIEW_TAB),
+			onSelect = { choice ->
+				editor.chooseCanvasMode(choice)
+				focus()
+			},
+		)
 	}
 }
 

@@ -3,6 +3,8 @@ package io.github.psd2live.core
 import io.github.psd2live.i18n.tr
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import org.umamo.edit.withDeformerDeleted
+import org.umamo.edit.withParameterDeleted
 import org.umamo.format.art.LayerBlend
 import org.umamo.runtime.model.BlendMode
 import org.umamo.runtime.model.ChannelGrids
@@ -33,6 +35,7 @@ import org.umamo.runtime.model.DeformPath
 import org.umamo.runtime.model.DeformPathPoint
 import org.umamo.runtime.model.WarpLatticeForm
 import org.umamo.runtime.model.withDerivedRenderRoot
+import org.umamo.render.eval.buildDeformerWorlds
 import java.text.Normalizer
 import java.util.Locale
 import java.util.UUID
@@ -51,6 +54,8 @@ object StandardParameters {
 	val BODY_X = ParameterId("ParamBodyAngleX")
 	val BODY_Y = ParameterId("ParamBodyAngleY")
 	val BODY_Z = ParameterId("ParamBodyAngleZ")
+	val BODY_LEAN = ParameterId("ParamBodyLean")
+	val PROPORTION = ParameterId("ParamProportion")
 	val EYE_L_OPEN = ParameterId("ParamEyeLOpen")
 	val EYE_R_OPEN = ParameterId("ParamEyeROpen")
 	val EYE_BALL_X = ParameterId("ParamEyeBallX")
@@ -72,6 +77,8 @@ object StandardParameters {
 			Parameter(BODY_X, tr("model.parameter.bodyX"), -10f, 10f, 0f),
 			Parameter(BODY_Y, tr("model.parameter.bodyY"), -10f, 10f, 0f),
 			Parameter(BODY_Z, tr("model.parameter.bodyZ"), -10f, 10f, 0f),
+			Parameter(BODY_LEAN, tr("model.parameter.bodyLean"), -10f, 10f, 0f),
+			Parameter(PROPORTION, tr("model.parameter.proportion"), -10f, 10f, 0f),
 			Parameter(EYE_L_OPEN, tr("model.parameter.eyeLOpen"), 0f, 1f, 1f),
 			Parameter(EYE_R_OPEN, tr("model.parameter.eyeROpen"), 0f, 1f, 1f),
 			Parameter(EYE_BALL_X, tr("model.parameter.eyeBallX"), -1f, 1f, 0f),
@@ -170,6 +177,10 @@ object RigBuilder {
 		/** False when the config built no deformers, which leaves every mesh in canvas space. */
 		val deformersEnabled: Boolean,
 		val deformers: List<Deformer>,
+		/** How the figure stands, which places the body, lean and legs warps. */
+		val stance: BodyStance,
+		/** The frame the body warps span: the body's own parts and the neck. */
+		val bodyFrame: Bounds,
 	) {
 		/** Replace only artwork while keeping every existing deformer and normalization frame. */
 		fun withArtwork(input: PipelineAnalysis): RigContext = RigContext(
@@ -191,6 +202,8 @@ object RigBuilder {
 			skeletonEnabled = skeletonEnabled,
 			deformersEnabled = deformersEnabled,
 			deformers = deformers,
+			stance = stance,
+			bodyFrame = bodyFrame,
 		)
 		/** The layer expressed in the coordinate system its mesh and its keyforms are authored in. */
 		fun rigLayer(layer: ClassifiedLayer): ClassifiedLayer =
@@ -227,6 +240,8 @@ object RigBuilder {
 			var id = parentId.raw
 			val seen = mutableSetOf<String>()
 			while (id !in frameByDeformer && seen.add(id)) {
+				// The torso bend is an identity lattice over the breath warp; a bone's rotation takes the canvas.
+				if (id.startsWith("DeformSkelTorso")) return bodyFrame
 				if (id.startsWith("DeformSkel") || config.rigEdits.skeleton?.bones?.any { it.deformerId == id } == true) {
 					return character
 				}
@@ -237,7 +252,7 @@ object RigBuilder {
 
 		private fun inferredParentAndFrame(layer: ClassifiedLayer, config: PipelineConfig): Pair<DeformerId, Bounds> =
 			defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, face, frontHair, backHair,
-				config.rigEdits.skeleton?.enabled == true)
+				config.rigEdits.skeleton?.enabled == true, stance.legsFrame.takeIf { deformersEnabled }, bodyFrame)
 	}
 
 	/**
@@ -275,7 +290,7 @@ object RigBuilder {
 		), config, meshCache)
 		val character = analysis.anchors.character
 		val layout = analysis.calibration ?: analysis
-		val faceRig = NinePoseFaceRig.from(layout)
+		val faceRig = NinePoseFaceRig.from(layout, config.rigTuning)
 		val headSpace = faceRig.coordinateSpace
 		val rigLayerById = analysis.layers.associate { layer ->
 			layer.source.id.raw to layer.riggedIn(analysis.anchors, headSpace)
@@ -298,9 +313,13 @@ object RigBuilder {
 		val backHair = backHairCandidates.map { it.bounds }.takeIf { it.isNotEmpty() }?.reduce(Bounds::union)?.expanded(0.04f)
 
 		val deformersEnabled = !config.meshOnly && config.generateDeformers
+		val stance = BodyStance.of(analysis, character, config.rigEdits.skeleton, config.bodyStrength, config.rigTuning)
+		val bodyFrame = bodyFrame(analysis, stance, faceRig, character, head, face, frontHair, backHair, config.rigEdits.skeleton?.enabled == true)
 		val deformerResult = if (deformersEnabled) {
 			buildDeformers(
 				analysis,
+				stance,
+				bodyFrame,
 				rigLayerById,
 				faceRig,
 				character,
@@ -322,8 +341,10 @@ object RigBuilder {
 		}
 
 		val frameByDeformer = mutableMapOf<String, Bounds>()
-		frameByDeformer[bodyWarpId.raw] = character
-		frameByDeformer[breathWarpId.raw] = character
+		frameByDeformer[bodyWarpId.raw] = bodyFrame
+		frameByDeformer[BodyStance.leanWarpId.raw] = bodyFrame
+		stance.legsFrame?.let { frameByDeformer[BodyStance.legsWarpId.raw] = it }
+		frameByDeformer[breathWarpId.raw] = bodyFrame
 		frameByDeformer[headRotationId.raw] = character
 		frameByDeformer[headWarpId.raw] = head
 		frameByDeformer[faceWarpId.raw] = face
@@ -360,6 +381,8 @@ object RigBuilder {
 			config.rigEdits.skeleton?.enabled == true,
 			deformersEnabled,
 			deformerResult.deformers,
+			stance,
+			bodyFrame,
 		)
 	}
 
@@ -369,8 +392,9 @@ object RigBuilder {
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
 	): PipelineAnalysis {
+		val unitScale = MeshResolution.unitScale(config, analysis.source)
 		val layers = analysis.layers.map { layer ->
-			val footprint = meshFootprint(layer, config, meshCache) ?: return@map layer
+			val footprint = meshFootprint(layer, config, meshCache, unitScale) ?: return@map layer
 			layer.copy(
 				bounds = footprint.bounds,
 				centroidX = footprint.centerX,
@@ -387,7 +411,9 @@ object RigBuilder {
 
 	private data class MeshFootprint(val bounds: Bounds, val centerX: Float, val centerY: Float)
 
-	private fun meshFootprint(layer: ClassifiedLayer, config: PipelineConfig, meshCache: PreviewMeshCache?): MeshFootprint? {
+	private fun meshFootprint(
+		layer: ClassifiedLayer, config: PipelineConfig, meshCache: PreviewMeshCache?, unitScale: Float,
+	): MeshFootprint? {
 		if (layer.opaquePixels <= 0) return null
 		val source = layer.source
 		val width = source.raster.width
@@ -403,8 +429,8 @@ object RigBuilder {
 			return rectangle()
 		}
 		val (settings, _) = meshSettings(layer, config)
-		val adaptive = if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings)
-			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings)
+		val adaptive = if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
+			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
 		// The renderer falls back to a rectangular mesh when adaptive triangulation fails.
 		if (adaptive == null) return rectangle()
 		if (adaptive.indices.isEmpty()) return null
@@ -499,6 +525,8 @@ object RigBuilder {
 		frontHair: Bounds?,
 		backHair: Bounds?,
 		skeletonEnabled: Boolean = false,
+		legsFrame: Bounds? = null,
+		bodyFrame: Bounds = character,
 	): Pair<DeformerId, Bounds> = when (layer.semantic.tag) {
 		SemanticTag.FACE -> faceContourId to faceFrame
 		SemanticTag.IRIDES -> faceRig.regionFor(FaceFeature.IRIS, layer.semantic.side)?.let { gazeWarpId(it) to it.bounds }
@@ -516,12 +544,44 @@ object RigBuilder {
 			?: (faceWarpId to faceFrame)
 		SemanticTag.FRONT_HAIR -> frontHair?.let { frontHairPhysicsWarpId to it } ?: (headWarpId to head)
 		SemanticTag.BACK_HAIR -> backHair?.let { backHairPhysicsWarpId to it } ?: (headWarpId to head)
+		// The legs stand on the floor apart from the body: nothing that moves the body reaches the feet.
+		SemanticTag.LEGWEAR, SemanticTag.FOOTWEAR -> legsFrame?.let { BodyStance.legsWarpId to it } ?: (breathWarpId to bodyFrame)
 		else -> when {
 			layer.semantic.tag in faceTags -> faceWarpId to faceFrame
-			skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags -> bodyWarpId to character
-			inferredGroup(layer, anchors) == LayerGroup.HEAD -> headWarpId to head
-			else -> breathWarpId to character
+			inferredGroup(layer, anchors) == LayerGroup.HEAD && !(skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags) ->
+				headWarpId to head
+			else -> breathWarpId to bodyFrame
 		}
+	}
+
+	/**
+	 * The frame the body warps span: every part that hangs on the breath warp - the torso and its clothes,
+	 * the arms, a skirt, a tail - with the torso itself and the neck the head turns on, never the head, its
+	 * hair or the legs. A rotation passes on only its pivot, so the head needs nothing of it but the neck.
+	 */
+	private fun bodyFrame(
+		analysis: PipelineAnalysis,
+		stance: BodyStance,
+		faceRig: NinePoseFaceRig,
+		character: Bounds,
+		head: Bounds,
+		face: Bounds,
+		frontHair: Bounds?,
+		backHair: Bounds?,
+		skeletonEnabled: Boolean,
+	): Bounds {
+		val torso = stance.torso
+		val parts = analysis.layers.filter { layer ->
+			layer.opaquePixels > 0 && defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, face, frontHair, backHair,
+				skeletonEnabled, stance.legsFrame).first == breathWarpId
+		}.map { it.bounds }
+		val pivotY = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.mouthLineY).second
+		val neck = Bounds(torso.centerX - torso.halfWidth, minOf(pivotY, torso.shoulderY) - torso.length * 0.1f,
+			torso.centerX + torso.halfWidth, torso.waistY)
+		val union = (parts + neck).reduce(Bounds::union)
+		val padX = union.width * 0.04f
+		val padY = union.height * 0.03f
+		return Bounds(union.left - padX, union.top - padY, union.right + padX, union.bottom + padY)
 	}
 
 	private val faceTags = setOf(
@@ -563,6 +623,9 @@ object RigBuilder {
 	 * journal itself says which naming it speaks. Empty when the document was never split.
 	 */
 	private fun splitStableDrawableIds(inputAnalysis: PipelineAnalysis, config: PipelineConfig): Map<String, DrawableId> {
+		if (config.rigEdits.splitDrawableIds.isNotEmpty()) {
+			return config.rigEdits.splitDrawableIds.mapValues { DrawableId(it.value) }
+		}
 		val splitBaselineIds = config.rigEdits.splitBaselineLayerIds
 		val splitNamed = config.rigEdits.referencesSplitDrawable() ||
 			config.drawOrderOverrides.keys.any { it.startsWith(SPLIT_DRAWABLE_PREFIX) }
@@ -605,6 +668,21 @@ object RigBuilder {
 			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
 		), config, meshCache)), stableDrawableIds,
 	)
+
+	/** Allocate final semantic names before any split mesh can be referenced by an edit. */
+	internal fun assignSplitDrawableIds(analysis: PipelineAnalysis, existing: Map<String, DrawableId>): Map<String, DrawableId> {
+		val ids = existing.toMutableMap()
+		val reserved = existing.values.toMutableSet()
+		val counts = mutableMapOf<String, Int>()
+		for (layer in orderMouthLayers(analysis.layers.sortedBy { it.source.order })) {
+			if (layer.source.id.raw in ids || layer.opaquePixels == 0) continue
+			var id = uniqueDrawableId(layer, counts)
+			while (id in reserved) id = uniqueDrawableId(layer, counts)
+			ids[layer.source.id.raw] = id
+			reserved += id
+		}
+		return ids
+	}
 
 	private fun buildWithContext(
 		inputAnalysis: PipelineAnalysis,
@@ -708,6 +786,7 @@ object RigBuilder {
 		}
 
 		val builtDeformPaths = mutableListOf<DeformPath>()
+		val reservedDrawableIds = stableDrawableIds.values.toMutableSet()
 		val orderedLayers = orderMouthLayers(analysis.layers.sortedBy { it.source.order })
 		for ((drawIndex, layer) in orderedLayers.withIndex()) {
 			val placement = atlas.placementByLayerId[layer.source.id.raw]
@@ -719,7 +798,13 @@ object RigBuilder {
 			val (parentId, parentFrame) = context.parentAndFrame(layer, config)
 			val id = stableDrawableIds[layer.source.id.raw]
 				?: if (stableDrawableIds.isEmpty()) uniqueDrawableId(layer, idCounts)
+				else if (config.rigEdits.splitDrawableIds.isNotEmpty()) {
+					var candidate = uniqueDrawableId(layer, idCounts)
+					while (candidate in reservedDrawableIds) candidate = uniqueDrawableId(layer, idCounts)
+					candidate
+				}
 				else stableSplitDrawableId(layer.source.id.raw, stableDrawableIds.values)
+			reservedDrawableIds += id
 			val parts = buildDrawableMesh(
 				layer,
 				rigLayer,
@@ -737,7 +822,9 @@ object RigBuilder {
 			)
 			builtDeformPaths.addAll(parts.mouthPaths)
 			val override = config.layerOverrides[layer.source.id.raw]
-			val channelGrids = if (config.meshOnly) ChannelGrids.Empty else buildChannels(layer, override, switchParamKeys)
+			val classification = override?.type ?: layer.semantic.type
+			val channelGrids = if (config.meshOnly && classification == LayerType.PRESET) ChannelGrids.Empty
+				else buildChannels(layer, override, switchParamKeys, config.rigTuning)
 			val drawable = Drawable(
 				id = id,
 				name = layer.source.name,
@@ -865,7 +952,7 @@ object RigBuilder {
 		val puppet = PuppetModel(
 			parameters = StandardParameters.all + uniqueCustomParams,
 			parts = parts,
-			deformers = deformers,
+			deformers = withFaceLean(deformers, config.rigTuning),
 			drawables = maskedDrawables,
 			rootChildren = listOf(OrgChild.Part(headPartId), OrgChild.Part(extraPartId), OrgChild.Part(bodyPartId)),
 			rootPartId = null,
@@ -884,10 +971,10 @@ object RigBuilder {
 			atlas = puppetAtlas,
 			sources = artSources,
 			deformPaths = builtDeformPaths,
-		).withDerivedRenderRoot()
+		).withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
 		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
 		val skeletonPuppet = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
-			?.let { SkeletonRig.apply(puppet, it, analysis.anchors.character, handEditedTopology(config)) } ?: puppet
+			?.let { SkeletonRig.apply(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance) } ?: puppet
 		return BuiltRig(
 			skeletonPuppet,
 			pageByDrawable,
@@ -900,6 +987,22 @@ object RigBuilder {
 			warnings,
 			faceRig.initialAngleZ,
 		)
+	}
+
+	/**
+	 * A hair kind the model preset simulates drops its legacy sway: the physics warp unwraps into the follow
+	 * warp, which has the same frame, and its parameter goes, so the simulation bake is the only motion. The
+	 * parameter goes first: that collapses the warp to its rest lattice, which the unwrap then maps through.
+	 */
+	private fun withoutLegacyHairSway(puppet: PuppetModel, config: PipelineConfig): PuppetModel {
+		var model = puppet
+		if (config.hairSimulationFront) {
+			model = model.withParameterDeleted(StandardParameters.HAIR_FRONT).withDeformerDeleted(frontHairPhysicsWarpId)
+		}
+		if (config.hairSimulationBack) {
+			model = model.withParameterDeleted(StandardParameters.HAIR_BACK).withDeformerDeleted(backHairPhysicsWarpId)
+		}
+		return model
 	}
 
 	/** Drawables whose topology the user edited by hand; the skeleton must not renumber their vertices. */
@@ -1086,6 +1189,7 @@ object RigBuilder {
 			pageHeight,
 			config,
 			meshCache,
+			MeshResolution.unitScale(config, context.analysis.source),
 		)
 		val outlineMouth = config.mouthOutlineEnabled && !config.meshOnly &&
 			layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)
@@ -1127,47 +1231,112 @@ object RigBuilder {
 	}
 
 	/**
-	 * Body yaw keeps the two silhouette endpoints on every lattice row the same distance apart.
-	 * Perspective is expressed by an interior roll with zero endpoint weight, so +X and -X are
-	 * exact mirrors instead of the former signed global scale (`1 + kx * 0.025`).
+	 * The body's warps (see [BodyStance]): the body over [frame] at the root on Body X and Body Y, the lean
+	 * and the proportions under it on their own parameters, and for a standing figure the legs, a second root
+	 * beside the body, on Body X, Body Y and the proportions.
 	 */
-	internal fun bodyWarpPoint(
-		character: Bounds,
-		u: Float,
-		v: Float,
-		bodyAngleX: Float,
-		bodyAngleY: Float,
-		strength: Float,
-	): Pair<Float, Float> {
-		val boundedStrength = strength.coerceIn(0f, 4f)
-		val yaw = bodyAngleX / 10f * boundedStrength
-		val pitch = bodyAngleY / 10f * boundedStrength
-		val torsoEnvelope = sin(PI * v).toFloat().coerceAtLeast(0f)
-		val endpointSafeRoll = 4f * u * (1f - u)
-		val endpointSafePitch = sin(2.0 * PI * v).toFloat()
-		val rowShift = yaw * character.width * 0.035f * torsoEnvelope
-		val perspectiveRoll = yaw * character.width * 0.015f * torsoEnvelope * endpointSafeRoll
-		val x = character.left + u * character.width + rowShift + perspectiveRoll
-		val y = character.top + v * character.height + pitch * character.height * 0.007f * endpointSafePitch
-		return x to y
+	internal fun bodyWarps(stance: BodyStance, frame: Bounds, bodyPartId: PartId?): List<Deformer.Warp> {
+		val bodyAxes = listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f), axis(StandardParameters.BODY_Y, -10f, 0f, 10f))
+		fun canvasOf(u: Float, v: Float) = (frame.left + u * frame.width).toDouble() to (frame.top + v * frame.height).toDouble()
+		val legs = if (!stance.standing) emptyList() else {
+			val legsFrame = stance.legsFrame!!
+			val legRows = (legsFrame.height / (stance.legLength * LEG_ROW_SPACING)).toInt().coerceIn(10, 20)
+			// The legs shorten and lengthen with the proportions too, the body coming down with them.
+			val legsGrid = grid(bodyAxes + axis(StandardParameters.PROPORTION, -10f, 0f, 10f)) { values ->
+				val solved = stance.Solved(stance.bodyPose(values[0], values[1]))
+				lattice(LEG_COLUMNS, legRows) { u, v ->
+					stance.legsAt(solved.legPoint((legsFrame.left + u * legsFrame.width).toDouble(), (legsFrame.top + v * legsFrame.height).toDouble()), values[2])
+				}
+			}
+			listOf(Deformer.Warp(BodyStance.legsWarpId, tr("model.deformer.legs"), null, bodyPartId, legRows, LEG_COLUMNS, true, legsGrid))
+		}
+		// At the root the lattice is canvas pixels.
+		val bodyGrid = grid(bodyAxes) { values ->
+			lattice(BODY_COLUMNS, BODY_ROWS) { u, v ->
+				val (x, y) = canvasOf(u, v)
+				stance.bodyPoint(x, y, values[0], values[1])
+			}
+		}
+		val body = Deformer.Warp(bodyWarpId, tr("model.deformer.body"), null, bodyPartId, BODY_ROWS, BODY_COLUMNS, true, bodyGrid)
+		// Under the body the lattice is in its space over the same frame.
+		val leanGrid = grid(leanAxes()) { values ->
+			lattice(LEAN_COLUMNS, LEAN_ROWS) { u, v ->
+				val (x, y) = canvasOf(u, v)
+				val p = stance.leanPoint(x, y, values[0], values[1])
+				doubleArrayOf((p[0] - frame.left) / frame.width, (p[1] - frame.top) / frame.height)
+			}
+		}
+		val lean = Deformer.Warp(BodyStance.leanWarpId, tr("model.deformer.bodyLean"), bodyWarpId, bodyPartId, LEAN_ROWS, LEAN_COLUMNS, true, leanGrid)
+		return legs + body + lean
 	}
 
-	/** Body Z is an odd row shift; Breath is deliberately non-negative and may expand the chest. */
+	/**
+	 * Where the torso is drawn, canvas pixels: its centre line, the shoulder and waist lines, and half its
+	 * width at the chest. The breath and the body's lean are placed by it.
+	 */
+	internal class TorsoFrame(val centerX: Float, val shoulderY: Float, val waistY: Float, val halfWidth: Float) {
+		val length: Float get() = waistY - shoulderY
+	}
+
+	/**
+	 * The torso of [analysis]: the skeleton's upper body bone when there is one - it runs from the waist up
+	 * to the shoulders - else the shoulder and hip lines the layers give, across the topwear.
+	 */
+	internal fun torsoFrame(analysis: PipelineAnalysis, character: Bounds, skeleton: SkeletonSpec?): TorsoFrame {
+		val anchors = analysis.anchors
+		val topwear = analysis.layers.filter { it.semantic.tag == SemanticTag.TOPWEAR && it.opaquePixels > 0 }
+			.map { it.bounds }.reduceOrNull(Bounds::union)
+		val torsoBone = skeleton?.takeIf { it.enabled }?.bones?.firstOrNull { it.role == BoneRole.UPPER_BODY && it.length >= 1f }
+		val centerX = torsoBone?.headX ?: topwear?.centerX ?: anchors.chinX
+		val shoulderY = (torsoBone?.let { minOf(it.headY, it.tailY) } ?: anchors.shoulderY).coerceIn(character.top, character.bottom)
+		val minimum = character.height * 0.05f
+		val waistY = (torsoBone?.let { maxOf(it.headY, it.tailY) } ?: anchors.hipY)
+			.coerceIn(shoulderY + minimum, maxOf(character.bottom, shoulderY + minimum))
+		val halfWidth = (topwear?.width?.times(0.4f) ?: (anchors.face.width * 0.45f)).coerceAtLeast(1f)
+		return TorsoFrame(centerX, shoulderY, waistY, halfWidth)
+	}
+
+	/**
+	 * The body's second warp, in the lean warp's normalized space over [character], the body warps' frame.
+	 *
+	 * How far each goes is [tuning]'s Body Z and breath values.
+	 *
+	 * - Body Z leans the upper body about the waist: each row above it shifts sideways by its height over
+	 *   the waist, easing in across a band so the bend has no crease, and the hips and legs stay put. Rows
+	 *   only shift, so a lean either way keeps every row its width.
+	 * - Breath lifts the shoulders and everything they carry - the head, the arms - with the chest lifting
+	 *   less and the waist not at all, and widens the chest a little about the body's centre line. Past the
+	 *   torso's sides the widening stops growing, so an arm or a lock of hair beside it moves bodily.
+	 */
 	internal fun bodySecondaryWarpPoint(
+		character: Bounds,
+		torso: TorsoFrame,
 		u: Float,
 		v: Float,
 		bodyAngleZ: Float,
 		breathValue: Float,
 		strength: Float,
+		tuning: RigTuning = RigTuning(),
 	): Pair<Float, Float> {
 		val boundedStrength = strength.coerceIn(0f, 2f)
-		val z = bodyAngleZ / 10f * boundedStrength
+		val x = character.left + u * character.width
+		val y = character.top + v * character.height
+		val torsoLength = torso.length
+		val lean = Math.toRadians(tuning.bodyZDegrees * bodyAngleZ / 10.0 * boundedStrength)
+		val band = torsoLength * 0.3f
+		val above = (torso.waistY - y).coerceAtLeast(0f)
+		val lever = if (above < band) above * above / (2f * band) else above - band / 2f
+		val shift = kotlin.math.tan(lean).toFloat() * lever
 		val breath = breathValue.coerceIn(0f, 1f) * boundedStrength
-		val chest = kotlin.math.exp(-((v - 0.42f) * (v - 0.42f)) / 0.035f)
-		val x = u + z * 0.018f * sin(PI * v).toFloat() + (u - 0.5f) * breath * chest * 0.025f
-		val y = v - breath * chest * 0.012f
-		return x to y
+		val rise = smoothstep(((torso.waistY - y) / torsoLength).coerceIn(0f, 1f))
+		val lift = breath * tuning.breathLift / 100f * torsoLength * rise
+		val chestY = torso.shoulderY + torsoLength * 0.3f
+		val chest = rise * kotlin.math.exp(-((y - chestY) / (torsoLength * 0.45f)).let { it * it })
+		val widen = (x - torso.centerX).coerceIn(-torso.halfWidth, torso.halfWidth) * breath * tuning.breathWiden / 100f * chest
+		return (x + shift + widen - character.left) / character.width to (y - lift - character.top) / character.height
 	}
+
+	private fun smoothstep(t: Float) = t * t * (3f - 2f * t)
 
 	internal fun headContainerPoint(
 		head: Bounds,
@@ -1178,6 +1347,7 @@ object RigBuilder {
 		angleX: Float,
 		angleY: Float,
 		strength: Float,
+		tuning: RigTuning = RigTuning(),
 	): Pair<Float, Float> {
 		val boundedStrength = strength.coerceIn(0f, 2f)
 		val canvasX = head.left + u * head.width
@@ -1185,13 +1355,13 @@ object RigBuilder {
 		val yaw = angleX / 45f * boundedStrength
 		val pitch = angleY / 30f * boundedStrength
 		val crownArch = sin(PI * u).toFloat().coerceAtLeast(0f)
-		val shellX = yaw * head.width * (0.009f + crownArch * 0.004f)
-		val shellY = -pitch * head.height * 0.008f
+		val shellX = yaw * head.width * (tuning.headShellTurn + crownArch * tuning.headShellCrown) / 100f
+		val shellY = -pitch * head.height * tuning.headShellTilt / 100f
 		return (canvasX - originX + shellX) to (canvasY - originY + shellY)
 	}
 
-	internal fun gazePoint(u: Float, v: Float, eyeX: Float, eyeY: Float): Pair<Float, Float> =
-		(u + eyeX * 0.10f) to (v - eyeY * 0.085f)
+	internal fun gazePoint(u: Float, v: Float, eyeX: Float, eyeY: Float, tuning: RigTuning = RigTuning()): Pair<Float, Float> =
+		(u + eyeX * tuning.gazeX / 100f) to (v - eyeY * tuning.gazeY / 100f)
 
 	internal fun hairFollowPoint(
 		inHead: Bounds,
@@ -1231,6 +1401,8 @@ object RigBuilder {
 
 	private fun buildDeformers(
 		analysis: PipelineAnalysis,
+		stance: BodyStance,
+		bodyFrame: Bounds,
 		rigLayerById: Map<String, ClassifiedLayer>,
 		faceRig: NinePoseFaceRig,
 		character: Bounds,
@@ -1247,31 +1419,27 @@ object RigBuilder {
 		extraPartId: PartId,
 		config: PipelineConfig,
 	): DeformerBuildResult {
-		val bodyGrid = warpGrid(
-			listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f), axis(StandardParameters.BODY_Y, -10f, 0f, 10f)),
-			columns = 4,
-			rows = 6,
-		) { u, v, values ->
-			bodyWarpPoint(character, u, v, values[0], values[1], config.bodyStrength)
-		}
-		val body = Deformer.Warp(bodyWarpId, tr("model.deformer.body"), null, bodyPartId, 6, 4, true, bodyGrid)
+		val bodyWarps = bodyWarps(stance, bodyFrame, bodyPartId)
 
+		val torso = torsoFrame(analysis, character, config.rigEdits.skeleton)
 		val breathGrid = warpGrid(
 			listOf(axis(StandardParameters.BODY_Z, -10f, 0f, 10f), axis(StandardParameters.BREATH, 0f, 0.5f, 1f)),
 			columns = 4,
 			rows = 6,
 		) { u, v, values ->
-			bodySecondaryWarpPoint(u, v, values[0], values[1], config.bodyStrength)
+			bodySecondaryWarpPoint(bodyFrame, torso, u, v, values[0], values[1], config.bodyStrength, config.rigTuning)
 		}
-		val breath = Deformer.Warp(breathWarpId, tr("model.deformer.breath"), bodyWarpId, bodyPartId, 6, 4, true, breathGrid)
+		val breath = Deformer.Warp(breathWarpId, tr("model.deformer.breath"), BodyStance.leanWarpId, bodyPartId, 6, 4, true, breathGrid)
 
 		val headPivotX = faceRig.centerX
 		val headPivotY = faceRig.mouthLineY
 		val headPivotCanvas = faceRig.coordinateSpace.toCanvas(headPivotX, headPivotY)
-		val headPivotLocalX = normalizeX(headPivotCanvas.first, character)
-		val headPivotLocalY = normalizeY(headPivotCanvas.second, character)
-		val rotationGrid = oneDimGrid(StandardParameters.ANGLE_Z, floatArrayOf(-30f, 0f, 30f)) { value ->
-			RotationPivotForm(headPivotLocalX, headPivotLocalY, value, 1f)
+		val headPivotLocalX = normalizeX(headPivotCanvas.first, bodyFrame)
+		val headPivotLocalY = normalizeY(headPivotCanvas.second, bodyFrame)
+		// The head grows and shrinks with the lean and the proportions, which a warp cannot pass on to a rotation.
+		val rotationGrid = grid(listOf(axis(StandardParameters.ANGLE_Z, -30f, 0f, 30f)) + leanAxes()) { values ->
+			val scale = stance.leanScale(headPivotCanvas.second.toDouble(), values[1], values[2]).toFloat()
+			RotationPivotForm(headPivotLocalX, headPivotLocalY, values[0], scale)
 		}
 		val rotation = Deformer.Rotation(
 			headRotationId,
@@ -1286,7 +1454,7 @@ object RigBuilder {
 		// sole pixel-space child of the rotation deformer; all descendants use ordinary normalized
 		// warp coordinates.  Face, front hair and back hair are siblings below this node.
 		val headGrid = warpGrid(ninePoseAxes(), columns = 4, rows = 5) { u, v, values ->
-			headContainerPoint(head, headPivotX, headPivotY, u, v, values[0], values[1], config.headTurnStrength)
+			headContainerPoint(head, headPivotX, headPivotY, u, v, values[0], values[1], config.headTurnStrength, config.rigTuning)
 		}
 		val headContainer = Deformer.Warp(headWarpId, tr("model.deformer.headContainer"), headRotationId, headPartId, 5, 4, true, headGrid)
 
@@ -1305,7 +1473,7 @@ object RigBuilder {
 		// Identity at neutral, in the face's normalized space: the parent surface is inherited
 		// exactly once. Both directional bows affect every row/column, not just the center knot.
 		val displacementGrid = warpGrid(ninePoseAxes(), columns = 8, rows = 8) { u, v, values ->
-			featureDisplacementPoint(u, v, values[0], values[1], config.headTurnStrength,
+			featureDisplacementPoint(u, v, values[0], values[1], config.headTurnStrength, config.rigTuning,
 				faceFrame.width / faceFrame.height.coerceAtLeast(1e-4f))
 		}
 		val displacement = Deformer.Warp(featureDisplacementId, tr("model.deformer.featureDisplacement"),
@@ -1313,10 +1481,12 @@ object RigBuilder {
 		val socketY = normalizeY(faceRig.eyeLineY, faceFrame).coerceIn(0.05f, 0.95f)
 		val contourGrid = warpGrid(
 			listOf(axis(StandardParameters.ANGLE_X, *NinePoseFaceRig.angleXKeys)), columns = 8, rows = 16,
-		) { u, v, values -> faceContourPoint(u, v, values[0], config.headTurnStrength, socketY) }
+		) { u, v, values -> faceContourPoint(u, v, values[0], config.headTurnStrength, socketY, config.rigTuning) }
 		val contour = Deformer.Warp(faceContourId, tr("model.deformer.faceContour"),
 			faceWarpId, facePartId, 16, 8, true, contourGrid)
-		val deformers = mutableListOf<Deformer>(body, breath, rotation, headContainer, face, contour)
+		val deformers = mutableListOf<Deformer>()
+		deformers += bodyWarps
+		deformers += listOf(breath, rotation, headContainer, face, contour)
 		if (config.featureDisplacementEnabled) deformers += displacement
 		val pairFrames = mutableMapOf<String, Bounds>()
 		val pairedParentByLayerId = mutableMapOf<String, Pair<DeformerId, Bounds>>()
@@ -1384,7 +1554,7 @@ object RigBuilder {
 				config,
 			)
 			deformers += irisShape
-			deformers += gazeWarp(irisRegion, irisShape.id, facePartId)
+			deformers += gazeWarp(irisRegion, irisShape.id, facePartId, config.rigTuning)
 		}
 		frontHair?.let { frame ->
 			deformers += hairFollowWarp(
@@ -1393,9 +1563,9 @@ object RigBuilder {
 				frame,
 				head,
 				frontHairPartId,
-				-0.020f,
-				-0.006f,
-				yawPerspective = 0.10f,
+				-config.rigTuning.frontHairTurn / 100f,
+				-config.rigTuning.frontHairTilt / 100f,
+				yawPerspective = config.rigTuning.frontHairPerspective / 100f,
 			)
 			deformers += hairPhysicsWarp(
 				frontHairPhysicsWarpId,
@@ -1405,12 +1575,13 @@ object RigBuilder {
 				frame,
 				frontHairPartId,
 				rows = 4,
-				swayRatio = 0.12f,
-				curlRatio = 0.030f,
+				swayRatio = config.rigTuning.frontHairSway / 100f,
+				curlRatio = config.rigTuning.frontHairCurl / 100f,
 			)
 		}
 		backHair?.let { frame ->
-			deformers += hairFollowWarp(backHairFollowWarpId, tr("model.deformer.backHairFollow"), frame, head, backHairPartId, -0.018f, 0.004f)
+			deformers += hairFollowWarp(backHairFollowWarpId, tr("model.deformer.backHairFollow"), frame, head, backHairPartId,
+				-config.rigTuning.backHairTurn / 100f, -config.rigTuning.backHairTilt / 100f)
 			deformers += hairPhysicsWarp(
 				backHairPhysicsWarpId,
 				tr("model.deformer.backHairPhysics"),
@@ -1419,8 +1590,8 @@ object RigBuilder {
 				frame,
 				backHairPartId,
 				rows = 6,
-				swayRatio = 0.10f,
-				curlRatio = 0.025f,
+				swayRatio = config.rigTuning.backHairSway / 100f,
+				curlRatio = config.rigTuning.backHairCurl / 100f,
 			)
 		}
 
@@ -1433,7 +1604,7 @@ object RigBuilder {
 		}
 		val grouped = candidateLayers.groupBy { layer ->
 			val (defaultParentId, _) = defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, faceFrame, frontHair, backHair,
-				config.rigEdits.skeleton?.enabled == true)
+				config.rigEdits.skeleton?.enabled == true, stance.legsFrame, bodyFrame)
 			val baseName = pairBaseName(layer.source.name)
 			defaultParentId to baseName.lowercase(Locale.ROOT).trim()
 		}
@@ -1444,7 +1615,7 @@ object RigBuilder {
 
 			val (defaultParentId, defaultParentFrame) =
 				defaultParentAndFrame(pairLayers.first(), faceRig, analysis.anchors, character, head, faceFrame, frontHair, backHair,
-					config.rigEdits.skeleton?.enabled == true)
+					config.rigEdits.skeleton?.enabled == true, stance.legsFrame, bodyFrame)
 			val cleanBaseName = pairBaseName(pairLayers.first().source.name)
 			val pairId = uniquePairDeformerId(cleanBaseName, pairLayers.first().semantic.tag, usedDeformerIds)
 			val pairName = tr("model.deformer.pair", cleanBaseName)
@@ -1481,8 +1652,85 @@ object RigBuilder {
 			}
 		}
 
+		if (config.rigEdits.skeleton?.enabled != true) {
+			deformers += armHangWarps(analysis, stance, rigLayerById, deformers, pairedParentByLayerId, pairFrames, bodyPartId) { layer ->
+				defaultParentAndFrame(layer, faceRig, analysis.anchors, character, head, faceFrame, frontHair, backHair, false, stance.legsFrame, bodyFrame)
+			}
+		}
+
 		return DeformerBuildResult(deformers, pairFrames, pairedParentByLayerId)
 	}
+
+	/**
+	 * A warp for each arm on Body X and the body's lean and proportions, as artists give each arm a warp of its
+	 * own: an arm hangs straight down from its shoulder whatever the body does ([BodyStance.armPoint]), but
+	 * drawn beside the torso and the skirt it would bend with the body in the body and lean warps - drawn
+	 * larger and lower on the side the torso turns toward. At each key its lattice holds every point where
+	 * the arm puts the point it covers at rest, read back through its parent as the body leans there. The
+	 * arm's layers move under it: [parents] and [frames] receive it.
+	 */
+	private fun armHangWarps(
+		analysis: PipelineAnalysis,
+		stance: BodyStance,
+		rigLayerById: Map<String, ClassifiedLayer>,
+		deformers: List<Deformer>,
+		parents: MutableMap<String, Pair<DeformerId, Bounds>>,
+		frames: MutableMap<String, Bounds>,
+		partId: PartId,
+		defaultParent: (ClassifiedLayer) -> Pair<DeformerId, Bounds>,
+	): List<Deformer.Warp> {
+		val axes = listOf(axis(StandardParameters.BODY_X, -10f, 0f, 10f)) + leanAxes()
+		val combos = axes[0].keys.indices.flatMap { a ->
+			axes[1].keys.indices.flatMap { b -> axes[2].keys.indices.map { c -> intArrayOf(a, b, c) } }
+		}
+		val worlds = combos.map { c ->
+			val values = axes.indices.associate { axes[it].parameterId to axes[it].keys[c[it]] }
+			buildDeformerWorlds(deformers, { values[it] ?: 0f }, { 0f })
+		}
+		val torso = stance.torso
+		val warps = ArrayList<Deformer.Warp>()
+		for (side in listOf(Side.LEFT, Side.RIGHT)) {
+			val arms = analysis.layers.filter { it.semantic.tag == SemanticTag.HANDWEAR && it.semantic.side == side && it.opaquePixels > 0 }
+			if (arms.isEmpty()) continue
+			val hosts = arms.map { parents[it.source.id.raw] ?: defaultParent(it) }.distinct()
+			val (parentId, parentFrame) = hosts.singleOrNull() ?: continue
+			if (worlds.any { it[parentId] == null }) continue
+			val union = arms.map { rigLayerById.getValue(it.source.id.raw).bounds }.reduce(Bounds::union)
+			val frame = union.expanded(0.06f)
+			val shoulderX = torso.centerX + (if (frame.centerX >= torso.centerX) 1f else -1f) * torso.halfWidth
+			val rest = mapBounds(frame, parentFrame)
+			val cells = combos.mapIndexed { n, c ->
+				val bodyX = axes[0].keys[c[0]]
+				val lean = axes[1].keys[c[1]]
+				val size = axes[2].keys[c[2]]
+				val world = worlds[n].getValue(parentId)
+				val points = FloatArray((ARM_HANG_COLUMNS + 1) * (ARM_HANG_ROWS + 1) * 2)
+				for (row in 0..ARM_HANG_ROWS) for (column in 0..ARM_HANG_COLUMNS) {
+					val i = (row * (ARM_HANG_COLUMNS + 1) + column) * 2
+					val u = column.toFloat() / ARM_HANG_COLUMNS
+					val v = row.toFloat() / ARM_HANG_ROWS
+					val local = floatArrayOf(rest.left + u * rest.width, rest.top + v * rest.height)
+					if (bodyX == 0f && lean == 0f && size == 0f) { points[i] = local[0]; points[i + 1] = local[1]; continue }
+					val target = stance.armPoint((frame.left + u * frame.width).toDouble(), (frame.top + v * frame.height).toDouble(),
+						shoulderX.toDouble(), lean, size, bodyX)
+					val back = SkeletonRig.inverse(world, target[0].toFloat(), target[1].toFloat(), local)
+					points[i] = back[0]
+					points[i + 1] = back[1]
+				}
+				KeyformCell(c, WarpLatticeForm(points))
+			}
+			val id = DeformerId("DeformArmHang_" + (if (side == Side.LEFT) "L" else "R"))
+			warps += Deformer.Warp(id, tr("model.deformer.armHang", arms.first().source.name),
+				parentId, partId, ARM_HANG_ROWS, ARM_HANG_COLUMNS, true, KeyformGrid(axes, cells))
+			frames[id.raw] = frame
+			for (layer in arms) parents[layer.source.id.raw] = id to frame
+		}
+		return warps
+	}
+
+	/** An arm's hang warp: columns across the arm and rows down it. */
+	private const val ARM_HANG_COLUMNS = 3
+	private const val ARM_HANG_ROWS = 6
 
 	private fun identityWarp(
 		id: DeformerId,
@@ -1552,25 +1800,29 @@ object RigBuilder {
 	}
 
 	/** A local inward socket on the left silhouette, inherited by skin only. */
-	internal fun faceContourPoint(u: Float, v: Float, angleX: Float, strength: Float, socketY: Float): Pair<Float, Float> {
+	internal fun faceContourPoint(
+		u: Float, v: Float, angleX: Float, strength: Float, socketY: Float, tuning: RigTuning = RigTuning(),
+	): Pair<Float, Float> {
 		val turn = (-angleX / 45f * strength).coerceIn(0f, 1f)
 		val distance = (abs(v - socketY) / 0.18f).coerceIn(0f, 1f)
 		val horizontal = (u / 0.35f).coerceIn(0f, 1f)
 		// Two joined cubic Bezier segments have zero tangent at the socket and support edges.
 		val socket = BezierWarp.cubic(1f, 1f, 0f, 0f, distance)
 		val edge = BezierWarp.cubic(1f, 1f, 0f, 0f, horizontal)
-		return (u + turn * 0.018f * socket * edge) to v
+		return (u + turn * tuning.faceContour / 100f * socket * edge) to v
 	}
 
 	internal fun featureDisplacementPoint(
 		u: Float, v: Float, angleX: Float, angleY: Float, strength: Float,
+		tuning: RigTuning = RigTuning(),
 		aspectRatio: Float = 1f,
 	): Pair<Float, Float> {
 		val yaw = (angleX / 45f * strength).coerceIn(-1f, 1f)
 		val pitch = (angleY / 30f * strength).coerceIn(-1f, 1f)
 		// Cubic Bezier with endpoints 0 and handles 4/3 peaks at 1 at t=1/2.
 		fun bow(t: Float): Float = BezierWarp.cubic(0f, 4f / 3f, 4f / 3f, 0f, t)
-		val x = 0.5f + (u - 0.5f) * (1f - 0.15f * abs(yaw)) + yaw * (0.025f + 0.055f * bow(v))
+		val x = 0.5f + (u - 0.5f) * (1f - tuning.displacementNarrow / 100f * abs(yaw)) +
+			yaw * (0.025f + tuning.displacementShift / 100f * bow(v))
 		// Up: compress the whole height down toward the bottom, with extra compression
 		// in the upper half. Down: compress only the lower half up toward the middle.
 		// The squared half profiles are cubic Beziers with zero slope at their join.
@@ -1584,11 +1836,11 @@ object RigBuilder {
 			}
 		}
 		// Canvas Y grows downwards; negative AngleY is a downward look (U-shaped rows).
-		val y = compressedV(v) - pitch * (0.020f + 0.050f * bow(u))
+		val y = compressedV(v) - pitch * (0.020f + tuning.displacementTilt / 100f * bow(u))
 		// In canvas coordinates positive rotation is clockwise. Upper-left/lower-right
 		// have yaw*pitch < 0. Rotate the entire curved surface about its displaced center;
 		// pure horizontal/vertical poses stay unchanged. Correct for non-square face frames.
-		val radians = -yaw * pitch * (3f * PI.toFloat() / 180f)
+		val radians = -yaw * pitch * (tuning.displacementTwist * PI.toFloat() / 180f)
 		val centerX = 0.5f + yaw * 0.080f
 		val centerY = compressedV(0.5f) - pitch * 0.070f
 		val dx = (x - centerX) * aspectRatio
@@ -1640,13 +1892,13 @@ object RigBuilder {
 		)
 	}
 
-	private fun gazeWarp(region: FaceRegion, parent: DeformerId, part: PartId): Deformer.Warp {
+	private fun gazeWarp(region: FaceRegion, parent: DeformerId, part: PartId, tuning: RigTuning): Deformer.Warp {
 		val geometry = warpGrid(
 			listOf(axis(StandardParameters.EYE_BALL_X, -1f, 0f, 1f), axis(StandardParameters.EYE_BALL_Y, -1f, 0f, 1f)),
 			2,
 			2,
 		) { u, v, values ->
-			gazePoint(u, v, values[0], values[1])
+			gazePoint(u, v, values[0], values[1], tuning)
 		}
 		return Deformer.Warp(gazeWarpId(region), tr("model.deformer.gaze", sideDisplay(region.side)), parent, part, 2, 2, true, geometry)
 	}
@@ -1707,18 +1959,20 @@ object RigBuilder {
 		atlasHeight: Int = atlasWidth,
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
+		unitScale: Float,
 	): MeshData {
 		val width = max(1, layer.source.raster.width)
 		val height = max(1, layer.source.raster.height)
-		val (settings, effectiveSpacing) = meshSettings(layer, config)
+		val (settings, unitSpacing) = meshSettings(layer, config)
+		val effectiveSpacing = unitSpacing * unitScale
 
 		// Authored tooth layers may contain several disconnected teeth. Keep their complete texture;
 		// the mouth clipping id supplies the visible boundary.
 		if (layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) {
 			return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
 		}
-		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings)
-		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings)
+		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
+		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
 		if (adaptive != null) {
 			val positions = FloatArray(adaptive.positions.size)
 			val canvas = FloatArray(adaptive.positions.size)
@@ -1742,7 +1996,7 @@ object RigBuilder {
 		return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
 	}
 
-	private fun meshSettings(layer: ClassifiedLayer, config: PipelineConfig): Pair<MeshSettings, Float> {
+	internal fun meshSettings(layer: ClassifiedLayer, config: PipelineConfig): Pair<MeshSettings, Float> {
 		val semanticDensity = when (layer.semantic.tag) {
 			SemanticTag.FACE, SemanticTag.FRONT_HAIR, SemanticTag.BACK_HAIR, SemanticTag.TOPWEAR -> 0.65f
 			SemanticTag.IRIDES, SemanticTag.EYELASH, SemanticTag.EYEWHITE, SemanticTag.EYEBROW,
@@ -1838,11 +2092,11 @@ object RigBuilder {
 		val tag = layer.semantic.tag
 		return when (tag) {
 			SemanticTag.EYEWHITE, SemanticTag.EYELASH ->
-				eyeClosureGrid(layer, data, parentFrame, faceRig, eyeWhiteBounds)
+				eyeClosureGrid(layer, data, parentFrame, faceRig, eyeWhiteBounds, config.rigTuning)
 			// Blink does not key the iris directly. The independent physics output supplies a small,
 			// delayed squash/stretch while eye-white clipping removes it as the lid closes.
-			SemanticTag.IRIDES -> irisJellyGrid(layer, data, parentFrame)
-			SemanticTag.EYEBROW -> eyebrowGrid(layer, data, parentFrame)
+			SemanticTag.IRIDES -> irisJellyGrid(layer, data, parentFrame, config.rigTuning)
+			SemanticTag.EYEBROW -> eyebrowGrid(layer, data, parentFrame, config.rigTuning)
 			SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN -> mouthWholeGrid(data, parentFrame, mouthAperture ?: layer.bounds, config, mouthPaths)
 			SemanticTag.MOUTH_CLOSE, SemanticTag.TOOTH_T, SemanticTag.TOOTH_B, SemanticTag.TONGUE ->
 				zeroMeshGrid(data.mesh.positions.size)
@@ -1856,6 +2110,7 @@ object RigBuilder {
 		frame: Bounds,
 		faceRig: NinePoseFaceRig,
 		eyeWhiteBounds: List<Bounds>,
+		tuning: RigTuning,
 	): KeyformGrid<MeshDeltaForm> {
 		val parameter = if (layer.semantic.side == Side.LEFT) StandardParameters.EYE_L_OPEN else StandardParameters.EYE_R_OPEN
 		// Column sampling is defined in the source raster's canvas X axis.  Once the head has been
@@ -1884,6 +2139,7 @@ object RigBuilder {
 					whiteBounds,
 					layer.semantic.tag,
 					eyelashCenterline?.let { sampleCenterline(it, layer, canvasX) } ?: layer.centroidY,
+					tuning,
 				)
 				delta[vertex] = (closed.first - canvasX) / frame.width.coerceAtLeast(1e-4f) * (1f - openness)
 				delta[vertex + 1] = (closed.second - canvasY) / frame.height.coerceAtLeast(1e-4f) * (1f - openness)
@@ -1905,17 +2161,18 @@ object RigBuilder {
 		eyeWhiteBounds: Bounds,
 		tag: SemanticTag,
 		sourceAnchorY: Float = layerBounds.centerY,
+		tuning: RigTuning = RigTuning(),
 	): Pair<Float, Float> {
 		val halfWidth = (eyeWhiteBounds.width * 0.5f).coerceAtLeast(1e-4f)
 		val normalizedX = ((sourceX - eyeWhiteBounds.centerX) / halfWidth).coerceIn(-1f, 1f)
 		val arch = max(0f, 1f - normalizedX * normalizedX)
-		// Keep the trough at 72% of the eye-white height, but raise the endpoints from 48% to 34%.
-		// This deepens the U without increasing its centre travel and reduces movement at both corners.
-		val edgeY = eyeWhiteBounds.top + eyeWhiteBounds.height * 0.34f
-		val curveY = edgeY + max(1.5f, eyeWhiteBounds.height * 0.38f) * arch
+		// By default the trough sits at 72% of the eye-white height and the endpoints at 34%: a deep U
+		// whose corners move little.
+		val edgeY = eyeWhiteBounds.top + eyeWhiteBounds.height * tuning.blinkCorner / 100f
+		val curveY = edgeY + max(1.5f, eyeWhiteBounds.height * tuning.blinkDepth / 100f) * arch
 		val layerHeight = layerBounds.height.coerceAtLeast(1f)
 		val verticalScale = when (tag) {
-			SemanticTag.EYELASH -> 0.88f
+			SemanticTag.EYELASH -> tuning.eyelashSquash / 100f
 			SemanticTag.EYEWHITE -> (1.2f / layerHeight).coerceIn(0.015f, 0.55f)
 			else -> (1.2f / layerHeight).coerceIn(0.015f, 0.55f)
 		}
@@ -1986,23 +2243,23 @@ object RigBuilder {
 		return listOfNotNull(nearestLayer(layer, candidates)?.bounds)
 	}
 
-	private fun eyebrowGrid(layer: ClassifiedLayer, data: MeshData, frame: Bounds): KeyformGrid<MeshDeltaForm> {
+	private fun eyebrowGrid(layer: ClassifiedLayer, data: MeshData, frame: Bounds, tuning: RigTuning): KeyformGrid<MeshDeltaForm> {
 		val parameter = if (layer.semantic.side == Side.LEFT) StandardParameters.BROW_L_Y else StandardParameters.BROW_R_Y
 		return oneDimGrid(parameter, floatArrayOf(-1f, 0f, 1f)) { value ->
 			val delta = FloatArray(data.mesh.positions.size)
-			val dy = -value * layer.bounds.height * 0.12f / frame.height
+			val dy = -value * layer.bounds.height * tuning.browLift / 100f / frame.height
 			for (index in 1 until delta.size step 2) delta[index] = dy
 			MeshDeltaForm(delta)
 		}
 	}
 
-	private fun irisJellyGrid(layer: ClassifiedLayer, data: MeshData, frame: Bounds): KeyformGrid<MeshDeltaForm> =
+	private fun irisJellyGrid(layer: ClassifiedLayer, data: MeshData, frame: Bounds, tuning: RigTuning): KeyformGrid<MeshDeltaForm> =
 		oneDimGrid(StandardParameters.EYE_BALL_FORM, floatArrayOf(-1f, 0f, 1f)) { value ->
 			val delta = FloatArray(data.mesh.positions.size)
 			for (index in data.rigPositions.indices step 2) {
 				val sourceX = data.rigPositions[index]
 				val sourceY = data.rigPositions[index + 1]
-				val target = irisJellyPoint(sourceX, sourceY, layer.centroidX, layer.centroidY, value)
+				val target = irisJellyPoint(sourceX, sourceY, layer.centroidX, layer.centroidY, value, tuning)
 				delta[index] = (target.first - sourceX) / frame.width.coerceAtLeast(1e-4f)
 				delta[index + 1] = (target.second - sourceY) / frame.height.coerceAtLeast(1e-4f)
 			}
@@ -2016,10 +2273,11 @@ object RigBuilder {
 		pivotX: Float,
 		pivotY: Float,
 		jelly: Float,
+		tuning: RigTuning = RigTuning(),
 	): Pair<Float, Float> {
 		val amount = jelly.coerceIn(-1f, 1f)
-		val scaleX = 1f - amount * 0.045f
-		val scaleY = 1f + amount * 0.11f
+		val scaleX = 1f - amount * tuning.irisJellySquash / 100f
+		val scaleY = 1f + amount * tuning.irisJellyStretch / 100f
 		return pivotX + (sourceX - pivotX) * scaleX to pivotY + (sourceY - pivotY) * scaleY
 	}
 
@@ -2048,7 +2306,7 @@ object RigBuilder {
 			for (index in data.rigPositions.indices step 2) {
 				val sourceX = data.rigPositions[index]
 				val sourceY = data.rigPositions[index + 1]
-				val target = mouthWholePoint(sourceX, sourceY, aperture, values[0], values[1], config.mouthShape, config.mouthOutlineEnabled, config.mouthCurve)
+				val target = mouthWholePoint(sourceX, sourceY, aperture, values[0], values[1], config.mouthShape, config.mouthOutlineEnabled, config.mouthCurve, config.rigTuning)
 				delta[index] = (target.first - sourceX) / parentFrame.width.coerceAtLeast(1e-4f)
 				delta[index + 1] = (target.second - sourceY) / parentFrame.height.coerceAtLeast(1e-4f)
 			}
@@ -2086,8 +2344,8 @@ object RigBuilder {
                 id = UUID.randomUUID().toString(),
                 drawableId = drawableId,
                 points = upperPoints,
-                width = 0.1f,
-                hardness = 0.5f,
+                width = DeformPath.DEFAULT_WIDTH,
+                hardness = DeformPath.DEFAULT_HARDNESS,
                 closed = false,
                 editLevel = 2,
             ),
@@ -2095,8 +2353,8 @@ object RigBuilder {
                 id = UUID.randomUUID().toString(),
                 drawableId = drawableId,
                 points = lowerPoints,
-                width = 0.1f,
-                hardness = 0.5f,
+                width = DeformPath.DEFAULT_WIDTH,
+                hardness = DeformPath.DEFAULT_HARDNESS,
                 closed = false,
                 editLevel = 2,
             ),
@@ -2176,7 +2434,7 @@ object RigBuilder {
         }
         val geometry = grid(mouthAxes()) { values ->
             val transformed = path.map { p ->
-                mouthWholePoint(p.first, p.second, aperture, values[0], values[1], config.mouthShape, true, config.mouthCurve)
+                mouthWholePoint(p.first, p.second, aperture, values[0], values[1], config.mouthShape, true, config.mouthCurve, config.rigTuning)
             }
             val target = normalized(MouthStrokeMesh.positions(transformed, radius, joins))
             MeshDeltaForm(FloatArray(positions.size) { target[it] - positions[it] })
@@ -2214,8 +2472,8 @@ object RigBuilder {
                     id = UUID.randomUUID().toString(),
                     drawableId = lipDrawable.id,
                     points = points,
-                    width = 0.1f,
-                    hardness = 0.5f,
+                    width = DeformPath.DEFAULT_WIDTH,
+                    hardness = DeformPath.DEFAULT_HARDNESS,
                     closed = false,
                     editLevel = 2,
                 )
@@ -2233,19 +2491,21 @@ object RigBuilder {
         shape: String = "smile",
         exactClose: Boolean = false,
         curve: MouthCurve = MouthCurve.preset("smile"),
+		tuning: RigTuning = RigTuning(),
 	): Pair<Float, Float> {
 		val open = mouthOpen.coerceIn(0f, 1f)
 		val easedOpen = open * open * (3f - 2f * open)
 		val form = mouthForm.coerceIn(-1f, 1f)
 		val halfWidth = (aperture.width * 0.5f).coerceAtLeast(1e-4f)
 		val normalizedX = ((sourceX - aperture.centerX) / halfWidth).coerceIn(-1.25f, 1.25f)
-		val horizontalScale = 0.92f + easedOpen * 0.08f + form * 0.07f
+		val narrow = tuning.mouthClosedNarrow / 100f
+		val horizontalScale = 1f - narrow + easedOpen * narrow + form * tuning.mouthFormWiden / 100f
 		val targetX = aperture.centerX + (sourceX - aperture.centerX) * horizontalScale
-		val seamY = aperture.top + aperture.height * 0.48f
+		val seamY = aperture.top + aperture.height * tuning.mouthSeam / 100f
 		val closedScale = if (exactClose) 0f else (1.25f / aperture.height.coerceAtLeast(1f)).coerceIn(0.018f, 0.12f)
 		val verticalScale = closedScale + easedOpen * (1f - closedScale)
 		val cornerWeight = abs(normalizedX).toDouble().pow(1.55).toFloat().coerceAtMost(1.35f)
-		val expressionY = -form * aperture.height * (0.018f + cornerWeight * 0.105f) * (0.72f + easedOpen * 0.28f)
+		val expressionY = -form * aperture.height * (tuning.mouthSmileBase + cornerWeight * tuning.mouthSmile) / 100f * (0.72f + easedOpen * 0.28f)
         val effectiveCurve = if (shape == "custom") curve else MouthCurve.preset(shape)
         val presetY = effectiveCurve.yAt((normalizedX + 1f) * 0.5f) * aperture.height * (1f - easedOpen)
         val targetY = seamY + (sourceY - seamY) * verticalScale + expressionY + presetY
@@ -2259,6 +2519,7 @@ object RigBuilder {
 		layer: ClassifiedLayer,
 		override: LayerClassificationOverride?,
 		switchParamKeys: Map<String, FloatArray>,
+		tuning: RigTuning,
 	): ChannelGrids {
 		val type = override?.type ?: layer.semantic.type
 		val opacityGrid = when (type) {
@@ -2288,8 +2549,8 @@ object RigBuilder {
 					}
 					SemanticTag.MOUTH_CLOSE -> scalarGrid(StandardParameters.MOUTH_OPEN, floatArrayOf(0f, 1f)) { 1f - it }
 					SemanticTag.TONGUE, SemanticTag.TOOTH_T, SemanticTag.TOOTH_B ->
-						scalarGrid(StandardParameters.MOUTH_OPEN, floatArrayOf(0f, 0.15f, 1f)) { open ->
-							(open / 0.15f).coerceIn(0f, 1f)
+						scalarGrid(StandardParameters.MOUTH_OPEN, floatArrayOf(0f, tuning.teethFade / 100f, 1f)) { open ->
+							(open / (tuning.teethFade / 100f)).coerceIn(0f, 1f)
 						}
 					else -> null
 				}
@@ -2310,7 +2571,7 @@ object RigBuilder {
 			group("ParamGroupEyes", tr("model.group.eyes"), listOf(StandardParameters.EYE_L_OPEN, StandardParameters.EYE_R_OPEN, StandardParameters.EYE_BALL_X, StandardParameters.EYE_BALL_Y, StandardParameters.EYE_BALL_FORM)),
 			group("ParamGroupBrows", tr("model.group.brows"), listOf(StandardParameters.BROW_L_Y, StandardParameters.BROW_R_Y)),
 			group("ParamGroupMouth", tr("model.group.mouth"), listOf(StandardParameters.MOUTH_FORM, StandardParameters.MOUTH_OPEN)),
-			group("ParamGroupBody", tr("model.group.body"), listOf(StandardParameters.BODY_X, StandardParameters.BODY_Y, StandardParameters.BODY_Z, StandardParameters.BREATH)),
+			group("ParamGroupBody", tr("model.group.body"), listOf(StandardParameters.BODY_X, StandardParameters.BODY_Y, StandardParameters.BODY_Z, StandardParameters.BODY_LEAN, StandardParameters.PROPORTION, StandardParameters.BREATH)),
 			group("ParamGroupPhysics", tr("model.group.physics"), listOf(StandardParameters.HAIR_FRONT, StandardParameters.HAIR_BACK)),
 		)
 		return if (customParameters.isNotEmpty()) {
@@ -2450,6 +2711,7 @@ object RigBuilder {
 					shape = config.mouthShape,
 					exactClose = config.mouthOutlineEnabled,
 					curve = config.mouthCurve,
+					tuning = config.rigTuning,
 				)
 			} else {
 				data.rigPositions[index] to data.rigPositions[index + 1]
@@ -2482,7 +2744,7 @@ object RigBuilder {
 		val joins = listOf(overlap, overlap + columns.lastIndex)
 		val radius = config.mouthThickness.coerceIn(0.5f, 8f) * 0.5f
 		val transformed = path.map { p ->
-			mouthWholePoint(p.first, p.second, aperture, 0f, 0f, config.mouthShape, true, config.mouthCurve)
+			mouthWholePoint(p.first, p.second, aperture, 0f, 0f, config.mouthShape, true, config.mouthCurve, config.rigTuning)
 		}
 		val rawPositions = MouthStrokeMesh.positions(transformed, radius, joins)
 		var left = Float.POSITIVE_INFINITY
@@ -2554,6 +2816,44 @@ object RigBuilder {
 
 	private fun axis(parameter: ParameterId, vararg keys: Float) = KeyformAxis(parameter, keys)
 
+	/**
+	 * The head's warps keyed on Angle Y with the lean joining their axes, so the face bows with the body:
+	 * leaning in it turns down by [RigTuning.faceLeanDown] degrees of Angle Y, leaning back up by [RigTuning.faceLeanUp].
+	 * At each lean key a cell holds the warp's own lattice at Angle Y moved so, read between its keys as
+	 * the runtime would and held at its ends; every such warp moves alike, so the face turns as one.
+	 */
+	internal fun withFaceLean(deformers: List<Deformer>, tuning: RigTuning = RigTuning()): List<Deformer> = deformers.map { deformer ->
+		if (deformer !is Deformer.Warp) return@map deformer
+		val grid = deformer.geometryGrid ?: return@map deformer
+		val yi = grid.axes.indexOfFirst { it.parameterId == StandardParameters.ANGLE_Y }
+		if (yi < 0 || grid.axes[yi].keys.size < 2 || grid.axes.any { it.parameterId == StandardParameters.BODY_LEAN }) return@map deformer
+		val keys = grid.axes[yi].keys
+		val byCoordinate = grid.cells.associateBy { it.coordinate.toList() }
+		val leans = floatArrayOf(-10f, 0f, 10f)
+		val shifts = floatArrayOf(tuning.faceLeanUp, 0f, -tuning.faceLeanDown)
+		fun at(cell: KeyformCell<WarpLatticeForm>, index: Int) =
+			byCoordinate[cell.coordinate.copyOf().also { it[yi] = index }.toList()]?.form ?: cell.form
+		val cells = grid.cells.flatMap { cell ->
+			leans.indices.map { l ->
+				val form = if (shifts[l] == 0f) cell.form else {
+					val target = (keys[cell.coordinate[yi]] + shifts[l]).coerceIn(keys.first(), keys.last())
+					var j = 0
+					while (j < keys.size - 2 && target > keys[j + 1]) j++
+					val t = ((target - keys[j]) / (keys[j + 1] - keys[j])).coerceIn(0f, 1f)
+					val a = at(cell, j).controlPoints
+					val b = at(cell, j + 1).controlPoints
+					WarpLatticeForm(FloatArray(a.size) { a[it] + (b[it] - a[it]) * t })
+				}
+				KeyformCell(cell.coordinate + l, form)
+			}
+		}
+		deformer.copy(geometryGrid = KeyformGrid(grid.axes + KeyformAxis(StandardParameters.BODY_LEAN, leans), cells))
+	}
+
+	/** The lean warp's axes: the lean and the proportions, three keys each. */
+	internal fun leanAxes(): List<KeyformAxis> =
+		listOf(axis(StandardParameters.BODY_LEAN, -10f, 0f, 10f), axis(StandardParameters.PROPORTION, -10f, 0f, 10f))
+
 	private fun <T> oneDimGrid(parameter: ParameterId, keys: FloatArray, form: (Float) -> T): KeyformGrid<T> =
 		KeyformGrid(listOf(KeyformAxis(parameter, keys)), keys.indices.map { index -> KeyformCell(intArrayOf(index), form(keys[index])) })
 
@@ -2589,6 +2889,28 @@ object RigBuilder {
 		}
 		WarpLatticeForm(controlPoints)
 	}
+
+	/** A lattice of [columns] by [rows] cells with each point placed by [point] from its (u, v). */
+	private fun lattice(columns: Int, rows: Int, point: (u: Float, v: Float) -> DoubleArray): WarpLatticeForm {
+		val controlPoints = FloatArray((columns + 1) * (rows + 1) * 2)
+		var index = 0
+		for (row in 0..rows) for (column in 0..columns) {
+			val p = point(column.toFloat() / columns, row.toFloat() / rows)
+			controlPoints[index++] = p[0].toFloat()
+			controlPoints[index++] = p[1].toFloat()
+		}
+		return WarpLatticeForm(controlPoints)
+	}
+
+	/** Lattice sizes of the body warps: the body turns across its width, the lean only pitches about the waist. */
+	private const val BODY_COLUMNS = 12
+	private const val BODY_ROWS = 14
+	private const val LEAN_COLUMNS = 8
+	private const val LEAN_ROWS = 12
+
+	/** Columns of the legs warp, a few per leg, and its row spacing in leg lengths so the knee bends across rows. */
+	private const val LEG_COLUMNS = 8
+	private const val LEG_ROW_SPACING = 0.06
 
 	private fun Deformer.withParent(newParent: DeformerId?): Deformer = when (this) {
 		is Deformer.Warp -> copy(parent = newParent)

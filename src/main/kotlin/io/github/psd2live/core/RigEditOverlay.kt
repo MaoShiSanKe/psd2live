@@ -2,6 +2,9 @@ package io.github.psd2live.core
 
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.float
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.umamo.edit.Pose
 import org.umamo.edit.channelValueAt
 import org.umamo.edit.geometryGridOf
@@ -11,6 +14,7 @@ import org.umamo.edit.withGeometryKeyRemoved
 import org.umamo.edit.withParameterCreated
 import org.umamo.edit.withParameterDeleted
 import org.umamo.edit.withParameterRange
+import org.umamo.edit.withParametersSyncedFromTree
 import org.umamo.runtime.keyform.MeshDeltaInterpolator
 import org.umamo.runtime.keyform.RotationPivotInterpolator
 import org.umamo.runtime.keyform.WarpLatticeInterpolator
@@ -97,6 +101,7 @@ data class RigTargetRef(
 	val kind: RigTargetKind,
 	val id: String,
 	val secondaryId: String? = null,
+	val glueId: String? = null,
 ) {
 	init {
 		require(id.isNotBlank()) { "Target ID must not be blank" }
@@ -109,7 +114,7 @@ data class RigTargetRef(
 		RigTargetKind.ART_MESH -> KeyformOwner.Drawable(DrawableId(id))
 		RigTargetKind.WARP_DEFORMER, RigTargetKind.ROTATION_DEFORMER -> KeyformOwner.Deformer(DeformerId(id))
 		RigTargetKind.PART -> KeyformOwner.Part(PartId(id))
-		RigTargetKind.GLUE -> KeyformOwner.Glue(DrawableId(id), DrawableId(secondaryId ?: id))
+		RigTargetKind.GLUE -> KeyformOwner.Glue(DrawableId(id), DrawableId(secondaryId ?: id), glueId)
 	}
 }
 
@@ -198,6 +203,9 @@ data class RigKeyformCopyEdit(
  * included in Agent history snapshots and export configuration.
  */
 data class RigEditOverlay(
+	/** Embedded CMO3 baseline; imported rigs rebuild from this instead of generating a PSD rig. */
+	val importedCmo3: String? = null,
+	val importedLayerIds: Map<String, String> = emptyMap(),
 	/** Null means no skeleton has been authored yet; [SkeletonSpec.Disabled] is an explicit opt-out. */
 	val skeleton: SkeletonSpec? = null,
 	val parameterEdits: List<RigParameterEdit> = emptyList(),
@@ -227,11 +235,17 @@ data class RigEditOverlay(
     val calibrationLayerIds: Set<String> = emptySet(),
     /** Source layers active before the first mesh split; preserves the generated Warp frames on rebuild. */
     val splitBaselineLayerIds: Set<String> = emptySet(),
+    /** Committed drawable ids, including formally named split pieces, preserved across rebuilds. */
+    val splitDrawableIds: Map<String, String> = emptyMap(),
     val structureEdits: List<kotlinx.serialization.json.JsonObject> = emptyList(),
     /** New authoring commands replay in actual order, after the legacy baseline. */
     val authoringJournal: List<kotlinx.serialization.json.JsonObject> = emptyList(),
     /** Authored motions and overrides of the generated ones; they do not touch the rig. */
     val motionClips: List<MotionClip> = emptyList(),
+    /** How the user tuned each generated motion, by name, and which ones they deleted. */
+    val motionPresets: Map<String, MotionPresetSettings> = emptyMap(),
+    /** Simulated bodies; they read the rebuilt rig and, once baked, write back through their own generator. */
+    val simEdits: List<io.github.psd2live.core.sim.RigSimEdit> = emptyList(),
 ) {
 	init {
         require(motionClips.map { it.id }.distinct().size == motionClips.size) { "Duplicate motion IDs" }
@@ -240,6 +254,8 @@ data class RigEditOverlay(
         require(physicsEdits.map { it.id }.distinct().size == physicsEdits.size) { "Duplicate physics IDs" }
         require(validFps(physicsFps)) { "FPS must be $UNLIMITED_FPS (unlimited) or within $PHYSICS_FPS_RANGE" }
         require(swingEdits.map { it.id }.distinct().size == swingEdits.size) { "Duplicate swing IDs" }
+        require(simEdits.map { it.id }.distinct().size == simEdits.size) { "Duplicate simulation IDs" }
+        require(simEdits.flatMap { it.outputParameters }.let { it.distinct().size == it.size }) { "Each simulation needs its own parameters" }
         require(swingEdits.flatMap { it.parameterIds }.let { it.distinct().size == it.size }) { "Each swing needs its own parameters" }
 		require(parameterEdits.map(RigParameterEdit::id).distinct().size == parameterEdits.size) {
 			"Rig parameter edits contain duplicate IDs"
@@ -265,7 +281,18 @@ data class RigEditOverlay(
 		}
 		val journalWarpIds = structureEdits.filter { it["action"]?.jsonPrimitive?.contentOrNull == "create_warp" }.map { it.getValue("id").jsonPrimitive.content }.toSet()
         for (warp in warpEdits) if(warp.id !in journalWarpIds) model = warp.applyTo(model)
-        model = RigStructureEdits.replay(model, structureEdits)
+		// Generated axes do not exist until swing/simulation materialization. Replay their panel
+		// placement and links afterwards, including moves of another parameter relative to them.
+		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
+			simEdits.flatMap { it.outputParameters }
+		fun generatedPanelEdit(edit: kotlinx.serialization.json.JsonObject): Boolean =
+			edit["kind"]?.jsonPrimitive?.contentOrNull == "parameter" &&
+				edit["action"]?.jsonPrimitive?.contentOrNull in setOf("move", "link") &&
+				listOf("id", "partner_id", "before_id").any { field ->
+					edit[field]?.jsonPrimitive?.contentOrNull in generatedIds
+				}
+		val (generatedPanelEdits, earlyStructureEdits) = structureEdits.partition(::generatedPanelEdit)
+        model = RigStructureEdits.replay(model, earlyStructureEdits)
 		// 3. Apply keyform sets
 		for (set in keyformSetEdits) {
 			model = applyKeyformSet(model, set)
@@ -278,7 +305,19 @@ data class RigEditOverlay(
 		for (delete in keyformDeleteEdits) {
 			model = applyKeyformDelete(model, delete)
 		}
-		return SwingGenerator.apply(authoringJournal.fold(model, RigAuthoringJournal::replay), swingEdits)
+		val deferredJournalEdits = mutableListOf<kotlinx.serialization.json.JsonObject>()
+		for (command in authoringJournal) {
+			if (command["op"]?.jsonPrimitive?.contentOrNull == "structure") {
+				val edits = command.getValue("edits").jsonArray.map { it.jsonObject }
+				val (deferred, early) = edits.partition(::generatedPanelEdit)
+				deferredJournalEdits += deferred
+				model = RigStructureEdits.replay(model, early)
+			} else {
+				model = RigAuthoringJournal.replay(model, command)
+			}
+		}
+		model = io.github.psd2live.core.sim.SimGenerator.apply(SwingGenerator.apply(model, swingEdits), simEdits)
+		return RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree()
 	}
 
 	fun upsert(edit: RigParameterEdit): RigEditOverlay {
@@ -332,10 +371,61 @@ data class RigEditOverlay(
 	}
 }
 
-internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay): BuiltRig =
-	if (overlay == RigEditOverlay.Empty) this else copy(puppet = overlay.applyTo(puppet))
+internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map<String, Boolean> = emptyMap(),
+                                 drawOrderOverrides: Map<String, Float> = emptyMap()): BuiltRig {
+	if (overlay == RigEditOverlay.Empty) return withDrawOrderOverrides(drawOrderOverrides)
+	var model = overlay.applyTo(puppet)
+	val bounds = sourceBoundsByDrawableId.toMutableMap()
+	val layers = layerIdByDrawableId.toMutableMap()
+	val pages = pageByDrawableId.toMutableMap()
+	for (command in overlay.authoringJournal) {
+		val op = command["op"]?.jsonPrimitive?.contentOrNull
+		if (op == SourcePartitionJournal.OP) {
+			for (piece in SourcePartitionJournal.pieces(command)) {
+				val id = piece.getValue("id").jsonPrimitive.content
+				val drawable = model.drawables.singleOrNull { it.id.raw == id } ?: continue
+				layers[id] = piece.getValue("layer_id").jsonPrimitive.content
+				layerVisibility[layers.getValue(id)]?.let { visible ->
+					model = model.copy(drawables = model.drawables.map { if (it.id.raw == id) it.copy(isVisible = visible) else it })
+				}
+				pages[id] = drawable.texturePage
+				val canvas = piece.getValue("texture_canvas").jsonArray.map { it.jsonPrimitive.float }
+				val xs = canvas.indices.step(2).map { canvas[it] }; val ys = canvas.indices.step(2).map { canvas[it + 1] }
+				bounds[id] = Bounds(xs.min(), ys.min(), xs.max(), ys.max())
+			}
+			continue
+		}
+		if (op != RasterMeshJournal.OP && op != RasterMeshCreation.OP && op != RigMeshActivation.OP) continue
+		val id = command.getValue("id").jsonPrimitive.content
+		if ((op == RasterMeshCreation.OP || op == RigMeshActivation.OP) && model.drawables.any { it.id.raw == id }) {
+			layers[id] = command.getValue("layer_id").jsonPrimitive.content
+			pages[id] = model.drawables.single { it.id.raw == id }.texturePage
+		}
+		val value = command["neutral_bounds"]?.jsonArray ?: continue
+		val numbers = value.map { it.jsonPrimitive.content.toFloat() }
+		require(numbers.size == 4 && numbers.all(Float::isFinite) && numbers[2] >= numbers[0] && numbers[3] >= numbers[1]) {
+			"Invalid rebuilt mesh neutral bounds"
+		}
+		if (model.drawables.any { it.id.raw == id }) bounds[id] = Bounds(numbers[0], numbers[1], numbers[2], numbers[3])
+	}
+	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages)
+        .withDrawOrderOverrides(drawOrderOverrides)
+}
 
 internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit): PuppetModel {
+    val requestedChannel = delete.channel?.takeUnless { it.equals("geometry", ignoreCase = true) }?.let { name ->
+        val canonical = when (name.lowercase()) {
+            "draworder" -> "DRAW_ORDER"
+            "multiplycolor" -> "MULTIPLY_COLOR"
+            "screencolor" -> "SCREEN_COLOR"
+            "glueintensity" -> "GLUE_INTENSITY"
+            "flipx" -> "FLIP_X"
+            "flipy" -> "FLIP_Y"
+            else -> name.uppercase()
+        }
+        FormChannel.entries.firstOrNull { it.name == canonical }
+            ?: throw IllegalArgumentException("Unknown keyform channel: $name")
+    }
 	val paramId = ParameterId(delete.parameterId)
 	val param = model.parameters.firstOrNull { it.id == paramId } ?: return model
 	val owner = delete.target.asKeyformOwner()
@@ -363,9 +453,7 @@ internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit
 
 	val deleteChannels = delete.channel == null || !delete.channel.equals("geometry", ignoreCase = true)
 	if (deleteChannels) {
-		val targetCh = delete.channel?.let { name ->
-			runCatching { FormChannel.valueOf(name.uppercase()) }.getOrNull()
-		}
+        val targetCh = requestedChannel
 		val channelFilter: (FormChannel) -> Boolean = { ch ->
 			targetCh == null || ch == targetCh
 		}
@@ -395,7 +483,7 @@ internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit
 	return current
 }
 
-internal fun applyKeyformSet(model: PuppetModel, set: RigKeyformSetEdit): PuppetModel {
+internal fun applyKeyformSet(model: PuppetModel, set: RigKeyformSetEdit, capturePose: Map<String, Float>? = null): PuppetModel {
 	val blendTargets = model.blendParametersIn(set.coordinate)
 	if (blendTargets.isNotEmpty()) {
 		val owner = set.target.asKeyformOwner()
@@ -409,6 +497,7 @@ internal fun applyKeyformSet(model: PuppetModel, set: RigKeyformSetEdit): Puppet
 				RotationPivotForm(geo.originX, geo.originY, geo.angle, geo.scale ?: 1f)
 			} else null,
 			channels = set.channels,
+			poseCoordinate = capturePose ?: set.coordinate,
 		)
 	}
 	val gridCoordinate = model.gridCoordinateOf(set.coordinate)
@@ -704,7 +793,7 @@ internal fun PuppetModel.withReplacedChannelGrids(owner: KeyformOwner, channelGr
 		is KeyformOwner.Glue ->
 			copy(
 				glues = glues.map { glue ->
-					if (glue.meshA == owner.meshA && glue.meshB == owner.meshB) glue.copy(channelGrids = channelGrids) else glue
+					if (owner.matches(glue)) glue.copy(channelGrids = channelGrids) else glue
 				},
 			)
 	}

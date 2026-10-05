@@ -92,7 +92,15 @@ internal fun PhysicsGroupEditor(
 
 	Column(Modifier.fillMaxWidth()) {
 		SectionBody {
-			GroupTitle(viewModel, state, group, groups, onSelect) { name -> edit { it.copy(name = name) } }
+			// A simulation's pendulum is renamed on the simulation, so the bake keeps driving it.
+			val simulation = if (group.origin == PhysicsOrigin.SIMULATION)
+				io.github.psd2live.core.sim.SimGenerator.simulationOf(group.id, state.rigEdits.simEdits) else null
+			GroupTitle(viewModel, state, group, groups, onSelect) { name ->
+				if (simulation != null) {
+					val baked = simulation.bake?.pendulums?.firstOrNull { it.id == group.id }?.name ?: simulation.name
+					viewModel.renameSimulationOutput(simulation.id, group.id, name, baked)
+				} else edit { it.copy(name = name) }
+			}
 
 			PendulumEditor(
 				viewModel = viewModel,
@@ -181,17 +189,18 @@ internal fun PhysicsGroupEditor(
 	}
 }
 
-/** A folder-style header over its padded body, shown while [open]. */
+/** A folder-style header over its padded body, shown while [open]; the simulation panel uses it too. */
 @Composable
-private fun PhysicsSection(
+internal fun PhysicsSection(
 	title: String,
 	open: Boolean,
 	onToggle: () -> Unit,
 	count: Int? = null,
+	icon: (@Composable () -> Unit)? = null,
 	trailing: (@Composable RowScope.() -> Unit)? = null,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
-	PanelSectionRow(title, open, onToggle, count = count, icon = null, trailing = trailing?.let { t -> { Spacer(Modifier.width(6.dp)); t() } })
+	PanelSectionRow(title, open, onToggle, count = count, icon = icon, trailing = trailing?.let { t -> { Spacer(Modifier.width(6.dp)); t() } })
 	PhysicsRowDivider()
 	if (open) SectionBody(content)
 }
@@ -249,6 +258,8 @@ internal fun GroupTitle(
 		PhysicsOrigin.PRESET -> tr("physics.originNote.preset")
 		PhysicsOrigin.SKELETON -> tr("physics.originNote.skeleton")
 		PhysicsOrigin.SWING -> tr("physics.originNote.swing", swing?.name ?: "")
+		PhysicsOrigin.SIMULATION -> tr("physics.originNote.simulation",
+			io.github.psd2live.core.sim.SimGenerator.simulationOf(group.id, state.rigEdits.simEdits)?.name ?: "")
 		PhysicsOrigin.CUSTOM -> tr("physics.originNote.custom")
 	}
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

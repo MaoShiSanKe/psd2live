@@ -11,8 +11,8 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import io.github.psd2live.agent.AgentMcpService
-import io.github.psd2live.agent.AgentWorkspaceStore
-import io.github.psd2live.agent.ViewModelAgentWorkspace
+import io.github.psd2live.project.WorkspaceStore
+import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PipelineConfig
 import io.github.psd2live.core.ProgressListener
@@ -54,6 +54,8 @@ fun main(arguments: Array<String>) {
             neuralAlpha = !options.flags.contains("--no-upscale-neural-alpha"),
         ),
 		meshSpacing = options.int("--mesh-spacing", 64),
+		meshUnits = if (options.flags.contains("--mesh-pixels")) io.github.psd2live.core.MeshUnits.PIXELS
+			else io.github.psd2live.core.MeshUnits.DOCUMENT,
 		headTurnStrength = options.float("--head-strength", 1f),
 		bodyStrength = options.float("--body-strength", 1f),
 		meshOnly = options.flags.contains("--mesh-only"),
@@ -78,7 +80,7 @@ fun main(arguments: Array<String>) {
 
 private fun runGui() {
 	val instanceLock = try {
-		AppInstanceLock.acquire(AgentWorkspaceStore.defaultRoot()) ?: run {
+		AppInstanceLock.acquire(WorkspaceStore.defaultRoot()) ?: run {
 			// Held by a running editor; leave it alone rather than share its store and MCP port.
 			System.err.println(tr("app.alreadyRunning"))
 			runCatching { JOptionPane.showMessageDialog(null, tr("app.alreadyRunning"), tr("app.title"), JOptionPane.WARNING_MESSAGE) }
@@ -89,8 +91,8 @@ private fun runGui() {
 		null
 	}
 	val viewModel = PSD2LiveViewModel()
-	val agentWorkspace = ViewModelAgentWorkspace(viewModel)
-	viewModel.attachAgentWorkspace(agentWorkspace)
+	val agentWorkspace = DesktopWorkspace(viewModel)
+	viewModel.attachWorkspace(agentWorkspace)
 	var agentMcpService: AgentMcpService? = null
 	val agentMcpStartup = runCatching {
 		AgentMcpService(agentWorkspace)

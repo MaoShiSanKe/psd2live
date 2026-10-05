@@ -10,6 +10,7 @@ internal enum class GeometrySafetyReason {
     GEOMETRY_NEW_FLIP,
     GEOMETRY_NEW_DEGENERATE,
     GEOMETRY_NEW_COLLAPSE,
+    GEOMETRY_SAMPLING_LIMIT,
 }
 
 internal data class GeometrySafetyViolation(
@@ -49,6 +50,7 @@ internal data class GeometrySafetyReport(
     val newCollapseCount: Int,
     val violations: List<GeometrySafetyViolation>,
     val diagnostics: List<JsonObject>,
+    val warnings: List<GeometrySafetyViolation> = emptyList(),
 ) {
     fun toJson(): JsonObject = buildJsonObject {
         put("safe", safe)
@@ -71,6 +73,7 @@ internal data class GeometrySafetyReport(
         put("preexistingCollapseCount", preexistingCollapseCount)
         put("newCollapseCount", newCollapseCount)
         put("violations", JsonArray(violations.map { it.toJson() }))
+        put("warnings", JsonArray(warnings.map { it.toJson() }))
         put("diagnostics", JsonArray(diagnostics))
         put("scope", "Affected parent-local native key coordinates only; no parent composition, masks, painted coverage, physics, or aesthetics.")
     }
@@ -104,17 +107,20 @@ internal object GeometrySafetyEvaluator {
         val kind: String,
         val id: String,
         val parent: String?,
-        val signature: Int,
-        val coordinates: List<Map<String, Float>>,
+        val signature: Any,
+        val coordinateSource: () -> List<Map<String, Float>>,
         val triangles: IntArray,
         val reference: FloatArray,
         val pointCount: Int,
         val rawValidation: () -> String?,
-    )
+    ) {
+        val coordinates by lazy(coordinateSource)
+    }
 
-    fun evaluate(before: PuppetModel, candidate: PuppetModel): GeometrySafetyReport {
+    fun evaluate(before: PuppetModel, candidate: PuppetModel, blockFoldovers: Boolean = true): GeometrySafetyReport {
         val beforeTargets = targets(before)
         val afterTargets = targets(candidate)
+        val beforeParameters = before.parameters.mapTo(HashSet()) { it.id.raw }
         val direct = (beforeTargets.keys + afterTargets.keys).filterTo(mutableSetOf()) { ref ->
             beforeTargets[ref]?.let { old -> afterTargets[ref]?.let { next -> old.signature != next.signature || old.parent != next.parent } ?: true } ?: true
         }
@@ -146,6 +152,7 @@ internal object GeometrySafetyEvaluator {
         val coordinateEvidence = linkedMapOf<String, List<Map<String, Float>>>()
 
         for (ref in affected.sorted()) {
+            checkpoint()
             val old = beforeTargets[ref]
             val next = afterTargets[ref]
             if (next == null) {
@@ -153,17 +160,15 @@ internal object GeometrySafetyEvaluator {
                 diagnostics += buildJsonObject { put("target", ref); put("status", "removed") }
                 continue
             }
-            coordinateEvidence[ref] = next.coordinates
             next.rawValidation()?.let { detail ->
                 invalid++
                 violations += GeometrySafetyViolation(GeometrySafetyReason.GEOMETRY_INVALID_TOPOLOGY, ref, emptyMap(), detail = detail)
                 diagnostics += buildJsonObject { put("target", ref); put("status", "invalid_topology"); put("detail", detail) }
                 continue
             }
-
-            val oldCoordinates = old?.coordinates.orEmpty().associateBy(::coordinateKey)
+            coordinateEvidence[ref] = next.coordinates
             for (coordinate in next.coordinates) {
-                val key = coordinateKey(coordinate)
+                checkpoint()
                 val candidatePoints = sample(candidate, next, coordinate)
                 if (candidatePoints == null) {
                     invalid++
@@ -182,9 +187,7 @@ internal object GeometrySafetyEvaluator {
 
                 val oldComparable = old?.takeIf {
                     it.pointCount == next.pointCount && it.triangles.contentEquals(next.triangles)
-                }?.let { comparable ->
-                    oldCoordinates[key]?.let { sample(before, comparable, it) }
-                }
+                }?.let { comparable -> sample(before, comparable, coordinate.filterKeys { it in beforeParameters }) }
                 val reference = if (oldComparable != null) old.reference else next.reference
                 val referenceStatus = runCatching { RigGeometryDiagnostics.inspect(reference, reference, next.triangles) }.getOrNull()
                 val candidateStatus = runCatching { RigGeometryDiagnostics.inspect(reference, candidatePoints, next.triangles) }.getOrNull()
@@ -206,12 +209,15 @@ internal object GeometrySafetyEvaluator {
                 oldDegenerates += oldStatus?.let { (it.degenerateTriangles + it.degenerateReferenceTriangles).size } ?: 0
                 oldCollapses += oldStatus?.collapsedTriangles?.size ?: 0
 
-                val newlyFlipped = candidateStatus.flippedTriangles.filter { it !in oldStatus?.flippedTriangles.orEmpty() }
+                // A whole-surface invertible affine mirror or compression is a valid authoring edit.
+                // Local foldovers, zero-area geometry and non-affine collapses still fail the gate.
+                val affine = oldComparable != null && invertibleAffine(oldComparable, candidatePoints, next.triangles)
+                val newlyFlipped = candidateStatus.flippedTriangles.filter { !affine && it !in oldStatus?.flippedTriangles.orEmpty() }
                 val oldDegenerateTriangles = oldStatus?.let { it.degenerateTriangles + it.degenerateReferenceTriangles }.orEmpty()
                 val candidateDegenerateTriangles = candidateStatus.degenerateTriangles + candidateStatus.degenerateReferenceTriangles
                 val newlyDegenerate = candidateDegenerateTriangles.filter { it !in oldDegenerateTriangles }
                 val newlyCollapsed = candidateStatus.collapsedTriangles.filter {
-                    it !in oldStatus?.collapsedTriangles.orEmpty() && it !in newlyFlipped && it !in newlyDegenerate
+                    !affine && it !in oldStatus?.collapsedTriangles.orEmpty() && it !in newlyFlipped && it !in newlyDegenerate
                 }
                 if (newlyFlipped.isNotEmpty()) {
                     newFlips += newlyFlipped.size
@@ -238,9 +244,12 @@ internal object GeometrySafetyEvaluator {
                 }
             }
         }
-        val safe = violations.isEmpty()
-        return GeometrySafetyReport(safe, affected.sorted(), coordinateEvidence, newFlips, newDegenerates,
-            invalid, nonFinite, oldFlips, oldDegenerates, oldCollapses, newCollapses, violations, diagnostics)
+        val warnings = if (blockFoldovers) emptyList() else violations.filter {
+            it.reason in setOf(GeometrySafetyReason.GEOMETRY_NEW_FLIP, GeometrySafetyReason.GEOMETRY_NEW_COLLAPSE)
+        }
+        val blockers = violations - warnings.toSet()
+        return GeometrySafetyReport(blockers.isEmpty(), affected.sorted(), coordinateEvidence, newFlips, newDegenerates,
+            invalid, nonFinite, oldFlips, oldDegenerates, oldCollapses, newCollapses, blockers, diagnostics, warnings)
     }
 
     private fun coordinateDiagnostic(ref: String, coordinate: Map<String, Float>, status: String, points: Int) = buildJsonObject {
@@ -255,7 +264,8 @@ internal object GeometrySafetyEvaluator {
             val mesh = drawable.mesh!!
             val ref = "mesh:${drawable.id.raw}"
             put(ref, Target(ref, "mesh", drawable.id.raw, drawable.parentDeformerId?.raw,
-                drawableGeometrySignature(drawable), coordinates(drawable.geometryGrid), mesh.indices, mesh.positions,
+                listOf(drawableGeometrySignature(drawable), blendIdentity(drawable.blendShapes) { it.positionDeltas }),
+                { coordinates(drawable.geometryGrid, drawable.blendShapes) }, mesh.indices, mesh.positions,
                 mesh.positions.size / 2) { validateMesh(drawable) })
         }
         model.deformers.forEach { deformer ->
@@ -264,13 +274,14 @@ internal object GeometrySafetyEvaluator {
                     val ref = "warp:${deformer.id.raw}"
                     val domain = warpDomain(deformer.rows, deformer.columns)
                     put(ref, Target(ref, "warp", deformer.id.raw, deformer.parent?.raw,
-                        warpGeometrySignature(deformer), coordinates(deformer.geometryGrid),
+                        listOf(warpGeometrySignature(deformer), blendIdentity(deformer.blendShapes) { it.controlPoints }), { coordinates(deformer.geometryGrid, deformer.blendShapes) },
                         RigGeometryDiagnostics.lattice(deformer.rows, deformer.columns), domain, domain.size / 2) { validateWarp(deformer) })
                 }
                 is Deformer.Rotation -> {
                     val ref = "rotation:${deformer.id.raw}"
                     put(ref, Target(ref, "rotation", deformer.id.raw, deformer.parent?.raw,
-                        rotationGeometrySignature(deformer), coordinates(deformer.geometryGrid), IntArray(0), FloatArray(4), 2) { validateRotation(deformer) })
+                        listOf(rotationGeometrySignature(deformer), blendIdentity(deformer.blendShapes) { floatArrayOf(it.originX, it.originY, it.angle, it.scale) }),
+                        { coordinates(deformer.geometryGrid, deformer.blendShapes) }, IntArray(0), FloatArray(4), 2) { validateRotation(deformer) })
                 }
             }
         }
@@ -292,9 +303,8 @@ internal object GeometrySafetyEvaluator {
 
     private fun coordinateKey(coordinate: Map<String, Float>): String = coordinate.toSortedMap().entries.joinToString("|") { "${it.key}=${it.value.toRawBits()}" }
 
-    private fun <T> coordinates(grid: KeyformGrid<T>?): List<Map<String, Float>> {
-        if (grid == null || grid.axes.isEmpty()) return listOf(emptyMap())
-        return grid.cells.mapNotNull { cell ->
+    private fun <T, B : Any> coordinates(grid: KeyformGrid<T>?, blends: List<BlendShapeBinding<B>>): List<Map<String, Float>> {
+        val base = if (grid == null || grid.axes.isEmpty()) listOf(emptyMap()) else grid.cells.mapNotNull { cell ->
             if (cell.coordinate.size != grid.axes.size) null else buildMap<String, Float> {
                 for (i in grid.axes.indices) {
                     val keyIndex = cell.coordinate[i]
@@ -304,6 +314,20 @@ internal object GeometrySafetyEvaluator {
                 }
             }
         }.distinctBy(::coordinateKey).sortedBy(::coordinateKey)
+        val axes = linkedMapOf<String, MutableSet<Float>>()
+        blends.forEach { blend ->
+            axes.getOrPut(blend.parameterId.raw) { linkedSetOf() }.addAll(blend.keys.toList())
+            blend.limits.forEach { limit -> axes.getOrPut(limit.parameterId.raw) { linkedSetOf() }.addAll(limit.points.map { it.value }) }
+        }
+        var result = base
+        axes.forEach { (id, values) ->
+            require(values.all { it.isFinite() }) { "Blend coordinates must be finite" }
+            if (result.size.toLong() * values.size > 16384) throw GeometrySafetyRejectedException(
+                GeometrySafetyReport.noGeometryChange().copy(safe = false, violations = listOf(
+                    GeometrySafetyViolation(GeometrySafetyReason.GEOMETRY_SAMPLING_LIMIT, "rig", emptyMap(), detail = "More than 16384 geometry coordinates on one target"))))
+            result = result.flatMap { coordinate -> values.sorted().map { coordinate + (id to it) } }.distinctBy(::coordinateKey)
+        }
+        return result
     }
 
     private fun validateMesh(drawable: Drawable): String? {
@@ -313,16 +337,55 @@ internal object GeometrySafetyEvaluator {
         if (mesh.indices.size % 3 != 0) return "Triangle index count must be divisible by three"
         if (mesh.indices.any { it !in 0 until mesh.positions.size / 2 }) return "Triangle index is outside the vertex range"
         return validateGrid(drawable.geometryGrid, mesh.positions.size) { it.positionDeltas }
+            ?: validateBlends(drawable.blendShapes, mesh.positions.size) { it.positionDeltas }
     }
 
     private fun validateWarp(warp: Deformer.Warp): String? {
         if (warp.rows < 1 || warp.columns < 1) return "Warp lattice dimensions must be positive"
         val expected = (warp.rows + 1) * (warp.columns + 1) * 2
         return validateGrid(warp.geometryGrid, expected) { it.controlPoints }
+            ?: validateBlends(warp.blendShapes, expected) { it.controlPoints }
     }
 
     private fun validateRotation(rotation: Deformer.Rotation): String? = validateGrid(rotation.geometryGrid, null) {
         floatArrayOf(it.originX, it.originY, it.angle, it.scale)
+    } ?: validateBlends(rotation.blendShapes, 4) { floatArrayOf(it.originX, it.originY, it.angle, it.scale) }
+
+    private fun <T : Any> validateBlends(blends: List<BlendShapeBinding<T>>, count: Int, values: (T) -> FloatArray): String? {
+        for (blend in blends) {
+            if (blend.keys.isEmpty() || blend.keys.size != blend.forms.size || blend.neutralIndex !in blend.keys.indices ||
+                blend.keys.any { !it.isFinite() } || blend.keys.toList().zipWithNext().any { (a, b) -> a >= b }) return "Malformed blend keys"
+            if (blend.forms.filterNotNull().any { values(it).size != count }) return "Malformed blend geometry"
+        }
+        return null
+    }
+
+    private fun <T : Any> blendIdentity(blends: List<BlendShapeBinding<T>>, values: (T) -> FloatArray): Any =
+        blends.map { listOf(it.parameterId.raw, it.keys.toList(), it.neutralIndex, it.forms.map { form -> form?.let { values(it).toList() } }, it.limits) }
+
+    private fun checkpoint() { if (Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("Geometry evaluation cancelled") }
+
+    private fun invertibleAffine(before: FloatArray, after: FloatArray, triangles: IntArray): Boolean {
+        val triangle = triangles.asSequence().chunked(3).firstOrNull { ids ->
+            kotlin.math.abs((before[ids[1]*2]-before[ids[0]*2]).toDouble() * (before[ids[2]*2+1]-before[ids[0]*2+1]) -
+                (before[ids[2]*2]-before[ids[0]*2]).toDouble() * (before[ids[1]*2+1]-before[ids[0]*2+1])) > 1e-12
+        } ?: return false
+        val a = triangle[0]*2; val b = triangle[1]*2; val c = triangle[2]*2
+        val ux = (before[b]-before[a]).toDouble(); val uy = (before[b+1]-before[a+1]).toDouble()
+        val vx = (before[c]-before[a]).toDouble(); val vy = (before[c+1]-before[a+1]).toDouble()
+        val determinant = ux*vy-uy*vx
+        val pu = (after[b]-after[a]).toDouble(); val qu = (after[b+1]-after[a+1]).toDouble()
+        val pv = (after[c]-after[a]).toDouble(); val qv = (after[c+1]-after[a+1]).toDouble()
+        if (kotlin.math.abs(pu*qv-qu*pv) < 1e-12) return false
+        val tolerance = 1e-6 * maxOf(1.0, kotlin.math.abs(pu), kotlin.math.abs(qu), kotlin.math.abs(pv), kotlin.math.abs(qv))
+        for (i in before.indices step 2) {
+            checkpoint()
+            val x = (before[i]-before[a]).toDouble(); val y = (before[i+1]-before[a+1]).toDouble()
+            val u = (x*vy-y*vx)/determinant; val v = (ux*y-uy*x)/determinant
+            val dx = after[a]+u*pu+v*pv-after[i]; val dy = after[a+1]+u*qu+v*qv-after[i+1]
+            if (kotlin.math.abs(dx) > tolerance || kotlin.math.abs(dy) > tolerance) return false
+        }
+        return true
     }
 
     private fun <T> validateGrid(grid: KeyformGrid<T>?, scalarCount: Int?, values: (T) -> FloatArray): String? {
@@ -344,31 +407,18 @@ internal object GeometrySafetyEvaluator {
         return null
     }
 
-    private fun drawableGeometrySignature(drawable: Drawable): Int {
-        var result = drawable.parentDeformerId?.raw.hashCode()
-        val mesh = drawable.mesh ?: return result
-        result = 31 * result + mesh.positions.contentHashCode()
-        result = 31 * result + mesh.uvs.contentHashCode()
-        result = 31 * result + mesh.indices.contentHashCode()
-        result = 31 * result + gridSignature(drawable.geometryGrid) { it.positionDeltas.contentHashCode() }
-        return result
-    }
+    private fun drawableGeometrySignature(drawable: Drawable): Any = listOf(drawable.parentDeformerId?.raw,
+        drawable.mesh?.positions?.toList(), drawable.mesh?.uvs?.toList(), drawable.mesh?.indices?.toList(),
+        gridSignature(drawable.geometryGrid) { it.positionDeltas })
 
-    private fun warpGeometrySignature(warp: Deformer.Warp): Int = listOf(
-        warp.parent?.raw.hashCode(), warp.rows, warp.columns,
-        gridSignature(warp.geometryGrid) { it.controlPoints.contentHashCode() },
-    ).fold(1) { acc, value -> 31 * acc + value }
+    private fun warpGeometrySignature(warp: Deformer.Warp): Any = listOf(
+        warp.parent?.raw, warp.rows, warp.columns, gridSignature(warp.geometryGrid) { it.controlPoints })
 
-    private fun rotationGeometrySignature(rotation: Deformer.Rotation): Int = listOf(
-        rotation.parent?.raw.hashCode(),
-        gridSignature(rotation.geometryGrid) { listOf(it.originX.toRawBits(), it.originY.toRawBits(), it.angle.toRawBits(), it.scale.toRawBits()).hashCode() },
-    ).fold(1) { acc, value -> 31 * acc + value }
+    private fun rotationGeometrySignature(rotation: Deformer.Rotation): Any = listOf(
+        rotation.parent?.raw, rotation.baseAngle, rotation.handleLength,
+        gridSignature(rotation.geometryGrid) { floatArrayOf(it.originX, it.originY, it.angle, it.scale) })
 
-    private fun <T> gridSignature(grid: KeyformGrid<T>?, form: (T) -> Int): Int {
-        if (grid == null) return 0
-        var result = 1
-        grid.axes.forEach { axis -> result = 31 * result + axis.parameterId.raw.hashCode(); result = 31 * result + axis.keys.contentHashCode() }
-        grid.cells.forEach { cell -> result = 31 * result + cell.coordinate.contentHashCode(); result = 31 * result + form(cell.form) }
-        return result
-    }
+    private fun <T> gridSignature(grid: KeyformGrid<T>?, form: (T) -> FloatArray): Any = listOf(
+        grid?.axes?.map { listOf(it.parameterId.raw, it.keys.toList()) },
+        grid?.cells?.map { listOf(it.coordinate.toList(), form(it.form).toList()) })
 }

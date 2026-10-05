@@ -27,7 +27,7 @@ object PhysicsAuthoring {
 
     /** Turns a non-preset group on or off; the presets are switched by their own settings. */
     fun setEnabled(overlay: RigEditOverlay, id: String, enabled: Boolean): RigEditOverlay {
-        require(id !in PhysicsGenerator.presetIds) { "Presets are switched by their settings" }
+        require(overlay.importedCmo3 != null || id !in PhysicsGenerator.presetIds) { "Presets are switched by their settings" }
         return overlay.copy(disabledPhysicsIds = if (enabled) overlay.disabledPhysicsIds - id else overlay.disabledPhysicsIds + id)
     }
 
@@ -141,7 +141,7 @@ object PhysicsAuthoring {
     /** Everything a `physics_put` changes, resolved against the current [groups]. */
     data class Request(val edit: RigPhysicsEdit?, val generated: RigPhysicsEdit?, val enabled: Boolean?)
 
-    private val controlKeys = setOf("id", "enabled", "state", "expected_history_head_node_id", "task_id", "mode")
+    private val controlKeys = setOf("id", "enabled", "state", "task_id", "mode")
 
     /**
      * Reads `physics_put` arguments laid over the group with that ID (or a new template), so an agent
@@ -160,7 +160,11 @@ object PhysicsAuthoring {
         val base = group?.setting ?: template(id, id, available)
         val edit = base.patched(fields)
         edit.parameters.firstOrNull { it !in available }?.let { throw IllegalArgumentException("Parameter $it does not exist; create it first") }
-        PhysicsCatalog.issueOf(edit, available)?.let { throw IllegalArgumentException(it.message) }
+        // New groups and partially edited presets remain authorable, with catalog diagnostics keeping
+        // them inactive until both sides are configured. Invalid references and feedback still fail.
+        PhysicsCatalog.issueOf(edit, available)?.takeUnless {
+            it.code == PhysicsIssue.Code.NO_INPUT || it.code == PhysicsIssue.Code.NO_OUTPUT
+        }?.let { throw IllegalArgumentException(it.message) }
         return Request(edit, group?.generated, enabled)
     }
 }

@@ -14,7 +14,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,7 +29,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Divider
 import androidx.compose.material.Text
@@ -61,17 +59,17 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
-import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.MotionClip
 import io.github.psd2live.core.MotionClips
-import io.github.psd2live.core.SkeletonSpec
+import io.github.psd2live.core.MotionPresetSettings
+import io.github.psd2live.core.MotionPresets
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactMenuDivider
@@ -81,21 +79,16 @@ import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconChevron
-import io.github.psd2live.ui.components.IconClose
-import io.github.psd2live.ui.components.IconCollapseAll
-import io.github.psd2live.ui.components.IconExpandAll
-import io.github.psd2live.ui.components.IconEye
+import io.github.psd2live.ui.components.IconPause
 import io.github.psd2live.ui.components.IconPlay
-import io.github.psd2live.ui.components.IconReset
-import io.github.psd2live.ui.components.IconSearch
 import io.github.psd2live.ui.components.TreeContextMenu
+import io.github.psd2live.ui.state.MotionEditorState
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.previewControlCanvas
 import io.github.psd2live.ui.state.previewPanelState
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
-import java.awt.Cursor
 
 private const val MOTION_SETTINGS_FIELD = "motion-settings"
 private const val BUILTIN_SECTION = "builtin"
@@ -106,28 +99,17 @@ private val MotionRowIndent = 12.dp
 /** One motion as the panel lists it, generated or the user's own. */
 private data class MotionEntry(
 	val key: String,
+	/** The id the animation editor opens it under; the panel and the editor play it by this id. */
+	val editorId: String,
 	val title: String,
-	val playName: String,
-	val clipId: String?,
-	val summary: MotionSummary,
+	val loop: Boolean,
+	val duration: Float,
 	val enabled: Boolean,
 	val onEnabledChange: (Boolean) -> Unit,
 	val modified: Boolean,
-	val onEdit: () -> Unit,
-	val onEditProperties: ((MotionClip) -> MotionClip) -> Unit,
-	val onFocusParameter: (String) -> Unit,
 	val onRename: ((String) -> Unit)?,
+	val settings: @Composable () -> Unit,
 	val menu: @Composable ((() -> Unit)) -> Unit,
-)
-
-/** What a motion row shows: its timing and each curve's range. */
-private data class MotionSummary(
-	val loop: Boolean,
-	val duration: Float,
-	val fps: Float,
-	val fadeIn: Float,
-	val fadeOut: Float,
-	val curves: List<Pair<String, Pair<Float, Float>>>,
 )
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -141,122 +123,61 @@ internal fun AnimationPanelView(
 	val typography = LocalToolTypography.current
 	val previewState = state.previewPanelState()
 	val skeleton = state.rigEdits.skeleton
-	var searchOpen by remember { mutableStateOf(false) }
 	var query by remember { mutableStateOf("") }
-	val searchFocus = remember { FocusRequester() }
-	fun closeSearch() {
-		query = ""
-		searchOpen = false
-	}
 	val openSections = remember { mutableStateMapOf(BUILTIN_SECTION to true, CUSTOM_SECTION to true) }
 	val openSettings = remember { mutableStateMapOf<String, Boolean>() }
 	var newMenuOpen by remember { mutableStateOf(false) }
 
-	val builtins = builtinEntries(viewModel, previewState)
+	val presets = state.rigEdits.motionPresets
+	val clips = state.rigEdits.motionClips
+	val basic = state.motionBasic
+	val skeletonPresets = state.motionSkeleton
+	// Generating the idle expands its poses onto the bones: only when what it is made from changes. A group
+	// the model presets switch off is not in the model, so it is not listed.
+	val generated = remember(skeleton, presets, clips, basic, skeletonPresets) {
+		MotionClips.BUILTIN_NAMES.associateWith { name ->
+			val settings = presets[name] ?: MotionPresetSettings()
+			if (settings.deleted || !(if (MotionClips.isSkeletonPreset(name)) skeletonPresets else basic)) null
+			else MotionClips.overrideOf(clips, name) ?: MotionPresets.clip(name, name, skeleton, settings).takeIf { it.curves.isNotEmpty() }
+		}
+	}
+	val builtins = builtinEntries(viewModel, previewState, generated)
 	val customs = customEntries(viewModel, previewState)
 	val needle = query.trim()
 	fun List<MotionEntry>.matching() = if (needle.isEmpty()) this else filter { it.title.contains(needle, ignoreCase = true) }
 	val shownBuiltins = builtins.matching()
 	val shownCustoms = customs.matching()
-	val parameterNames = remember(state.previewModel) {
-		state.previewModel?.rig?.puppet?.parameters.orEmpty().associate { it.id.raw to it.name }
-	}
 
 	Column(modifier.fillMaxSize().background(colors.panelBackground)) {
-		BoxWithConstraints(
-			Modifier
-				.fillMaxWidth()
-				.background(colors.panelElevated)
-				.padding(horizontal = 4.dp, vertical = 3.dp)
-				.height(22.dp),
-		) {
-			// Labels appear in this order as the panel widens, each only once everything before it fits.
-			val labels = listOf(tr("animation.new"))
-			val labelsShown = shownToolLabels(labels, if (state.previewLive) 5 else 6, maxWidth)
-			Row(
-				modifier = Modifier.fillMaxSize(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
-			) {
-				if (searchOpen) {
-					LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
-					CompactTextField(
-						value = query,
-						onValueChange = { query = it },
-						placeholder = tr("animation.search"),
-						leadingIcon = { IconSearch(tint = colors.textMuted) },
-						trailingIcon = {
-							CompactIconButton(
-								onClick = { closeSearch() },
-								tooltip = tr("parameters.clearSearch"), size = 16.dp,
-							) { IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted) }
-						},
-						modifier = Modifier
-							.weight(1f)
-							.focusRequester(searchFocus)
-							.onPreviewKeyEvent { event ->
-								if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-									closeSearch()
-									true
-								} else false
-							},
-						height = 22.dp,
-					)
-				} else {
-					CompactIconButton(onClick = { searchOpen = true }, size = 22.dp, tooltip = tr("animation.search")) {
-						IconSearch(tint = colors.textMuted)
-					}
-					Box {
-						PanelToolButton(
-							label = labels[0],
-							showLabel = labelsShown > 0,
-							onClick = { newMenuOpen = true },
-							enabled = state.previewModel != null,
-							tooltip = tr("animation.new"),
-						) {
-							IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
-						}
-						NewMotionMenu(viewModel, skeleton, newMenuOpen) { newMenuOpen = false }
-					}
-					Spacer(Modifier.weight(1f))
-					if (!state.previewLive) {
-						CompactIconButton(
-							onClick = { viewModel.ensurePreviewCanvas(focus = true) },
-							size = 22.dp,
-							tooltip = tr("window.showPreview"),
-						) {
-							IconEye(visible = true, modifier = Modifier.size(12.dp), tint = colors.textMuted)
-						}
-					}
-					CompactIconButton(
-						onClick = { openSections.keys.toList().forEach { openSections[it] = true } },
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.expandAll"),
-					) {
-						IconExpandAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					CompactIconButton(
-						onClick = {
-							openSections.keys.toList().forEach { openSections[it] = false }
-							openSettings.clear()
-						},
-						size = 22.dp,
-						tooltip = tr("canvas.hierarchy.collapseAll"),
-					) {
-						IconCollapseAll(modifier = Modifier.size(11.dp), tint = colors.textMuted)
-					}
-					CompactIconButton(
-						onClick = { viewModel.resetPreviewParameters() },
-						enabled = state.previewModel != null,
-						size = 22.dp,
-						tooltip = tr("animation.resetPose"),
-					) {
-						IconReset(modifier = Modifier.size(11.dp), tint = colors.textPrimary)
-					}
+		val labels = listOf(tr("animation.new"))
+		PanelToolbar(
+			labels = labels,
+			iconCount = if (state.previewLive) 4 else 5,
+			search = PanelSearch(query, { query = it }, tr("animation.search")),
+		) { labelsShown ->
+			Box {
+				PanelToolButton(
+					label = labels[0],
+					showLabel = labelsShown > 0,
+					onClick = { newMenuOpen = true },
+					enabled = state.previewModel != null,
+					tooltip = tr("animation.new"),
+				) {
+					IconAdd(modifier = Modifier.size(10.dp), tint = colors.textPrimary)
 				}
+				NewMotionMenu(viewModel, state, newMenuOpen) { newMenuOpen = false }
 			}
+			Spacer(Modifier.weight(1f))
+			PanelShowPreviewButton(state, viewModel)
+			PanelExpandCollapseButtons(
+				onExpandAll = { openSections.keys.toList().forEach { openSections[it] = true } },
+				onCollapseAll = {
+					openSections.keys.toList().forEach { openSections[it] = false }
+					openSettings.clear()
+				},
+			)
+			PanelResetButton(onClick = { viewModel.resetPreviewParameters() }, enabled = state.previewModel != null, tooltip = tr("animation.resetPose"))
 		}
-		Divider(color = colors.divider)
 
 		if (state.previewModel == null || (needle.isNotEmpty() && shownBuiltins.isEmpty() && shownCustoms.isEmpty())) {
 			Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -286,9 +207,7 @@ internal fun AnimationPanelView(
 					items(entries, key = { "m:${it.key}" }) { entry ->
 						MotionRow(
 							viewModel = viewModel,
-							state = previewState,
 							entry = entry,
-							parameterNames = parameterNames,
 							settingsOpen = openSettings[entry.key] == true,
 							onToggleSettings = { openSettings[entry.key] = openSettings[entry.key] != true },
 						)
@@ -316,125 +235,101 @@ internal fun AnimationPanelView(
 	}
 }
 
-/** Blank clip or a copy of a generated motion, opened from the toolbar. */
+/** Blank clip, a copy of a generated motion, or a deleted generated motion put back; opened from the toolbar. */
 @Composable
-private fun NewMotionMenu(viewModel: PSD2LiveViewModel, skeleton: SkeletonSpec?, open: Boolean, onDismiss: () -> Unit) {
+private fun NewMotionMenu(
+	viewModel: PSD2LiveViewModel,
+	state: PSD2LiveState,
+	open: Boolean,
+	onDismiss: () -> Unit,
+) {
+	val presets = state.rigEdits.motionPresets
 	TreeContextMenu(expanded = open, onDismissRequest = onDismiss) {
 		CompactMenuItem(text = tr("animation.newBlank"), onClick = { onDismiss(); viewModel.createMotionClip() })
+		val playable = MotionClips.BUILTIN_NAMES.filter {
+			state.motionPresetGroupOn(it) && MotionClips.builtinTracks(it, state.rigEdits.skeleton).isNotEmpty()
+		}
 		CompactMenuDivider()
 		CompactMenuSection(tr("animation.newFromPreset"))
-		for (name in MotionClips.BUILTIN_NAMES) {
-			if (MotionClips.builtinTracks(name, skeleton).isEmpty()) continue
+		for (name in playable) {
 			CompactMenuItem(text = builtinMotionTitle(name), onClick = { onDismiss(); viewModel.createMotionClip(fromBuiltin = name) })
+		}
+		val deleted = playable.filter { presets[it]?.deleted == true }
+		if (deleted.isNotEmpty()) {
+			CompactMenuDivider()
+			CompactMenuSection(tr("animation.restorePreset"))
+			for (name in deleted) {
+				CompactMenuItem(text = builtinMotionTitle(name), onClick = { onDismiss(); viewModel.restoreMotionPreset(name) })
+			}
 		}
 	}
 }
 
-/** True when [override] still matches what [name] generates, so it reads as unmodified. */
-private fun isPristine(override: MotionClip, name: String, skeleton: SkeletonSpec?): Boolean {
-	val tracks = MotionClips.builtinTracks(name, skeleton)
-	val fresh = MotionClips.fromTracks(override.id, override.name, override.builtin, MotionClips.isLoopBuiltin(name), tracks,
-		MotionClips.builtinDuration(name, tracks))
-	return fresh.copy(enabled = override.enabled) == override
-}
-
-private fun builtinEntries(viewModel: PSD2LiveViewModel, state: PSD2LiveState): List<MotionEntry> {
-	val clips = state.rigEdits.motionClips
-	val skeleton = state.rigEdits.skeleton
-	return MotionClips.BUILTIN_NAMES.mapNotNull { name ->
-		val override = MotionClips.overrideOf(clips, name)
-		val tracks = MotionClips.builtinTracks(name, skeleton)
-		// Skeleton presets only list when the current skeleton can play them.
-		if (override == null && tracks.isEmpty()) return@mapNotNull null
+private fun builtinEntries(viewModel: PSD2LiveViewModel, state: PSD2LiveState, generated: Map<String, MotionClip?>): List<MotionEntry> =
+	MotionClips.BUILTIN_NAMES.mapNotNull { name ->
+		// Deleted presets, switched-off groups and skeleton presets the current skeleton cannot play are not listed.
+		val clip = generated[name] ?: return@mapNotNull null
 		val (enabled, setEnabled) = when (name) {
 			"Idle" -> state.motionIdle to viewModel::setMotionIdle
 			"Blink" -> state.motionBlink to viewModel::setMotionBlink
 			"Nod" -> state.motionNod to viewModel::setMotionNod
 			"Shake" -> state.motionShake to viewModel::setMotionShake
-			else -> state.motionSkeleton to viewModel::setMotionSkeleton
+			else -> (state.rigEdits.motionPresets[name]?.disabled != true) to { on: Boolean -> viewModel.setMotionPresetEnabled(name, on) }
 		}
+		val edited = clip.id != name
 		MotionEntry(
 			key = "builtin:$name",
+			editorId = MotionEditorState.presetClipId(name),
 			title = builtinMotionTitle(name),
-			playName = name,
-			clipId = override?.id,
-			summary = override?.let(::summaryOf) ?: MotionSummary(
-				loop = MotionClips.isLoopBuiltin(name),
-				duration = MotionClips.builtinDuration(name, tracks),
-				fps = 30f,
-				fadeIn = 1f,
-				fadeOut = 1f,
-				curves = tracks.map { (id, points) -> id to (points.minOf { it.second } to points.maxOf { it.second }) },
-			),
+			loop = clip.loop,
+			duration = clip.duration,
 			enabled = enabled,
 			onEnabledChange = setEnabled,
-			modified = override != null && !isPristine(override, name, skeleton),
-			onEdit = { viewModel.editBuiltinMotion(name) },
-			onEditProperties = { transform -> viewModel.updateMotionClipProperties(viewModel.ensureBuiltinOverride(name), transform) },
-			onFocusParameter = { id ->
-				viewModel.editBuiltinMotion(name)
-				viewModel.focusMotionCurve(id)
-			},
+			modified = edited,
 			onRename = null,
+			settings = { PresetSettings(viewModel, name, state.rigEdits.motionPresets[name] ?: MotionPresetSettings(), edited) },
 			menu = { dismiss ->
 				CompactMenuItem(text = tr("animation.duplicateAsCustom"), onClick = { dismiss(); viewModel.createMotionClip(fromBuiltin = name) })
 				CompactMenuItem(
 					text = tr("animation.resetDefault"),
-					enabled = override != null,
-					onClick = { dismiss(); viewModel.resetBuiltinMotion(name) },
+					enabled = edited || state.rigEdits.motionPresets[name]?.values?.isNotEmpty() == true,
+					onClick = { dismiss(); viewModel.resetMotionPreset(name) },
 				)
+				CompactMenuItem(text = tr("animation.delete"), danger = true, onClick = { dismiss(); viewModel.deleteMotionPreset(name) })
 			},
 		)
 	}
-}
 
-private fun customEntries(viewModel: PSD2LiveViewModel, state: PSD2LiveState): List<MotionEntry> {
-	val stems = MotionClips.exportStems(state.rigEdits.motionClips)
-	return state.rigEdits.motionClips.filter { it.builtin == null }.map { clip ->
+private fun customEntries(viewModel: PSD2LiveViewModel, state: PSD2LiveState): List<MotionEntry> =
+	state.rigEdits.motionClips.filter { it.builtin == null }.map { clip ->
 		MotionEntry(
 			key = "clip:${clip.id}",
+			editorId = clip.id,
 			title = clip.name,
-			playName = stems.getValue(clip.id),
-			clipId = clip.id,
-			summary = summaryOf(clip),
+			loop = clip.loop,
+			duration = clip.duration,
 			enabled = clip.enabled,
 			onEnabledChange = { value -> viewModel.updateMotionClipProperties(clip.id) { it.copy(enabled = value) } },
 			modified = false,
-			onEdit = { viewModel.openMotionInEditor(clip.id) },
-			onEditProperties = { transform -> viewModel.updateMotionClipProperties(clip.id, transform) },
-			onFocusParameter = { id ->
-				viewModel.openMotionInEditor(clip.id)
-				viewModel.focusMotionCurve(id)
-			},
 			onRename = { viewModel.renameMotionClip(clip.id, it) },
+			settings = { ClipSettings(viewModel, clip) },
 			menu = { dismiss ->
 				CompactMenuItem(text = tr("animation.duplicate"), onClick = { dismiss(); viewModel.duplicateMotionClip(clip.id) })
 				CompactMenuItem(text = tr("animation.delete"), danger = true, onClick = { dismiss(); viewModel.deleteMotionClip(clip.id) })
 			},
 		)
 	}
-}
-
-private fun summaryOf(clip: MotionClip) = MotionSummary(
-	loop = clip.loop,
-	duration = clip.duration,
-	fps = clip.fps,
-	fadeIn = clip.fadeIn,
-	fadeOut = clip.fadeOut,
-	curves = clip.curves.map { curve -> curve.parameterId to (curve.keys.minOf { it.value } to curve.keys.maxOf { it.value }) },
-)
 
 /**
- * One motion: enable, play and open in the editor on the row, its settings folded underneath and the rest in
- * the right-click menu. The motion open in the editor is marked like a related parameter.
+ * One motion: enable, edit and play on the row, its advanced settings folded underneath and the rest in the
+ * right-click menu. Play and pause are the animation editor's: the row plays the motion there, so both show
+ * the same state. The motion open in the editor is marked like a related parameter.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun MotionRow(
 	viewModel: PSD2LiveViewModel,
-	state: PSD2LiveState,
 	entry: MotionEntry,
-	parameterNames: Map<String, String>,
 	settingsOpen: Boolean,
 	onToggleSettings: () -> Unit,
 ) {
@@ -447,10 +342,9 @@ private fun MotionRow(
 	var renaming by remember { mutableStateOf(false) }
 	var draftName by remember(entry.title) { mutableStateOf(entry.title) }
 	val renameFocus = remember { FocusRequester() }
-	val activeMotionName = viewModel.activeMotionName
-	val playing = entry.playName.equals(activeMotionName, ignoreCase = true) ||
-		(entry.playName.equals("Idle", ignoreCase = true) && state.animationEnabled && entry.enabled && activeMotionName == null)
-	val editing = entry.clipId != null && viewModel.motionEditor.clipId == entry.clipId
+	val editor = viewModel.motionEditor
+	val editing = editor.clipId == entry.editorId
+	val playing = editing && editor.playing
 	fun commitRename() {
 		if (!renaming) return
 		renaming = false
@@ -533,29 +427,37 @@ private fun MotionRow(
 						}
 						if (playing) {
 							Spacer(Modifier.width(4.dp))
-							MotionBadge(tr(if (entry.summary.loop) "animation.looping" else "animation.playing"), colors.accent)
+							MotionBadge(tr(if (entry.loop) "animation.looping" else "animation.playing"), colors.accent)
 						}
 					}
 				}
 				Spacer(Modifier.width(6.dp))
 				Text(
-					text = "${tr(if (entry.summary.loop) "animation.loop" else "animation.once")} · %.1fs".format(entry.summary.duration),
+					text = "${tr(if (entry.loop) "animation.loop" else "animation.once")} · %.1fs".format(entry.duration),
 					style = typography.monoSmall.copy(fontSize = 9.5.sp),
 					color = colors.textMuted,
 					maxLines = 1,
 				)
 				Spacer(Modifier.width(6.dp))
-				CompactIconButton(onClick = entry.onEdit, size = 18.dp, tooltip = tr("animation.edit")) {
+				CompactIconButton(onClick = { viewModel.openMotionInEditor(entry.editorId) }, size = 18.dp, tooltip = tr("animation.edit")) {
 					IconMotionCurve(tint = if (editing) colors.accent else colors.textMuted)
 				}
 				Spacer(Modifier.width(4.dp))
-				CompactIconButton(onClick = { viewModel.triggerMotion(entry.playName) }, size = 18.dp, tooltip = tr("animation.trigger")) {
-					IconPlay(modifier = Modifier.size(9.dp), tint = colors.accent)
+				CompactIconButton(
+					onClick = { viewModel.toggleMotionPlayback(entry.editorId) },
+					size = 18.dp,
+					tooltip = tr(if (playing) "animation.pause" else "animation.play"),
+				) {
+					if (playing) IconPause(modifier = Modifier.size(9.dp), tint = colors.textPrimary)
+					else IconPlay(modifier = Modifier.size(9.dp), tint = colors.accent)
 				}
 			}
 			TreeContextMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, clickOffset = menuOffset, minWidth = 160.dp) {
-				CompactMenuItem(text = tr("animation.edit"), onClick = { menuOpen = false; entry.onEdit() })
-				CompactMenuItem(text = tr("animation.trigger"), onClick = { menuOpen = false; viewModel.triggerMotion(entry.playName) })
+				CompactMenuItem(text = tr("animation.edit"), onClick = { menuOpen = false; viewModel.openMotionInEditor(entry.editorId) })
+				CompactMenuItem(
+					text = tr(if (playing) "animation.pause" else "animation.play"),
+					onClick = { menuOpen = false; viewModel.toggleMotionPlayback(entry.editorId) },
+				)
 				if (entry.onRename != null) {
 					CompactMenuItem(text = tr("animation.rename"), onClick = { menuOpen = false; draftName = entry.title; renaming = true })
 				}
@@ -569,100 +471,83 @@ private fun MotionRow(
 			enter = expandVertically() + fadeIn(),
 			exit = shrinkVertically() + fadeOut(),
 		) {
-			MotionSettings(viewModel, entry, parameterNames)
+			Column(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(colors.panelElevated.copy(alpha = 0.35f))
+					.padding(start = MotionRowIndent + 4.dp, end = 6.dp, top = 4.dp, bottom = 6.dp),
+				verticalArrangement = Arrangement.spacedBy(4.dp),
+			) {
+				entry.settings()
+			}
 		}
 	}
 }
 
-/** Timing and the parameters a motion drives, indented under its row. */
+/**
+ * The advanced settings of a generated motion, its own knobs (see [MotionPresets.knobs]) two to a row and its
+ * switches below. Once its keys are edited by hand the knobs no longer apply until it is reset.
+ */
 @Composable
-private fun MotionSettings(viewModel: PSD2LiveViewModel, entry: MotionEntry, names: Map<String, String>) {
+private fun PresetSettings(viewModel: PSD2LiveViewModel, name: String, settings: MotionPresetSettings, edited: Boolean) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val summary = entry.summary
-	Column(
-		modifier = Modifier
-			.fillMaxWidth()
-			.background(colors.panelElevated.copy(alpha = 0.35f))
-			.padding(start = MotionRowIndent + 4.dp, end = 6.dp, top = 4.dp, bottom = 6.dp),
-		verticalArrangement = Arrangement.spacedBy(4.dp),
-	) {
-		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-			SettingField(tr("animation.duration"), summary.duration, 0.1f, 600f, 0.1, 2, Modifier.weight(1f), viewModel) { value ->
-				entry.onEditProperties { it.copy(duration = value) }
-			}
-			SettingField("FPS", summary.fps, 1f, 120f, 1.0, 0, Modifier.weight(1f), viewModel) { value ->
-				entry.onEditProperties { it.copy(fps = value) }
-			}
-		}
-		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-			SettingField(tr("animation.fadeInTime"), summary.fadeIn, 0f, 5f, 0.1, 1, Modifier.weight(1f), viewModel) { value ->
-				entry.onEditProperties { it.copy(fadeIn = value) }
-			}
-			SettingField(tr("animation.fadeOutTime"), summary.fadeOut, 0f, 5f, 0.1, 1, Modifier.weight(1f), viewModel) { value ->
-				entry.onEditProperties { it.copy(fadeOut = value) }
-			}
-		}
-		CompactCheckbox(
-			checked = summary.loop,
-			onCheckedChange = { value -> entry.onEditProperties { it.copy(loop = value) } },
-			label = tr("animation.loopPlayback"),
-		)
-		if (summary.curves.isNotEmpty()) {
+	val knobs = MotionPresets.knobs(name)
+	if (edited) {
+		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 			Text(
-				text = tr("animation.affectedParams"),
+				text = tr("animation.presetEdited"),
 				style = typography.caption.copy(fontSize = 10.sp),
-				color = colors.textMuted,
-				modifier = Modifier.padding(top = 2.dp),
+				color = colors.warning,
+				modifier = Modifier.weight(1f),
 			)
-			summary.curves.forEachIndexed { index, (paramId, range) ->
-				AffectedParameterRow(
-					color = motionCurveColor(index),
-					name = names[paramId]?.ifBlank { null } ?: paramId,
-					known = paramId in names,
-					range = range,
-					onClick = { entry.onFocusParameter(paramId) },
+			CompactButton(text = tr("animation.resetDefault"), onClick = { viewModel.resetMotionPreset(name) }, height = 20.dp)
+		}
+	}
+	for (pair in knobs.filterNot { it.toggle }.chunked(2)) {
+		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+			for (knob in pair) {
+				SettingField(
+					label = tr("animation.knob.${knob.label}"),
+					value = settings.value(knob),
+					min = knob.min,
+					max = knob.max,
+					step = knob.step.toDouble(),
+					decimals = if (knob.integer) 0 else 2,
+					unit = if (knob.integer) "" else "×",
+					enabled = !edited,
+					modifier = Modifier.weight(1f),
+					viewModel = viewModel,
+				) { viewModel.setMotionPresetValue(name, knob.id, it) }
+			}
+			if (pair.size == 1) Spacer(Modifier.weight(1f))
+		}
+	}
+	val toggles = knobs.filter { it.toggle }
+	if (toggles.isNotEmpty()) {
+		Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+			for (knob in toggles) {
+				CompactCheckbox(
+					checked = settings.value(knob) > 0.5f,
+					onCheckedChange = { viewModel.setMotionPresetValue(name, knob.id, if (it) 1f else 0f) },
+					enabled = !edited,
+					label = tr("animation.knob.${knob.label}"),
 				)
 			}
 		}
 	}
 }
 
-/** A driven parameter, tinted like its track in the animation editor; click to open that curve. */
+/** The advanced settings of a user clip: its fades, which the editor's toolbar leaves out. */
 @Composable
-private fun AffectedParameterRow(color: Color, name: String, known: Boolean, range: Pair<Float, Float>, onClick: () -> Unit) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val interaction = remember { MutableInteractionSource() }
-	val hovered by interaction.collectIsHoveredAsState()
-	Row(
-		modifier = Modifier
-			.fillMaxWidth()
-			.height(20.dp)
-			.clip(RoundedCornerShape(2.dp))
-			.background(if (hovered) colors.controlHover.copy(alpha = 0.55f) else Color.Transparent)
-			.hoverable(interaction)
-			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-			.clickable(interactionSource = interaction, indication = null, onClick = onClick)
-			.padding(horizontal = 4.dp),
-		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.spacedBy(5.dp),
-	) {
-		Box(Modifier.size(7.dp).clip(CircleShape).background(color))
-		Text(
-			text = name,
-			style = typography.caption.copy(fontSize = 10.5.sp),
-			color = if (known) colors.textPrimary else colors.warning,
-			maxLines = 1,
-			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.weight(1f),
-		)
-		Text(
-			text = "%.1f ~ %.1f".format(range.first, range.second),
-			style = typography.monoSmall.copy(fontSize = 9.5.sp),
-			color = colors.textMuted,
-			maxLines = 1,
-		)
+private fun ClipSettings(viewModel: PSD2LiveViewModel, clip: MotionClip) {
+	Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+		SettingField(tr("animation.fadeInTime"), clip.fadeIn, 0f, 5f, 0.1, 1, "", true, Modifier.weight(1f), viewModel) { value ->
+			viewModel.updateMotionClipProperties(clip.id) { it.copy(fadeIn = value) }
+		}
+		SettingField(tr("animation.fadeOutTime"), clip.fadeOut, 0f, 5f, 0.1, 1, "", true, Modifier.weight(1f), viewModel) { value ->
+			viewModel.updateMotionClipProperties(clip.id) { it.copy(fadeOut = value) }
+		}
 	}
 }
 
@@ -674,6 +559,8 @@ private fun SettingField(
 	max: Float,
 	step: Double,
 	decimals: Int,
+	unit: String,
+	enabled: Boolean,
 	modifier: Modifier,
 	viewModel: PSD2LiveViewModel,
 	onChange: (Float) -> Unit,
@@ -688,7 +575,7 @@ private fun SettingField(
 		Text(
 			text = label,
 			style = typography.caption.copy(fontSize = 10.sp),
-			color = colors.textMuted,
+			color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f),
 			maxLines = 1,
 			overflow = TextOverflow.Ellipsis,
 			modifier = Modifier.weight(1f),
@@ -700,8 +587,10 @@ private fun SettingField(
 			max = max.toDouble(),
 			step = step,
 			decimals = decimals,
+			unit = unit,
+			enabled = enabled,
 			height = 20.dp,
-			modifier = Modifier.width(60.dp),
+			modifier = Modifier.width(64.dp),
 			onEditStart = { viewModel.beginEditorField(MOTION_SETTINGS_FIELD) },
 			onEditEnd = { viewModel.endEditorField(MOTION_SETTINGS_FIELD) },
 		)
