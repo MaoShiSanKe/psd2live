@@ -852,6 +852,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 latestLiveParameters = emptyMap()
                 pausedPhysics = emptyMap()
                 setLivePose(emptyMap())
+                setMotionFramePose(emptyMap())
                 resetPreviewPhysics()
                 pointerActive = false
             } else if (before.previewModel !== after.previewModel ||
@@ -866,6 +867,8 @@ class PSD2LiveViewModel : AutoCloseable {
                     _simulationFrames.value = null; _simulationStatus.value = SimulationStatus.Idle
                 }
             }
+            // With no preview on screen no frame will replace the last one the sliders show.
+            if (before.previewLive && !after.previewLive) setLivePose(emptyMap())
             _uiState.value = _state.value
         }
     }
@@ -1995,11 +1998,15 @@ class PSD2LiveViewModel : AutoCloseable {
     fun beginEditorGesture() = beginEditorSession(SLIDER_SESSION)
     fun endEditorGesture() = editorSessions.end(SLIDER_SESSION)
 
-	/** Preview scrubs carry only changed values until release, like pointer tracking. */
+	/**
+	 * A slider or pose drag. Its samples are the authored pose every view shows at once, held as one pending
+	 * change; release commits that change once, cancel withdraws it.
+	 */
 	private data class ParameterScrub(
 		val generation: Long,
 		val workspaceId: String,
 		val expectedState: String,
+		val pending: PendingPose,
 		val overrides: Map<ParameterId, Float> = emptyMap(),
 		val autoKey: kotlinx.serialization.json.JsonObject? = null,
 		val poseTarget: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
@@ -2057,6 +2064,13 @@ class PSD2LiveViewModel : AutoCloseable {
 		val busy = synchronized(stateLock) { poseCommitsQueued > 0 }
 		updateState { if (it.poseCommitBusy == busy) it else it.copy(poseCommitBusy = busy) }
 		if (!busy && !_state.value.canvasEditBusy) queuedCanvasSave?.let { saveAs -> queuedCanvasSave = null; requestProjectSave(saveAs) }
+	}
+
+	/** Registers a change that a gesture fills in sample by sample before it is submitted. */
+	private fun openPendingPose(): PendingPose = synchronized(stateLock) {
+		val current = _state.value
+		PendingPose(++nextPendingPoseId, current.projectOpenGeneration, current.activeWorkspace.id, emptyMap())
+			.also { pendingPoses += it }
 	}
 
 	/** Shows [values] at once as the authored pose of the active workspace and holds them until their commit lands. */
@@ -2173,7 +2187,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			configurePlayback("stop_motion")
 		}
 		configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", false) })
-		// One state change pauses motion. Slider samples after this never rebuild the edit canvas.
+		// One state change pauses motion; each sample after it only moves the authored pose.
 		val suppressPreviewEffects = current.activeCanvas.mode == CanvasMode.EDIT
 		if (current.animationEnabled || current.previewParameterValues.isNotEmpty() ||
 			current.activeWorkspace.pose?.authoringPose != suppressPreviewEffects) {
@@ -2181,7 +2195,9 @@ class PSD2LiveViewModel : AutoCloseable {
 				.authoringPose(suppressPreviewEffects) }
 		}
 		val started = _state.value
-		parameterScrub = ParameterScrub(started.projectOpenGeneration, started.activeWorkspace.id, currentWorkspaceState() ?: return, autoKey = currentAutoKey())
+		val expected = currentWorkspaceState() ?: return
+		parameterScrub = ParameterScrub(started.projectOpenGeneration, started.activeWorkspace.id, expected,
+			openPendingPose(), autoKey = currentAutoKey())
 		parameterScrubActive = true
 	}
 
@@ -2195,6 +2211,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorSessions.end(SLIDER_SESSION)
 	}
 	fun cancelParameterScrub() {
+		parameterScrub?.let { discardPendingPose(it.pending) }
 		parameterScrub = null; parameterScrubValues.clear(); parameterScrubActive = false
 		editorSessions.end(SLIDER_SESSION)
 	}
@@ -2222,7 +2239,10 @@ class PSD2LiveViewModel : AutoCloseable {
 		parameterScrub = null
 		val current = _state.value
 		if (current.projectOpenGeneration == scrub.generation && current.activeWorkspace.id == scrub.workspaceId && (scrub.overrides.isNotEmpty() || scrub.poseTarget.isNotEmpty() || extras.isNotEmpty())) {
-			submitParameterValues(scrub.overrides, scrub.expectedState, kotlinx.serialization.json.JsonObject(scrub.poseTarget + extras), scrub.autoKey)
+			scrub.pending.values = scrub.overrides
+			submitParameterValues(scrub.pending, scrub.expectedState, kotlinx.serialization.json.JsonObject(scrub.poseTarget + extras), scrub.autoKey)
+		} else {
+			discardPendingPose(scrub.pending)
 		}
 		parameterScrubValues.clear()
 		parameterScrubActive = false
@@ -3378,7 +3398,11 @@ class PSD2LiveViewModel : AutoCloseable {
 			motionEditor.focusedCurve = null
 			motionEditor.playhead = 0f
 		}
+		val opened = motionEditor.clipId != id
 		motionEditor.clipId = id
+		// The process clock poses the canvases and sliders at the playhead of the motion now open.
+		if (opened && editingMotionClip() != null)
+			configurePlayback("seek", kotlinx.serialization.json.buildJsonObject { put("clip_id", id); put("time", 0f) })
 		if (focus) requestSelectDockModule("animationEditor")
 	}
 
@@ -3388,11 +3412,15 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun closeMotionEditorClip() {
+		val open = motionEditor.clipId != null
 		motionEditor.autoKey = false
 		motionEditor.playing = false
 		motionEditor.clipId = null
 		motionEditor.selection = emptySet()
 		motionEditor.focusedCurve = null
+		// Release the timeline's pose so the next clock frame does not reopen the motion it carries.
+		if (open) configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", _state.value.animationEnabled) })
+		setMotionFramePose(emptyMap())
 	}
 
 	private fun motionKeyJson(key: MotionKey) = kotlinx.serialization.json.buildJsonObject {
@@ -3603,6 +3631,8 @@ class PSD2LiveViewModel : AutoCloseable {
 			frame.getValue("tracking").jsonPrimitive.boolean || frame["clip_id"] != null
 		val values = frame.getValue("values").jsonObject.map { (id, value) -> ParameterId(id) to value.jsonPrimitive.float }.toMap()
 		processFrameValues = values
+		val curves = frame["clip_id"]?.let { editingMotionClip(current)?.curves?.mapTo(HashSet()) { ParameterId(it.parameterId) } }
+		setMotionFramePose(if (curves.isNullOrEmpty()) emptyMap() else values.filterKeys { it in curves })
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
 			if (!switches) it.copy(previewParameterValues = values)
 			else it.copy(animationEnabled = frame.getValue("animation").jsonPrimitive.boolean, previewParameterValues = values, mouseTrackingEnabled = frame.getValue("tracking").jsonPrimitive.boolean)
@@ -5116,12 +5146,23 @@ class PSD2LiveViewModel : AutoCloseable {
 		val current = _state.value
 		if (current.projectOpenGeneration != scrub.generation || current.activeWorkspace.id != scrub.workspaceId) return false
 		var overrides = scrub.overrides
+		val changed = HashMap<ParameterId, Float>()
 		for ((id, value) in values) {
 			if (overrides[id] == value) continue
 			overrides = overrides + (id to value)
 			parameterScrubValues[id] = value
+			changed[id] = value
 		}
-		if (overrides !== scrub.overrides) parameterScrub = scrub.copy(overrides = overrides)
+		if (changed.isEmpty()) return true
+		parameterScrub = scrub.copy(overrides = overrides)
+		// The edit canvas, the software preview, guides and the physics panel all read the authored pose.
+		synchronized(stateLock) {
+			scrub.pending.values = overrides
+			updateState { latest ->
+				if (latest.projectOpenGeneration != scrub.generation || latest.activeWorkspace.id != scrub.workspaceId) latest
+				else latest.copy(parameterValues = latest.parameterValues + changed)
+			}
+		}
 		return true
 	}
 
@@ -5878,8 +5919,29 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** Compose-readable live value for [id]; reading it only invalidates when that entry changes. */
 	fun livePoseOf(id: ParameterId): Float? = _livePoseSnapshot[id]
 
-	/** Publish [next] to both the StateFlow readers and the per-key Compose snapshot. */
+	/** The evaluated frame's part of [livePose]: animation, the pointer's look or paused physics. */
+	@Volatile private var liveFramePose: Map<ParameterId, Float> = emptyMap()
+	/**
+	 * The timeline's part of [livePose]: while a motion is selected the preview poses its curves at the playhead,
+	 * playing or not, so the sliders of those parameters follow the playhead like the canvases do.
+	 */
+	@Volatile private var motionFramePose: Map<ParameterId, Float> = emptyMap()
+
 	private fun setLivePose(next: Map<ParameterId, Float>) {
+		liveFramePose = next
+		emitLivePose()
+	}
+
+	private fun setMotionFramePose(next: Map<ParameterId, Float>) {
+		if (next == motionFramePose) return
+		motionFramePose = next
+		emitLivePose()
+	}
+
+	/** Publish the frame and timeline poses to both the StateFlow readers and the per-key Compose snapshot. */
+	private fun emitLivePose() {
+		val frame = liveFramePose; val motion = motionFramePose
+		val next = if (motion.isEmpty()) frame else if (frame.isEmpty()) motion else frame + motion
 		if (next == _livePose.value) return
 		_livePose.value = next
 		if (next.isEmpty()) {
@@ -5948,7 +6010,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		val isMeshOnly = current.meshOnly
 		val anim = inPreview && current.animationEnabled && !isMeshOnly
 		val tracking = inPreview && current.mouseTrackingEnabled && !isMeshOnly && current.activeWorkspace.pose?.authoringPose != true
-		val processFrame = if (inPreview && current.previewModel != null && processPlaybackActive)
+		// The timeline plays and poses the edit canvases too, with no preview on screen.
+		val processFrame = if ((inPreview || motionEditor.clipId != null) && current.previewModel != null && processPlaybackActive)
 			(workspaceBackend as? io.github.psd2live.application.WorkspacePreviewPort)?.playbackFrame(dt) else null
 		if (processFrame != null) applyPlaybackFrame(processFrame, switches = false)
 
@@ -5984,6 +6047,10 @@ class PSD2LiveViewModel : AutoCloseable {
 					}
 				}
 			}
+		} else if (current.sdkStatus != "ready" && !pausedPhysicsOn && pausedPhysics.isEmpty()) {
+			// Stopped and not following the pointer: the software preview shows the authored pose again, so the
+			// sliders must not keep the last animated frame.
+			setLivePose(emptyMap())
 		}
 		// 5. Paused, physics still runs, on the pose the user sets: a slider or the pointer's look swings it.
 		stepPausedPhysics(current, model, pausedPhysicsOn, tracking, dt)

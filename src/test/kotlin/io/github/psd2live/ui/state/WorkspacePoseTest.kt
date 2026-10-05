@@ -91,22 +91,66 @@ class WorkspacePoseTest {
         }
     }
 
-    @Test fun previewSliderSamplesStayOutOfDocumentStateUntilRelease() = runBlocking<Unit> {
+    @Test fun sliderSamplesMoveEveryViewAtOnceAndCommitOnlyOnRelease() = runBlocking<Unit> {
         fixture { vm, workspace ->
             vm.addCanvas(CanvasMode.PREVIEW, focus = false)
             vm.setStateForTest(vm.state.value.copy(sdkStatus = "ready"))
             assertEquals(CanvasMode.EDIT, vm.state.value.activeCanvas.mode)
+            val edit = vm.state.value.activeCanvas.id
+            fun committed() = workspace.previewSession().getValue("values").jsonObject.getValue(parameter.raw).jsonPrimitive.float
             vm.beginParameterScrub()
-            val started = vm.state.value
             vm.setParameterValue(parameter, 0.25f)
             vm.setParameterValue(parameter, 0.5f)
-            assertSame(started, vm.state.value)
+            // The edit canvas, guides and physics read the authored pose; each sample reaches it at once.
+            assertEquals(0.5f, vm.state.value.parameterValues[parameter])
+            assertEquals(0.5f, vm.canvasPose(vm.canvasEditorFor(edit).state)[parameter])
             assertEquals(0.5f, vm.parameterScrubValueOf(parameter))
-            assertEquals(0.5f, vm.parameterScrubPose(started, started.parameterValues)[parameter])
+            assertEquals(0f, committed(), "samples are not committed")
+            assertFalse(vm.state.value.poseCommitBusy)
             vm.endParameterScrub()
             settled(vm)
             assertFalse(vm.parameterScrubActive)
             assertEquals(0.5f, vm.state.value.parameterValues[parameter])
+            assertEquals(0.5f, committed())
+        }
+    }
+
+    @Test fun aCancelledSliderReturnsEveryViewToTheCommittedPose() = runBlocking<Unit> {
+        fixture { vm, workspace ->
+            vm.setParameterValue(parameter, 0.2f); settled(vm)
+            val before = workspace.history().nodes.size
+            vm.beginParameterScrub()
+            vm.setParameterValue(parameter, 0.9f)
+            assertEquals(0.9f, vm.state.value.parameterValues[parameter])
+            vm.cancelParameterScrub()
+            settled(vm)
+            assertEquals(0.2f, vm.state.value.parameterValues[parameter])
+            assertEquals(0.2f, workspace.previewSession().getValue("values").jsonObject.getValue(parameter.raw).jsonPrimitive.float)
+            assertEquals(before, workspace.history().nodes.size)
+        }
+    }
+
+    @Test fun theOpenMotionPosesTheSlidersAtThePlayheadWithoutAPreviewCanvas() = runBlocking<Unit> {
+        fixture { vm, workspace ->
+            val clip = MotionClip("clip", "Clip", duration = 1f, loop = true, curves = listOf(MotionCurve(parameter.raw,
+                listOf(MotionKey(0f, -1f, io.github.psd2live.core.MotionInterpolation.LINEAR), MotionKey(1f, 1f, io.github.psd2live.core.MotionInterpolation.LINEAR)))))
+            putClip(workspace, clip)
+            assertTrue(vm.state.value.activeWorkspace.canvases.all { it.mode == CanvasMode.EDIT })
+            vm.openMotionInEditor(clip.id)
+            vm.setMotionPlayhead(0.75f)
+            // The sliders read livePose over the authored pose, as the edit canvases read the clock frame.
+            assertEquals(0.5f, vm.livePose.value[parameter])
+            assertEquals(0.5f, vm.canvasPose(vm.state.value)[parameter])
+            assertNull(vm.livePose.value[ParameterId("untracked")], "parameters without a curve keep the authored pose")
+            // Playing with no preview on screen still advances the clock and the sliders with it.
+            vm.setMotionPlayhead(0f)
+            vm.setMotionEditorPlaying(true)
+            withTimeout(5000) { while ((vm.livePose.value[parameter] ?: -1f) < -0.5f) kotlinx.coroutines.delay(10) }
+            assertEquals(vm.livePose.value[parameter], vm.canvasPose(vm.state.value)[parameter])
+            vm.setMotionEditorPlaying(false)
+            vm.closeMotionEditorClip()
+            assertNull(vm.livePose.value[parameter])
+            withTimeout(5000) { while (vm.canvasPose(vm.state.value)[parameter] != 0f) kotlinx.coroutines.delay(10) }
         }
     }
 
