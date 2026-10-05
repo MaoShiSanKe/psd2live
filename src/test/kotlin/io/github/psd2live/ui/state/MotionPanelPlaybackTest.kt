@@ -147,4 +147,55 @@ class MotionPanelPlaybackTest {
 			assertEquals(0f, released.getValue("values").jsonObject.getValue("ParamAngleX").jsonPrimitive.float)
 		}
 	}
+	@Test fun editedIdleKeepsItsPanelIdentityAndCanBePausedFromEitherControl() = runBlocking<Unit> {
+		fixture { vm, workspace ->
+			val idle = MotionEditorState.presetClipId("Idle")
+			vm.editBuiltinMotion("Idle")
+			vm.setMotionKey("ParamAngleY", 0.3f, -5f)
+			settled(vm)
+			vm.toggleMotionPlayback(idle)
+			vm.applyPlaybackFrame(workspace.playbackFrame(0.1f))
+			assertEquals(idle, vm.motionEditor.clipId)
+			assertTrue(vm.motionEditor.playing)
+			vm.toggleMotionPlayback(idle)
+			assertFalse(vm.motionEditor.playing)
+			vm.togglePreviewPlayback()
+			assertTrue(vm.motionEditor.playing)
+			vm.setMotionEditorPlaying(false)
+			assertFalse(vm.state.value.previewPanelState().animationEnabled)
+		}
+	}
+
+	@Test fun smoothTrackingDefaultsOffAndRoundTripsWithWorkspacePresentation() = runBlocking<Unit> {
+		fixture { vm, _ ->
+			assertFalse(vm.state.value.previewPanelState().smoothMouseTracking)
+			vm.setMouseTrackingEnabled(true)
+			vm.setSmoothMouseTracking(true)
+			val restored = WorkspaceStateCodec.decode(WorkspaceStateCodec.encode(vm.state.value))
+			assertTrue(restored.previewPanelState().smoothMouseTracking)
+			vm.editBuiltinMotion("Idle")
+			assertTrue(vm.state.value.previewPanelState().smoothMouseTracking)
+			vm.setSmoothMouseTracking(false)
+			assertFalse(WorkspaceStateCodec.decode(WorkspaceStateCodec.encode(vm.state.value)).previewPanelState().smoothMouseTracking)
+		}
+	}
+
+	@Test fun renderedPoseWinsOverTimelineAndSeekDiscardsThatRenderedFrame() = runBlocking<Unit> {
+		fixture { vm, _ ->
+			vm.editBuiltinMotion("Nod")
+			vm.setMotionKey("ParamAngleY", 0.3f, -5f)
+			settled(vm)
+			vm.setMotionPlayhead(0.3f)
+			vm.setMotionEditorPlaying(true)
+			vm.setStateForTest(vm.state.value.copy(meshOnly = false))
+			vm.setCanvasMode(vm.state.value.activeCanvas.id, CanvasMode.PREVIEW)
+			val angle = org.umamo.runtime.model.ParameterId("ParamAngleY")
+			vm.acceptSdkFrame(io.github.psd2live.core.CubismSdkFrame(
+				BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), mapOf(angle to -7f)))
+			assertEquals(-7f, vm.livePose.value[angle])
+			vm.setMotionPlayhead(0.3f)
+			assertEquals(-5f, vm.livePose.value[angle])
+		}
+	}
+
 }

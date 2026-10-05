@@ -215,7 +215,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
             })) }, listOf("bone_id", "settings")))
             put("auto_key", objectSchema(buildJsonObject { put("clip_id", string()); put("time", number()); put("snap", boolean()) }, listOf("clip_id", "time")))
         }, listOf("state")), WorkspaceOperationKind.SESSION) { input -> WorkspaceOperationOutput(workspace.authorPose(input)) }
-    register("preview_playback", "Control the process-owned motion clock or normalized pointer tracking. Frames stay transient and never replace authored preview values, locks or saved poses. Modes start, seek, pause, stop and tracking return the current bounded evaluated frame.",
+    register("preview_playback", "Tracking mode accepts smooth (default false) for delayed head/body following with body Y; the algorithm is independent of clip selection. Control the process-owned motion clock or normalized pointer tracking. Frames stay transient and never replace authored preview values, locks or saved poses. Modes start, seek, pause, stop and tracking return the current bounded evaluated frame.",
         WorkspaceResultSchema.union(listOf(
             variant("mode", "start", buildJsonObject { put("state", string()); put("clip_id", string()); put("time", number()) }, listOf("state", "clip_id")),
             variant("mode", "seek", buildJsonObject { put("state", string()); put("clip_id", string()); put("time", number()) }, listOf("state", "time")),
@@ -225,7 +225,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
             variant("mode", "trigger", buildJsonObject { put("state", string()); put("name", string()) }, listOf("state", "name")),
             variant("mode", "stop_motion", buildJsonObject { put("state", string()); put("name", string()) }, listOf("state")),
             variant("mode", "reset", buildJsonObject { put("state", string()) }, listOf("state")),
-            variant("mode", "tracking", buildJsonObject { put("state", string()); put("enabled", boolean()); put("pointer", vector(2)) }, listOf("state", "enabled"))
+            variant("mode", "tracking", buildJsonObject { put("state", string()); put("enabled", boolean()); put("pointer", vector(2)); put("smooth", boolean()) }, listOf("state", "enabled"))
         )), WorkspaceOperationKind.SESSION) { input -> WorkspaceOperationOutput(workspace.controlPlayback(input)) }
     register("preview_physics", "Step the process-owned preview pendulums for dt seconds (0..1, default 1/60), on authored values or the supplied transient pose. Reports outputs and settling without changing authored values, dirty state or history. playing selects the playback clock; changing clocks starts from rest. reset restarts this workspace's pendulums.",
         objectSchema(buildJsonObject { put("state", string()); put("values", previewValues); put("dt", buildJsonObject { put("type", "number"); put("minimum", 0); put("maximum", 1) }); put("playing", boolean()); put("reset", boolean()) }, listOf("state")), WorkspaceOperationKind.SESSION) {

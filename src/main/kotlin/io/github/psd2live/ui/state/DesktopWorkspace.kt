@@ -233,7 +233,7 @@ class DesktopWorkspace(
         requireExpected(arguments.getValue("state").jsonPrimitive.content, captured)
         val current = viewModel.state.value
         val result = playbackSessions.configure(captured.projectId, captured.state, current.activeWorkspace.id, arguments,
-            initialTracking = current.mouseTrackingEnabled)
+            initialTracking = current.mouseTrackingEnabled, initialSmoothTracking = current.smoothMouseTracking)
         viewModel.applyPlaybackFrame(result)
         result
     }
@@ -298,7 +298,7 @@ class DesktopWorkspace(
 
     /** An authored change stops playback and restarts the clocks from the new pose; tracking and the open motion stay. */
     private fun resetAuthoredPlayback(projectId: String, state: String, current: PSD2LiveState): kotlinx.serialization.json.JsonObject =
-        playbackSessions.restart(projectId, state, current.activeWorkspace.id, initialTracking = current.mouseTrackingEnabled)
+        playbackSessions.restart(projectId, state, current.activeWorkspace.id, initialTracking = current.mouseTrackingEnabled, initialSmoothTracking = current.smoothMouseTracking)
 
     override fun layerMeshSettings(layerId: String): kotlinx.serialization.json.JsonObject = captureQueries().layerMeshSettings(layerId)
     override suspend fun importPsd(path: String, discardUnsaved: Boolean): WorkspaceMutationResult = editMutex.withLock {

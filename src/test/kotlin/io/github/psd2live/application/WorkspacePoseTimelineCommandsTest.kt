@@ -232,7 +232,7 @@ class WorkspacePoseTimelineCommandsTest {
         control(buildJsonObject { put("mode", "animation"); put("enabled", true) })
         val idle = sessions.frame("first", 0.25f)
         assertTrue(kotlin.math.abs(value(idle, StandardParameters.ANGLE_X)) > 0.01f)
-        control(buildJsonObject { put("mode", "tracking"); put("enabled", true); put("pointer", buildJsonArray { add(1); add(0) }) })
+        control(buildJsonObject { put("mode", "tracking"); put("enabled", true); put("smooth", true); put("pointer", buildJsonArray { add(1); add(0) }) })
         val following = sessions.frame("first", 0.05f)
         assertTrue(value(following, StandardParameters.ANGLE_X) > value(idle, StandardParameters.ANGLE_X))
         assertTrue(value(following, StandardParameters.ANGLE_X) < 30f)
@@ -334,4 +334,36 @@ class WorkspacePoseTimelineCommandsTest {
             validateOperationSchema(terminal.getValue("result"), operations.registry.definition("preview_pose").jobResultSchema!!)
         }
     }
+    @Test fun trackingAlgorithmIsIndependentOfAnimationAndClipSelectionAndCanBeDisabled() = runBlocking<Unit> {
+        val runtime = fixture(); val root = runtime.capture()
+        val capture = runtime.install(root.state, root.projectId, root.document,
+            root.model.copy(config = root.model.config.copy(meshOnly = false)), runtime.history(), root.auxiliary, discardUnsaved = true)
+        val sessions = WorkspacePlaybackSessions(runtime)
+        fun control(mode: String, fields: JsonObject = JsonObject(emptyMap())) = sessions.configure(
+            capture.projectId, capture.state, "first", JsonObject(fields + ("mode" to JsonPrimitive(mode))))
+        fun value(frame: JsonObject, id: String) = frame.getValue("values").jsonObject.getValue(id).jsonPrimitive.float
+        control("animation", buildJsonObject { put("enabled", true) })
+        val direct = control("tracking", buildJsonObject {
+            put("enabled", true); put("pointer", buildJsonArray { add(0.5f); add(-0.5f) })
+        })
+        assertFalse(direct.getValue("smooth_tracking").jsonPrimitive.boolean)
+        assertEquals(15f, value(sessions.frame("first", 0.1f), "ParamAngleX"))
+        val selected = control("seek", buildJsonObject { put("clip_id", "take"); put("time", 0f) })
+        assertEquals(15f, value(selected, "ParamAngleX"))
+        control("tracking", buildJsonObject { put("enabled", true); put("smooth", true) })
+        val smooth = sessions.frame("first", 0.1f)
+        assertTrue(value(smooth, "ParamAngleX") in 0f..19f)
+        assertTrue(value(smooth, "ParamAngleY") < 0f)
+        assertTrue(value(smooth, "ParamBodyAngleY") < 0f)
+        control("animation", buildJsonObject { put("enabled", true) })
+        val idle = sessions.frame("first", 0f)
+        assertEquals(value(smooth, "ParamAngleX"), value(idle, "ParamAngleX"))
+        assertEquals(value(smooth, "ParamBodyAngleY"), value(idle, "ParamBodyAngleY"))
+        assertTrue(sessions.restart(capture.projectId, capture.state, "first").getValue("smooth_tracking").jsonPrimitive.boolean)
+        val stopped = control("tracking", buildJsonObject { put("enabled", false) })
+        sessions.pointer("first", 1f to 1f)
+        assertEquals(stopped.getValue("values"), sessions.frame("first", 0.1f).getValue("values"))
+        assertEquals(capture, runtime.capture())
+    }
+
 }

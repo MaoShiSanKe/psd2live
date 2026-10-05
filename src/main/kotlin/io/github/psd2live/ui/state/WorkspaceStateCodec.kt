@@ -115,6 +115,7 @@ internal object WorkspaceStateCodec {
         put("isolatedLayerId", p.isolatedLayerId)
         put("animationEnabled", p.animationEnabled)
         put("mouseTrackingEnabled", p.mouseTrackingEnabled)
+        put("smoothMouseTracking", p.smoothMouseTracking)
         putJsonObject("layerVisibility") { p.layerVisibility.forEach { (id, visible) -> put(id, visible) } }
         putJsonObject("deformerVisibility") { p.deformerVisibility.forEach { (id, visible) -> put(id, visible) } }
         p.isolationSnapshot?.let { snapshot -> putJsonObject("isolationSnapshot") { snapshot.forEach { (id, visible) -> put(id, visible) } } }
@@ -132,6 +133,7 @@ internal object WorkspaceStateCodec {
             isolatedLayerId = obj["isolatedLayerId"]?.jsonPrimitive?.contentOrNull,
             animationEnabled = booleanOr(obj, "animationEnabled", false),
             mouseTrackingEnabled = booleanOr(obj, "mouseTrackingEnabled", true),
+            smoothMouseTracking = booleanOr(obj, "smoothMouseTracking", false),
             layerVisibility = obj["layerVisibility"]?.jsonObject?.mapValues { it.value.jsonPrimitive.boolean } ?: emptyMap(),
             deformerVisibility = obj["deformerVisibility"]?.jsonObject?.mapValues { it.value.jsonPrimitive.boolean } ?: emptyMap(),
             isolationSnapshot = obj["isolationSnapshot"]?.jsonObject?.mapValues { it.value.jsonPrimitive.boolean },
@@ -488,6 +490,7 @@ internal object WorkspaceStateCodec {
         put("parameterSearchQuery", state.parameterSearchQuery)
         put("animationEnabled", state.animationEnabled)
         put("mouseTrackingEnabled", state.mouseTrackingEnabled)
+        put("smoothMouseTracking", state.smoothMouseTracking)
         put("activeInspectorTab", state.activeInspectorTab.name)
         state.isolationSnapshot?.let { values -> putJsonObject("isolationSnapshot") { values.forEach { (id, v) -> put(id, v) } } }
         putJsonObject("parameterValues") { state.parameterValues.forEach { (id, v) -> put(id.raw, v) } }
@@ -616,6 +619,7 @@ internal object WorkspaceStateCodec {
         parameterSearchQuery = value["parameterSearchQuery"]?.jsonPrimitive?.content ?: base.parameterSearchQuery,
         animationEnabled = value["animationEnabled"]?.jsonPrimitive?.boolean ?: base.animationEnabled,
         mouseTrackingEnabled = value["mouseTrackingEnabled"]?.jsonPrimitive?.boolean ?: base.mouseTrackingEnabled,
+        smoothMouseTracking = value["smoothMouseTracking"]?.jsonPrimitive?.boolean ?: false,
         activeInspectorTab = value["activeInspectorTab"]?.jsonPrimitive?.content?.let { runCatching { InspectorTab.valueOf(it) }.getOrNull() } ?: base.activeInspectorTab,
         isolationSnapshot = value["isolationSnapshot"]?.jsonObject?.mapValues { it.value.jsonPrimitive.boolean },
         parameterValues = value["parameterValues"]?.jsonObject?.map { (id, v) -> ParameterId(id) to v.jsonPrimitive.float }?.toMap() ?: base.parameterValues,

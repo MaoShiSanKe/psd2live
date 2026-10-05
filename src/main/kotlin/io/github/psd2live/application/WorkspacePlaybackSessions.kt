@@ -8,6 +8,7 @@ import org.umamo.runtime.model.ParameterId
 internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<RigPreviewModel>) {
     private data class Session(val projectId: String, val generation: String, val clipId: String? = null, val time: Float = 0f,
                                val playing: Boolean = false, val tracking: Boolean = false,
+                               val smoothTracking: Boolean = false, val trackingClock: PreviewAnimationClock = PreviewAnimationClock(),
                                val pointer: Pair<Float, Float>? = null, val clockNanos: Long = System.nanoTime(),
                                val animation: Boolean = false, val animationClock: PreviewAnimationClock = PreviewAnimationClock(),
                                val motionId: String? = null, val motionTime: Float = 0f, val activeMotion: String? = null,
@@ -38,14 +39,14 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
     }
 
     @Synchronized fun configure(projectId: String, state: String, workspaceId: String, request: JsonObject,
-                                initialTracking: Boolean = false): JsonObject {
+                                initialTracking: Boolean = false, initialSmoothTracking: Boolean = false): JsonObject {
         val capture = runtime.capture()
         if (capture.state != state) throw WorkspaceConflict(state, capture.state)
         require(capture.projectId == projectId) { "Operation targets another project" }
         require(workspaceId.isNotBlank()) { "Workspace ID must be nonempty" }
         val generation = capture.state.substringBeforeLast(':')
         val current = sessions[workspaceId]?.takeIf { it.projectId == projectId && it.generation == generation }
-            ?: Session(projectId, generation, tracking = initialTracking)
+            ?: Session(projectId, generation, tracking = initialTracking, smoothTracking = initialSmoothTracking)
         val mode = request.getValue("mode").jsonPrimitive.content
         val next = when (mode) {
             "start" -> {
@@ -83,9 +84,11 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
                 val point = request["pointer"]?.jsonArray?.let {
                     require(it.size == 2) { "Pointer must contain two coordinates" }
                     it[0].jsonPrimitive.float to it[1].jsonPrimitive.float
-                }
+                } ?: current.pointer
                 require(point == null || (point.first.isFinite() && point.second.isFinite() && point.first in -1f..1f && point.second in -1f..1f)) { "Pointer must be normalized to -1..1" }
-                current.copy(tracking = enabled, pointer = point.takeIf { enabled })
+                val smooth = request["smooth"]?.jsonPrimitive?.boolean ?: current.smoothTracking
+                current.copy(tracking = enabled, pointer = point.takeIf { enabled }, smoothTracking = smooth,
+                    trackingClock = if (enabled != current.tracking || smooth != current.smoothTracking) PreviewAnimationClock() else current.trackingClock)
             }
             else -> error("Unknown playback mode: $mode")
         }
@@ -110,16 +113,17 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
      * An authored change stops the clocks and restarts them from rest at the new pose. The tracking switch
      * and pointer stay, and an open motion stays posed at its playhead, so the views keep showing its curves.
      */
-    @Synchronized fun restart(projectId: String, state: String, workspaceId: String, initialTracking: Boolean = false): JsonObject {
+    @Synchronized fun restart(projectId: String, state: String, workspaceId: String, initialTracking: Boolean = false,
+                              initialSmoothTracking: Boolean = false): JsonObject {
         val capture = runtime.capture()
         if (capture.state != state) throw WorkspaceConflict(state, capture.state)
         require(capture.projectId == projectId) { "Operation targets another project" }
         val generation = state.substringBeforeLast(':')
         val current = sessions[workspaceId]?.takeIf { it.projectId == projectId && it.generation == generation }
-            ?: Session(projectId, generation, tracking = initialTracking)
+            ?: Session(projectId, generation, tracking = initialTracking, smoothTracking = initialSmoothTracking)
         val clip = current.clipId?.let { clip(capture, it) }
         val next = Session(projectId, generation, clipId = current.clipId.takeIf { clip != null }, time = clip?.let { current.time.coerceAtMost(it.duration) } ?: 0f,
-            tracking = current.tracking, pointer = current.pointer)
+            tracking = current.tracking, pointer = current.pointer, smoothTracking = current.smoothTracking)
         sessions[workspaceId] = next
         return result(capture, workspaceId, next)
     }
@@ -147,8 +151,9 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
             session = if (oneShot != null && time > oneShot.duration) session.copy(motionId = null, activeMotion = null, motionTime = 0f)
                 else session.copy(motionTime = time)
         }
-        session = session.copy(animationClock = session.animationClock.advance(delta, session.animation, capture.model.config,
-            session.pointer.takeIf { session.tracking }))
+        session = session.copy(animationClock = session.animationClock.advance(delta, session.animation, capture.model.config, null),
+            trackingClock = session.trackingClock.advance(delta, false, capture.model.config,
+                session.pointer.takeIf { session.tracking && session.smoothTracking }))
         sessions[workspaceId] = session.copy(clockNanos = now)
         return result(capture, workspaceId, session)
     }
@@ -156,15 +161,19 @@ internal class WorkspacePlaybackSessions(private val runtime: WorkspaceRuntime<R
     private fun result(capture: WorkspaceCapture<RigPreviewModel>, workspaceId: String, session: Session) = buildJsonObject {
         val pose = PreviewSessions.read(capture.model.rig.puppet.parameters, capture.auxiliary, workspaceId)
         val clip = session.clipId?.let { clip(capture, it) }
-        val values = if (session.animation && !capture.model.config.meshOnly) {
+        val base = if (session.animation && !capture.model.config.meshOnly) {
             val oneShot = session.motionId?.let { clip(capture, it) }?.let { MotionClips.sampleAll(it, session.motionTime.toDouble(), false) }.orEmpty()
-            val generated = session.animationClock.sample(capture.model, true, session.tracking && session.pointer != null, oneShot)
+            val generated = session.animationClock.sample(capture.model, true, false, oneShot)
             boundedPreviewPose(pose.values + generated.filterKeys { it !in pose.locked }, capture.model.rig.puppet.parameters)
-        } else sample(capture.model, pose, clip, session.time, session.tracking, session.pointer)
+        } else sample(capture.model, pose, clip, session.time)
+        val values = pointerPreviewPose(base, session.pointer?.first ?: 0f, session.pointer?.second ?: 0f,
+            capture.model.rig.puppet.parameters, session.tracking && session.pointer != null, pose.locked,
+            session.trackingClock.takeIf { session.smoothTracking })
         put("project_id", capture.projectId); put("state", capture.state); put("workspace_id", workspaceId)
         session.clipId?.let { put("clip_id", it) }
         put("time", session.time); put("playing", session.playing); put("tracking", session.tracking)
         put("animation", session.animation); put("elapsed", session.animationClock.elapsed)
+        put("smooth_tracking", session.smoothTracking)
         session.activeMotion?.let { put("active_motion", it) }
         put("pointer_active", session.pointer != null)
         putJsonObject("values") { values.forEach { (id, value) -> put(id.raw, value) } }

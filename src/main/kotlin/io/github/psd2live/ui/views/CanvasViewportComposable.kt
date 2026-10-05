@@ -1579,12 +1579,14 @@ fun CanvasViewportComposable(
 			CanvasPreviewToolbar(
 				animationEnabled = canvasState.animationEnabled,
 				mouseTrackingEnabled = canvasState.mouseTrackingEnabled,
+				smoothMouseTracking = canvasState.smoothMouseTracking,
 				physicsEnabled = canvasState.generatePhysics,
 				physicsAvailable = !canvasState.meshOnly,
 				fps = canvasState.rigEdits.physicsFps,
 				enabled = true,
 				onToggleAnimation = { viewModel.togglePreviewPlayback() },
 				onToggleMouseTracking = { viewModel.setMouseTrackingEnabled(!canvasState.mouseTrackingEnabled) },
+				onToggleSmoothTracking = { viewModel.setSmoothMouseTracking(!canvasState.smoothMouseTracking) },
 				onTogglePhysics = { viewModel.setGeneratePhysics(!canvasState.generatePhysics) },
 				onSelectFps = viewModel::setProjectFps,
 			)

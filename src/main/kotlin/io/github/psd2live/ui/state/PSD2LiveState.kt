@@ -516,6 +516,7 @@ data class PSD2LiveState(
 	val parameterSnapshots: List<ParameterSnapshot> = emptyList(),
 	val animationEnabled: Boolean = false,
 	val mouseTrackingEnabled: Boolean = true,
+	val smoothMouseTracking: Boolean = false,
 	val sdkStatus: String? = null,
 	val activeInspectorTab: InspectorTab = InspectorTab.LAYERS,
 	val currentLanguage: AppLanguage = I18n.currentLanguage,

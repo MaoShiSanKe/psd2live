@@ -3640,7 +3640,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (commandsSeen == null) playbackCommands++
 		playbackSyncKey = "${current.projectOpenGeneration}/${current.activeWorkspace.id}/${frame.getValue("state").jsonPrimitive.content.substringBeforeLast(':')}"
 		frame["clip_id"]?.jsonPrimitive?.content?.let {
-			motionEditor.clipId = it
+			motionEditor.clipId = current.rigEdits.motionClips.firstOrNull { clip -> clip.id == it }?.builtin
+				?.let(MotionEditorState::presetClipId) ?: it
 			motionEditor.playhead = frame.getValue("time").jsonPrimitive.float
 		}
 		val playing = frame.getValue("playing").jsonPrimitive.boolean
@@ -3651,8 +3652,11 @@ class PSD2LiveViewModel : AutoCloseable {
 		processPlaybackActive = animation || playing || tracking || frame["clip_id"] != null
 		val values = frame.getValue("values").jsonObject.map { (id, value) -> ParameterId(id) to value.jsonPrimitive.float }.toMap()
 		processFrameValues = values
+		// A control command invalidates the previously rendered/physical frame.
+		if (commandsSeen == null) liveFramePose = emptyMap()
 		val curves = frame["clip_id"]?.let { editingMotionClip(current)?.curves?.mapTo(HashSet()) { ParameterId(it.parameterId) } }
 		setMotionFramePose(if (curves.isNullOrEmpty()) emptyMap() else values.filterKeys { it in curves })
+		if (commandsSeen == null) emitLivePose()
 		val composePhysics = current.previewLive && current.generatePhysics && !current.meshOnly &&
 			current.activeWorkspace.pose?.authoringPose != true
 		updateCanvasPresentation(current.activeWorkspace.id, current.previewControlCanvas().id, CanvasMode.PREVIEW) {
@@ -3660,7 +3664,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			// Clock poses publish after physics composition, avoiding an intermediate frame at rest.
 			it.copy(animationEnabled = animation || playing,
 				previewParameterValues = if (commandsSeen != null && composePhysics) it.previewParameterValues else parameterScrubPose(current, values),
-				mouseTrackingEnabled = tracking)
+				mouseTrackingEnabled = tracking, smoothMouseTracking = frame["smooth_tracking"]?.jsonPrimitive?.boolean ?: false)
 		}
 	}
 
@@ -3690,7 +3694,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val key = "${current.projectOpenGeneration}/${current.activeWorkspace.id}/${state.substringBeforeLast(':')}"
 		if (key == playbackSyncKey) return
 		val panel = current.previewPanelState()
-		if (!configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", panel.mouseTrackingEnabled) })) return
+		if (!configurePlayback("tracking", kotlinx.serialization.json.buildJsonObject { put("enabled", panel.mouseTrackingEnabled); put("smooth", panel.smoothMouseTracking) })) return
 		if (panel.animationEnabled && editingMotionClip(current) == null)
 			configurePlayback("animation", kotlinx.serialization.json.buildJsonObject { put("enabled", true) })
 		playbackSyncKey = key
@@ -3701,7 +3705,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		if (playing && clip == null) return
 		if (playing && clip != null) {
 			val time = motionEditor.playhead.takeIf { it < clip.duration - 1e-4f } ?: 0f
-			configurePlayback("start", kotlinx.serialization.json.buildJsonObject { put("clip_id", clip.id); put("time", time) })
+			configurePlayback("start", kotlinx.serialization.json.buildJsonObject { put("clip_id", motionEditor.clipId ?: clip.id); put("time", time) })
 		} else configurePlayback("pause")
 	}
 	fun stopMotionEditorPlayback() = configurePlayback("stop")
@@ -5523,6 +5527,19 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
+	fun setSmoothMouseTracking(enabled: Boolean) {
+		val current = _state.value
+		if (!configurePlayback("tracking", buildJsonObject {
+			put("enabled", current.mouseTrackingEnabled); put("smooth", enabled)
+			if (pointerActive) put("pointer", kotlinx.serialization.json.JsonArray(listOf(
+				kotlinx.serialization.json.JsonPrimitive(pointerX), kotlinx.serialization.json.JsonPrimitive(-pointerY))))
+		})) {
+			if (workspaceBackend != null && currentWorkspaceState() != null) return
+			updateState { it.copy(smoothMouseTracking = enabled) }
+		}
+		markWorkspaceChanged()
+	}
+
 	fun updatePointer(screenNormX: Float, screenNormY: Float, owner: String? = null) {
         if (owner != null) canvasPointers[owner] = screenNormX.coerceIn(-1f, 1f) to screenNormY.coerceIn(-1f, 1f)
         pointerOwner = owner
@@ -6029,7 +6046,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** Publish the frame and timeline poses to both the StateFlow readers and the per-key Compose snapshot. */
 	private fun emitLivePose() {
 		val frame = liveFramePose; val motion = motionFramePose
-		val next = if (motion.isEmpty()) frame else if (frame.isEmpty()) motion else frame + motion
+		val next = if (motion.isEmpty()) frame else if (frame.isEmpty()) motion else motion + frame
 		if (next == _livePose.value) return
 		_livePose.value = next
 		if (next.isEmpty()) {
@@ -6204,15 +6221,13 @@ class PSD2LiveViewModel : AutoCloseable {
 			return
 		}
 		val panel = current.previewPanelState()
-		val pointer = if (tracking) canvasPointers[canvasRenderKey(panel.previewControlCanvas().id, CanvasMode.PREVIEW)] else null
-		val posed = if (motionEditor.clipId != null && processFrameValues.isNotEmpty()) processFrameValues else panel.parameterValues
-		val pose = io.github.psd2live.core.pointerPreviewPose(parameterScrubPose(current, posed),
-			pointer?.first ?: 0f, -(pointer?.second ?: 0f), model.rig.puppet.parameters, pointer != null, panel.lockedParameters)
+		val posed = if ((tracking || motionEditor.clipId != null) && processFrameValues.isNotEmpty()) processFrameValues else panel.parameterValues
+		val pose = parameterScrubPose(current, posed)
 		val out = stepSoftwarePhysics(false, current, model, pose, dt)
 		pausedPhysics = out
 		if (current.sdkStatus != "ready") {
 			val shown = io.github.psd2live.core.boundedPreviewPose(pose + out, model.rig.puppet.parameters)
-			setLivePose((if (pointer != null) pose.filterKeys { it in POINTER_POSE_PARAMETERS } else emptyMap()) + out)
+			setLivePose((if (tracking && pointerActive) pose.filterKeys { it in POINTER_POSE_PARAMETERS } else emptyMap()) + out)
 			updateState { latest -> if (!latest.previewLive || latest.previewParameterValues == shown) latest else latest.copy(previewParameterValues = shown) }
 		}
 	}
