@@ -10,6 +10,7 @@ import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.WeightPaint
 import io.github.psd2live.ui.WeightPaintMode
+import io.github.psd2live.ui.rotateAbout
 import io.github.psd2live.ui.views.CanvasModeChoice
 import io.github.psd2live.ui.views.chooseCanvasMode
 import kotlinx.coroutines.delay
@@ -148,6 +149,77 @@ class CanvasModeMenuTest {
             LayerRaster(8, 8, ByteArray(8 * 8 * 4) { -1 }), null, null, true)
         return PSD2LivePipeline().buildPreview(WorkspaceSourceArt(8, 8, listOf(layer), emptyList()),
             PipelineConfig(meshOnly = true, atlasSize = 256))
+    }
+
+    @Test fun selectionRejectsEmptyPartsOfMeshBounds() {
+        val original = preview()
+        val drawable = original.rig.puppet.drawables.first()
+        val triangle = org.umamo.runtime.model.DrawableMesh(
+            floatArrayOf(0f, 0f, 8f, 0f, 0f, -8f),
+            floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f), intArrayOf(0, 1, 2))
+        val model = original.copy(rig = original.rig.copy(puppet = original.rig.puppet.copy(
+            drawables = listOf(drawable.copy(mesh = triangle)))))
+        val geometry = org.umamo.render.eval.DeformedGeometry(
+            mapOf(drawable.id to triangle.positions), mapOf(drawable.id to drawable.drawOrder),
+            mapOf(drawable.id to 1f))
+        val bounds = io.github.psd2live.core.RigCanvasSupport.boundsByDrawable(geometry)
+        val layer = model.rig.layerIdByDrawableId.getValue(drawable.id.raw)
+        assertEquals(listOf(layer), io.github.psd2live.core.RigCanvasSupport.hitLayers(model, bounds, 1f, 1f, geometry = geometry))
+        assertTrue(io.github.psd2live.core.RigCanvasSupport.hitLayers(model, bounds, 7f, 7f, geometry = geometry).isEmpty())
+        assertTrue(io.github.psd2live.core.RigCanvasSupport.hitLayers(model, bounds, 1f, 1f,
+            visibleLayerIds = emptySet(), geometry = geometry).isEmpty())
+    }
+
+    @Test fun transformToolMovesWholeLayerInSelectionMode() = runBlocking<Unit> {
+        workspace { vm, model ->
+            val editor = vm.canvasEditorFor(vm.state.value.activeCanvas.id)
+            editor.selectLayer(model.rig.layerIdByDrawableId.values.first())
+            val viewport = io.github.psd2live.core.CanvasViewport(20.0, 0.0, 0.0, 8f, 8f)
+            assertFalse(editor.drawsTransformBox)
+            assertNull(editor.transformFrame(viewport))
+            editor.activateTool(CanvasTool.TRANSFORM)
+            assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
+            assertTrue(editor.drawsTransformBox)
+            val frame = assertNotNull(editor.transformFrame(viewport))
+            val start = Offset(frame.bounds.centerX, frame.bounds.centerY)
+            val before = assertNotNull(editor.target()).geometry.points.copyOf()
+            assertTrue(editor.press(start, viewport, shift = false, alt = false))
+            editor.move(start + Offset(20f, 0f), viewport, shift = false)
+            assertNotNull(editor.preview)
+            val after = assertNotNull(editor.target()).geometry.points
+            for (i in before.indices step 2) {
+                assertEquals(before[i] + 1f, after[i], 0.001f)
+                assertEquals(before[i + 1], after[i + 1], 0.001f)
+            }
+            editor.cancel()
+            val scaleFrame = assertNotNull(editor.transformFrame(viewport))
+            val scaleTarget = assertNotNull(editor.target())
+            val scalePoints = editor.screen(scaleTarget.geometry.points, scaleTarget, viewport)
+            val center = Offset(scaleFrame.bounds.centerX, scaleFrame.bounds.centerY)
+            val corner = Offset(scaleFrame.bounds.maxX, scaleFrame.bounds.maxY)
+            editor.press(corner, viewport, shift = false, alt = true)
+            editor.move(corner + Offset(scaleFrame.bounds.width / 4f, scaleFrame.bounds.height / 4f),
+                viewport, shift = false, alt = true)
+            val scaledTarget = assertNotNull(editor.target())
+            val scaled = editor.screen(scaledTarget.geometry.points, scaledTarget, viewport)
+            scalePoints.forEachIndexed { i, point ->
+                assertTrue((scaled[i] - (center + (point - center) * 1.5f)).getDistance() < 0.01f)
+            }
+            editor.cancel()
+            val rotationFrame = assertNotNull(editor.transformFrame(viewport))
+            val rotationStart = rotationFrame.bounds.rotateHandlePos
+            editor.press(rotationStart, viewport, shift = false, alt = false)
+            editor.move(rotationStart.rotateAbout(rotationFrame.pivot, 90f), viewport, shift = false)
+            val rotatedTarget = assertNotNull(editor.target())
+            val rotated = editor.screen(rotatedTarget.geometry.points, rotatedTarget, viewport)
+            scalePoints.forEachIndexed { i, point ->
+                assertTrue((rotated[i] - point.rotateAbout(rotationFrame.pivot, 90f)).getDistance() < 0.01f)
+            }
+            editor.cancel()
+            editor.activateTool(CanvasTool.SELECT)
+            assertNull(editor.transformFrame(viewport))
+            assertNull(editor.preview)
+        }
     }
 
     @Test fun modeMenuListsEveryModeWithPreviewLast() {

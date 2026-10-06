@@ -1,5 +1,7 @@
 package io.github.psd2live.ui.views
 
+import io.github.psd2live.ui.SELECTION_TOOLS
+
 import io.github.psd2live.core.RigInformationOverlay
 
 import io.github.psd2live.ui.PanShift
@@ -183,7 +185,8 @@ fun CanvasViewportComposable(
 	val showDeformPaths = viewOptions.showDeformPaths
 	// Preview is view-only: selection, hover focus and selection-gated overlays stay on Edit.
 	val allowSelectionChrome = mode == CanvasMode.EDIT
-	val showSelectionBounds = allowSelectionChrome && viewOptions.showSelectionBounds
+	val showSelectionBounds = allowSelectionChrome && viewOptions.showSelectionBounds &&
+        !(editor.objectMode && editor.tool in SELECTION_TOOLS)
 	val dimUnselected = allowSelectionChrome && viewOptions.dimUnselected
 	val filterSelectedOnly = allowSelectionChrome && viewOptions.filterSelectedOnly
 	var zoom by remember { mutableStateOf(cameraZoom.toDouble()) }
@@ -681,6 +684,7 @@ fun CanvasViewportComposable(
 					ShortcutAction.SELECT_ALL -> { editor.selectAll(); true }
 					ShortcutAction.INVERT_SELECTION -> { editor.selectAll(true); true }
 					ShortcutAction.TOOL_SELECT -> { editor.activateTool(CanvasTool.SELECT); true }
+					ShortcutAction.TOOL_TRANSFORM -> { editor.activateTool(CanvasTool.TRANSFORM); true }
 					ShortcutAction.TOOL_LASSO_SELECT -> { editor.activateTool(CanvasTool.LASSO_SELECT); true }
 					ShortcutAction.TOOL_BRUSH_SELECT -> { editor.activateTool(CanvasTool.BRUSH_SELECT); true }
 					ShortcutAction.TOOL_BRUSH -> { editor.activateTool(CanvasTool.BRUSH); true }

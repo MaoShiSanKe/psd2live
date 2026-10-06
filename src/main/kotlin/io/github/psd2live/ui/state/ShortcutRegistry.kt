@@ -84,6 +84,7 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
 
     // Canvas tools
     TOOL_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.select"),
+    TOOL_TRANSFORM(ShortcutCategory.CANVAS_TOOLS, "editor.tool.transform"),
     TOOL_LASSO_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.lasso_select"),
     TOOL_BRUSH_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.brush_select"),
     TOOL_BRUSH(ShortcutCategory.CANVAS_TOOLS, "editor.tool.brush"),
@@ -217,7 +218,8 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.MODE_PAINT to keys("Alt+6", "Alt+NumPad6"),
     ShortcutAction.MODE_PREVIEW to keys("Alt+7", "Alt+NumPad7"),
 
-    ShortcutAction.TOOL_SELECT to keys("V", "T"),
+    ShortcutAction.TOOL_SELECT to keys("V"),
+    ShortcutAction.TOOL_TRANSFORM to keys("T"),
     ShortcutAction.TOOL_LASSO_SELECT to keys("L"),
     ShortcutAction.TOOL_BRUSH_SELECT to keys("W"),
     ShortcutAction.TOOL_BRUSH to keys("B"),

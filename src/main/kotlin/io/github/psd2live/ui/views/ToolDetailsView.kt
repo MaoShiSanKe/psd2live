@@ -210,7 +210,7 @@ internal fun ToolDetailsView(
 
             // 4. Tool-Specific Parameters
             when (editor.tool) {
-                CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT -> {
+                CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (editor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.EDIT && target?.kind == "mesh") {
                             Text(
@@ -281,7 +281,7 @@ internal fun ToolDetailsView(
                             )
                         }
 
-                        if (editor.tool == CanvasTool.SELECT && editor.hasTransformSelection) {
+                        if (editor.tool == CanvasTool.TRANSFORM && editor.hasTransformSelection) {
                             Divider(color = colors.divider, thickness = 0.8.dp)
                             PreciseTransformColumn(editor)
                         }

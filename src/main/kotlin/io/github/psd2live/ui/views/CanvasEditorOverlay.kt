@@ -606,6 +606,29 @@ internal fun BoxScope.CanvasEditorOverlay(
                     return@forEach
                 }
                 val points = editor.screen(item.geometry.points, item, viewport)
+                if (item.kind == "mesh") {
+                    val awt = ComponentPalette.strong(layerId)
+                    val color = Color(awt.red, awt.green, awt.blue)
+                    val area = Path()
+                    val edges = mutableMapOf<Pair<Int, Int>, Int>()
+                    for (offset in item.indices.indices step 3) {
+                        val indices = (0..2).map { item.indices[offset + it] }
+                        if (indices.any { it !in points.indices }) continue
+                        area.moveTo(points[indices[0]].x, points[indices[0]].y)
+                        for (index in indices.drop(1)) area.lineTo(points[index].x, points[index].y)
+                        area.close()
+                        for (i in 0..2) {
+                            val a = indices[i]; val b = indices[(i + 1) % 3]
+                            val edge = minOf(a, b) to maxOf(a, b)
+                            edges[edge] = (edges[edge] ?: 0) + 1
+                        }
+                    }
+                    drawPath(area, color.copy(alpha = 0.08f))
+                    edges.filterValues { it == 1 }.keys.forEach { (a, b) ->
+                        drawLine(color, points[a], points[b], strokeWidth = 1.6f)
+                    }
+                    return@forEach
+                }
                 if (points.isNotEmpty()) {
                     val left = points.minOf { it.x }; val top = points.minOf { it.y }
                     val origin = Offset(left, top)

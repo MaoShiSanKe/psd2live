@@ -98,6 +98,7 @@ internal fun modeLabel(mode: EditHierarchyMode): String = tr(
 /** Canvas tools, each pointing at the shortcut action that activates it. */
 internal enum class CanvasTool(val action: ShortcutAction) {
     SELECT(ShortcutAction.TOOL_SELECT),
+    TRANSFORM(ShortcutAction.TOOL_TRANSFORM),
     LASSO_SELECT(ShortcutAction.TOOL_LASSO_SELECT),
     BRUSH_SELECT(ShortcutAction.TOOL_BRUSH_SELECT),
     BRUSH(ShortcutAction.TOOL_BRUSH),
@@ -297,7 +298,7 @@ internal val VERTEX_TOOLS = setOf(
  * The per-mode palettes below are subsets of this list.
  */
 internal val TOOLBAR_TOOL_ORDER = listOf(
-    CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT,
+    CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT,
     CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE,
     CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT,
     CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE,
@@ -320,14 +321,14 @@ internal val TOOLBAR_DIVIDERS = listOf(CanvasTool.BRUSH_SELECT, CanvasTool.SKELE
  */
 internal fun toolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = when (mode) {
     EditHierarchyMode.SELECT -> listOf(
-        listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT),
+        listOf(CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT),
     )
     EditHierarchyMode.DEFORM -> listOf(
-        listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT),
+        listOf(CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT),
         listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE),
     )
     EditHierarchyMode.EDIT -> listOf(
-        listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT),
+        listOf(CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT),
         listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE),
         listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE),
     )
@@ -1024,7 +1025,7 @@ internal class CanvasEditor(
                 source.deformPaths.any { it.drawableId.raw == target.id && it.editLevel == pathLevel } ->
                 "editor.pathBindHint"
             // drawsTransformBox reads model via target(); only evaluate once a puppet exists.
-            tool == CanvasTool.SELECT && source != null && drawsTransformBox -> "editor.transformHint"
+            tool == CanvasTool.TRANSFORM -> "editor.transformHint"
             tool == CanvasTool.CREATE_WARP -> if (placement != null) "editor.placementDragHint" else "editor.createWarpHint"
             tool == CanvasTool.CREATE_ROTATION -> if (placement != null) "editor.placementRotationHint" else "editor.createRotationHint"
             placement?.kind == CreatePlacementKind.LAYER -> "editor.placementLayerHint"
@@ -1486,13 +1487,9 @@ internal class CanvasEditor(
     val pose get() = viewModel.canvasPose(state).mapKeys { it.key.raw }
 
 
-    /**
-     * Whether the active tool should draw a transform box at all. Object and paint modes are selection /
-     * pixel work only, so the box never appears there — and neither do its handles, which read the same frame.
-     */
+    /** Only the transform tool owns the box and its handles. */
     val drawsTransformBox get() =
-        hierarchyMode in setOf(EditHierarchyMode.DEFORM, EditHierarchyMode.EDIT) &&
-            tool == CanvasTool.SELECT && selectionHasExtent
+        tool == CanvasTool.TRANSFORM && (objectMode || selectionHasExtent)
 
     /**
      * Whether the selection spans enough to be scaled or turned, which is what both the transform box and
@@ -1505,6 +1502,7 @@ internal class CanvasEditor(
      */
     val selectionHasExtent: Boolean
         get() {
+            if (objectMode) return transformTargets(model).isNotEmpty()
             if (hierarchyMode !in setOf(EditHierarchyMode.DEFORM, EditHierarchyMode.EDIT)) return false
             val t = target() ?: return false
             if (t.kind == "rotation") return true
@@ -1520,6 +1518,7 @@ internal class CanvasEditor(
      */
     val hasTransformSelection: Boolean
         get() {
+            if (objectMode) return transformTargets(model).isNotEmpty()
             if (hierarchyMode !in setOf(EditHierarchyMode.DEFORM, EditHierarchyMode.EDIT)) return false
             val t = target() ?: return false
             return t.kind == "rotation" || vertices.any { it in 0 until t.count }
@@ -3033,6 +3032,7 @@ internal class CanvasEditor(
      * Creation tools are handled separately and never force Edit.
      */
     private fun modeForTool(tool: CanvasTool): EditHierarchyMode = when {
+        tool == CanvasTool.TRANSFORM -> EditHierarchyMode.SELECT
         tool in SKELETON_TOOLS -> EditHierarchyMode.SKELETON
         tool in PAINT_TOOLS -> EditHierarchyMode.PAINT
         tool in WEIGHT_TOOLS -> EditHierarchyMode.SIMULATE
@@ -3207,10 +3207,7 @@ internal class CanvasEditor(
      * produced resolves. See endTransformBox.
      */
     fun transformFrame(viewport: CanvasViewport): TransformFrame? {
-        // Object mode is selection only, so it has no frame at all. Enforced here rather than at each
-        // caller: the box, its handles, the hover ring and the precise-transform pivot all read the
-        // frame, and one null is what keeps every one of them out of the mode.
-        if (hierarchyMode == EditHierarchyMode.SELECT) return null
+        if (tool != CanvasTool.TRANSFORM) return null
         val bounds = currentDragBounds
         if (bounds != null) return TransformFrame(bounds, framePivotAtPress, frameAngle)
         return selectionFrame(viewport)
@@ -3223,6 +3220,10 @@ internal class CanvasEditor(
      * what lets a box around three points of a cheek read as those three points.
      */
     private fun selectionFrame(viewport: CanvasViewport): TransformFrame? {
+        if (objectMode) {
+            val points = transformTargets(model).flatMap { screen(it.geometry.points, it, viewport) }
+            return frameOf(points, points.indices.toSet(), frameAngle)
+        }
         if (editsMeshes()) {
             // One box around the selected points of every edited mesh. A glued point is one point, so
             // it counts once: a lone glued point has no box, exactly like a lone vertex, instead of a
@@ -3250,7 +3251,8 @@ internal class CanvasEditor(
      * not the whole mesh. That fallback would move artwork nobody asked to move.
      */
     private fun gestureIndices(t: CanvasTarget): Set<Int> =
-        if (t.kind != "rotation") selection[t.id].orEmpty().filter { it in 0 until t.count }.toSet() else (0 until t.count).toSet()
+        if (objectMode || t.kind == "rotation") (0 until t.count).toSet()
+        else selection[t.id].orEmpty().filter { it in 0 until t.count }.toSet()
 
     private var cachedGeometrySource: PuppetModel? = null
     private var cachedGeometryPose = emptyMap<ParameterId, Float>()
@@ -3432,9 +3434,13 @@ internal class CanvasEditor(
             return
         }
 
-        // Object mode has no transform box, so no handle is ever live here. What the pointer is over is
-        // the pick itself, and resolving it through the same call the press makes is what guarantees the
-        // annotation names the thing a click would actually select — Ctrl included.
+        if (tool == CanvasTool.TRANSFORM) {
+            val frame = transformFrame(viewport)
+            hoveredHandle = frame?.let { transformHandleAt(pos, it) } ?: BoundingHandle.NONE
+            return
+        }
+
+        // Resolve object hover through the same mesh hit test as a press.
         if (hierarchyMode == EditHierarchyMode.SELECT) {
             if (tool == CanvasTool.SELECT) {
                 val bone = objectModeBoneHit(pos, viewport)
@@ -3543,7 +3549,7 @@ internal class CanvasEditor(
      */
     private fun updatePointHover(pos: Offset, viewport: CanvasViewport, t: CanvasTarget?) {
         if (editsMeshes()) {
-            val frame = selectionFrame(viewport)
+            val frame = transformFrame(viewport)
             hoveredHandle = frame?.let { transformRingAt(pos, it) } ?: BoundingHandle.NONE
             val hit = if (hoveredHandle != BoundingHandle.NONE) null else pickEditVertex(pos, viewport)
             hoveredMeshVertex = hit
@@ -3553,7 +3559,7 @@ internal class CanvasEditor(
         hoveredMeshVertex = null
         val points = if (t != null) screen(t.geometry.points, t, viewport) else emptyList()
         // A rotation deformer never gets a box, so its points are screened for the vertex hover alone.
-        val frame = if (t == null || t.kind !in POINT_BOX_KINDS) null else frameOf(points, vertices, frameAngle)
+        val frame = transformFrame(viewport)
         hoveredHandle = frame?.let { transformRingAt(pos, it) } ?: BoundingHandle.NONE
         hoveredVertex = if (hoveredHandle != BoundingHandle.NONE || points.isEmpty()) null
         else points.indices.minByOrNull { (points[it] - pos).getDistance() }?.takeIf { (points[it] - pos).getDistance() <= 10f }
@@ -4927,9 +4933,13 @@ internal class CanvasEditor(
     /**
      * What a transform gesture edits: in Edit, every mesh with selected points - glue partners included,
      * so a glued point moves on both sides - and otherwise the one mesh or deformer the point tools are
-     * working on. Object mode never gets here: it has no box to grab and no body to drag.
+     * working on. Object mode transforms every point of the selected layers or deformer.
      */
     private fun transformTargets(source: PuppetModel): List<CanvasTarget> {
+        if (objectMode) {
+            if (state.selectedDeformerId != null) return listOfNotNull(target(source))
+            return objects.mapNotNull { target(source, it, null) }.ifEmpty { listOfNotNull(target(source)) }
+        }
         if (!editsMeshGeometry()) return listOfNotNull(target(source))
         // A gesture starts here, so this is where a selection made in edge or face mode - which only
         // names the primary's vertices - is completed with the glued partners it moves.
@@ -5207,9 +5217,21 @@ internal class CanvasEditor(
             return true
         }
 
-        // 5. Object mode picks and nothing else. The transform box and its handles belong to the point
-        //    tools, so a press here selects — Ctrl walks the hierarchy — or starts a marquee. It never
-        //    begins a transform drag, which is what keeps the mode read-only.
+        if (tool == CanvasTool.TRANSFORM) {
+            val frame = transformFrame(viewport) ?: return true
+            val handle = transformHandleAt(pos, frame)
+            if (handle == BoundingHandle.NONE) return true
+            val source = state.previewModel?.rig?.puppet ?: return true
+            val targets = transformTargets(source)
+            if (!objectMode && hierarchyMode == EditHierarchyMode.DEFORM &&
+                viewModel.snapTargetsToNearestKeys(targets.map { it.kind to it.id }) {
+                    press(pos, viewport, shift, alt, ctrl)
+                }) return true
+            beginTransformDrag(source, targets, handle, frame, viewport)
+            return true
+        }
+
+        // Select picks objects or starts a marquee; only Transform drags the object box.
         if (hierarchyMode == EditHierarchyMode.SELECT && tool == CanvasTool.SELECT) {
             // A bone sits over the art it moves, so it is tried first: clicking one picks the skeleton.
             objectModeBoneHit(pos, viewport)?.let { hit ->
@@ -5231,22 +5253,6 @@ internal class CanvasEditor(
             marquee = listOf(pos, pos)
             dragging = true
             return true
-        }
-
-        // 6. Point Transform handles (SELECT tool in DEFORM/EDIT mode)
-        if (tool == CanvasTool.SELECT) {
-            val frame = transformFrame(viewport)
-            val handle = frame?.let { transformRingAt(pos, it) } ?: BoundingHandle.NONE
-            if (frame != null && handle != BoundingHandle.NONE) {
-                val source = state.previewModel?.rig?.puppet ?: return true
-                val targets = transformTargets(source)
-                if (hierarchyMode == EditHierarchyMode.DEFORM) {
-                    val refs = targets.map { it.kind to it.id }
-                    if (viewModel.snapTargetsToNearestKeys(refs) { press(pos, viewport, shift, alt, ctrl) }) return true
-                }
-                beginTransformDrag(source, targets, handle, frame, viewport)
-                return true
-            }
         }
 
         // Path handles: EDIT rebinds, DEFORM deforms — always before mesh vertex picks.
@@ -5309,18 +5315,6 @@ internal class CanvasEditor(
             }
         }
 
-        if (tool == CanvasTool.SELECT) {
-            val boxFrame = transformFrame(viewport)
-            if (boxFrame != null &&
-                (boxFrame.bounds.contains(pos.intoTransformFrame(boxFrame.pivot, boxFrame.angleDeg)) || (picked.isNotEmpty() && picked.all { it in vertices })) &&
-                !shift && !alt
-            ) {
-                val source = state.previewModel?.rig?.puppet ?: return true
-                beginTransformDrag(source, transformTargets(source), BoundingHandle.BODY, boxFrame, viewport)
-                return true
-            }
-        }
-
         if (picked.isNotEmpty()) {
             if (pickedEdge != null) {
                 selectedEdges = when { alt -> selectedEdges - pickedEdge; shift -> selectedEdges + pickedEdge; else -> setOf(pickedEdge) }
@@ -5366,11 +5360,8 @@ internal class CanvasEditor(
         val picked = pickEditVertex(pos, viewport)
         val pickedSelected = picked != null &&
             weldGroups().members(picked).all { it.index in selection[it.mesh].orEmpty() }
-        val frame = transformFrame(viewport)
-        if (frame != null && !shift && !alt &&
-            (frame.bounds.contains(pos.intoTransformFrame(frame.pivot, frame.angleDeg)) || pickedSelected)
-        ) {
-            beginTransformDrag(source, transformTargets(source), BoundingHandle.BODY, frame, viewport)
+        if (pickedSelected && !shift && !alt) {
+            beginTransformDrag(source, transformTargets(source), BoundingHandle.BODY, selectionFrame(viewport), viewport)
             return true
         }
         if (picked == null) {

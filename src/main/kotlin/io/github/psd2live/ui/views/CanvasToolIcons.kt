@@ -160,6 +160,11 @@ internal fun DrawScope.drawToolIcon(
     val pen = IconPen(this, color)
     when (tool) {
         CanvasTool.SELECT -> pen.selectArrow()
+        CanvasTool.TRANSFORM -> {
+            pen.box(3f, 3f, 12f, 12f, r = 0f)
+            for (x in listOf(3f, 15f)) for (y in listOf(3f, 15f))
+                pen.fillBox(x - 1.5f, y - 1.5f, 3f, 3f, r = 0f)
+        }
         CanvasTool.LASSO_SELECT -> pen.lasso()
         CanvasTool.BRUSH_SELECT -> pen.brushSelect()
         CanvasTool.BRUSH -> pen.deformBrush(brushShape ?: BrushShape.CIRCLE)

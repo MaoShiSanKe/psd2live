@@ -396,7 +396,7 @@ internal object RigCanvasSupport {
 				if (geometry != null) {
 					val mesh = drawable.mesh
 					val positions = geometry.worldPositions[drawable.id]
-					if (mesh != null && positions != null && !isPointInMesh(canvasX, canvasY, positions, mesh.indices)) {
+					if (mesh == null || positions == null || !isPointInMesh(canvasX, canvasY, positions, mesh.indices)) {
 						return@mapNotNull null
 					}
 				}
@@ -408,9 +408,6 @@ internal object RigCanvasSupport {
 			.distinct()
 			.toList()
 
-		if (candidates.isEmpty() && geometry != null) {
-			return hitLayers(model, drawableBounds, canvasX, canvasY, visibleLayerIds, geometry = null, drawOrderOverrides = drawOrderOverrides)
-		}
 		return candidates
 	}
 
@@ -469,6 +466,7 @@ internal object RigCanvasSupport {
 		x1: Float, y1: Float,
 		x2: Float, y2: Float,
 	): Boolean {
+		if (kotlin.math.abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)) < 1e-8f) return false
 		val cross0 = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)
 		val cross1 = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 		val cross2 = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)
