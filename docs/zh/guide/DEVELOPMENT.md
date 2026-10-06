@@ -57,6 +57,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 ## 测试与打包
 
 ```bash
+./gradlew quickTest                              # 日常回归：跳过标记 @Tag("slow") 的测试类
 ./gradlew test                                   # 全部测试（CI 在 Ubuntu 与 Windows 上运行）
 ./gradlew test --tests "io.github.psd2live.core.SwingDeformerTest"   # 单个测试类
 ./gradlew createDistributable                    # 带运行时的应用目录

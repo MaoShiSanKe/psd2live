@@ -1,5 +1,6 @@
 package io.github.psd2live.agent
 
+import org.junit.jupiter.api.Tag
 import io.github.psd2live.ui.state.DesktopWorkspace
 
 import io.github.psd2live.project.MutationAuthor
@@ -17,6 +18,7 @@ import java.nio.file.Files
 import javax.imageio.ImageIO
 import kotlin.test.*
 
+@Tag("slow")
 class LayerClassificationIntegrationTest {
     @TempDir lateinit var temp: Path
 

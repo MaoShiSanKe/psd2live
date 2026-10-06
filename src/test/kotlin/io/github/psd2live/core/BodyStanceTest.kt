@@ -1,5 +1,6 @@
 package io.github.psd2live.core
 
+import org.junit.jupiter.api.Tag
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.DeformerId
@@ -19,6 +20,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@Tag("slow")
 class BodyStanceTest {
 	private val character = Bounds(0f, 0f, 400f, 1000f)
 

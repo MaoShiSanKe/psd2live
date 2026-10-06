@@ -101,12 +101,13 @@ class WorkspaceMotionObservationIntegrationTest {
         val bundle = observationMotion(preview.runtimeBundle, business().getValue("frames").jsonArray,
             preview.rig.puppet.parameters.associate { it.id.raw to it.default })
         val parameters = preview.rig.puppet.parameters.map { it.id }
-        fun directories() = Files.list(Path.of(System.getProperty("java.io.tmpdir"))).use { paths ->
+        val staging = Files.createDirectories(temporary.resolve("motion-staging"))
+        fun directories() = Files.list(staging).use { paths ->
             paths.filter { it.fileName.toString().startsWith("psd2live-motion-sample-") }.toList().toSet()
         }
         val before = directories(); val entered = CompletableDeferred<Unit>(); val release = CountDownLatch(1)
         val frames = AtomicInteger(); val queuedCalls = AtomicInteger()
-        CubismSdkPreviewSession({}, {}).use { session ->
+        CubismSdkPreviewSession({}, {}, staging).use { session ->
             val sampling = async(Dispatchers.Default) {
                 session.sampleMotionAwait(bundle, parameters, "AgentObservation", 25, 60, { fraction ->
                     if (fraction > 0) frames.incrementAndGet()

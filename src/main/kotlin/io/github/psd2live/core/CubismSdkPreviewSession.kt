@@ -60,6 +60,8 @@ internal const val CUBISM_NATIVE_POINTER_Y = 0f
 class CubismSdkPreviewSession(
 	private val onFrame: (CubismSdkFrame) -> Unit,
 	private val onStatus: (String?) -> Unit,
+	/** Where observation sampling stages its temporary model files; the system temp directory by default. */
+	private val stagingRoot: java.nio.file.Path? = null,
 ) : AutoCloseable {
 	private interface Api : Library {
 		fun Live2D_InitOffscreen(): Int
@@ -240,7 +242,8 @@ class CubismSdkPreviewSession(
                     api = it
                 }
                 checkpoint()
-                val directory = Files.createTempDirectory("psd2live-motion-sample-")
+                val directory = stagingRoot?.let { Files.createTempDirectory(it, "psd2live-motion-sample-") }
+                    ?: Files.createTempDirectory("psd2live-motion-sample-")
                 val samples = ArrayList<Map<ParameterId, Float>>(frames)
                 try {
                     val manifest = materialize(bundle, directory, cleanupOnExit = false)

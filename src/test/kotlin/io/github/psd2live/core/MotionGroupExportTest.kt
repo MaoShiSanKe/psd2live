@@ -1,10 +1,12 @@
 package io.github.psd2live.core
 
+import org.junit.jupiter.api.Tag
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@Tag("slow")
 class MotionGroupExportTest {
 	@Test fun modelPresetGroupsAndSkeletonSwitchesDecideTheExportedMotions() {
 		val pipeline = PSD2LivePipeline()

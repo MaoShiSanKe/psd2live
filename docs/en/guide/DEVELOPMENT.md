@@ -57,6 +57,7 @@ Notes:
 ## Tests and packaging
 
 ```bash
+./gradlew quickTest                              # everyday regression run: skips test classes tagged @Tag("slow")
 ./gradlew test                                   # all tests (CI runs them on Ubuntu and Windows)
 ./gradlew test --tests "io.github.psd2live.core.SwingDeformerTest"   # one test class
 ./gradlew createDistributable                    # application directory with runtime

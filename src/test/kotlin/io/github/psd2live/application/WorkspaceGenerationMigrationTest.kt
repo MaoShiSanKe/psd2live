@@ -1,5 +1,6 @@
 package io.github.psd2live.application
 
+import org.junit.jupiter.api.Tag
 import io.github.psd2live.core.*
 import io.github.psd2live.project.*
 import kotlinx.coroutines.*
@@ -20,6 +21,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.*
 
+@Tag("slow")
 class WorkspaceGenerationMigrationTest {
     @TempDir lateinit var temporary: Path
     private val builder = WorkspacePreviewBuilder()

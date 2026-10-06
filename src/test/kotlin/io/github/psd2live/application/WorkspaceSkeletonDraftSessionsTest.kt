@@ -1,11 +1,13 @@
 package io.github.psd2live.application
 
+import org.junit.jupiter.api.Tag
 import io.github.psd2live.core.*
 import io.github.psd2live.project.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import kotlin.test.*
 
+@Tag("slow")
 class WorkspaceSkeletonDraftSessionsTest {
     private val builder = WorkspacePreviewBuilder()
     private suspend fun fixture(): WorkspaceRuntime<RigPreviewModel> =

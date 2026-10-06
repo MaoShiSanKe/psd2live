@@ -139,16 +139,38 @@ tasks.named("compileTestKotlin").configure {
 	enabled = true
 }
 
-tasks.test {
-	enabled = true
+// Test classes run in parallel JVMs. Each fork already uses every core for coroutine work, so a quarter of
+// the cores (at most 8 forks of 2 GiB) is enough; -Ppsd2live.testForks=N overrides it.
+val testForks = providers.gradleProperty("psd2live.testForks").map(String::toInt)
+	.orElse(providers.provider { (Runtime.getRuntime().availableProcessors() / 4).coerceIn(1, 8) })
+
+tasks.withType<Test>().configureEach {
 	useJUnitPlatform()
 	maxHeapSize = "2g"
+	maxParallelForks = testForks.get()
+	// App settings use Java Preferences, which the platform shares between processes (and with the
+	// user's real settings); every test JVM gets its own in-memory store instead.
+	systemProperty("java.util.prefs.PreferencesFactory", "io.github.psd2live.testing.MemoryPreferencesFactory")
 	// CI keeps no test reports, so a failure's message and stack must reach the log.
 	testLogging {
 		events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
 		exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
 		showStackTraces = true
 	}
+}
+
+tasks.test {
+	enabled = true
+}
+
+// Everyday regression run: the full suite minus classes tagged "slow" (whole-pipeline, desktop and
+// visual integration tests). CI and pre-release checks keep running `test`.
+tasks.register<Test>("quickTest") {
+	group = "verification"
+	description = "Runs the test suite without the tests tagged slow."
+	testClassesDirs = sourceSets.test.get().output.classesDirs
+	classpath = sourceSets.test.get().runtimeClasspath
+	useJUnitPlatform { excludeTags("slow") }
 }
 
 

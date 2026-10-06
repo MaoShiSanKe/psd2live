@@ -1,5 +1,6 @@
 package io.github.psd2live.core.sim
 
+import org.junit.jupiter.api.Tag
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.VertexGroupJournal
@@ -19,6 +20,7 @@ import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
+@Tag("slow")
 class SimPipelineIntegrationTest {
     private val psd = Path.of("examples/tml/psd-input/tml.psd")
 

@@ -1,5 +1,6 @@
 package io.github.psd2live.core
 
+import org.junit.jupiter.api.Tag
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -26,6 +27,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@Tag("slow")
 class SkeletonRigTest {
 	@Test fun foldCoverageDoesNotDependOnMeshInsertionOrder() {
 		val points = floatArrayOf(-10f, 70f, 10f, 70f, 0f, 85f, -10f, 115f, 10f, 115f, 0f, 130f)
