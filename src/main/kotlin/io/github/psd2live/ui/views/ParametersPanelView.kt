@@ -1755,7 +1755,7 @@ private fun ParameterRowItem(
 		ParameterTrack(
 			value = currentValue.coerceIn(param.min, param.max),
 			enabled = !controlled,
-			onValueChange = { viewModel.setParameterValue(param.id, it) },
+			onValueChange = { viewModel.setParameterValueFromPanel(param.id, it) },
 			valueRange = param.min..param.max,
 			keyMarks = sliderMarks,
             highlightedKeys = selectedKeys,
@@ -1765,7 +1765,7 @@ private fun ParameterRowItem(
 			onGestureStart = viewModel::beginParameterScrub,
 			onGestureEnd = viewModel::endParameterScrub,
 		)
-		ParameterValueInput(param, currentValue, { viewModel.setParameterValue(param.id, it) })
+		ParameterValueInput(param, currentValue, { viewModel.setParameterValueFromPanel(param.id, it) })
 		Spacer(Modifier.width(ParamRowInputSpacer))
 		CompactIconButton(
 			onClick = { viewModel.resetParameter(param.id) },
@@ -1855,7 +1855,7 @@ private fun LinkedParameterPad(
 						if (!xLocked && !xControlled) put(horizontal.id, x)
 						if (!yLocked && !yControlled) put(vertical.id, y)
 					}
-					viewModel.setParameterValues(values)
+					viewModel.setParameterValuesFromPanel(values)
 				},
 				onHoverKey = onKeyHover,
 				onGestureStart = viewModel::beginParameterScrub,
@@ -1907,8 +1907,8 @@ private fun LinkedParameterPad(
 			verticalArrangement = Arrangement.spacedBy(8.dp),
 			horizontalAlignment = Alignment.End,
 		) {
-			ParameterValueInput(horizontal, xValue) { viewModel.setParameterValue(horizontal.id, it) }
-			ParameterValueInput(vertical, yValue) { viewModel.setParameterValue(vertical.id, it) }
+			ParameterValueInput(horizontal, xValue) { viewModel.setParameterValueFromPanel(horizontal.id, it) }
+			ParameterValueInput(vertical, yValue) { viewModel.setParameterValueFromPanel(vertical.id, it) }
 		}
 		Spacer(Modifier.width(ParamRowInputSpacer))
 		Column(

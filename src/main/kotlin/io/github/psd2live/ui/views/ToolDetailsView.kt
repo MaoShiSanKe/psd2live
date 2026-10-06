@@ -173,10 +173,8 @@ internal fun ToolDetailsView(
                 }
             }
 
-            // 3. Target Pose / Parameter Picker. Warp and rotation edits still address a pose; an ArtMesh
-            //    edit does not, so for a mesh this control would do nothing and is not offered.
-            val meshHasBlend = target?.kind == "mesh" && editor.model.parameters.any { it.kind == org.umamo.runtime.model.ParameterKind.BLEND_SHAPE }
-            if (target != null && editor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.DEFORM && (target.kind != "mesh" || meshHasBlend)) {
+            // Every geometry target can bind to the selected parameter while deforming.
+            if (target != null && editor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.DEFORM) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = tr("editor.targetPose"),

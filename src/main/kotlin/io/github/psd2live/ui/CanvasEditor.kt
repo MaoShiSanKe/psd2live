@@ -1302,7 +1302,14 @@ internal class CanvasEditor(
     var error by mutableStateOf<String?>(null)
     var space by mutableStateOf(false)
     var axis by mutableStateOf<String?>(null)
-    var parameter by mutableStateOf<String?>(null)
+    private var deformationParameters by mutableStateOf<List<String>>(emptyList())
+    var parameter: String?
+        get() = deformationParameters.firstOrNull()
+        set(value) { deformationParameters = listOfNotNull(value) }
+
+    internal fun selectDeformationParameters(ids: Collection<ParameterId>) {
+        deformationParameters = ids.map { it.raw }.distinct()
+    }
     private var activeElementMode by mutableStateOf(0)
     var elementMode: Int
         get() = activeElementMode
@@ -1736,15 +1743,7 @@ internal class CanvasEditor(
         val nextEdges = selectedEdges.filterTo(LinkedHashSet()) { it in live }
         if (nextEdges.size != selectedEdges.size) selectedEdges = nextEdges
     }
-    private fun coordinate(t: CanvasTarget) = buildMap {
-        t.geometry.axes.forEach { a -> put(a.parameterId.raw, pose[a.parameterId.raw] ?: model.parameters.firstOrNull { it.id == a.parameterId }?.default ?: 0f) }
-        parameter?.let { p -> model.parameters.firstOrNull { it.id.raw == p }?.let { put(p, pose[p] ?: it.default) } }
-        val blends = model.parameters.filter { it.kind == org.umamo.runtime.model.ParameterKind.BLEND_SHAPE }
-        val named = parameter?.let { id -> blends.find { it.id.raw == id } }
-        val active = blends.filter { kotlin.math.abs((pose[it.id.raw] ?: it.default)) >= org.umamo.runtime.eval.EPS_KEY }
-        val chosen = named?.takeIf { kotlin.math.abs((pose[it.id.raw] ?: it.default)) >= org.umamo.runtime.eval.EPS_KEY } ?: active.singleOrNull()
-        if (chosen != null) put(chosen.id.raw, pose[chosen.id.raw] ?: chosen.default)
-    }
+    private fun coordinate(t: CanvasTarget) = canvasDeformationCoordinate(model, t.geometry.axes, pose, deformationParameters)
 
     /** Only structural mesh editing moves UVs; deformation writes the current pose. */
     private fun geometryCommand(t: CanvasTarget, points: FloatArray, ctrl: Boolean = false) =
@@ -4334,19 +4333,13 @@ internal class CanvasEditor(
     /** Freeze canvas pose, destination coordinates and vertex selection independently of the viewport. */
     private fun deformStrokeRequest(source: PuppetModel, targets: List<CanvasTarget>, editedSet: Boolean): CanvasDeformStroke.Request {
         val capturedPose = pose.toMap()
-        val parameters = source.parameters.associateBy { it.id.raw }
-        val blends = source.parameters.filter { it.kind == ParameterKind.BLEND_SHAPE }
-        val named = parameter?.let { id -> blends.find { it.id.raw == id } }
-        val active = blends.filter { abs(capturedPose[it.id.raw] ?: it.default) >= org.umamo.runtime.eval.EPS_KEY }
-        val chosen = named?.takeIf { abs(capturedPose[it.id.raw] ?: it.default) >= org.umamo.runtime.eval.EPS_KEY } ?: active.singleOrNull()
         val selected = editedSet && selection.values.any { it.isNotEmpty() }
         return CanvasDeformStroke.Request(
             CanvasDeformStroke.Action.valueOf(tool.name),
             if (hierarchyMode == EditHierarchyMode.EDIT) CanvasDeformStroke.Mode.EDIT else CanvasDeformStroke.Mode.DEFORM,
             targets.map { target ->
                 val geometry = RigGeometryTools.geometry(source, target.kind, target.id, capturedPose)
-                val key = geometry.axes.associate { axis -> axis.parameterId.raw to (capturedPose[axis.parameterId.raw] ?: parameters.getValue(axis.parameterId.raw).default) } +
-                    listOfNotNull(parameter?.let(parameters::get), chosen).associate { it.id.raw to (capturedPose[it.id.raw] ?: it.default) }
+                val key = canvasDeformationCoordinate(source, geometry.axes, capturedPose, deformationParameters)
                 val allowed = if (editedSet) (if (selected) selection[target.id].orEmpty().toSet() else null)
                     else vertices.takeIf { it.isNotEmpty() }?.toSet()
                 CanvasDeformStroke.Target(target.kind, target.id, key, allowed)

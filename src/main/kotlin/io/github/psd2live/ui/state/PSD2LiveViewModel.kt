@@ -5158,6 +5158,18 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	fun setParameterValue(id: ParameterId, value: Float) = setParameterValues(mapOf(id to value))
 
+    /** Panel input selects the destination axis even when its value already equals the shown key. */
+    fun setParameterValuesFromPanel(values: Map<ParameterId, Float>) {
+        val selected = values.filterValues(Float::isFinite).keys
+        if (selected.isEmpty()) return
+        uiState.value.activeWorkspace.canvases.filter { it.mode == CanvasMode.EDIT }.forEach {
+            canvasEditorFor(it.id).selectDeformationParameters(selected)
+        }
+        setParameterValues(values)
+    }
+
+    fun setParameterValueFromPanel(id: ParameterId, value: Float) = setParameterValuesFromPanel(mapOf(id to value))
+
 	/**
 	 * Every panel, canvas and the physics preview show the change at once, with the skeleton's constrained
 	 * parameters following it as they will after the commit. Scrub samples stay transient until release; a
