@@ -17,15 +17,14 @@ internal class JointBand(val x: Double, val y: Double, val nx: Double, val ny: D
  * Gives a mesh enough vertices across each joint band to bend smoothly.
  *
  * A mesh bends only where it has vertices, and a generated mesh is as coarse as its outline allows, so
- * an elbow often falls inside one long triangle that can only fold along an edge. This inserts five
- * rows of vertices across every band - at both edges, the quarter points and the joint - each row as
+ * an elbow often falls inside one long triangle that can only fold along an edge. This inserts 17
+ * rows of vertices across every band, including the rigid endpoints and the joint, each row as
  * wide as the mesh is there. The inserted vertices are affine combinations of the old ones, so the
  * picture does not move and every existing keyform follows through [withMeshTopologyEdit].
  *
  * Rows that already have a vertex nearby are skipped, so refining a refined mesh changes nothing.
  */
 internal object SkeletonMeshRefine {
-	private val rowOffsets = doubleArrayOf(-1.0, -0.5, 0.0, 0.5, 1.0)
 
 	/** Largest number of points one row may add, however wide the mesh is. */
 	private const val MAX_ROW_POINTS = 24
@@ -35,10 +34,10 @@ internal object SkeletonMeshRefine {
 	 * space the bands are in. Returns the model and the refined mesh's rest vertices in the same space, or
 	 * the inputs unchanged when nothing needed adding.
 	 */
-	fun refine(model: PuppetModel, drawableId: DrawableId, canvas: FloatArray, bands: List<JointBand>): Pair<PuppetModel, FloatArray> {
+	fun refine(model: PuppetModel, drawableId: DrawableId, canvas: FloatArray, bands: List<JointBand>, segments: Int = 16): Pair<PuppetModel, FloatArray> {
 		val mesh = model.drawables.firstOrNull { it.id == drawableId }?.mesh ?: return model to canvas
 		if (canvas.size != mesh.positions.size || bands.isEmpty()) return model to canvas
-		val points = bands.flatMap { rowPoints(canvas, mesh.indices, it) }
+		val points = bands.flatMap { rowPoints(canvas, mesh.indices, it, segments) }
 		if (points.isEmpty()) return model to canvas
 		val inserted = MeshRefinementOps.insertPoints(mesh, canvas, points, extend = false, edgeSnap = 0.5f) ?: return model to canvas
 		val edit = inserted.result.edit
@@ -50,12 +49,12 @@ internal object SkeletonMeshRefine {
 	}
 
 	/**
-	 * The points one band asks for: [rowOffsets] rows across the band. Each row gets a vertex wherever it
+	 * The points one band asks for: segments + 1 rows across the band. Each row gets a vertex wherever it
 	 * crosses the outline, so the silhouette bends at the row instead of running straight across the
 	 * joint, and interior vertices between those crossings at most a third of the limb's width apart.
 	 * Spots an existing vertex already covers are skipped.
 	 */
-	private fun rowPoints(canvas: FloatArray, indices: IntArray, band: JointBand): List<Pair<Float, Float>> {
+	private fun rowPoints(canvas: FloatArray, indices: IntArray, band: JointBand, segments: Int): List<Pair<Float, Float>> {
 		val tx = -band.ny
 		val ty = band.nx
 		val count = canvas.size / 2
@@ -78,7 +77,8 @@ internal object SkeletonMeshRefine {
 			if (covered(canvas, x, y, clearance) || out.any { hypot(it.first - x, it.second - y) < clearance }) return
 			out += x.toFloat() to y.toFloat()
 		}
-		for (offset in rowOffsets) {
+		for (row in 0..segments) {
+			val offset = -1.0 + 2.0 * row / segments
 			val depth = offset * band.half
 			val crossings = ArrayList<Double>()
 			for (edge in edges) {
@@ -92,8 +92,10 @@ internal object SkeletonMeshRefine {
 			if (crossings.size < 2) continue
 			crossings.sort()
 			val width = crossings.last() - crossings.first()
-			val spacing = maxOf(3.0, minOf(band.half * 0.5, width / 3.0), width / MAX_ROW_POINTS)
-			val clearance = minOf(spacing * 0.45, band.half * 0.2)
+			// Five rows and three transverse intervals leave the contact gradient inside
+			// large triangles: even a smooth vertex field then produces faceted UV folds.
+			val spacing = maxOf(3.0, minOf(band.half * 2 / segments, width / (if (segments == 4) 3.0 else 6.0)), width / MAX_ROW_POINTS)
+			val clearance = if (segments == 4) minOf(spacing * .45, band.half * .2) else minOf(spacing * .4, band.half * .05)
 			for (across in crossings) add(depth, across, clearance)
 			// Crossings pair up as the row enters and leaves the silhouette; fill only inside each span.
 			for (k in 0 until crossings.size - 1 step 2) {

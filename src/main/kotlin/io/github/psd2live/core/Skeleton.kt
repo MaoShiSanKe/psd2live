@@ -192,22 +192,25 @@ data class SkeletonBone(
 	}
 }
 
-/** Sampling controls for skeleton parameter keys. Defaults preserve projects saved before version 4. */
+/** Sampling controls for skeleton keys and joint meshes; legacy JSON retains indexed topology. */
 data class SkeletonSampling(
 	val tolerancePx: Float = 1f,
 	val minimumStepDegrees: Float = 7.5f,
 	val maxMeshKeyforms: Int = 600,
+	val jointMeshSegments: Int = 16,
 ) {
 	init {
 		require(tolerancePx.isFinite() && tolerancePx in TOLERANCE_RANGE)
 		require(minimumStepDegrees.isFinite() && minimumStepDegrees in STEP_RANGE)
 		require(maxMeshKeyforms in MESH_LIMIT_RANGE)
+		require(jointMeshSegments in 4..32 && jointMeshSegments % 2 == 0)
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
 		put("tolerancePx", tolerancePx)
 		put("minimumStepDegrees", minimumStepDegrees)
 		put("maxMeshKeyforms", maxMeshKeyforms)
+		put("jointMeshSegments", jointMeshSegments)
 	}
 
 	companion object {
@@ -219,6 +222,9 @@ data class SkeletonSampling(
 			tolerancePx = o["tolerancePx"]?.jsonPrimitive?.floatOrNull ?: 1f,
 			minimumStepDegrees = o["minimumStepDegrees"]?.jsonPrimitive?.floatOrNull ?: 7.5f,
 			maxMeshKeyforms = o["maxMeshKeyforms"]?.jsonPrimitive?.intOrNull ?: 600,
+			// Vertex-group journals store indexed arrays. Keep their original topology until
+			// a skeleton edit explicitly migrates the weights in canvas space.
+			jointMeshSegments = o["jointMeshSegments"]?.jsonPrimitive?.intOrNull ?: 4,
 		)
 	}
 }
@@ -438,7 +444,7 @@ data class SkeletonSpec(
 	}
 
 	fun toJson(): JsonObject = buildJsonObject {
-		put("version", 9)
+		put("version", 10)
 		putJsonObject("manualWeights") { manualWeights.forEach { (id, map) -> put(id, map.toJson()) } }
 		putJsonObject("ikTargets") { ikTargets.forEach { (id, target) -> put(id, target.toJson()) } }
 		symmetryAxisX?.let { put("symmetryAxisX", it) }
@@ -458,7 +464,7 @@ data class SkeletonSpec(
 			val spec = SkeletonSpec(
 				enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
 				bones = raw.map(SkeletonBone::fromJson),
-				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(),
+				sampling = o["sampling"]?.jsonObject?.let(SkeletonSampling::fromJson) ?: SkeletonSampling(jointMeshSegments = 4),
 				symmetryAxisX = o["symmetryAxisX"]?.jsonPrimitive?.floatOrNull,
 				savedPoses = o["savedPoses"]?.jsonObject?.mapValues { (_, values) -> values.jsonObject.mapValues { it.value.jsonPrimitive.float } }.orEmpty(),
 				ikTargets = o["ikTargets"]?.jsonObject?.mapValues { SkeletonIkTarget.fromJson(it.value.jsonObject) }.orEmpty(),

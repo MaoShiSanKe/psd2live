@@ -196,7 +196,7 @@ internal object SkeletonRig {
 				JointBand(c.headX, c.headY, n[0], n[1], c.blend)
 			}
 			val drawableId = DrawableId(id)
-			val (refined, frameAfter) = SkeletonMeshRefine.refine(model, drawableId, canvas.getValue(drawableId), bands)
+			val (refined, frameAfter) = SkeletonMeshRefine.refine(model, drawableId, canvas.getValue(drawableId), bands, spec.sampling.jointMeshSegments)
 			model = refined
 			canvas = canvas + (drawableId to frameAfter)
 		}
@@ -1087,6 +1087,7 @@ internal object SkeletonRig {
 		val skinBones = skinBones(tree, parentOf)
 		val skins = SkeletonManualWeights.weights(canvas, mesh.indices, tree, parentOf, manual)
 		val arap = SkeletonArap(canvas, mesh.indices, BooleanArray(skins.size) { !skins[it].rigid })
+		val surface = SkeletonSurfaceFairing(canvas, mesh.indices)
 		val jointTemplates = SkeletonJointTemplates(canvas, mesh.indices, skins, skinBones, tree.map { it.role })
 		val deformerOf = tree.map { DeformerId(it.deformerId) }
 
@@ -1155,6 +1156,7 @@ internal object SkeletonRig {
 			for (v in skins.indices) if (closedFold[v]) {
 				corrected[v * 2] = guide[v * 2]; corrected[v * 2 + 1] = guide[v * 2 + 1]
 			}
+			surface.apply(corrected, jointTemplates.fairing(angles))
 			for (vertex in skins.indices) {
 				val inHome = inverse(homeWorld, corrected[vertex * 2], corrected[vertex * 2 + 1])
 				out[vertex * 2] = inHome[0] - restBase[vertex * 2]
@@ -1220,13 +1222,32 @@ internal object SkeletonRig {
 		}
 		val skinned = drawable.copy(
 			parentDeformerId = homeId,
-			mesh = DrawableMesh(restBase, mesh.uvs, mesh.indices),
+			mesh = DrawableMesh(restBase, mesh.uvs, foldDrawOrder(canvas, mesh.indices, skins, skinBones)),
 			geometryGrid = grid,
 			blendShapes = blendShapes,
 		)
 		val added = poses.map { KeyformAxis(it.id, it.keys) } + blendAxes
 		val posed = skinned.copy(blendShapes = skinned.blendShapes + additiveShapes(base, skinned, added, ::deltasAt))
 		return base.copy(drawables = base.drawables.map { if (it.id == drawableId) posed else it })
+	}
+
+	/** Painter order for a folded 2D limb: draw proximal material before distal material.
+	 * Delaunay insertion order is unrelated to surface depth and alternates the two branches
+	 * along the contact seam. Vertex IDs, winding, UVs and connectivity stay unchanged. */
+	internal fun foldDrawOrder(canvas: FloatArray, indices: IntArray, skins: List<VertexSkin>, bones: List<SkinBone>): IntArray {
+		if (skins.isEmpty() || skins.all { it.rigid && it.from == skins[0].from }) return indices
+		fun depth(bone: Int): Double = if (bones[bone].parent < 0) 0.0 else 1.0 + depth(bones[bone].parent)
+		val depths = DoubleArray(bones.size) { depth(it) }
+		val material = DoubleArray(skins.size) { v ->
+			val skin = skins[v]
+			val bone = bones[skin.to]
+			val ux = bone.tailX - bone.headX; val uy = bone.tailY - bone.headY
+			val length2 = ux * ux + uy * uy
+			val axial = if (length2 > 1e-8) ((canvas[v * 2] - bone.headX) * ux + (canvas[v * 2 + 1] - bone.headY) * uy) / length2 else 0.0
+			depths[skin.to] + axial.coerceIn(-1.0, 1.0)
+		}
+		val faces = (0 until indices.size / 3).sortedBy { face -> (0..2).sumOf { material[indices[face * 3 + it]] } }
+		return IntArray(indices.size) { indices[faces[it / 3] * 3 + it % 3] }
 	}
 
 	/**

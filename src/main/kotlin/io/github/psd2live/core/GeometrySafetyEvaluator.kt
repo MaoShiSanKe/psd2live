@@ -32,8 +32,9 @@ internal data class GeometrySafetyViolation(
 /**
  * Structural geometry evidence for one completely compiled candidate model.
  *
- * The evaluator is deliberately parent-local. It proves finite, well-formed native geometry and
- * prevents newly inverted/degenerate/collapsed triangles at affected native key coordinates. It is
+ * The evaluator is deliberately parent-local. It checks finite, well-formed native geometry and
+ * newly inverted/degenerate/collapsed triangles at affected native key coordinates. Large Cartesian
+ * products use bounded distributed sampling rather than exhaustive coverage. It is
  * not a visual, mask, painted-coverage, physics, or aesthetic oracle.
  */
 internal data class GeometrySafetyReport(
@@ -75,7 +76,7 @@ internal data class GeometrySafetyReport(
         put("violations", JsonArray(violations.map { it.toJson() }))
         put("warnings", JsonArray(warnings.map { it.toJson() }))
         put("diagnostics", JsonArray(diagnostics))
-        put("scope", "Affected parent-local native key coordinates only; no parent composition, masks, painted coverage, physics, or aesthetics.")
+        put("scope", "Affected parent-local native key coordinates only; large Cartesian products are sampled. No parent composition, masks, painted coverage, physics, or aesthetics.")
     }
 
     companion object {
@@ -322,10 +323,26 @@ internal object GeometrySafetyEvaluator {
         var result = base
         axes.forEach { (id, values) ->
             require(values.all { it.isFinite() }) { "Blend coordinates must be finite" }
-            if (result.size.toLong() * values.size > 16384) throw GeometrySafetyRejectedException(
-                GeometrySafetyReport.noGeometryChange().copy(safe = false, violations = listOf(
-                    GeometrySafetyViolation(GeometrySafetyReason.GEOMETRY_SAMPLING_LIMIT, "rig", emptyMap(), detail = "More than 16384 geometry coordinates on one target"))))
-            result = result.flatMap { coordinate -> values.sorted().map { coordinate + (id to it) } }.distinctBy(::coordinateKey)
+            // Disabled: a diagnostic sampling budget must not reject valid authored rigs.
+            // if (result.size.toLong() * values.size > 16384) throw GeometrySafetyRejectedException(
+            //     GeometrySafetyReport.noGeometryChange().copy(safe = false, violations = listOf(
+            //         GeometrySafetyViolation(GeometrySafetyReason.GEOMETRY_SAMPLING_LIMIT, "rig", emptyMap(), detail = "More than 16384 geometry coordinates on one target"))))
+            val keys = values.sorted()
+            val combinations = result.size.toLong() * keys.size
+            result = if (combinations <= 16384) result.flatMap { coordinate -> keys.map { coordinate + (id to it) } }
+            else {
+                // Deterministic distributed diagnostics instead of materializing an exponential
+                // Cartesian product. Both extreme coordinates remain in the sample. This is a
+                // bounded diagnostic sample, not a certificate covering every combination.
+                fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
+                val interior = combinations - 2
+                var stride = (interior * .6180339887498949).toLong().coerceAtLeast(1)
+                while (gcd(stride, interior) != 1L) stride++
+                List(16384) { index ->
+                    val flat = when (index) { 0 -> 0L; 16383 -> combinations - 1; else -> 1 + ((index - 1).toLong() * stride) % interior }
+                    result[(flat / keys.size).toInt()] + (id to keys[(flat % keys.size).toInt()])
+                }
+            }.distinctBy(::coordinateKey)
         }
         return result
     }

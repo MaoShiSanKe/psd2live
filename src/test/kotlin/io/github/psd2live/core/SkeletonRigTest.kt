@@ -27,6 +27,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class SkeletonRigTest {
+	@Test fun foldCoverageDoesNotDependOnMeshInsertionOrder() {
+		val points = floatArrayOf(-10f, 70f, 10f, 70f, 0f, 85f, -10f, 115f, 10f, 115f, 0f, 130f)
+		val bones = listOf(SkinBone(-1, 0.0, 0.0, 0.0, 100.0, 0.0), SkinBone(0, 0.0, 100.0, 0.0, 200.0, 35.0))
+		val skins = points.indices.filter { it % 2 == 0 }.map { VertexSkin(0, 1, .5f) }
+		val first = intArrayOf(3, 4, 5, 0, 1, 2)
+		val second = intArrayOf(0, 1, 2, 3, 4, 5)
+		val ordered = SkeletonRig.foldDrawOrder(points, first, skins, bones)
+		assertTrue(ordered.contentEquals(SkeletonRig.foldDrawOrder(points, second, skins, bones)))
+		assertTrue(ordered.takeLast(3) == listOf(3, 4, 5), "distal material covers proximal material in either bend direction")
+		assertEquals(first.toList().chunked(3).toSet(), ordered.toList().chunked(3).toSet(), "winding and connectivity preserved")
+		assertTrue(SkeletonRig.foldDrawOrder(points, first, List(6) { VertexSkin(0, 0, 0f) }, bones) === first)
+	}
 	private val bodyId = DeformerId("DeformBodyXY")
 	private val size = 500f
 	private val frame = Bounds(0f, 0f, size, size)
@@ -540,7 +552,7 @@ class SkeletonRigTest {
 		val sections = (0 until restPoints.size / 2).groupBy { kotlin.math.round(restPoints[it * 2 + 1] * 100f).toInt() }
 		for (angle in (-150..150 step 5).map(Int::toFloat) + 27f) {
 			val posed = canvas(baked, mapOf("ParamArmLB" to angle)).getValue(arm.id)
-			val depth = abs(kotlin.math.tan(Math.toRadians(angle * .5))).coerceAtMost(1.5)
+			val depth = SkeletonJointTemplates.foldDepth(angle.toDouble())
 			// MHR's tracked elbow sections widen up to 1.271 at 90 degrees (axial=0.5).
 			// Allow that measured pose bulge; rigid-width ARAP alone is not an anatomy target.
 			for (section in sections.values) {
@@ -563,6 +575,24 @@ class SkeletonRigTest {
 		}
 		for ((id, angle) in listOf("ParamArmLA" to 60f, "ParamArmLA" to -20f, "ParamHandL" to 35f, "ParamHandL" to -35f)) {
 			assertNoFlips(mesh.indices, restPoints, canvas(baked, mapOf(id to angle)).getValue(arm.id), "$id $angle°")
+		}
+	}
+
+	@Test fun mixedParentSectionDoesNotNarrowDuringIntermediateBends() {
+		val arm = strip("arm", 100f, 95f, 435f, 18f, 8f)
+		val baked = SkeletonRig.apply(model(arm), arm("arm").copy(sampling = SkeletonSampling(tolerancePx = .25f, maxMeshKeyforms = 1200)), frame)
+		val points = canvas(baked).getValue(arm.id)
+		val sections = (0 until points.size / 2).groupBy { kotlin.math.round(points[it * 2 + 1] * 100f).toInt() }.values
+		val parentSections = sections.filter { points[it.first() * 2 + 1] in 209f..222f }
+		assertTrue(parentSections.isNotEmpty())
+		for (angle in listOf(-135f, -105f, -75f, -45f, 45f, 75f, 105f, 135f)) {
+			val posed = canvas(baked, mapOf("ParamArmLB" to angle)).getValue(arm.id)
+			for (section in parentSections) {
+				val a = section.minBy { points[it * 2] }; val b = section.maxBy { points[it * 2] }
+				val before = points[b * 2] - points[a * 2]
+				val after = hypot(posed[b * 2] - posed[a * 2], posed[b * 2 + 1] - posed[a * 2 + 1])
+				assertTrue(after >= before * .9f, "mixed parent width $before -> $after at $angle, y=${points[a * 2 + 1]}")
+			}
 		}
 	}
 
@@ -878,7 +908,9 @@ class SkeletonRigTest {
 		val read = SkeletonSpec.fromJson(v1.jsonObject).bone("fore")!!
 		assertEquals(BoneRole.FOREARM.minAngle, read.minAngle)
 		assertEquals(null, read.blendWidth)
-		assertEquals(SkeletonSampling(), SkeletonSpec.fromJson(v1.jsonObject).sampling)
+		assertEquals(SkeletonSampling(jointMeshSegments = 4), SkeletonSpec.fromJson(v1.jsonObject).sampling)
+		assertEquals(4, SkeletonSampling.fromJson(buildJsonObject { put("tolerancePx", JsonPrimitive(1f)) }).jointMeshSegments)
+		assertEquals(16, SkeletonSpec.fromJson(spec.toJson()).sampling.jointMeshSegments)
 	}
 
 	@Test fun toleranceChangesTheBakedParameterPointCount() {

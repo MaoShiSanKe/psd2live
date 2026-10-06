@@ -176,14 +176,21 @@ class GeometrySafetyEvaluatorTest {
         assertEquals(0, report(before, after).newFlipCount)
     }
 
-    @Test fun excessiveBlendCombinationsFailExplicitlyInsteadOfSilentlySkippingGeometry() {
-        val parameters = (0..14).map { Parameter(ParameterId("Blend$it"), "Blend $it", 0f, 1f, 0f, ParameterKind.BLEND_SHAPE) }
+    @Test fun excessiveBlendCombinationsUseBoundedDiagnosticsWithoutRejectingTheRig() {
+        val parameters = (0..19).map { Parameter(ParameterId("Blend$it"), "Blend $it", 0f, 1f, 0f, ParameterKind.BLEND_SHAPE) }
         val before = model().copy(parameters = parameters)
         val blends = parameters.map { BlendShapeBinding(it.id, floatArrayOf(0f, 1f), 0,
             listOf(null, MeshForm(FloatArray(8), opacity = 1f))) }
         val after = before.copy(drawables = listOf(before.drawables.single().copy(blendShapes = blends)))
-        val failure = assertFailsWith<GeometrySafetyRejectedException> { report(before, after) }
-        assertEquals(GeometrySafetyReason.GEOMETRY_SAMPLING_LIMIT, failure.safetyReport.violations.single().reason)
+        val result = report(before, after)
+        assertTrue(result.safe)
+        val coordinates = result.affectedCoordinates.getValue("mesh:mesh")
+        assertTrue(coordinates.size <= 16384)
+        assertTrue(coordinates.first().values.all { it == 0f })
+        assertTrue(coordinates.last().values.all { it == 1f })
+        for (parameter in parameters) for (key in listOf(0f, 1f)) {
+            assertTrue(coordinates.any { it[parameter.id.raw] == key }, "diagnostics include ${parameter.id}=$key")
+        }
     }
 
     @Test fun authoringPolicyReportsFoldoversAsWarningsButStillRejectsDegenerateGeometry() {

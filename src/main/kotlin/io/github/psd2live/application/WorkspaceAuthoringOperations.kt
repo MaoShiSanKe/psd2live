@@ -670,7 +670,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
         variant("mode", "auto", buildJsonObject { put("state", string()) }, listOf("state")),
         variant("mode", "put", buildJsonObject {
             put("state", string()); put("spec", objectSchema(buildJsonObject {
-                put("version", integer(1, 9)); put("enabled", boolean())
+                put("version", integer(1, 10)); put("enabled", boolean())
                 put("symmetryAxisX", number())
                 put("savedPoses", skeletonMap(skeletonMap(number())))
                 put("ikTargets", skeletonMap(objectSchema(buildJsonObject {
@@ -685,6 +685,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
                     put("tolerancePx", buildJsonObject { put("type", "number"); put("minimum", 0.25); put("maximum", 4.0) })
                     put("minimumStepDegrees", buildJsonObject { put("type", "number"); put("minimum", 2.5); put("maximum", 20.0) })
                     put("maxMeshKeyforms", integer(100, 1200))
+                    put("jointMeshSegments", buildJsonObject { put("type", "integer"); put("enum", JsonArray((4..32 step 2).map(::JsonPrimitive))) })
                 }))
                 put("bones", arraySchema(objectSchema(boneFields,
                     listOf("id", "role", "head", "tail")), 0, 128))

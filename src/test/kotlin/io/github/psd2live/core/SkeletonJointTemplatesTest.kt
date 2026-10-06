@@ -24,7 +24,7 @@ class SkeletonJointTemplatesTest {
 		assertEquals(-0.634387, elbow[1], 1e-6)
 		val halfway = SkeletonJointTemplates.sample("knee", 112.5, 0.0, 0.0)
 		val before = SkeletonJointTemplates.sample("knee", 105.0, 0.0, 0.0)
-		for (axis in 0..1) assertEquals((before[axis] + knee[axis]) * 0.5, halfway[axis], 1e-9)
+		for (axis in 0..1) assertTrue(halfway[axis] in minOf(before[axis], knee[axis])..maxOf(before[axis], knee[axis]))
 	}
 
 	@Test fun correctionIsLocalAndRestIsUnchanged() {
@@ -186,6 +186,46 @@ class SkeletonJointTemplatesTest {
 		assertTrue(closed[5], "inner silhouette closes")
 		assertTrue(!closed[6], "adjacent interior vertex must not be hard flattened")
 		assertTrue(template.folding(floatArrayOf(0f, 120f))[6], "interior still permits overlap")
+		val fairing = template.fairing(floatArrayOf(0f, 120f))
+		assertEquals(0.0, fairing[5], "closed contact is fixed")
+		assertTrue(fairing[6] > 0.0, "inner surface must participate in smoothing")
+	}
+
+	@Test fun mixedParentAndChildSectionsKeepTheirWidthOutsideTheContactCage() {
+		for (angle in listOf(-150f, -120f, -90f, 60f, 90f, 120f, 150f)) {
+			val guide = templates(true).guide(angularSeed(angle), floatArrayOf(0f, angle)).first
+			for (y in listOf(75f, 85f, 115f, 125f)) {
+				val row = rows.indexOf(y); val a = row * 3; val b = a + 2
+				assertEquals(20.0, kotlin.math.hypot((guide[b * 2] - guide[a * 2]).toDouble(), (guide[b * 2 + 1] - guide[a * 2 + 1]).toDouble()),
+					1e-4, "cross-section at $y, $angle")
+			}
+		}
+	}
+
+	@Test fun innerCreasePreservesSuccessiveMaterialSectionsInsteadOfCrushingThemToOnePoint() {
+		for (angle in listOf(-120f, 120f)) {
+			val guide = templates(true).guide(angularSeed(angle), floatArrayOf(0f, angle)).first
+			val column = if (angle > 0) 0 else 2
+			val centre = rows.indexOf(100f) * 3 + column
+			val before = rows.indexOf(95f) * 3 + column
+			val after = rows.indexOf(105f) * 3 + column
+			for (axis in 0..1) assertEquals(guide[before * 2 + axis], guide[after * 2 + axis], 1e-4f)
+			assertTrue(kotlin.math.hypot((guide[before * 2] - guide[centre * 2]).toDouble(),
+				(guide[before * 2 + 1] - guide[centre * 2 + 1]).toDouble()) > 3.0,
+				"different material sections must retain distinct positions along the contact line at $angle")
+		}
+	}
+
+	@Test fun referencePoseInterpolationHasContinuousAngularTangents() {
+		for (kind in listOf("knee", "elbow")) for (angle in 15..135 step 15) {
+			val e = .001
+			for (s in listOf(-1.0, 0.0, 1.0)) for (fraction in listOf(0.0, 1.0)) {
+				val left = SkeletonJointTemplates.sample(kind, angle - e, s, fraction)
+				val middle = SkeletonJointTemplates.sample(kind, angle.toDouble(), s, fraction)
+				val right = SkeletonJointTemplates.sample(kind, angle + e, s, fraction)
+				for (axis in 0..1) assertEquals((middle[axis] - left[axis]) / e, (right[axis] - middle[axis]) / e, 1e-5)
+			}
+		}
 	}
 
 	private fun angularSeed(angle: Float) = FloatArray(canvas.size).also { seed ->

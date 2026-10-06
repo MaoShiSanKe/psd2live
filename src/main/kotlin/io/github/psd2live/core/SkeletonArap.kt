@@ -61,12 +61,15 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 		val y = DoubleArray(count) { (if (free[it]) seed else target)[it * 2 + 1].toDouble() }
 		val c = DoubleArray(count)
 		val s = DoubleArray(count)
+		val reflected = BooleanArray(count)
 		val dot = DoubleArray(count)
 		val cross = DoubleArray(count)
+		val mirrorDot = DoubleArray(count)
+		val mirrorCross = DoubleArray(count)
 		val bx = DoubleArray(count)
 		val by = DoubleArray(count)
 		repeat(30) {
-			dot.fill(0.0); cross.fill(0.0); bx.fill(0.0); by.fill(0.0)
+			dot.fill(0.0); cross.fill(0.0); mirrorDot.fill(0.0); mirrorCross.fill(0.0); bx.fill(0.0); by.fill(0.0)
 			for (e in edges) {
 				val rx = (rest[e.a * 2] - rest[e.b * 2]).toDouble()
 				val ry = (rest[e.a * 2 + 1] - rest[e.b * 2 + 1]).toDouble()
@@ -74,17 +77,27 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 				val d = e.weight * (rx * dx + ry * dy)
 				val t = e.weight * (rx * dy - ry * dx)
 				dot[e.a] += d; dot[e.b] += d; cross[e.a] += t; cross[e.b] += t
+				val md = e.weight * (rx * dx - ry * dy)
+				val mt = e.weight * (ry * dx + rx * dy)
+				mirrorDot[e.a] += md; mirrorDot[e.b] += md; mirrorCross[e.a] += mt; mirrorCross[e.b] += mt
 			}
 			for (i in 0 until count) {
-				val length = hypot(dot[i], cross[i])
-				c[i] = if (length > 1e-12) dot[i] / length else 1.0
-				s[i] = if (length > 1e-12) cross[i] / length else 0.0
+				val rotationLength = hypot(dot[i], cross[i])
+				val reflectionLength = hypot(mirrorDot[i], mirrorCross[i])
+				// Orthogonal Procrustes in O(2), restricted to intentional folding. Merely
+				// disabling the area gate leaves the SO(2) fit fighting reflected material,
+				// introducing opposing rotations and wrinkles around the contact line.
+				reflected[i] = folding[i] && reflectionLength > rotationLength + 1e-10
+				val length = if (reflected[i]) reflectionLength else rotationLength
+				c[i] = if (length > 1e-12) (if (reflected[i]) mirrorDot[i] else dot[i]) / length else 1.0
+				s[i] = if (length > 1e-12) (if (reflected[i]) mirrorCross[i] else cross[i]) / length else 0.0
 			}
 			for (e in edges) {
 				val rx = (rest[e.a * 2] - rest[e.b * 2]).toDouble()
 				val ry = (rest[e.a * 2 + 1] - rest[e.b * 2 + 1]).toDouble()
-				val dx = e.weight * 0.5 * ((c[e.a] + c[e.b]) * rx - (s[e.a] + s[e.b]) * ry)
-				val dy = e.weight * 0.5 * ((s[e.a] + s[e.b]) * rx + (c[e.a] + c[e.b]) * ry)
+				val sa = if (reflected[e.a]) -1 else 1; val sb = if (reflected[e.b]) -1 else 1
+				val dx = e.weight * 0.5 * ((c[e.a] + c[e.b]) * rx - (sa * s[e.a] + sb * s[e.b]) * ry)
+				val dy = e.weight * 0.5 * ((s[e.a] + s[e.b]) * rx + (sa * c[e.a] + sb * c[e.b]) * ry)
 				bx[e.a] += dx; bx[e.b] -= dx; by[e.a] += dy; by[e.b] -= dy
 				if (!free[e.b]) { bx[e.a] += e.weight * x[e.b]; by[e.a] += e.weight * y[e.b] }
 				if (!free[e.a]) { bx[e.b] += e.weight * x[e.a]; by[e.b] += e.weight * y[e.a] }

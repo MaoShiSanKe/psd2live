@@ -535,6 +535,13 @@ private fun SamplingSettings(
 			enabled = sampling != SkeletonSampling(), height = 18.dp)
 	}
 	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		SettingRow(tr("skeleton.sampling.jointMesh"), sampling.jointMeshSegments.toString()) {
+			CompactSlider(value = sampling.jointMeshSegments.toFloat(), onValueChange = {
+				change(sampling.copy(jointMeshSegments = ((it / 2f).roundToInt() * 2).coerceIn(4, 32)))
+			}, onValueChangeStarted = { viewModel.beginEditorField("skeleton.sampling.jointMesh") },
+				onValueChangeFinished = { viewModel.endEditorField("skeleton.sampling.jointMesh") },
+				valueRange = 4f..32f, modifier = Modifier.weight(1f))
+		}
 		SettingRow(tr("skeleton.sampling.tolerance"), "%.2fpx".format(sampling.tolerancePx)) {
 			CompactSlider(value = sampling.tolerancePx, onValueChange = {
 				change(sampling.copy(tolerancePx = ((it * 20f).roundToInt() / 20f).coerceIn(SkeletonSampling.TOLERANCE_RANGE)))

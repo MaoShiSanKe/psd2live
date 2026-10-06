@@ -91,26 +91,41 @@ internal class SkeletonJointTemplates(
 			val angle = SkeletonIk.wrap((angles[skin.to] - angles[skin.from]).toDouble())
 			if (abs(angle) < 1e-6) continue
 			penalties[vertex] = 4.0 * skin.weight * (1.0 - skin.weight)
-			if (joint.kind == "generic") continue
-			if (abs(angle) > 150.0) continue
 			val side = if (angle >= 0) 1.0 else -1.0
 			val x = canvas[vertex * 2] - bone.headX; val y = canvas[vertex * 2 + 1] - bone.headY
 			val axial = (x * joint.ux + y * joint.uy) / joint.radius
+			val parentAngle = Math.toRadians(angles[skin.from].toDouble())
+			val matrix = carry?.get(skin.from) ?: doubleArrayOf(cos(parentAngle), -sin(parentAngle), sin(parentAngle), cos(parentAngle))
+			val w = skin.weight.toDouble()
+			val rotation = Math.toRadians(angle)
+			val a = 1.0 - w + w * cos(rotation); val b = w * sin(rotation)
+			val scale = kotlin.math.hypot(a, b)
+			val widthGain = smootherstep((abs(axial) - .75) / .75)
+			if (scale > 1e-6 && widthGain > 0.0) {
+				// The 2D LBS linear part is scale * rotation. Its polar rotation restores the
+				// transverse material vector without rotating the axial vector around the pivot
+				// (which previously inflated the whole joint band). Keep compression at contact.
+				val normal = -x * joint.uy + y * joint.ux - joint.center
+				val nx = -joint.uy * normal; val ny = joint.ux * normal
+				val gain = widthGain * (1.0 / scale - 1.0)
+				val dx = gain * (a * nx - b * ny); val dy = gain * (b * nx + a * ny)
+				target[vertex * 2] += (matrix[0] * dx + matrix[1] * dy).toFloat()
+				target[vertex * 2 + 1] += (matrix[2] * dx + matrix[3] * dy).toFloat()
+			}
+			penalties[vertex] *= 1.0 + 3.0 * widthGain
+			if (joint.kind == "generic" || abs(angle) > 150.0) continue
 			if (abs(axial) >= 3.0) continue
 			val transverse = side * (-x * joint.uy + y * joint.ux - joint.center) / joint.radius
 			val fraction = ((transverse + 1.0) * 0.5).coerceIn(0.0, 1.0)
 			val neutral = sample(joint.kind, 0.0, axial, fraction)
 			val posed = sample(joint.kind, abs(angle), axial, fraction)
-			val rotation = Math.toRadians(abs(angle))
-			val w = skin.weight.toDouble()
-			val taper = 1.0 - smootherstep((abs(axial) - 1.5) / 1.5)
+			val referenceRotation = abs(rotation)
+			val taper = 1.0 - widthGain
 			// Vanishing correction and tangent at either rigid end, including authored bands
 			// shorter than the reference cage. Never force a template across a rigid seam.
 			val fade = taper * smootherstep(4.0 * w * (1.0 - w))
-			val dx = fade * (posed[0] - ((1 - w) * neutral[0] + w * (cos(rotation) * neutral[0] - sin(rotation) * neutral[1])))
-			val dy = fade * side * (posed[1] - ((1 - w) * neutral[1] + w * (sin(rotation) * neutral[0] + cos(rotation) * neutral[1])))
-			val parentAngle = Math.toRadians(angles[skin.from].toDouble())
-			val matrix = carry?.get(skin.from) ?: doubleArrayOf(cos(parentAngle), -sin(parentAngle), sin(parentAngle), cos(parentAngle))
+			val dx = fade * (posed[0] - ((1 - w) * neutral[0] + w * (cos(referenceRotation) * neutral[0] - sin(referenceRotation) * neutral[1])))
+			val dy = fade * side * (posed[1] - ((1 - w) * neutral[1] + w * (sin(referenceRotation) * neutral[0] + cos(referenceRotation) * neutral[1])))
 			val rx = (joint.ux * dx - joint.uy * dy) * joint.radius
 			val ry = (joint.uy * dx + joint.ux * dy) * joint.radius
 			target[vertex * 2] += (matrix[0] * rx + matrix[1] * ry).toFloat()
@@ -139,6 +154,33 @@ internal class SkeletonJointTemplates(
 		}
 	}
 
+	/** Smooth the whole free joint surface, pinning the closed contact silhouette. */
+	fun fairing(angles: FloatArray): DoubleArray {
+		val closed = folding(angles, closed = true)
+		return DoubleArray(skins.size) { v ->
+			val skin = skins[v]
+			if (skin.rigid || closed[v]) 0.0 else {
+				val angle = SkeletonIk.wrap((angles[skin.to] - angles[skin.from]).toDouble())
+				val joint = joints[skin.to]
+				// Fair the free surface even when a reference cage could not be fitted.
+				val contact = if (boundary[v] && joint != null) {
+					val bone = bones[skin.to]
+					val x = canvas[v * 2] - bone.headX; val y = canvas[v * 2 + 1] - bone.headY
+					val s = (x * joint.ux + y * joint.uy) / joint.radius
+					val n = (if (angle > 0) 1 else -1) * (-x * joint.uy + y * joint.ux - joint.center) / joint.radius
+					// Fade out before contact; entering the closed set must not remove a
+					// nonzero smoothing displacement abruptly in the middle of the pose range.
+					smootherstep((foldDepth(angle) - abs(s)) / .5) * smootherstep(n / .5)
+				} else 0.0
+				// The old bell mask attenuated the filter twice through its lambda/mu pair.
+				// Most of the bone-side transition therefore received essentially no fairing.
+				// Use full strength in the mixed band, fading only into the rigid endpoints.
+				val endpoint = smootherstep(minOf(skin.weight.toDouble(), 1.0 - skin.weight) / .05)
+				smootherstep(abs(angle) / 30.0) * endpoint * (1.0 - contact)
+			}
+		}
+	}
+
 	/** Zero-distance contact cage using positional constraints (Muller et al., PBD, 2006).
 	 * In 2D the two inner branches share the bend bisector: contact has zero thickness and
 	 * permits coincident silhouettes. This is a fold constraint, not collision repulsion.
@@ -160,7 +202,7 @@ internal class SkeletonJointTemplates(
 				val x = canvas[v * 2] - bone.headX; val y = canvas[v * 2 + 1] - bone.headY
 				val s = (x * joint.ux + y * joint.uy) / joint.radius
 				val n = side * (-x * joint.uy + y * joint.ux - joint.center) / joint.radius
-				if (n < 0.5 || abs(s) >= depth) null else v to s
+				if (n <= 0.0 || abs(s) >= depth) null else v to s
 			}
 			val parentAngle = Math.toRadians(angles[bone.parent].toDouble())
 			val m = carry?.get(bone.parent) ?: doubleArrayOf(cos(parentAngle), -sin(parentAngle), sin(parentAngle), cos(parentAngle))
@@ -175,13 +217,16 @@ internal class SkeletonJointTemplates(
 				val vx = cos(rotation) * rx - sin(rotation) * ry; val vy = sin(rotation) * rx + cos(rotation) * ry
 				val ox = seed[v * 2] - (m[0] * vx + m[1] * vy)
 				val oy = seed[v * 2 + 1] - (m[2] * vx + m[3] * vy)
-				// Collapse the axial material coordinate, retain its transverse position along
-				// the short crease. No angular-radius or offset-ray extension contributes here.
-				val t = (-rx * joint.uy + ry * joint.ux - joint.center).coerceIn(-joint.radius, joint.radius)
+				// Fold the two axial branches onto the crease without collapsing every axial
+				// section of a constant-width limb onto one point. Project each rigid branch
+				// onto the bend bisector, then saturate locally to keep the contact line short.
+				// Opposite axial coordinates meet, but successive sections keep material order.
+				val transverse = (-rx * joint.uy + ry * joint.ux - joint.center) / joint.radius
+				val t = joint.radius * smoothUnitLimit(transverse * cos(half) + side * abs(s) * abs(sin(half)))
 				val normal = side * (-rx * joint.uy + ry * joint.ux - joint.center) / joint.radius
 				// The silhouette closes fully. The interior fades into it rather than being
 				// hard flattened as a block; its faces may overlap through the soft solve.
-				val gain = smootherstep((depth - abs(s)) / 0.5) * if (boundary[v]) 1.0 else smootherstep((normal - .25) / .75)
+				val gain = smootherstep((depth - abs(s)) / 0.5) * smootherstep(normal / if (boundary[v]) .5 else 1.0)
 				target[v * 2] += ((ox + t * cx - target[v * 2]) * gain).toFloat()
 				target[v * 2 + 1] += ((oy + t * cy - target[v * 2 + 1]) * gain).toFloat()
 				penalties[v] += 64.0 * gain
@@ -190,7 +235,17 @@ internal class SkeletonJointTemplates(
 	}
 
 	companion object {
-		private fun foldDepth(angle: Double) = abs(kotlin.math.tan(Math.toRadians(angle * .5))).coerceAtMost(1.5)
+		internal fun foldDepth(angle: Double) = 1.5 * kotlin.math.tanh(abs(kotlin.math.tan(Math.toRadians(angle * .5))) / 1.5)
+		private fun smoothUnitLimit(value: Double): Double {
+			val x = abs(value)
+			if (x <= .8) return value
+			if (x >= 1.2) return kotlin.math.sign(value)
+			// Integrate 1 - smootherstep across the clipping interval: both the slope and
+			// curvature meet the linear section and the saturated section continuously.
+			val t = (x - .8) / .4
+			val t2 = t * t; val t4 = t2 * t2
+			return kotlin.math.sign(value) * (.8 + .4 * (t - 2.5 * t4 + 3 * t4 * t - t4 * t2))
+		}
 		private fun smootherstep(value: Double): Double {
 			val t = value.coerceIn(0.0, 1.0)
 			return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
@@ -225,7 +280,13 @@ internal class SkeletonJointTemplates(
 			}
 			val lower = atAngle(lo); val upper = atAngle(hi)
 			val t = if (hi == lo) 0.0 else (a - lo) / (hi - lo)
-			return DoubleArray(2) { lower[it] * (1.0 - t) + upper[it] * t }
+			val previous = atAngle(maxOf(lo - 15.0, 0.0)); val next = atAngle(minOf(hi + 15.0, 150.0))
+			return DoubleArray(2) {
+				val da = if (lo == 0.0) upper[it] - lower[it] else (upper[it] - previous[it]) * .5
+				val db = if (hi == 150.0) upper[it] - lower[it] else (next[it] - lower[it]) * .5
+				val t2 = t * t; val t3 = t2 * t
+				(2 * t3 - 3 * t2 + 1) * lower[it] + (t3 - 2 * t2 + t) * da + (-2 * t3 + 3 * t2) * upper[it] + (t3 - t2) * db
+			}
 		}
 	}
 }

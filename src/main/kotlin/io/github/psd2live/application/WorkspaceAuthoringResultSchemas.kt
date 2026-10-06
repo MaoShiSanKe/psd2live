@@ -101,10 +101,10 @@ internal object WorkspaceAnimationResultSchemas {
     )
     private val bone = s.obj(boneFields, boneFields.keys - setOf("parent", "blendWidth", "connected", "parameterOverride", "mirror"))
     private val skeletonFields = linkedMapOf(
-        "version" to buildJsonObject { put("type", "integer"); put("const", 9) }, "enabled" to s.boolean(), "symmetryAxisX" to s.number(),
+        "version" to buildJsonObject { put("type", "integer"); put("const", 10) }, "enabled" to s.boolean(), "symmetryAxisX" to s.number(),
         "manualWeights" to s.dictionary(s.obj(mapOf("positions" to s.array(s.number()), "triangles" to s.array(s.integer(0)), "weights" to s.array(values)))),
         "ikTargets" to s.dictionary(s.obj(mapOf("x" to s.number(), "y" to s.number(), "enabled" to s.boolean()))),
-        "savedPoses" to s.dictionary(values), "sampling" to s.obj(mapOf("tolerancePx" to s.number(0.25, 4), "minimumStepDegrees" to s.number(2.5, 20), "maxMeshKeyforms" to s.integer(100, 1200))),
+        "savedPoses" to s.dictionary(values), "sampling" to s.obj(mapOf("tolerancePx" to s.number(0.25, 4), "minimumStepDegrees" to s.number(2.5, 20), "maxMeshKeyforms" to s.integer(100, 1200), "jointMeshSegments" to s.integer(4, 32))),
         "bones" to s.array(bone),
     )
     val skeleton = s.obj(skeletonFields, skeletonFields.keys - "symmetryAxisX")

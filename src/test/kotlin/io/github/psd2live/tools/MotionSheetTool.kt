@@ -35,16 +35,19 @@ class MotionSheetTool {
 		val preview = if (sample.path.toString().endsWith(".psd2live", true)) {
 			io.github.psd2live.project.ProjectRepository().open(sample.path).use { opened ->
 				val document = opened.history.head().snapshot
+				println("Authored topology locks: " + document.rigEdits.authoringJournal.filter { it["op"]?.toString() == "\"canvas_topology\"" }.map { it["id"] })
 				val builder = io.github.psd2live.application.WorkspacePreviewBuilder()
 				val saved = builder.build(document)
 				val enabled = saved.config.rigEdits.skeleton?.takeIf { it.enabled }
 				if (enabled != null && System.getenv("PSD2LIVE_JOINT_STRESS") == "1") {
 					// Expand only the in-memory test rig; an out-of-range render would silently
 					// clamp to the saved limit and provide misleading high-angle comparisons.
-					val stress = enabled.copy(bones = enabled.bones.map {
+					val segments = System.getenv("PSD2LIVE_JOINT_SEGMENTS")?.toIntOrNull() ?: 16
+					val stress = enabled.copy(sampling = enabled.sampling.copy(jointMeshSegments = segments), bones = enabled.bones.map {
 						if (it.role == BoneRole.SHIN) it.copy(minAngle = -150f, maxAngle = 150f) else it
 					})
-					builder.build(document.copy(rigEdits = document.rigEdits.copy(skeleton = stress)))
+					val candidate = document.copy(rigEdits = document.rigEdits.copy(skeleton = stress))
+					builder.build(builder.normalizeMeshEdits(candidate, saved))
 				} else if (enabled != null) saved else {
 					val skeleton = SkeletonAutoBuilder.build(saved.analysis, saved.rig)
 					println("Saved project has no enabled skeleton; testing an auto skeleton on its artwork")
@@ -78,7 +81,7 @@ class MotionSheetTool {
 				}
 			}
 		}
-		val out = output("motion-sheet")
+		val out = output(if (System.getenv("PSD2LIVE_JOINT_SEGMENTS") == "4") "motion-sheet-legacy" else "motion-sheet")
 		val restCanvas = org.umamo.render.restMeshesToCanvasSpace(preview.rig.puppet)
 		var checked = 0
 		var maxThighDrift = 0f
@@ -91,14 +94,17 @@ class MotionSheetTool {
 			sheet(listOf(0f, 60f, 90f, 120f, -120f).map { angle ->
 				"knee %.0f".format(angle) to renderer.render(mapOf(shin.parameterId to angle), knee)
 			}, File(out, "${sample.name}-${shin.id}-knee.png"))
+			sheet(listOf(30f, 45f, 75f, 105f, 125f).filter { it <= shin.maxAngle }.map { angle ->
+				"knee %.0f".format(angle) to renderer.render(mapOf(shin.parameterId to angle), knee)
+			}, File(out, "${sample.name}-${shin.id}-intermediate.png"))
 			if (System.getenv("PSD2LIVE_JOINT_STRESS") == "1") {
 				kotlin.test.assertTrue(shin.minAngle <= -150f && shin.maxAngle >= 150f)
 				sheet(listOf(90f, 120f, 135f, 150f, -150f).map { angle ->
 					"knee %.0f".format(angle) to renderer.render(mapOf(shin.parameterId to angle), knee)
 				}, File(out, "${sample.name}-${shin.id}-high-angle.png"))
 			}
-			for (step in 0..24) {
-				val angle = shin.minAngle + (shin.maxAngle - shin.minAngle) * step / 24f
+			for (step in 0..120) {
+				val angle = shin.minAngle + (shin.maxAngle - shin.minAngle) * step / 120f
 				val posed = evaluator.evaluate(preview.rig.puppet, mapOf(org.umamo.runtime.model.ParameterId(shin.parameterId) to angle)).worldPositions
 				for (raw in thigh.drawableIds) {
 					val id = org.umamo.runtime.model.DrawableId(raw)
@@ -112,6 +118,7 @@ class MotionSheetTool {
 					val template = io.github.psd2live.core.SkeletonJointTemplates(mesh.positions, mesh.indices, skins, skinBones, tree.map { it.role })
 					val turns = FloatArray(tree.size) { if (tree[it].id == shin.id) angle * shin.direction else 0f }
 					val folding = template.folding(turns)
+					if (step == 90) println("$raw at $angle: vertices=${skins.size}, mixed=${skins.count { !it.rigid }}, fairing=${template.fairing(turns).count { it > 0.0 }}, closed=${template.folding(turns, closed = true).count { it }}")
 					fun area(points: FloatArray, a: Int, b: Int, c: Int) =
 						(points[b * 2] - points[a * 2]) * (points[c * 2 + 1] - points[a * 2 + 1]) -
 						(points[b * 2 + 1] - points[a * 2 + 1]) * (points[c * 2] - points[a * 2])

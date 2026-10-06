@@ -23,6 +23,30 @@ class WorkspaceSkeletonDraftSessionsTest {
         PreviewSessions.read(runtime.capture().model.rig.puppet.parameters, runtime.capture().auxiliary, workspace)
     private val move = SkeletonDraftIntent.Transform(setOf("arm_upper_l"), dx = 6f, dy = -4f, descendants = true)
 
+    @Test fun jointDensityUpgradePreservesPaintAndReloads() = runBlocking<Unit> {
+        val runtime = fixture()
+        val commands = WorkspaceDocumentCommands(runtime)
+        val start = runtime.capture()
+        val original = requireNotNull(start.document.rigEdits.skeleton)
+        val legacy = commands.execute(start.projectId, start.state, "Legacy mesh", listOf(
+            WorkspaceDocumentOperation("skeleton_put", buildJsonObject { put("spec", original.copy(
+                sampling = original.sampling.copy(jointMeshSegments = 4)).toJson()) })), MutationAuthor.USER).capture
+        val weighted = commands.execute(legacy.projectId, legacy.state, "Paint", listOf(
+            WorkspaceDocumentOperation("vertex_group_update", buildJsonObject {
+                put("target", "mesh:ArtMeshHandwearL"); put("name", "root"); put("kind", "pin"); put("rule", "fill")
+            })), MutationAuthor.USER).capture
+        val upgraded = commands.execute(weighted.projectId, weighted.state, "Smooth joint mesh", listOf(
+            WorkspaceDocumentOperation("skeleton_put", buildJsonObject { put("spec", original.toJson()) })), MutationAuthor.USER).capture
+        val group = upgraded.model.rig.puppet.vertexGroups.single()
+        val mesh = upgraded.model.rig.puppet.drawables.single { it.id == group.drawableId }.mesh!!
+        assertEquals(mesh.vertexCount, group.weights.size)
+        assertTrue(group.weights.size > weighted.model.rig.puppet.vertexGroups.single().weights.size)
+        assertTrue(group.weights.all { it > .999f }, "paint survives spatial resampling")
+        assertEquals(upgraded.model.rig.puppet.vertexGroups, builder.build(upgraded.document).rig.puppet.vertexGroups)
+        val undone = runtime.checkout(upgraded.projectId, upgraded.state, weighted.historyHead)
+        assertEquals(weighted.model.rig.puppet.vertexGroups, builder.build(undone.document).rig.puppet.vertexGroups)
+    }
+
     @Test fun skeletonChangesResampleVertexGroupsAndReplayFromHistory() = runBlocking<Unit> {
         val runtime = fixture()
         val commands = WorkspaceDocumentCommands(runtime)

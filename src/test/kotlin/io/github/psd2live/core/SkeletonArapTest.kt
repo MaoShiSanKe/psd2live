@@ -57,4 +57,13 @@ class SkeletonArapTest {
 		for (i in 0..7) assertEquals(points[i], overlap[i], "rigid handle $i")
 		assertTrue(overlap.all(Float::isFinite))
 	}
+
+	@Test fun reflectedFoldRetainsItsMaterialCoordinatesWithoutRotationWrinkles() {
+		val rest = floatArrayOf(0f, 0f, 20f, 0f, 20f, 20f, 0f, 20f, 5f, 10f, 15f, 10f)
+		val faces = intArrayOf(0, 1, 4, 1, 5, 4, 1, 2, 5, 2, 3, 5, 3, 4, 5, 3, 0, 4)
+		val solver = SkeletonArap(rest, faces, booleanArrayOf(false, false, false, false, true, true))
+		val mirrored = FloatArray(rest.size) { if (it % 2 == 0) -rest[it] else rest[it] }
+		val result = solver.solve(mirrored, mirrored, folding = BooleanArray(6) { true })
+		for (i in mirrored.indices) assertEquals(mirrored[i], result[i], .001f, "reflected material coordinate $i")
+	}
 }
