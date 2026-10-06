@@ -1148,8 +1148,13 @@ internal object SkeletonRig {
 				doubleArrayOf((points[2] - points[0]).toDouble(), (points[4] - points[0]).toDouble(),
 					(points[3] - points[1]).toDouble(), (points[5] - points[1]).toDouble())
 			}
-			val (guide, guideWeights) = jointTemplates.guide(seed, angles, carry)
-			val corrected = arap.solve(target, seed, guide, guideWeights)
+			val (guide, guideWeights) = jointTemplates.guide(seed, angles, carry, target)
+			val folding = jointTemplates.folding(angles)
+			val corrected = arap.solve(target, seed, guide, guideWeights, folding)
+			val closedFold = jointTemplates.folding(angles, closed = true)
+			for (v in skins.indices) if (closedFold[v]) {
+				corrected[v * 2] = guide[v * 2]; corrected[v * 2 + 1] = guide[v * 2 + 1]
+			}
 			for (vertex in skins.indices) {
 				val inHome = inverse(homeWorld, corrected[vertex * 2], corrected[vertex * 2 + 1])
 				out[vertex * 2] = inHome[0] - restBase[vertex * 2]

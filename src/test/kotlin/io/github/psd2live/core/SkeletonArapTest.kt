@@ -45,4 +45,16 @@ class SkeletonArapTest {
 		val safe = solver.solve(points, points, impossible, doubleArrayOf(0.0, 0.0, 0.0, 0.0, 100.0))
 		assertTrue(safe[8] < 20f, "guide cannot pull the centre across the rigid boundary")
 	}
+
+	@Test fun contactVertexMayCrossItsAdjacentFacesWithoutMovingRigidHandles() {
+		val solver = SkeletonArap(points, triangles, booleanArrayOf(false, false, false, false, true))
+		val guide = points.copyOf().also { it[8] = 25f; it[9] = 10f }
+		val penalty = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 100.0)
+		val protected = solver.solve(points, points, guide, penalty)
+		val overlap = solver.solve(points, points, guide, penalty, booleanArrayOf(false, false, false, false, true))
+		assertTrue(protected[8] < 20f)
+		assertTrue(overlap[8] > 20f, "one fold vertex must be able to cross the adjacent triangle")
+		for (i in 0..7) assertEquals(points[i], overlap[i], "rigid handle $i")
+		assertTrue(overlap.all(Float::isFinite))
+	}
 }

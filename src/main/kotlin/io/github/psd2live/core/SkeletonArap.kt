@@ -54,7 +54,7 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 		}
 	}
 
-	fun solve(target: FloatArray, seed: FloatArray = target, guide: FloatArray = seed, guideWeights: DoubleArray = DoubleArray(count)): FloatArray {
+	fun solve(target: FloatArray, seed: FloatArray = target, guide: FloatArray = seed, guideWeights: DoubleArray = DoubleArray(count), folding: BooleanArray = BooleanArray(count)): FloatArray {
 		if (free.none { it }) return target
 		val penalty = DoubleArray(count) { if (free[it]) diagonal[it] * guideWeights[it] else 0.0 }
 		val x = DoubleArray(count) { (if (free[it]) seed else target)[it * 2].toDouble() }
@@ -94,7 +94,7 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 			}
 			val nextX = x.copyOf(); val nextY = y.copyOf()
 			global(nextX, bx, penalty); global(nextY, by, penalty)
-			val step = safeStep(x, y, nextX, nextY)
+			val step = safeStep(x, y, nextX, nextY, folding)
 			var change = 0.0
 			for (i in 0 until count) {
 				val dx = step * (nextX[i] - x[i]); val dy = step * (nextY[i] - y[i])
@@ -112,10 +112,14 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 	 * The fixed-rotation ARAP global energy is quadratic, so a capped descent to its minimizer
 	 * also decreases that energy. Keep a small area margin for float keyform storage.
 	 */
-	private fun safeStep(x: DoubleArray, y: DoubleArray, nx: DoubleArray, ny: DoubleArray): Double {
+	private fun safeStep(x: DoubleArray, y: DoubleArray, nx: DoubleArray, ny: DoubleArray, folding: BooleanArray): Double {
 		var step = 1.0
 		for (i in triangles.indices step 3) {
 			val a = triangles[i]; val b = triangles[i + 1]; val c = triangles[i + 2]
+			// Include faces bridging the fold and its transition. Even one contact vertex
+			// can cross an adjacent face during overlap; requiring two prevented closure
+			// and capped the global solve for every vertex, pushing the joint open again.
+			if (folding[a] || folding[b] || folding[c]) continue
 			val ux = x[b] - x[a]; val uy = y[b] - y[a]; val vx = x[c] - x[a]; val vy = y[c] - y[a]
 			val dux = nx[b] - nx[a] - ux; val duy = ny[b] - ny[a] - uy
 			val dvx = nx[c] - nx[a] - vx; val dvy = ny[c] - ny[a] - vy

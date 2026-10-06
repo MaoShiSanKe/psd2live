@@ -37,7 +37,15 @@ class MotionSheetTool {
 				val document = opened.history.head().snapshot
 				val builder = io.github.psd2live.application.WorkspacePreviewBuilder()
 				val saved = builder.build(document)
-				if (saved.config.rigEdits.skeleton?.enabled == true) saved else {
+				val enabled = saved.config.rigEdits.skeleton?.takeIf { it.enabled }
+				if (enabled != null && System.getenv("PSD2LIVE_JOINT_STRESS") == "1") {
+					// Expand only the in-memory test rig; an out-of-range render would silently
+					// clamp to the saved limit and provide misleading high-angle comparisons.
+					val stress = enabled.copy(bones = enabled.bones.map {
+						if (it.role == BoneRole.SHIN) it.copy(minAngle = -150f, maxAngle = 150f) else it
+					})
+					builder.build(document.copy(rigEdits = document.rigEdits.copy(skeleton = stress)))
+				} else if (enabled != null) saved else {
 					val skeleton = SkeletonAutoBuilder.build(saved.analysis, saved.rig)
 					println("Saved project has no enabled skeleton; testing an auto skeleton on its artwork")
 					val candidate = document.copy(rigEdits = document.rigEdits.copy(skeleton = skeleton))
@@ -83,6 +91,12 @@ class MotionSheetTool {
 			sheet(listOf(0f, 60f, 90f, 120f, -120f).map { angle ->
 				"knee %.0f".format(angle) to renderer.render(mapOf(shin.parameterId to angle), knee)
 			}, File(out, "${sample.name}-${shin.id}-knee.png"))
+			if (System.getenv("PSD2LIVE_JOINT_STRESS") == "1") {
+				kotlin.test.assertTrue(shin.minAngle <= -150f && shin.maxAngle >= 150f)
+				sheet(listOf(90f, 120f, 135f, 150f, -150f).map { angle ->
+					"knee %.0f".format(angle) to renderer.render(mapOf(shin.parameterId to angle), knee)
+				}, File(out, "${sample.name}-${shin.id}-high-angle.png"))
+			}
 			for (step in 0..24) {
 				val angle = shin.minAngle + (shin.maxAngle - shin.minAngle) * step / 24f
 				val posed = evaluator.evaluate(preview.rig.puppet, mapOf(org.umamo.runtime.model.ParameterId(shin.parameterId) to angle)).worldPositions
@@ -91,11 +105,19 @@ class MotionSheetTool {
 					val mesh = restCanvas.drawables.single { it.id == id }.mesh ?: continue
 					val before = rest.getValue(id)
 					val after = posed.getValue(id)
+					val tree = io.github.psd2live.core.SkeletonRig.jointBones(skeleton)
+					val parents = io.github.psd2live.core.SkeletonRig.jointParents(skeleton)
+					val skinBones = io.github.psd2live.core.SkeletonRig.skinBones(tree, parents)
+					val skins = io.github.psd2live.core.SkeletonManualWeights.weights(mesh.positions, mesh.indices, tree, parents, skeleton.manualWeights[raw])
+					val template = io.github.psd2live.core.SkeletonJointTemplates(mesh.positions, mesh.indices, skins, skinBones, tree.map { it.role })
+					val turns = FloatArray(tree.size) { if (tree[it].id == shin.id) angle * shin.direction else 0f }
+					val folding = template.folding(turns)
 					fun area(points: FloatArray, a: Int, b: Int, c: Int) =
 						(points[b * 2] - points[a * 2]) * (points[c * 2 + 1] - points[a * 2 + 1]) -
 						(points[b * 2 + 1] - points[a * 2 + 1]) * (points[c * 2] - points[a * 2])
 					for (i in mesh.indices.indices step 3) {
 						val a = mesh.indices[i]; val b = mesh.indices[i + 1]; val c = mesh.indices[i + 2]
+						if (folding[a] || folding[b] || folding[c]) continue // intentional fold and overlapping transition
 						val initial = area(before, a, b, c)
 						if (abs(initial) < 0.01f) continue
 						kotlin.test.assertTrue(initial * area(after, a, b, c) > 0f, "$raw triangle ${i / 3} flipped when shin=$angle")
