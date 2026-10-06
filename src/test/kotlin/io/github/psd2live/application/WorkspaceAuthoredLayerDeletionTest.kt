@@ -101,6 +101,29 @@ class WorkspaceAuthoredLayerDeletionTest {
         assertEquals(authored.revision, runtime.capture().revision)
     }
 
+    @Test fun geometryEditsAfterADeferredDeletionReuseTheGeneratedBase() = runBlocking<Unit> {
+        lateinit var runtime: WorkspaceRuntime<RigPreviewModel>
+        runtime = fixture(rebuild = { builder.build(it, runtime.capture().model) })
+        val authored = author(runtime)
+        val deleted = WorkspaceLayerCommands(runtime).execute(authored.projectId, authored.state, deletion("third"), "Delete",
+            MutationAuthor.USER).commit.capture
+        assertTrue(RigLayerDeletion.deferred(deleted.model.config))
+        val second = mesh(deleted.model, "second")
+        val moved = second.mesh!!.positions.copyOf().also { it[0] += 0.5f; it[1] -= 0.25f }
+        val edited = WorkspaceDocumentCommands(runtime).executeJournal(deleted.projectId, deleted.state, "Move vertex", JsonArray(listOf(buildJsonObject {
+            put("op", "canvas_geometry"); put("kind", "mesh"); put("id", second.id.raw)
+            put("key", JsonObject(emptyMap())); put("pose", JsonObject(emptyMap())); put("preserve_image", true)
+            put("points", JsonArray(moved.map(::JsonPrimitive)))
+        })), MutationAuthor.USER).capture
+        // The incremental path keeps the complete generated base instead of regenerating it.
+        assertSame(deleted.model.baseRig, edited.model.baseRig)
+        assertEquals(moved[0], mesh(edited.model, "second").mesh!!.positions[0], 0.0001f)
+        assertTrue(edited.model.rig.puppet.drawables.none { edited.model.rig.layerIdByDrawableId[it.id.raw] == "third" })
+        val cold = builder.build(edited.document)
+        assertEquals(cold.analysis.layers.map { it.source.id }, edited.model.analysis.layers.map { it.source.id })
+        assertEvaluation(cold.rig.puppet, edited.model.rig.puppet)
+    }
+
     @Test fun depthRearOrFrontDeletionPreservesTheOtherSliceMotionAndRestoresTheWeld() = runBlocking<Unit> {
         for (layer in listOf("first", "front")) {
             val runtime = fixture(); val authored = author(runtime)

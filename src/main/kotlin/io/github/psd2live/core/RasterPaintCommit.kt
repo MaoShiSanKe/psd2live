@@ -67,7 +67,8 @@ internal object RasterPaintCommit {
         // would no longer line up with the parent deformer it hangs under.
         val geometryAnalysis = if (currentPreview.config.generationSource == null) currentAnalysis
             else RigGenerationSource.prepare(currentAnalysis, currentPreview.config).geometry
-        val rigContext = RigBuilder.rigContext(geometryAnalysis, currentPreview.config)
+        // Only a rebuilt or newly created mesh needs the frames; a plain repaint keeps every mesh.
+        val rigContext by lazy { RigBuilder.rigContext(geometryAnalysis, currentPreview.config, pipeline.meshCache) }
         val img = image
         val docW = image.width
         val docH = image.height

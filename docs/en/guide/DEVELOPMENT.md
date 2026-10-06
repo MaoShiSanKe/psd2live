@@ -85,10 +85,11 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.cmo3` | A `.cmo3`'s parameters, deformer tree (grid axes and bounds), drawables, band motion profile and per-drawable motion under the body parameters, silhouettes over body X × body Y, and its physics groups | `model-profile/<name>.txt`, `.png`, `-physics.txt` |
 | `ModelProfileTool.sample` | The band motion profile of a generated model (without a skeleton and on the auto skeleton), its body layers and auto bones | `model-profile/<sample>.txt` |
 | `SimBakeBenchmark` | Bakes the `tml` back hair at a few settings and compares the simulation with the export on motion the fit never saw | standard output |
+| `CommitPerfTool.profile` / `.desktop` | Wall time of one authored commit: `profile` goes through the application command boundary and splits it by phase (revision, settings decode, rebuild, geometry check); `desktop` goes through the desktop view model and adapter, committing mesh vertex edits and brush strokes in a row, and reports commit time and the longest UI-thread stall. Pair with `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` to sample | `commit-perf/report.txt`, `desktop.txt` |
 
 | Variable | Effect |
 | --- | --- |
-| `PSD2LIVE_SAMPLE` | Example name (`tml`, `ds`) or a PSD path; `tml` by default |
+| `PSD2LIVE_SAMPLE` | Example name (`tml`, `ds`) or a PSD path; `tml` by default. `CommitPerfTool.desktop` also accepts a `.psd2live` project |
 | `PSD2LIVE_CMO3` | Input of `ModelProfileTool.cmo3`: a `.cmo3` file or a directory of them |
 | `PSD2LIVE_PROBES` | Parameters the band profile probes, `id=value,...`; the ends of body X, Y and Z by default |
 | `PSD2LIVE_SHEET_PARAM` | Lay the silhouettes out along this parameter instead of body X × body Y |

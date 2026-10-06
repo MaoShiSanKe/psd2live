@@ -85,10 +85,11 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
+| `CommitPerfTool.profile` / `.desktop` | 1 回の編集コミットにかかる時間。`profile` はアプリケーション層のコマンド境界を通し、段階別（リビジョン、設定のデコード、再構築、ジオメトリ検査）に分けて計測。`desktop` はデスクトップのビューモデルとアダプタを通してメッシュ頂点編集とブラシのストロークを続けてコミットし、コミット時間と UI スレッドの最長停止を報告。`JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` と併用してサンプリング可能 | `commit-perf/report.txt`、`desktop.txt` |
 
 | 環境変数 | 効果 |
 | --- | --- |
-| `PSD2LIVE_SAMPLE` | サンプル名（`tml`、`ds`）または PSD のパス。既定は `tml` |
+| `PSD2LIVE_SAMPLE` | サンプル名（`tml`、`ds`）または PSD のパス。既定は `tml`。`CommitPerfTool.desktop` は `.psd2live` プロジェクトも受け付ける |
 | `PSD2LIVE_CMO3` | `ModelProfileTool.cmo3` の入力。`.cmo3` ファイルまたはそのディレクトリ |
 | `PSD2LIVE_PROBES` | プロファイルで調べるパラメータ。`id=値,...`。既定は体 X・Y・Z の両端 |
 | `PSD2LIVE_SHEET_PARAM` | シルエットを体 X × 体 Y ではなくこのパラメータに沿って並べる |

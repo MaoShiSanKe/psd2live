@@ -33,7 +33,8 @@ import java.nio.file.StandardOpenOption
 import java.time.Instant
 
 class PSD2LivePipeline {
-	private val meshCache = PreviewMeshCache()
+	internal val meshCache = PreviewMeshCache()
+	private val generatedGeometry = GeneratedGeometryCache()
 	fun inspect(psd: Path, config: PipelineConfig = PipelineConfig()): PipelineAnalysis {
 		require(Files.isRegularFile(psd)) { tr("error.psdMissing", psd) }
 		val bytes = Files.readAllBytes(psd)
@@ -86,10 +87,12 @@ class PSD2LivePipeline {
 		val atlas = AtlasPacker.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
 		if (config.generationSource == null) return GeneratedBase(analyses.textures, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
-		val geometryAtlas = AtlasPacker.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
-		val generated = RigBuilder.build(analyses.geometry, geometryAtlas, generationConfig, meshCache)
+		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, generationConfig, baselineConfig) {
+			val geometryAtlas = AtlasPacker.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+			GeneratedGeometryCache.Entry(geometryAtlas, RigBuilder.build(analyses.geometry, geometryAtlas, generationConfig, meshCache))
+		}
 		return GeneratedBase(analyses.textures, atlas,
-			withoutCreatedMeshes(RigGenerationSource.repack(generated, analyses.geometry, geometryAtlas, analyses.textures, atlas), config))
+			withoutCreatedMeshes(RigGenerationSource.repack(geometry.rig, analyses.geometry, geometry.atlas, analyses.textures, atlas), config))
 	}
 
     /** Keep the original analysis/parent frames, but let journal creations own their mesh IDs. */
@@ -364,8 +367,11 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 		baseName: String = "psd2live-preview",
 	): RigPreviewModel {
-		if (RigLayerDeletion.deferred(config)) return buildPreview(current.analysis.source, config)
-		val rig = current.baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
+		// A deferred deletion model keeps the complete generated base and atlas; only its replayed rig and
+		// analysis are filtered. Replay onto that base and filter the same way instead of regenerating it.
+		if (RigLayerDeletion.deferred(config) != RigLayerDeletion.deferred(current.config)) return buildPreview(current.analysis.source, config)
+		val rig = RigLayerDeletion.rig(current.baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides),
+			current.analysis, config)
 		val (runtimeBundle, _) = buildRuntimeBundle(baseName, current.analysis, current.atlas, rig, config)
 		return current.copy(
 			rig = rig,

@@ -383,6 +383,40 @@ class RasterPaintCommitTest {
         assertEquals(regenerated.model.rig.puppet.vertexGroups, regeneratedReplay.rig.puppet.vertexGroups)
     }
 
+    @Test fun repaintingUnderASavedGenerationSourceReusesGeometryButNotTextures() {
+        val initial = base(PSD2LivePipeline())
+        val config = initial.config.copy(meshOnly = false, generatePhysics = false, mouthOutlineEnabled = false)
+        val art = initial.analysis.source as WorkspaceSourceArt
+        fun painted(red: Int) = art.copy(layers = art.layers.map { layer ->
+            if (layer.id.raw != "art0") layer else (layer as WorkspaceSourceLayer).copy(raster = LayerRaster(layer.raster.width, layer.raster.height,
+                ByteArray(layer.raster.rgba.size) { if (it % 4 == 3) -1 else if (it % 4 == 0) red.toByte() else 40 }))
+        })
+        val saved = config.copy(generationSource = art)
+        val shared = PSD2LivePipeline()
+        val first = shared.buildPreview(painted(200), saved)
+        val second = shared.buildPreview(painted(30), saved)
+        val cold = PSD2LivePipeline().buildPreview(painted(30), saved)
+        assertEquals(cold.rig.puppet.deformers.map { it.id }, second.rig.puppet.deformers.map { it.id })
+        cold.rig.puppet.drawables.forEach { expected ->
+            val actual = second.rig.puppet.drawables.single { it.id == expected.id }
+            assertContentEquals(expected.mesh?.positions, actual.mesh?.positions)
+            assertContentEquals(expected.mesh?.uvs, actual.mesh?.uvs)
+        }
+        val placement = second.atlas.placementByLayerId.getValue("art0")
+        fun red(model: RigPreviewModel) = (model.atlas.pages[placement.page].image.getRGB(placement.x + 4, placement.y + 4) ushr 16) and 255
+        assertEquals(200, red(first)); assertEquals(30, red(second))
+        assertContentEquals(cold.atlas.pages[placement.page].png, second.atlas.pages[placement.page].png)
+        // A changed generation input is never served from the previous geometry.
+        val moved = saved.copy(generationSource = art.copy(layers = art.layers.map { layer ->
+            if (layer.id.raw != "art1") layer else (layer as WorkspaceSourceLayer).copy(bounds = LayerBounds(50, 40, 24, 24))
+        }))
+        val regenerated = shared.buildPreview(painted(30), moved)
+        val expected = PSD2LivePipeline().buildPreview(painted(30), moved)
+        fun art1(model: RigPreviewModel) = model.rig.puppet.drawables.single { model.rig.layerIdByDrawableId[it.id.raw] == "art1" }.mesh!!.positions
+        assertFalse(art1(second).contentEquals(art1(expected)))
+        assertContentEquals(art1(expected), art1(regenerated))
+    }
+
     @Test fun savedGenerationSourcePreservesGeneratedFramesAndPadsErasedTextureCoverage() {
         val pipeline = PSD2LivePipeline()
         val initial = base(pipeline)

@@ -32,6 +32,8 @@ data class WorkspacePaintRaster(val layerId: String, val raster: LayerRaster,
 
 /** GUI pixels and public raster gestures prepare the same durable candidate before rebuild/CAS. */
 internal object WorkspaceRasterEdits {
+    /** Shared so repeated paint commits reuse its content-addressed mesh cache. */
+    private val pipeline = PSD2LivePipeline()
     fun paint(document: WorkspaceDocument, model: RigPreviewModel, arguments: JsonObject,
               work: WorkspaceRasterWork = WorkspaceRasterWork.Direct): WorkspaceDocument =
         prepare(document, model, WorkspacePaintRaster.capture(arguments.getValue("layer_id").jsonPrimitive.content,
@@ -66,7 +68,6 @@ internal object WorkspaceRasterEdits {
         }
         val rebuild = visiblePixels && (request.rebuildMesh || missingMesh) && !DepthSplit.isFrontLayer(model, id)
         if (samePixels && !rebuild) return document
-        val pipeline = PSD2LivePipeline()
         val working = if (document.rigEdits.importedCmo3 == null) model else Cmo3ModelImport.paintingPreview(pipeline, document.source,
             document.config().copy(generationSource = document.generationSource ?: document.source))
         val prepared = RasterPaintCommit.prepare(pipeline, working, id, image, rebuild,

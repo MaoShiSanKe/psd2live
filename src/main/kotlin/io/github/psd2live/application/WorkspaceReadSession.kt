@@ -36,6 +36,11 @@ internal class WorkspaceReadSession(
     }
 
     private val projectSnapshot: WorkspaceProjectSnapshot by lazy { buildSnapshot() }
+
+    private companion object {
+        /** Read sessions are captured per call (every editor tick), while the committed document changes rarely. */
+        @Volatile var deletedCache: Triple<WorkspaceDocument, PipelineAnalysis, List<WorkspaceLayerSnapshot>>? = null
+    }
     override fun snapshot(): WorkspaceProjectSnapshot = projectSnapshot
 
     override fun sourceMeshComponents(layerId: String): JsonObject {
@@ -74,27 +79,7 @@ internal class WorkspaceReadSession(
                 metadata?.derived == true, metadata?.sourceAssetId, metadata?.sourceSpatialReferenceId)
         }
         // Deleted artwork remains in the immutable source even when the generator omits it from analysis.
-        val included = active.mapTo(HashSet()) { it.id }
-        val config = document?.config()
-        val missingDeleted = document?.deletedLayerIds.orEmpty() - included
-        val deleted = document?.source?.layers.orEmpty().filter { source ->
-            source.id.raw in missingDeleted || "${source.id.raw}:l" in missingDeleted || "${source.id.raw}:r" in missingDeleted
-        }.flatMap { source ->
-            val settings = requireNotNull(config)
-            if (settings.rigEdits.importedCmo3 != null) listOf(LayerClassifier.classify(source, settings.alphaThreshold))
-            else CharacterAnalyzer.expandLayer(CharacterAnalyzer.classify(source, settings), settings,
-                MeshResolution.unitScale(settings, requireNotNull(document).source))
-        }.filter { it.source.id.raw in missingDeleted }.map { classified ->
-            val source = classified.source
-            val id = source.id.raw
-            val semantic = classified.semantic
-            val bounds = Bounds(source.bounds.left.toFloat(), source.bounds.top.toFloat(),
-                (source.bounds.left + source.bounds.width).toFloat(), (source.bounds.top + source.bounds.height).toFloat())
-            val metadata = source as? WorkspaceSourceMetadata
-            WorkspaceLayerSnapshot(id, source.name, source.raster.width, source.raster.height, source.groupPath, source.order,
-                semantic.tag.name.lowercase(), semantic.side.name.lowercase(), semantic.type.name.lowercase(), semantic.parameter, semantic.switchId,
-                semantic.confidence, bounds, classified.bounds, false, true, metadata?.derived == true, metadata?.sourceAssetId, metadata?.sourceSpatialReferenceId)
-        }
+        val deleted = if (document == null || analysis == null) emptyList() else deletedLayers(document, analysis, active)
         return WorkspaceProjectSnapshot(
             projectId = captured?.projectId, revisionId = captured?.revision ?: "unloaded", historyHeadNodeId = captured?.historyHead,
             loaded = captured != null, inputName = presentation.inputName, canvasWidth = document?.source?.widthPx,
@@ -108,6 +93,36 @@ internal class WorkspaceReadSession(
             persistenceStatus = presentation.persistenceStatus, persistenceError = presentation.persistenceError,
             state = read.runtime.state,
         )
+    }
+
+    /** Classifying soft-deleted artwork is expensive; one immutable document and analysis always yield the same entries. */
+    private fun deletedLayers(document: WorkspaceDocument, analysis: PipelineAnalysis,
+                              active: List<WorkspaceLayerSnapshot>): List<WorkspaceLayerSnapshot> {
+        deletedCache?.let { (cachedDocument, cachedAnalysis, layers) ->
+            if (cachedDocument === document && cachedAnalysis === analysis) return layers
+        }
+        val included = active.mapTo(HashSet()) { it.id }
+        val config = document.config()
+        val missingDeleted = document.deletedLayerIds - included
+        val layers = document.source.layers.filter { source ->
+            source.id.raw in missingDeleted || "${source.id.raw}:l" in missingDeleted || "${source.id.raw}:r" in missingDeleted
+        }.flatMap { source ->
+            if (config.rigEdits.importedCmo3 != null) listOf(LayerClassifier.classify(source, config.alphaThreshold))
+            else CharacterAnalyzer.expandLayer(CharacterAnalyzer.classify(source, config), config,
+                MeshResolution.unitScale(config, document.source))
+        }.filter { it.source.id.raw in missingDeleted }.map { classified ->
+            val source = classified.source
+            val id = source.id.raw
+            val semantic = classified.semantic
+            val bounds = Bounds(source.bounds.left.toFloat(), source.bounds.top.toFloat(),
+                (source.bounds.left + source.bounds.width).toFloat(), (source.bounds.top + source.bounds.height).toFloat())
+            val metadata = source as? WorkspaceSourceMetadata
+            WorkspaceLayerSnapshot(id, source.name, source.raster.width, source.raster.height, source.groupPath, source.order,
+                semantic.tag.name.lowercase(), semantic.side.name.lowercase(), semantic.type.name.lowercase(), semantic.parameter, semantic.switchId,
+                semantic.confidence, bounds, classified.bounds, false, true, metadata?.derived == true, metadata?.sourceAssetId, metadata?.sourceSpatialReferenceId)
+        }
+        deletedCache = Triple(document, analysis, layers)
+        return layers
     }
 
     override fun history(): WorkspaceHistorySnapshot {
